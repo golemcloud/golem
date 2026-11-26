@@ -111,7 +111,7 @@ impl QuotaService for RecordingQuotaService {
         resource_name: ResourceName,
         expected_use: u64,
         previous_credit: i64,
-        previous_credit_at: Option<chrono::DateTime<chrono::Utc>>,
+        previous_credit_at: Option<jiff::Timestamp>,
     ) -> LeaseInterest {
         self.acquisitions.lock().unwrap().push((
             environment_id,
@@ -852,6 +852,7 @@ fn deployment_state(
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access: ToolFilesystemAccess::Unset,
                     source: tool.registration.source.clone(),
+                    shell: false,
                 },
             )
         })

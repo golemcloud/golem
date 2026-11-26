@@ -1,0 +1,492 @@
+{
+  "tier": "pr",
+  "description": "diff/cmp/patch conformance: GNU diffutils 3.12 and GNU patch 2.8 in the oracle are the\nreference for status, stdout and stderr.\n\nAny script that would embed a real file's mtime in its output (a `-u`/`-c`/`-y` header without\n`--label`) is avoided here — the WASM sandbox and the oracle container never share a clock, so\nthose cases either pass `--label` (which drops the timestamp from GNU's own header entirely),\nstick to a header-less format (normal, ed, `-q`), or, for `patch`, embed a literal patch text\nwith a fake timestamp instead of generating one with `diff` inside the script.",
+  "cases": [
+    {
+      "name": "diff: normal format default",
+      "script": "printf 'one\\ntwo\\nthree\\n' > /tmp/a; printf 'one\\nTWO\\nthree\\n' > /tmp/b; diff /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: unified with labels",
+      "script": "printf '1\\n2\\n3\\n4\\n5\\n' > /tmp/a; printf '1\\n2\\nX\\n4\\n5\\n' > /tmp/b; diff -u --label L --label R /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: context with labels",
+      "script": "printf 'one\\n' > /tmp/a; printf 'two\\n' > /tmp/b; diff -c --label L --label R /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: unified custom context",
+      "script": "printf '1\\n2\\n3\\n4\\n5\\n6\\n7\\n' > /tmp/a; printf '1\\n2\\n3\\nX\\n5\\n6\\n7\\n' > /tmp/b; diff -U1 --label L --label R /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: context custom count",
+      "script": "printf '1\\n2\\n3\\n4\\n5\\n' > /tmp/a; printf '1\\n2\\nX\\n4\\n5\\n' > /tmp/b; diff -C1 --label L --label R /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: ed format",
+      "script": "printf 'one\\ntwo\\nthree\\n' > /tmp/a; printf 'one\\nTWO\\nthree\\n' > /tmp/b; diff -e /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: brief differ",
+      "script": "printf 'x\\n' > /tmp/a; printf 'y\\n' > /tmp/b; diff -q /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: report identical",
+      "script": "printf 'x\\n' > /tmp/a; printf 'x\\n' > /tmp/c; diff -s /tmp/a /tmp/c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: identical files are silent",
+      "script": "printf 'x\\n' > /tmp/a; printf 'x\\n' > /tmp/c; diff /tmp/a /tmp/c; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: binary files differ",
+      "script": "printf 'a\\000b' > /tmp/bin1; printf 'a\\000c' > /tmp/bin2; diff /tmp/bin1 /tmp/bin2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: binary files identical",
+      "script": "printf 'a\\000b' > /tmp/bin1; cp /tmp/bin1 /tmp/bin3; diff /tmp/bin1 /tmp/bin3; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: new file treats missing as empty",
+      "script": "printf 'hello\\n' > /tmp/b; diff -N /tmp/nope /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: missing file without new-file errors",
+      "script": "printf 'hello\\n' > /tmp/b; diff /tmp/nope /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: stdin operand",
+      "script": "printf 'hello\\n' > /tmp/b; printf 'hello\\n' | diff - /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: recursive walk",
+      "script": "mkdir -p /tmp/rd/a/sub /tmp/rd/b/sub; cd /tmp/rd; printf 'old\\n' > a/common.txt; printf 'new\\n' > b/common.txt; printf 'a\\n' > a/onlya.txt; printf 'b\\n' > b/onlyb.txt; printf '1\\n' > a/sub/f.txt; printf '2\\n' > b/sub/f.txt; diff -r a b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: recursive type mismatch",
+      "script": "mkdir -p /tmp/rt/a/x /tmp/rt/b; cd /tmp/rt; printf 'hi\\n' > b/x; diff -r a b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: ignore case treats lines as identical",
+      "script": "printf 'Hello World\\n' > /tmp/ica; printf 'hello world\\n' > /tmp/icb; diff -i /tmp/ica /tmp/icb; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: ignore all space treats lines as identical",
+      "script": "printf 'hello world\\n' > /tmp/iwa; printf 'helloworld\\n' > /tmp/iwb; diff -w /tmp/iwa /tmp/iwb; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: ignore space change collapses amount not presence",
+      "script": "printf '  x\\n' > /tmp/iba; printf '   x\\n' > /tmp/ibb; diff -b /tmp/iba /tmp/ibb; echo status=$?; printf ' x\\n' > /tmp/ibc; printf 'x\\n' > /tmp/ibd; diff -b /tmp/ibc /tmp/ibd; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: ignore space change real change still reported",
+      "script": "printf 'a   b\\nold\\nc\\n' > /tmp/ibx; printf 'a b\\nnew\\nc\\n' > /tmp/iby; diff -bu --label L --label R /tmp/ibx /tmp/iby",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: ignore blank lines still refused",
+      "script": "printf 'x\\n' > /tmp/a; printf 'y\\n' > /tmp/b; diff -B /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "diff: -B is unsupported in bash-tool\n"
+        },
+        "reason": "bash-tool refuses -B alone; GNU ignores wholly blank lines"
+      }
+    },
+    {
+      "name": "diff: color flag accepted",
+      "script": "printf 'x\\n' > /tmp/a; printf 'y\\n' > /tmp/b; diff --color -q /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: side by side",
+      "script": "printf 'one\\ntwo\\nthree\\n' > /tmp/a; printf 'one\\nTWO\\nthree\\nfour\\n' > /tmp/b; diff -y /tmp/a /tmp/b",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": "one\t\t\t\t\t\t\t\tone\ntwo\t\t\t\t\t\t\t      <\n\t\t\t\t\t\t\t      >\tTWO\nthree\t\t\t\t\t\t\t\tthree\n\t\t\t\t\t\t\t      >\tfour\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "diffutils' side-by-side port shows a changed line as a deleted-then-inserted pair"
+      }
+    },
+    {
+      "name": "cmp: default differ message",
+      "script": "printf 'aaaa' > /tmp/f1; printf 'aaab' > /tmp/f2; cmp /tmp/f1 /tmp/f2; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: identical files silent",
+      "script": "printf 'aaaa' > /tmp/f1; cp /tmp/f1 /tmp/f1b; cmp /tmp/f1 /tmp/f1b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: verbose lists differences",
+      "script": "printf 'aaaa' > /tmp/f1; printf 'abab' > /tmp/f2; cmp -l /tmp/f1 /tmp/f2; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: silent suppresses output",
+      "script": "printf 'aaaa' > /tmp/f1; printf 'aaab' > /tmp/f2; cmp -s /tmp/f1 /tmp/f2; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: eof on shorter file",
+      "script": "printf 'aaa' > /tmp/short; printf 'aaaa' > /tmp/long; cmp /tmp/short /tmp/long; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: eof at a line boundary",
+      "script": "printf 'x\\ny\\n' > /tmp/l1; printf 'x\\ny\\nz' > /tmp/l2; cmp /tmp/l1 /tmp/l2; echo status=$?; cmp -l /tmp/l1 /tmp/l2; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: missing file errors",
+      "script": "printf 'aaaa' > /tmp/f1; cmp /tmp/nope /tmp/f1; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: apply from stdin",
+      "script": "printf 'line1\\nline2\\nline3\\n' > /tmp/pt1.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' | patch /tmp/pt1.txt; cat /tmp/pt1.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: apply via -i flag",
+      "script": "printf 'line1\\nline2\\nline3\\n' > /tmp/pt2.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' > /tmp/pt2.patch; patch -i /tmp/pt2.patch /tmp/pt2.txt; cat /tmp/pt2.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: positional file and patchfile",
+      "script": "printf 'line1\\nline2\\nline3\\n' > /tmp/pt3.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' > /tmp/pt3.patch; patch /tmp/pt3.txt /tmp/pt3.patch; cat /tmp/pt3.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: git style p1 strip",
+      "script": "printf 'one\\ntwo\\nthree\\n' > /tmp/x.txt; cd /tmp; printf -- '--- a/x.txt\\n+++ b/x.txt\\n@@ -1,3 +1,3 @@\\n one\\n-two\\n+TWO\\n three\\n' | patch -p1; cat /tmp/x.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: reverse undoes a patch",
+      "script": "printf 'one\\nTWO\\nthree\\n' > /tmp/xr.txt; cd /tmp; printf -- '--- a/xr.txt\\n+++ b/xr.txt\\n@@ -1,3 +1,3 @@\\n one\\n-two\\n+TWO\\n three\\n' | patch -p1 -R; cat /tmp/xr.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: dry run does not modify",
+      "script": "printf 'line1\\nline2\\nline3\\n' > /tmp/pt4.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' | patch --dry-run /tmp/pt4.txt; cat /tmp/pt4.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: output flag redirects",
+      "script": "printf 'line1\\nline2\\nline3\\n' > /tmp/pt5.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' | patch -o /tmp/pt5.out /tmp/pt5.txt; cat /tmp/pt5.out; echo ---; cat /tmp/pt5.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: silent suppresses success message",
+      "script": "printf 'line1\\nline2\\nline3\\n' > /tmp/pt6.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' | patch -s /tmp/pt6.txt; cat /tmp/pt6.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: hunk offset search",
+      "script": "printf '0\\n0\\n0\\n0\\n0\\nline1\\nline2\\nline3\\n' > /tmp/pt7.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' | patch /tmp/pt7.txt; cat /tmp/pt7.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: failing hunk writes rej",
+      "script": "printf 'AAA\\nBBB\\nCCC\\n' > /tmp/pt8.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' | patch /tmp/pt8.txt; echo ---; cat /tmp/pt8.txt; echo ---; cat /tmp/pt8.txt.rej",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: creation via dev null",
+      "script": "cd /tmp; printf -- '--- /dev/null\\n+++ newfile.txt\\n@@ -0,0 +1,2 @@\\n+hello\\n+world\\n' | patch -p0; cat /tmp/newfile.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: deletion via dev null",
+      "script": "printf 'hello\\nworld\\n' > /tmp/delfile.txt; cd /tmp; printf -- '--- delfile.txt\\n+++ /dev/null\\n@@ -1,2 +0,0 @@\\n-hello\\n-world\\n' | patch -p0; test -f /tmp/delfile.txt && echo EXISTS || echo DELETED",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: multi file patch",
+      "script": "printf 'alpha\\n' > /tmp/alpha.txt; cd /tmp; printf -- 'diff --git a/alpha.txt b/alpha.txt\\n--- a/alpha.txt\\n+++ b/alpha.txt\\n@@ -1 +1 @@\\n-alpha\\n+ALPHA\\ndiff --git a/beta.txt b/beta.txt\\nnew file mode 100644\\n--- /dev/null\\n+++ b/beta.txt\\n@@ -0,0 +1 @@\\n+beta\\n' | patch -p1; cat /tmp/alpha.txt; cat /tmp/beta.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: already applied is detected",
+      "script": "printf 'line1\\nline2-changed\\nline3\\n' > /tmp/pt9.txt; printf -- '--- a\\n+++ b\\n@@ -1,3 +1,3 @@\\n line1\\n-line2\\n+line2-changed\\n line3\\n' | patch -N /tmp/pt9.txt; cat /tmp/pt9.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: unified groups nearby changes into one hunk",
+      "script": "printf 'one\\ntwo\\nthree\\nfour\\nfive\\nsix\\nseven\\n' > /tmp/ga; printf 'one\\ntwo\\nTHREE\\nfour\\nfive\\nsix\\nseven\\neight\\n' > /tmp/gb; diff -u --label L --label R /tmp/ga /tmp/gb",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: context groups nearby changes into one hunk",
+      "script": "printf 'one\\ntwo\\nthree\\nfour\\nfive\\nsix\\nseven\\n' > /tmp/ga; printf 'one\\ntwo\\nTHREE\\nfour\\nfive\\nsix\\nseven\\neight\\n' > /tmp/gb; diff -c --label L --label R /tmp/ga /tmp/gb",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: bundled short options ruaN",
+      "script": "printf 'one\\ntwo\\nthree\\n' > /tmp/ba; printf 'one\\nTWO\\nthree\\n' > /tmp/bb; diff -ruaN --label L --label R /tmp/ba /tmp/bb",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: recursive header echoes bundled short options",
+      "script": "mkdir -p /tmp/rh1/o /tmp/rh1/n; cd /tmp/rh1; printf 'one\\n' > o/f; printf 'two\\n' > n/f; diff -ruN --label L --label R o n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: recursive header echoes separate short options",
+      "script": "mkdir -p /tmp/rh2/o /tmp/rh2/n; cd /tmp/rh2; printf 'one\\n' > o/f; printf 'two\\n' > n/f; diff -r -u -N --label L --label R o n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: recursive header echoes long options",
+      "script": "mkdir -p /tmp/rh3/o /tmp/rh3/n; cd /tmp/rh3; printf 'one\\n' > o/f; printf 'two\\n' > n/f; diff --recursive --unified --label L --label R o n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: recursive header echoes separate numeric argument",
+      "script": "mkdir -p /tmp/rh4/o /tmp/rh4/n; cd /tmp/rh4; printf 'one\\n' > o/f; printf 'two\\n' > n/f; diff -r -U 5 --label L --label R o n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: recursive header echoes attached numeric argument",
+      "script": "mkdir -p /tmp/rh5/o /tmp/rh5/n; cd /tmp/rh5; printf 'one\\n' > o/f; printf 'two\\n' > n/f; diff -rU5 --label L --label R o n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: recursive header quotes an option needing escaping",
+      "script": "mkdir -p /tmp/rh6/o /tmp/rh6/n; cd /tmp/rh6; printf 'one\\n' > o/f; printf 'two\\n' > n/f; diff -ru --color=never --label L --label R o n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: default strip cant find file transcript",
+      "script": "mkdir -p /tmp/proj4/src; cd /tmp/proj4; printf 'fn main() {}\\n' > src/main.rs; printf -- '--- a/src/main.rs\\n+++ b/src/main.rs\\n@@ -1 +1 @@\\n-fn main() {}\\n+fn main() { println!(\"hi\"); }\\n' | patch; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: empty input is silent success",
+      "script": "printf 'a\\n' > /tmp/pe1.txt; printf '' | patch /tmp/pe1.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: garbage only input is reported",
+      "script": "printf 'a\\n' > /tmp/pe2.txt; printf 'garbage\\n' | patch /tmp/pe2.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: truncated hunk reports unexpected eof",
+      "script": "printf 'a\\n' > /tmp/pe3.txt; printf -- '--- f\\n+++ f\\n@@ -100,5 +100,5 @@\\n-x\\n+y\\n' | patch /tmp/pe3.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: invalid context length diagnostic",
+      "script": "printf 'a\\n' > /tmp/de1; diff -U -1 /tmp/de1 /tmp/de1; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: invalid width diagnostic",
+      "script": "printf 'a\\n' > /tmp/de2; diff -y -W 0 /tmp/de2 /tmp/de2; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: missing operand diagnostic",
+      "script": "diff; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: extra operand diagnostic",
+      "script": "printf 'a\\n' > /tmp/de3; diff /tmp/de3 /tmp/de3 /tmp/de3; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: unrecognized long option diagnostic",
+      "script": "printf 'a\\n' > /tmp/de4; diff --bogus /tmp/de4 /tmp/de4; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: invalid short option diagnostic",
+      "script": "printf 'a\\n' > /tmp/de5; diff -K /tmp/de5 /tmp/de5; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: option requires argument diagnostic",
+      "script": "diff -U; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: ignore initial skips both sides",
+      "script": "printf 'abcdef\\n' > /tmp/ce1; printf 'ABCdef\\n' > /tmp/ce2; cmp -i 3 /tmp/ce1 /tmp/ce2; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: ignore initial colon pair skips independently",
+      "script": "printf 'abcdef\\n' > /tmp/ce3; printf 'ABCdef\\n' > /tmp/ce4; cmp -i 3:0 /tmp/ce3 /tmp/ce4; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: positional skip applies to first file only",
+      "script": "printf 'abcdef\\n' > /tmp/ce5; printf 'ABCdef\\n' > /tmp/ce6; cmp /tmp/ce5 /tmp/ce6 3; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: invalid ignore initial value diagnostic",
+      "script": "printf 'a\\n' > /tmp/ce7; cmp /tmp/ce7 /tmp/ce7 /tmp/ce7; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: missing operand diagnostic",
+      "script": "cmp; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cmp: single operand defaults second to stdin",
+      "script": "printf 'a\\n' > /tmp/ce8; cmp /tmp/ce8; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: round trip forward and reverse",
+      "script": "mkdir -p /tmp/rtd && cd /tmp/rtd; printf 'one\\ntwo\\nthree\\n' > a; printf 'one\\nTWO\\nthree\\nfour\\n' > b; diff -u a b > x.patch; cp a a.new; patch a.new < x.patch >/dev/null; diff -q a.new b && echo FORWARD_OK; patch -R a.new < x.patch >/dev/null; diff -q a.new a && echo REVERSE_OK",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: round trip via cmp",
+      "script": "mkdir -p /tmp/rtc && cd /tmp/rtc; printf 'alpha\\nbeta\\ngamma\\n' > a; printf 'alpha\\nBETA\\ngamma\\n' > b; diff -u a b > x.patch; cp a a.new; patch -s a.new < x.patch; cmp a.new b && echo CMP_OK",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: round trip -Naur tree then patch -p1",
+      "script": "mkdir -p /tmp/rtn/src /tmp/rtn/src2; cd /tmp/rtn; printf 'one\\ntwo\\nthree\\n' > src/common.txt; printf 'one\\nTWO\\nthree\\n' > src2/common.txt; printf 'only-in-src2\\n' > src2/newfile.txt; diff -Naur src src2 > tree.patch; mkdir -p target; cp src/common.txt target/; cd target; patch -p1 < ../tree.patch >/dev/null; cd ..; diff -rq target src2 && echo ROUNDTRIP_OK",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "patch: compound command preserves piped stdin",
+      "script": "printf 'x\\n' | { mkdir -p /tmp/compoundq; cat; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: large files that differ throughout",
+      "script": "seq 30000 >/tmp/a; seq 2 30001 >/tmp/b; diff /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diff: -e and -y on files this large are refused",
+      "script": "seq 30000 >/tmp/a; seq 2 30001 >/tmp/b; diff -e /tmp/a /tmp/b | wc -c; echo status=${PIPESTATUS[0]}; diff -y -W 20 /tmp/a /tmp/b | wc -l; echo status=${PIPESTATUS[0]}",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "0\nstatus=2\n0\nstatus=2\n"
+        },
+        "stderr": {
+          "text": "diff: -e on files this large is unsupported in bash-tool\ndiff: -y on files this large is unsupported in bash-tool\n"
+        },
+        "reason": "the engine behind -e and -y needs memory for every pair of differing lines; past about 4,000 a side bash-tool refuses instead of running out of memory"
+      }
+    }
+  ]
+}

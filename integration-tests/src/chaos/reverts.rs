@@ -46,7 +46,7 @@
 use crate::chaos::history::{Outcome, Stream};
 use crate::chaos::workload::{self, WorkloadContext};
 use crate::chaos::{RetryPolicy, RevertConfig};
-use chrono::{DateTime, Utc};
+
 use golem_common::model::agent::{RevertLastInvocations, RevertWorkerTarget};
 use golem_test_framework::dsl::TestDsl;
 use serde::{Deserialize, Serialize};
@@ -70,8 +70,8 @@ pub struct RevertRound {
     pub asked_to_revert: u32,
     /// What the revert call itself returned.
     pub outcome: Outcome,
-    pub submitted_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
+    pub submitted_at: jiff::Timestamp,
+    pub completed_at: Option<jiff::Timestamp>,
     /// The counter value observed after the revert, taken from the next round's
     /// first increment. `None` for the last round of the run, which the final
     /// read-back answers instead.
@@ -190,7 +190,7 @@ pub fn start(ctx: WorkloadContext, config: &RevertConfig) -> RevertHandle {
                 }
 
                 // ── Revert ──────────────────────────────────────────────────
-                let submitted_at = Utc::now();
+                let submitted_at = jiff::Timestamp::now();
                 submitted.fetch_add(1, Ordering::Relaxed);
                 let outcome = revert_once(&ctx, &agent, round, &config).await;
 
@@ -202,7 +202,7 @@ pub fn start(ctx: WorkloadContext, config: &RevertConfig) -> RevertHandle {
                         asked_to_revert: config.revert_invocations,
                         outcome,
                         submitted_at,
-                        completed_at: Some(Utc::now()),
+                        completed_at: Some(jiff::Timestamp::now()),
                         observed_after: None,
                     });
                     pending = Some(rounds.len() - 1);

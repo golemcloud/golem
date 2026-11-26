@@ -53,6 +53,7 @@ inherit_test_dep!(
 inherit_test_dep!(Tracing);
 
 #[test]
+#[test_r::tag(latency)]
 #[tracing::instrument]
 async fn spawning_many_workers_that_sleep(
     last_unique_id: &LastUniqueId,
@@ -170,6 +171,7 @@ async fn spawning_many_workers_that_sleep(
 }
 
 #[test]
+#[test_r::tag(latency)]
 #[tracing::instrument]
 async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     last_unique_id: &LastUniqueId,

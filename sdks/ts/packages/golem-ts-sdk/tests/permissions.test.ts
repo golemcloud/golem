@@ -303,7 +303,7 @@ describe('permission cards', () => {
     const { host, permissions } = await loadPermissions();
     const { AgentId } = await import('../src/agentId');
     const { Uuid } = await import('../src/uuid');
-    const target = permissions.Holder.agent(new AgentId(new Uuid(11n, 12n)));
+    const target = permissions.Holder.agent(AgentId.fromWit({ uuid: new Uuid(11n, 12n) }));
     const installed = permissions.deriveFromWallet({}).unwrap();
     expect(installed.install(target).isOk()).toBe(true);
     expect(host.installCard).toHaveBeenCalledWith(
@@ -504,7 +504,7 @@ describe('permission cards', () => {
     host.installCard.mockImplementationOnce(() => {
       throw { tag: 'install-recipient-mismatch', val: 'no matching recipient' };
     });
-    const target = permissions.Holder.agent(new AgentId(new Uuid(1n, 2n)));
+    const target = permissions.Holder.agent(AgentId.fromWit({ uuid: new Uuid(1n, 2n) }));
     expect(installed.install(target).unwrapErr().kind).toBe('install-recipient-mismatch');
     expect(installed.isMoved()).toBe(true);
     expect(() => installed.install(target)).toThrow(/already been moved/);

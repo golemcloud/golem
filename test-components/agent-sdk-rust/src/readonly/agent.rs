@@ -92,6 +92,7 @@ pub trait ReadonlyAgent {
     /// `#[read_only]` doing a `WriteLocal` host call (create-promise).
     /// Must trap with `AgentError::ReadOnlyViolation`.
     #[read_only]
+    #[endpoint(get = "/fail")]
     fn bad_write(&self) -> u64;
 
     /// `#[read_only]` doing an outgoing HTTP call.

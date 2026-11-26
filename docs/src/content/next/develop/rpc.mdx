@@ -700,7 +700,7 @@ Every durable client returns the ID of its agent. If we know the **agent ID** of
   ```typescript
   const newAgent = await WeatherAgent.client.create({ location: "London" });
   const agentId = await newAgent.agentId();
-  const sameAgent = await WeatherAgent.client.getById(agentId);
+  const sameAgent = WeatherAgent.client.getById(agentId);
   ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -721,7 +721,7 @@ Every durable client returns the ID of its agent. If we know the **agent ID** of
     ```scala
     import golem.AgentId
 
-    def sameAgent(agentId: AgentId): Future[WeatherAgentRemote] =
+    def sameAgent(agentId: AgentId): WeatherAgentRemote =
       WeatherAgentClient.getById(agentId)
     ```
 

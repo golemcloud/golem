@@ -17,9 +17,9 @@
 //! counts the target's effects to show that the invocation runs exactly once, at its deadline.
 
 use crate::Tracing;
-use crate::scheduled_ephemeral::HoldFirstSchedule;
+use crate::scheduled_ephemeral::{HoldFirstSchedule, PausedScheduler};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
@@ -71,7 +71,7 @@ impl SchedulerStorage for HoldFirstWake {
     async fn insert(
         &self,
         id: ScheduleId,
-        due: DateTime<Utc>,
+        due: jiff::Timestamp,
         shard: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -92,7 +92,7 @@ impl SchedulerStorage for HoldFirstWake {
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         ttl: Duration,
@@ -102,7 +102,7 @@ impl SchedulerStorage for HoldFirstWake {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         self.inner.count_due(now, assignment).await
@@ -112,21 +112,27 @@ impl SchedulerStorage for HoldFirstWake {
         &self,
         id: &ScheduleId,
         owner: uuid::Uuid,
-        until: DateTime<Utc>,
+        until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
-        self.inner.ack(id, owner).await
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(id, owner, now).await
     }
 }
 
-fn schedule_input(server_name: &str, due: DateTime<Utc>) -> TypedSchemaValue {
+fn schedule_input(server_name: &str, due: jiff::Timestamp) -> TypedSchemaValue {
     data_value!(
         server_name.to_string(),
-        due.timestamp() as u64,
-        due.timestamp_subsec_nanos()
+        due.as_second() as u64,
+        due.subsec_nanosecond() as u32
     )
 }
 
@@ -134,7 +140,7 @@ async fn schedule_at(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     server_name: &str,
-    due: DateTime<Utc>,
+    due: jiff::Timestamp,
 ) -> anyhow::Result<()> {
     executor
         .invoke_and_await_agent(
@@ -306,7 +312,7 @@ async fn scheduled_invocation_lost_before_its_wake_is_stored_runs_once(
     let server_name = "lost-before-wake";
     let target = start_agents(&executor, &component, server_name).await?;
     let client = agent_key!("ScheduledInvocationClient", CLIENT);
-    let due = Utc::now() + chrono::Duration::seconds(10);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(10);
     let key = IdempotencyKey::fresh();
     let invocation = {
         let executor = executor.clone();
@@ -343,7 +349,10 @@ async fn scheduled_invocation_lost_before_its_wake_is_stored_runs_once(
         ),
     )
     .await??;
-    assert!(Utc::now() < due, "the repair must precede the deadline");
+    assert!(
+        jiff::Timestamp::now() < due,
+        "the repair must precede the deadline"
+    );
     wait_for_scheduled_start(&executor, &target).await?;
     assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }
@@ -367,12 +376,15 @@ async fn scheduled_invocation_survives_a_restart_before_its_wake_fires(
         .await?;
     let server_name = "restart-before-fire";
     let target = start_agents(&executor, &component, server_name).await?;
-    let due = Utc::now() + chrono::Duration::seconds(8);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(8);
     schedule_at(&executor, &component, server_name, due).await?;
     drop(executor);
 
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    assert!(Utc::now() < due, "the restart must precede the deadline");
+    assert!(
+        jiff::Timestamp::now() < due,
+        "the restart must precede the deadline"
+    );
     wait_for_scheduled_start(&executor, &target).await?;
     assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }
@@ -418,7 +430,7 @@ async fn schedule_receipt_names_the_scheduled_invocation_and_replays_without_the
         &executor,
         &component,
         server_name,
-        Utc::now() + chrono::Duration::seconds(2),
+        jiff::Timestamp::now() + jiff::SignedDuration::from_secs(2),
     )
     .await?;
     let receipt_before_restart = receipt(&executor).await?;
@@ -459,7 +471,7 @@ async fn scheduled_invocation_lost_at_its_start_runs_once_after_a_restart(
         .await?;
     let server_name = "lost-at-start";
     let target = start_agents(&executor, &component, server_name).await?;
-    let due = Utc::now() + chrono::Duration::seconds(3);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(3);
     schedule_at(&executor, &component, server_name, due).await?;
     let mut started = executor
         .gate_next_invocation_started_append(&target.agent_id)
@@ -484,20 +496,41 @@ async fn deleted_scheduled_target_is_not_recreated_by_its_wake(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let release = tokio_util::sync::CancellationToken::new();
+    release.cancel();
+    let acknowledged = Arc::new(tokio::sync::Notify::new());
+    let overrides = TestExecutorOverrides {
+        wrap_scheduler_storage: Some(Arc::new({
+            let acknowledged = acknowledged.clone();
+            move |inner| {
+                Arc::new(PausedScheduler {
+                    inner,
+                    release: release.clone(),
+                    invocation_wake: Mutex::new(None),
+                    acknowledged: acknowledged.clone(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
     let server_name = "deleted";
     let target = start_agents(&executor, &component, server_name).await?;
-    let due = Utc::now() + chrono::Duration::seconds(5);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
     schedule_at(&executor, &component, server_name, due).await?;
     executor.delete_worker(&target).await?;
-    assert!(Utc::now() < due, "the deletion must precede the deadline");
+    assert!(
+        jiff::Timestamp::now() < due,
+        "the deletion must precede the deadline"
+    );
 
-    let wait = (due + chrono::Duration::seconds(5) - Utc::now()).to_std()?;
-    tokio::time::sleep(wait).await;
+    tokio::time::timeout(Duration::from_secs(60), acknowledged.notified())
+        .await
+        .map_err(|_| anyhow::anyhow!("the invocation wake was never acknowledged"))?;
     assert_eq!(executor.get_worker_metadata_opt(&target).await?, None);
     Ok(())
 }
@@ -523,7 +556,7 @@ async fn schedule_in_the_past_runs_on_the_next_tick(
         &executor,
         &component,
         server_name,
-        Utc::now() - chrono::Duration::seconds(60),
+        jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60),
     )
     .await?;
     assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
@@ -745,7 +778,7 @@ async fn durable_schedule_retry_with_the_same_key_commits_one_invocation(
     let server_name = "same-key-retry";
     let target = start_agents(&executor, &component, server_name).await?;
     let client = agent_key!("ScheduledInvocationClient", CLIENT);
-    let due = Utc::now() + chrono::Duration::seconds(10);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(10);
     let key = IdempotencyKey::fresh();
     let invocation = {
         let executor = executor.clone();
@@ -783,7 +816,10 @@ async fn durable_schedule_retry_with_the_same_key_commits_one_invocation(
         schedules[1], schedules[0],
         "the repair must schedule the same key on the same target"
     );
-    assert!(Utc::now() < due, "the repair must precede the deadline");
+    assert!(
+        jiff::Timestamp::now() < due,
+        "the repair must precede the deadline"
+    );
     wait_for_scheduled_start(&executor, &target).await?;
     assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }

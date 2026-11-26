@@ -1,0 +1,619 @@
+{
+  "commands": [
+    "b2sum",
+    "base32",
+    "base64",
+    "basename",
+    "basenc",
+    "cat",
+    "cksum",
+    "cmp",
+    "comm",
+    "cp",
+    "csplit",
+    "curl",
+    "cut",
+    "date",
+    "diff",
+    "dirname",
+    "env",
+    "expand",
+    "expr",
+    "factor",
+    "file",
+    "find",
+    "fmt",
+    "fold",
+    "grep",
+    "head",
+    "jq",
+    "join",
+    "link",
+    "ln",
+    "ls",
+    "man",
+    "md5sum",
+    "mkdir",
+    "mktemp",
+    "mv",
+    "nl",
+    "numfmt",
+    "od",
+    "paste",
+    "patch",
+    "printenv",
+    "printf",
+    "readlink",
+    "realpath",
+    "rev",
+    "rm",
+    "rmdir",
+    "sed",
+    "seq",
+    "sha1sum",
+    "sha256sum",
+    "sha512sum",
+    "shuf",
+    "sleep",
+    "sort",
+    "split",
+    "stat",
+    "tac",
+    "tail",
+    "tee",
+    "timeout",
+    "touch",
+    "tr",
+    "truncate",
+    "tsort",
+    "unexpand",
+    "uniq",
+    "unlink",
+    "wc",
+    "wget",
+    "which",
+    "xargs",
+    "yes",
+    "sh",
+    "bash",
+    "chmod",
+    "dd",
+    "du",
+    "hostname",
+    "install",
+    "nproc",
+    "uname"
+  ],
+  "builtins": [
+    ".",
+    ":",
+    "[",
+    "alias",
+    "bg",
+    "bind",
+    "break",
+    "builtin",
+    "caller",
+    "cd",
+    "command",
+    "compgen",
+    "complete",
+    "compopt",
+    "continue",
+    "declare",
+    "dirs",
+    "disown",
+    "echo",
+    "enable",
+    "eval",
+    "exec",
+    "exit",
+    "export",
+    "false",
+    "fc",
+    "fg",
+    "getopts",
+    "hash",
+    "help",
+    "history",
+    "jobs",
+    "kill",
+    "let",
+    "local",
+    "logout",
+    "mapfile",
+    "popd",
+    "pushd",
+    "pwd",
+    "read",
+    "readarray",
+    "readonly",
+    "return",
+    "set",
+    "shift",
+    "shopt",
+    "source",
+    "suspend",
+    "test",
+    "times",
+    "trap",
+    "true",
+    "type",
+    "typeset",
+    "ulimit",
+    "umask",
+    "unalias",
+    "unset",
+    "wait"
+  ],
+  "builtinReplacements": [
+    "printf"
+  ],
+  "fixtures": [
+    "probe-tool",
+    "legacy-stdin"
+  ],
+  "language": {
+    "syntax.quote.single": "single quotes",
+    "syntax.quote.double": "double quotes",
+    "syntax.quote.ansi-c": "$'...' quoting",
+    "syntax.quote.escape": "backslash escapes",
+    "syntax.comment": "comments",
+    "syntax.error": "syntax errors and how much of the script runs",
+    "syntax.alias": "alias expansion",
+    "compound.pipeline": "pipelines",
+    "compound.pipeline.negate": "! pipelines",
+    "compound.list": "&&, || and ; lists",
+    "compound.group": "{ ...; } groups",
+    "compound.subshell": "( ... ) subshells",
+    "compound.if": "if / elif / else",
+    "compound.case": "case",
+    "compound.case.fallthrough": "case ;& and ;;&",
+    "compound.for": "for name in words",
+    "compound.for-arith": "for (( ; ; ))",
+    "compound.while": "while loops",
+    "compound.until": "until loops",
+    "compound.select": "select",
+    "compound.arith": "(( ... )) commands",
+    "compound.cond": "[[ ... ]]",
+    "compound.cond.regex": "[[ =~ ]] and BASH_REMATCH",
+    "compound.function": "function definitions",
+    "compound.function.local": "local variables",
+    "compound.function.recursion": "recursive functions",
+    "param.positional": "$1, $@, $*, $# and shift / set --",
+    "param.special": "$?, $$, $!, $0, $- and $_",
+    "param.array.indexed": "indexed arrays",
+    "param.array.assoc": "associative arrays",
+    "param.nameref": "namerefs (declare -n)",
+    "param.indirect": "${!name} indirection",
+    "param.readonly": "readonly variables",
+    "param.export": "exported variables reaching children",
+    "param.attributes": "declare -i / -l / -u / -x attributes",
+    "param.callstack": "FUNCNAME, BASH_SOURCE, LINENO, BASH_LINENO",
+    "param.random": "RANDOM, SECONDS, EPOCHSECONDS and friends",
+    "expansion.brace": "brace expansion",
+    "expansion.tilde": "tilde expansion",
+    "expansion.parameter.default": "${x:-w} ${x-w} ${x:=w} ${x=w}",
+    "expansion.parameter.alternative": "${x:+w} ${x+w}",
+    "expansion.parameter.error": "${x:?w} ${x?w}",
+    "expansion.parameter.length": "${#x}",
+    "expansion.parameter.substring": "${x:offset:length}",
+    "expansion.parameter.trim": "${x#p} ${x##p} ${x%p} ${x%%p}",
+    "expansion.parameter.replace": "${x/p/r} and its anchored forms",
+    "expansion.parameter.case": "${x^} ${x^^} ${x,} ${x,,}",
+    "expansion.parameter.transform": "${x@Q} and the other @ operators",
+    "expansion.parameter.names": "${!prefix*} and ${!array[@]}",
+    "expansion.command": "$( ... ) and backquote substitution",
+    "expansion.arithmetic": "$(( ... ))",
+    "expansion.process": "process substitution: <(list) and >(list), buffered",
+    "expansion.word-splitting": "word splitting and IFS",
+    "expansion.glob": "pathname expansion",
+    "expansion.glob.options": "extglob, globstar, nullglob, failglob, dotglob, nocaseglob",
+    "redirection.input": "< file",
+    "redirection.output": "> file",
+    "redirection.append": ">> file",
+    "redirection.noclobber": "set -C and >|",
+    "redirection.both": "&> and &>>",
+    "redirection.duplicate": "n>&m and n<&m",
+    "redirection.close": "n>&- and n<&-",
+    "redirection.heredoc": "<< here documents",
+    "redirection.heredoc.strip": "<<- here documents",
+    "redirection.heredoc.quoted": "quoted here-document delimiters",
+    "redirection.herestring": "<<< here strings",
+    "redirection.fd-variable": "{var}> redirections",
+    "redirection.dev-paths": "/dev/null, /dev/stdin, /dev/stdout, /dev/stderr, /dev/fd/N",
+    "redirection.exec": "exec redirections",
+    "option.errexit": "set -e",
+    "option.nounset": "set -u",
+    "option.xtrace": "set -x",
+    "option.pipefail": "set -o pipefail",
+    "option.noglob": "set -f",
+    "option.allexport": "set -a",
+    "option.noexec": "set -n",
+    "option.posix": "set -o posix",
+    "option.lastpipe": "shopt -s lastpipe",
+    "option.nocasematch": "shopt -s nocasematch",
+    "trap.exit": "EXIT traps",
+    "trap.err": "ERR traps",
+    "trap.pipe": "PIPE traps and SIGPIPE",
+    "trap.signal": "traps on TERM, INT, HUP",
+    "trap.debug-return": "DEBUG and RETURN traps",
+    "jobs.background": "& background jobs",
+    "jobs.wait": "wait, wait -n, wait PID",
+    "jobs.kill": "kill and signals to jobs",
+    "jobs.end-of-run": "jobs left running when the script ends",
+    "env.home": "HOME unset, ~ and cd",
+    "env.identity": "UID, EUID, USER, HOSTNAME, OSTYPE",
+    "env.path": "PATH and command lookup",
+    "env.golem": "GOLEM_* variables",
+    "env.tmp": "a missing /tmp",
+    "env.filesystem": "writing outside /tmp",
+    "tool.sibling": "sibling tools as commands",
+    "tool.refused": "refused Clank workflows",
+    "child.shell": "sh -c and bash -c",
+    "child.exec": "find -exec and xargs running shell commands",
+    "state.cross-call": "separate calls: only the working directory carries"
+  },
+  "notApplicable": {
+    "builtin.fc": "history editing needs an interactive shell",
+    "builtin.complete": "programmable completion needs an interactive shell",
+    "builtin.compopt": "programmable completion needs an interactive shell",
+    "builtin.logout": "there is no login shell: logout fails as bash's does outside one",
+    "builtin.bg": "job control needs an interactive shell",
+    "builtin.fg": "job control needs an interactive shell",
+    "builtin.help": "help text is Brush's own",
+    "compound.coproc": "coproc needs processes and is refused",
+    "builtin.umask": "refused: an agent's files have no permission bits to mask",
+    "builtin.ulimit": "refused: WASI has no resource limits"
+  },
+  "qualifiers": [
+    "error"
+  ],
+  "detectors": [
+    [
+      "syntax.quote.single",
+      "'"
+    ],
+    [
+      "syntax.quote.double",
+      "\""
+    ],
+    [
+      "syntax.quote.ansi-c",
+      "\\$'"
+    ],
+    [
+      "syntax.quote.escape",
+      "\\\\[^\\n]"
+    ],
+    [
+      "syntax.comment",
+      "(^|\\s)#[^!{]"
+    ],
+    [
+      "compound.pipeline",
+      "[^|]\\|[^|]"
+    ],
+    [
+      "compound.pipeline.negate",
+      "(^|[;&|(]\\s*|(?<![\\p{L}\\p{N}_])then\\s+|(?<![\\p{L}\\p{N}_])do\\s+)!\\s"
+    ],
+    [
+      "compound.list",
+      "&&|\\|\\|"
+    ],
+    [
+      "compound.group",
+      "(^|[;&|(]\\s*)\\{\\s"
+    ],
+    [
+      "compound.subshell",
+      "(^|[;&|]\\s*)\\((?!\\()"
+    ],
+    [
+      "compound.if",
+      "(?<![\\p{L}\\p{N}_])if(?![\\p{L}\\p{N}_]).*(?<![\\p{L}\\p{N}_])then(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "compound.case",
+      "(?<![\\p{L}\\p{N}_])case(?![\\p{L}\\p{N}_]).*(?<![\\p{L}\\p{N}_])in(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "compound.case.fallthrough",
+      ";;&|;&"
+    ],
+    [
+      "compound.for",
+      "(?<![\\p{L}\\p{N}_])for\\s+[\\p{L}\\p{N}_]+(\\s+in(?![\\p{L}\\p{N}_])|\\s*;|\\s*$)"
+    ],
+    [
+      "compound.for-arith",
+      "(?<![\\p{L}\\p{N}_])for\\s*\\(\\("
+    ],
+    [
+      "compound.while",
+      "(?<![\\p{L}\\p{N}_])while(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "compound.until",
+      "(?<![\\p{L}\\p{N}_])until(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "compound.select",
+      "(?<![\\p{L}\\p{N}_])select\\s+[\\p{L}\\p{N}_]+"
+    ],
+    [
+      "compound.arith",
+      "(^|[;&|]\\s*)\\(\\("
+    ],
+    [
+      "compound.cond",
+      "\\[\\["
+    ],
+    [
+      "compound.cond.regex",
+      "=~"
+    ],
+    [
+      "compound.function",
+      "[\\p{L}\\p{N}_]+\\s*\\(\\)\\s*\\{|(?<![\\p{L}\\p{N}_])function\\s+[\\p{L}\\p{N}_]+"
+    ],
+    [
+      "compound.function.local",
+      "(?<![\\p{L}\\p{N}_])local(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "param.positional",
+      "\\$[1-9#@*]|(?<![\\p{L}\\p{N}_])shift(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])set\\s+--"
+    ],
+    [
+      "param.special",
+      "\\$[?$!0_-]"
+    ],
+    [
+      "param.array.indexed",
+      "[\\p{L}\\p{N}_]+=\\(|\\$\\{[\\p{L}\\p{N}_]+\\[[@*0-9]"
+    ],
+    [
+      "param.array.assoc",
+      "declare\\s+-[\\p{L}\\p{N}_]*A|local\\s+-[\\p{L}\\p{N}_]*A"
+    ],
+    [
+      "param.nameref",
+      "(declare|local)\\s+-[\\p{L}\\p{N}_]*n"
+    ],
+    [
+      "param.indirect",
+      "\\$\\{![\\p{L}\\p{N}_]+\\}"
+    ],
+    [
+      "param.readonly",
+      "(?<![\\p{L}\\p{N}_])readonly(?![\\p{L}\\p{N}_])|declare\\s+-[\\p{L}\\p{N}_]*r"
+    ],
+    [
+      "param.export",
+      "(?<![\\p{L}\\p{N}_])export(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "param.attributes",
+      "declare\\s+-[\\p{L}\\p{N}_]*[ilux]"
+    ],
+    [
+      "param.callstack",
+      "FUNCNAME|BASH_SOURCE|LINENO"
+    ],
+    [
+      "param.random",
+      "\\$\\{?(RANDOM|SECONDS|EPOCHSECONDS|EPOCHREALTIME|SRANDOM)"
+    ],
+    [
+      "expansion.brace",
+      "\\{[^{}\\s,]*,[^{}\\s]*\\}|\\{[^{}\\s]+\\.\\.[^{}\\s]+\\}"
+    ],
+    [
+      "expansion.tilde",
+      "(^|[\\s=:])~"
+    ],
+    [
+      "expansion.parameter.default",
+      "\\$\\{[^}]*:?[-=][^}]*\\}"
+    ],
+    [
+      "expansion.parameter.alternative",
+      "\\$\\{[^}]*:?\\+[^}]*\\}"
+    ],
+    [
+      "expansion.parameter.error",
+      "\\$\\{[\\p{L}\\p{N}_]+:?\\?"
+    ],
+    [
+      "expansion.parameter.length",
+      "\\$\\{#[\\p{L}\\p{N}_]"
+    ],
+    [
+      "expansion.parameter.substring",
+      "\\$\\{[\\p{L}\\p{N}_]+:[-0-9 ]"
+    ],
+    [
+      "expansion.parameter.trim",
+      "\\$\\{[\\p{L}\\p{N}_]+(\\[[^\\]]*\\])?(##?|%%?)"
+    ],
+    [
+      "expansion.parameter.replace",
+      "\\$\\{[\\p{L}\\p{N}_]+(\\[[^\\]]*\\])?//?"
+    ],
+    [
+      "expansion.parameter.case",
+      "\\$\\{[\\p{L}\\p{N}_]+(\\^\\^?|,,?)"
+    ],
+    [
+      "expansion.parameter.transform",
+      "\\$\\{[\\p{L}\\p{N}_]+@[QEPAaULuK]\\}"
+    ],
+    [
+      "expansion.parameter.names",
+      "\\$\\{![\\p{L}\\p{N}_]+(\\*|@|\\[)"
+    ],
+    [
+      "expansion.command",
+      "\\$\\((?!\\()|`"
+    ],
+    [
+      "expansion.arithmetic",
+      "\\$\\(\\("
+    ],
+    [
+      "expansion.process",
+      "[<>]\\("
+    ],
+    [
+      "expansion.word-splitting",
+      "(?<![\\p{L}\\p{N}_])IFS="
+    ],
+    [
+      "redirection.input",
+      "(^|[^<])<[^<&(]"
+    ],
+    [
+      "redirection.output",
+      "(^|[^>&])>[^>&(|]"
+    ],
+    [
+      "redirection.append",
+      ">>"
+    ],
+    [
+      "redirection.noclobber",
+      ">\\||(?<![\\p{L}\\p{N}_])set\\s+-[\\p{L}\\p{N}_]*C|noclobber"
+    ],
+    [
+      "redirection.both",
+      "&>"
+    ],
+    [
+      "redirection.duplicate",
+      "\\d?[<>]&\\d"
+    ],
+    [
+      "redirection.close",
+      "[<>]&-"
+    ],
+    [
+      "redirection.heredoc",
+      "<<[^<-]"
+    ],
+    [
+      "redirection.heredoc.strip",
+      "<<-"
+    ],
+    [
+      "redirection.heredoc.quoted",
+      "<<-?\\s*['\"]"
+    ],
+    [
+      "redirection.herestring",
+      "<<<"
+    ],
+    [
+      "redirection.fd-variable",
+      "\\{[\\p{L}\\p{N}_]+\\}[<>]"
+    ],
+    [
+      "redirection.dev-paths",
+      "/dev/(null|stdin|stdout|stderr|fd/)"
+    ],
+    [
+      "redirection.exec",
+      "(?<![\\p{L}\\p{N}_])exec\\s+\\d*[<>]"
+    ],
+    [
+      "option.errexit",
+      "(?<![\\p{L}\\p{N}_])set\\s+-[\\p{L}\\p{N}_]*e|(?<![\\p{L}\\p{N}_])bash\\s+-[\\p{L}\\p{N}_]*e"
+    ],
+    [
+      "option.nounset",
+      "(?<![\\p{L}\\p{N}_])set\\s+-[\\p{L}\\p{N}_]*u|(?<![\\p{L}\\p{N}_])bash\\s+-[\\p{L}\\p{N}_]*u"
+    ],
+    [
+      "option.xtrace",
+      "(?<![\\p{L}\\p{N}_])set\\s+-[\\p{L}\\p{N}_]*x"
+    ],
+    [
+      "option.pipefail",
+      "pipefail"
+    ],
+    [
+      "option.noglob",
+      "(?<![\\p{L}\\p{N}_])set\\s+-[\\p{L}\\p{N}_]*f"
+    ],
+    [
+      "option.allexport",
+      "(?<![\\p{L}\\p{N}_])set\\s+-[\\p{L}\\p{N}_]*a"
+    ],
+    [
+      "option.noexec",
+      "(?<![\\p{L}\\p{N}_])set\\s+-[\\p{L}\\p{N}_]*n"
+    ],
+    [
+      "option.posix",
+      "-o\\s+posix"
+    ],
+    [
+      "option.lastpipe",
+      "lastpipe"
+    ],
+    [
+      "option.nocasematch",
+      "nocasematch"
+    ],
+    [
+      "expansion.glob.options",
+      "extglob|globstar|nullglob|failglob|dotglob|nocaseglob"
+    ],
+    [
+      "trap.exit",
+      "(?<![\\p{L}\\p{N}_])trap(?![\\p{L}\\p{N}_]).*(?<![\\p{L}\\p{N}_])EXIT(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "trap.err",
+      "(?<![\\p{L}\\p{N}_])trap(?![\\p{L}\\p{N}_]).*(?<![\\p{L}\\p{N}_])ERR(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "trap.pipe",
+      "(?<![\\p{L}\\p{N}_])trap(?![\\p{L}\\p{N}_]).*(?<![\\p{L}\\p{N}_])(PIPE|SIGPIPE|13)(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "trap.signal",
+      "(?<![\\p{L}\\p{N}_])trap(?![\\p{L}\\p{N}_]).*(?<![\\p{L}\\p{N}_])(TERM|INT|HUP)(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "trap.debug-return",
+      "(?<![\\p{L}\\p{N}_])trap(?![\\p{L}\\p{N}_]).*(?<![\\p{L}\\p{N}_])(DEBUG|RETURN)(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "jobs.background",
+      "[^&]&(\\s|$)(?!&)"
+    ],
+    [
+      "jobs.wait",
+      "(?<![\\p{L}\\p{N}_])wait(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "jobs.kill",
+      "(?<![\\p{L}\\p{N}_])kill(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "child.shell",
+      "(?<![\\p{L}\\p{N}_])(sh|bash)\\s+-[\\p{L}\\p{N}_]*c(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "child.exec",
+      "-exec(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])xargs(?![\\p{L}\\p{N}_])"
+    ],
+    [
+      "tool.sibling",
+      "(?<![\\p{L}\\p{N}_])probe-tool(?![\\p{L}\\p{N}_])"
+    ]
+  ],
+  "commandStart": "(?:[;&|(){}`]|\\$\\(|(?<![\\p{L}\\p{N}_])(?:then|do|else|in|while|until|if|elif|time)(?![\\p{L}\\p{N}_])|!|^)\\s*(?=(?:[\\p{L}\\p{N}_]+=[^\\s]*\\s+)*([.:\\[]|[A-Za-z_][\\p{L}\\p{N}_-]*)(?=\\s|;|$|\\)|&|\\|))"
+}

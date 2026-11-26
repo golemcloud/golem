@@ -18,7 +18,7 @@ use super::{
 };
 use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
 use golem_common::serialization::deserialize;
 use golem_service_base::db::postgres::PostgresPool;
@@ -68,11 +68,12 @@ impl PostgresSchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for PostgresSchedulerStorage {
     async fn insert(
         &self,
         schedule_id: ScheduleId,
-        due_at: DateTime<Utc>,
+        due_at: jiff::Timestamp,
         shard_id: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -107,7 +108,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
@@ -172,7 +173,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         if assignment.is_empty() {
@@ -198,14 +199,16 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        lease_until: DateTime<Utc>,
+        lease_until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let query = sqlx::query(
-            "UPDATE scheduled_actions SET lease_until_ms = $3, available_at_ms = $3 WHERE schedule_id = $1 AND lease_owner = $2;",
+            "UPDATE scheduled_actions SET lease_until_ms = GREATEST(lease_until_ms, $3), available_at_ms = GREATEST(lease_until_ms, $3) WHERE schedule_id = $1 AND lease_owner = $2 AND lease_until_ms > $4 AND $3 > $4;",
         )
         .bind(schedule_id.id)
         .bind(lease_owner)
-        .bind(datetime_to_millis(lease_until));
+        .bind(datetime_to_millis(lease_until))
+        .bind(datetime_to_millis(now));
 
         self.pool
             .with_rw("scheduler_storage", "extend_lease")
@@ -219,12 +222,14 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let query = sqlx::query(
-            "DELETE FROM scheduled_actions WHERE schedule_id = $1 AND lease_owner = $2;",
+            "DELETE FROM scheduled_actions WHERE schedule_id = $1 AND lease_owner = $2 AND lease_until_ms > $3;",
         )
         .bind(schedule_id.id)
-        .bind(lease_owner);
+        .bind(lease_owner)
+        .bind(datetime_to_millis(now));
 
         self.pool
             .with_rw("scheduler_storage", "ack")

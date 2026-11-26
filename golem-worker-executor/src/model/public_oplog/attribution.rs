@@ -234,6 +234,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             OplogEntry::Create { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Interrupted { .. }

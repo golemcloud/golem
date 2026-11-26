@@ -369,6 +369,7 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
             oplog_index: OplogIndex::from_u64(4),
             idempotency_key: Some(InvocationId(Uuid::from_u128(1))),
             manual_update_target_revision: None,
+            operation: None,
         };
         let mut status = AgentStatusRecord {
             pending_invocations: vec![pending],
@@ -433,6 +434,7 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(constructor),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..Default::default()
     });
@@ -500,6 +502,7 @@ fn future_invocations_do_not_block_ready_work_or_idle() {
         oplog_index: OplogIndex::from_u64(3),
         idempotency_key: Some(InvocationId(Uuid::from_u128(3))),
         manual_update_target_revision: None,
+        operation: None,
     };
     let ready = PendingInvocationRef {
         not_before: None,
@@ -1682,7 +1685,7 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
 
         let clock = crate::services::resource_usage_metering::TestClock::new_at(
             Instant::now(),
-            chrono::Utc::now(),
+            jiff::Timestamp::now(),
         );
         let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test(Some(clock.clone())).await;

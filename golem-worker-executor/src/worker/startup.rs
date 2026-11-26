@@ -67,7 +67,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let status = this.state_actor.status().await;
                 if this.agent_mode() == AgentMode::Durable
                     && status.status == AgentStatus::Interrupted
-                    && status.current_idempotency_key.is_some()
+                    && (status.current_idempotency_key().is_some()
+                        || status.settling_invocation.is_some())
                 {
                     this.add_and_commit_oplog_internal(
                         unloaded.lifecycle(),

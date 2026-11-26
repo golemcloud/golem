@@ -18,21 +18,42 @@ pub struct FilePin {
 
 pub type Pins = BTreeMap<String, FilePin>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackageSource<'a> {
+    File(&'a str),
+    Url(&'a str),
+    Oci(&'a str),
+}
+
+impl<'a> PackageSource<'a> {
+    pub fn parse(source: &'a str) -> Self {
+        if let Some(reference) = source.strip_prefix("oci://") {
+            Self::Oci(reference)
+        } else if source.starts_with("https://") || source.starts_with("http://") {
+            Self::Url(source)
+        } else {
+            Self::File(source)
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
     #[error(
-        "Too many packages (maximum {MAX_PACKAGES}); repair the manifest and rerun `golem install <file>`"
+        "Too many packages (maximum {MAX_PACKAGES}); repair the manifest and rerun `golem install <source>`"
     )]
     Limit,
-    #[error("Package {0:?} has no golem.lock entry; run `golem install <file>`")]
+    #[error("Package {0:?} has no golem.lock entry; run `golem install <source>`")]
     Missing(String),
     #[error(
-        "golem.lock entry {0:?} has no manifest entry; delete this entry from golem.lock if you no longer use the package, or run `golem install <file>` with the archive for {0:?}"
+        "golem.lock entry {0:?} has no manifest entry; delete this entry from golem.lock if you no longer use the package, or run `golem install <source>` for {0:?}"
     )]
     Extra(String),
-    #[error("golem.lock entry {0:?} disagrees with the manifest ({1}); run `golem install <file>`")]
+    #[error(
+        "golem.lock entry {0:?} disagrees with the manifest ({1}); run `golem install <source>`"
+    )]
     Mismatch(String, &'static str),
-    #[error("Invalid golem.lock entry {name:?}; run `golem install <file>`: {cause:#}")]
+    #[error("Invalid golem.lock entry {name:?}; run `golem install <source>`: {cause:#}")]
     Invalid {
         name: String,
         #[source]
@@ -84,6 +105,12 @@ pub fn check_lock(manifest: &Pins, lock: &Pins) -> Result<(), LockError> {
 pub enum ExpandError {
     #[error(transparent)]
     Lock(#[from] LockError),
+    #[error("golem.lock entry {name:?} has a disallowed source: {cause:#}")]
+    Source {
+        name: String,
+        #[source]
+        cause: anyhow::Error,
+    },
     #[error("golem.lock entry {name:?} ({location:?}, {digest}): {cause:#}")]
     Entry {
         name: String,
@@ -96,13 +123,13 @@ pub enum ExpandError {
 
 /// The caller controls source authority, including authorization of cache hits. Preflight
 /// runs for every pin before any cache, source, or unpack effect. A Golem tool can refuse
-/// local file sources here (the only source type so far), without changing expansion.
+/// sources here without changing expansion.
 #[async_trait::async_trait]
 pub trait PackageEffects: Send {
-    fn authorize_file(&self, name: &str, pin: &FilePin) -> anyhow::Result<()>;
+    fn authorize(&self, name: &str, pin: &FilePin) -> anyhow::Result<()>;
     // Return at most `limit` bytes, or an error. Invalid cache bytes are treated as a miss.
     async fn cached(&mut self, digest: &str, limit: u64) -> anyhow::Result<Option<Vec<u8>>>;
-    async fn fetch_file(&mut self, pin: &FilePin, limit: u64) -> anyhow::Result<Vec<u8>>;
+    async fn fetch(&mut self, pin: &FilePin, limit: u64) -> anyhow::Result<Vec<u8>>;
     async fn cache(&mut self, digest: &str, verified: &[u8]) -> anyhow::Result<()>;
     // Paths are relative to `root` and contain only normal components. The caller must
     // use a fresh root or a confined filesystem view that does not follow symlinks.
@@ -119,6 +146,8 @@ pub trait PackageEffects: Send {
 pub struct ExpandedPackages {
     pub declarations: Declarations,
     pub components: BTreeMap<ComponentName, InstalledComponent>,
+    pub agent_packages: BTreeMap<AgentTypeName, String>,
+    pub calls: BTreeMap<String, BTreeSet<AgentTypeName>>,
 }
 
 #[derive(Debug)]
@@ -153,8 +182,11 @@ pub async fn expand(
     };
     for (name, pin) in lock {
         effects
-            .authorize_file(name, pin)
-            .map_err(|cause| entry_error(name, pin, cause))?;
+            .authorize(name, pin)
+            .map_err(|cause| ExpandError::Source {
+                name: name.clone(),
+                cause,
+            })?;
     }
 
     let mut expanded = ExpandedPackages::default();
@@ -200,13 +232,35 @@ async fn expand_one(
     let package = match cached {
         Some(package) => package,
         None => {
-            let bytes = effects.fetch_file(pin, MAX_PACKAGE_BYTES).await?;
+            let bytes = effects.fetch(pin, MAX_PACKAGE_BYTES).await?;
             let package = verify(&bytes)
                 .context("Could not verify the source package digest and identity")?;
             effects.cache(&pin.digest, &bytes).await?;
             package
         }
     };
+
+    let config = package.config();
+    for agent in config
+        .components
+        .values()
+        .flat_map(|c| &c.metadata.agent_types)
+    {
+        if let Some(previous) = output
+            .agent_packages
+            .insert(agent.type_name.clone(), name.into())
+        {
+            bail!(
+                "Duplicate installed agent type {} in packages {previous:?} and {name:?}",
+                agent.type_name
+            );
+        }
+    }
+    if !config.package.calls.is_empty() {
+        output
+            .calls
+            .insert(name.into(), config.package.calls.clone());
+    }
 
     let mut unpack = Unpack {
         package: &package,

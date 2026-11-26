@@ -181,6 +181,9 @@ pub enum ValueError {
     OptionInnerPresenceMismatch {
         path: ValuePath,
     },
+    TextLanguageInvalid {
+        path: ValuePath,
+    },
     TextLanguageNotAllowed {
         path: ValuePath,
         language: String,
@@ -386,6 +389,10 @@ impl Display for ValueError {
             ValueError::OptionInnerPresenceMismatch { path } => {
                 write!(f, "option-value presence inconsistent at {path}")
             }
+            ValueError::TextLanguageInvalid { path } => write!(
+                f,
+                "text value at {path} carries a language that is not a BCP-47 language tag"
+            ),
             ValueError::TextLanguageNotAllowed { path, language } => write!(
                 f,
                 "text value at {path} carries language `{language}` not in the allow-list"
@@ -476,6 +483,46 @@ impl Display for ValueError {
 }
 
 impl Error for ValueError {}
+
+impl ValueError {
+    /// Describes the failure by its path and the restriction it violates, without the
+    /// submitted value, so that it can be shown to a caller that may not see the value.
+    pub fn diagnostic(&self) -> String {
+        match self {
+            ValueError::UnionUnknownTag { path, .. } => {
+                format!("union value at {path} carries a tag that does not match any branch")
+            }
+            ValueError::TextLanguageNotAllowed { path, .. } => {
+                format!("text value at {path} carries a language not in the allow-list")
+            }
+            ValueError::BinaryMimeNotAllowed { path, .. } => {
+                format!("binary value at {path} carries a mime-type not in the allow-list")
+            }
+            ValueError::PathExtensionNotAllowed { path, .. } => {
+                format!("path value at {path} has an extension not in the allow-list")
+            }
+            ValueError::UrlInvalid { path, reason, .. } => {
+                format!("url value at {path} is not a valid URL: {reason}")
+            }
+            ValueError::UrlSchemeNotAllowed { path, .. } => {
+                format!("url value at {path} has a scheme not in the allow-list")
+            }
+            ValueError::UrlHostNotAllowed { path, .. } => {
+                format!("url value at {path} has a host not in the allow-list")
+            }
+            ValueError::QuantityUnitNotAllowed { path, .. } => {
+                format!("quantity value at {path} has a unit which is not allowed")
+            }
+            ValueError::SecretCategoryMismatch { path, expected, .. } => {
+                format!("secret value at {path} does not have category `{expected}`")
+            }
+            ValueError::QuotaTokenResourceMismatch { path, expected, .. } => {
+                format!("quota-token value at {path} does not have resource `{expected}`")
+            }
+            _ => self.to_string(),
+        }
+    }
+}
 
 struct ValidationContext<'a> {
     index: GraphIndex<'a>,
@@ -1245,6 +1292,21 @@ fn describe_numeric_bound(bound: NumericBound) -> String {
     }
 }
 
+/// Whether `tag` has the syntax of a BCP-47 language tag: subtags of 1 to 8 ASCII letters or
+/// digits separated by `-`, and a first subtag of letters only. The subtags are not checked
+/// against the language subtag registry.
+fn is_language_tag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    let valid = |subtag: &str, letters_only: bool| {
+        (1..=8).contains(&subtag.len())
+            && subtag
+                .bytes()
+                .all(|byte| byte.is_ascii_alphabetic() || (!letters_only && byte.is_ascii_digit()))
+    };
+    subtags.next().is_some_and(|first| valid(first, true))
+        && subtags.all(|subtag| valid(subtag, false))
+}
+
 fn check_text(
     _context: &ValidationContext,
     restrictions: &TextRestrictions,
@@ -1252,6 +1314,13 @@ fn check_text(
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
 ) {
+    if let Some(lang) = &payload.language
+        && !is_language_tag(lang)
+    {
+        errors.push(ValueError::TextLanguageInvalid {
+            path: path.snapshot(),
+        });
+    }
     if let (Some(allowed), Some(lang)) = (&restrictions.languages, &payload.language)
         && !allowed.iter().any(|a| a == lang)
     {

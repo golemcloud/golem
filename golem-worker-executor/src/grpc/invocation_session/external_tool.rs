@@ -60,8 +60,13 @@ where
         };
         let owned = OwnedAgentId::new(request.environment_id()?, &agent_id);
         self.ensure_worker_belongs_to_this_executor(&owned.agent_id)?;
-        let operation = format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/"));
-        if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG {
+        let operation = golem_common::model::InvocationOperation::tool_operation(
+            &tool.tool_name,
+            &tool.command_path,
+        );
+        let mode = request.mode();
+        let virtual_lookup = mode == Mode::Lookup && owned.agent_id.type_tag() == RESERVED_TYPE_TAG;
+        if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG && !virtual_lookup {
             return Err(WorkerExecutorError::invalid_request(
                 "existing tool target must be a real agent",
             ));
@@ -76,12 +81,14 @@ where
         } else {
             None
         };
-        // An existing owner is named by its fingerprint, and the guard pins that incarnation in
-        // every mode. A virtual owner has no incarnation a caller can name.
+        // An existing agent is named by its fingerprint, and the guard pins that incarnation in
+        // every mode. A virtual receipt can also be observed without a fingerprint; its lookup
+        // acquires only an existing owner and never starts it.
         let expected_fingerprint = match (tool.fresh_owner, request.expected_callee_fingerprint) {
             (false, Some(fingerprint)) => {
                 Some(golem_common::model::AgentFingerprint(fingerprint.into()))
             }
+            (false, None) if virtual_lookup => None,
             (true, None) => None,
             (true, Some(_)) => {
                 return Err(WorkerExecutorError::invalid_request(
@@ -103,7 +110,6 @@ where
             .map(TryInto::try_into)
             .transpose()
             .map_err(WorkerExecutorError::permission_denied)?;
-        let mode = request.mode();
         if scope_card.is_some() && mode != Mode::Await {
             return Err(WorkerExecutorError::permission_denied(
                 "scope cards are supported only for invoke-and-await",
@@ -118,6 +124,7 @@ where
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         };
         if mode == Mode::Lookup {
             let key = request
@@ -139,13 +146,9 @@ where
             let (worker, metadata, _response_lease) = if let Some(expected) = expected_fingerprint {
                 // The guard pins the named incarnation, and the response describes that worker,
                 // so a delete or re-create between reads cannot answer for another incarnation.
-                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
-                    self,
-                    &owned,
-                    caller,
-                    Some(expected),
-                )
-                .await?;
+                let (worker, response_lease) =
+                    Worker::get_exact_existing_suspended_for_response(self, &owned, Some(expected))
+                        .await?;
                 let bound = scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime);
@@ -171,8 +174,7 @@ where
                     return Ok(response);
                 };
                 let (worker, response_lease) =
-                    Worker::get_exact_existing_suspended_for_response(self, &owned, caller, None)
-                        .await?;
+                    Worker::get_exact_existing_suspended_for_response(self, &owned, None).await?;
                 scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime)?;
@@ -186,6 +188,9 @@ where
                     output.idempotency_key = response.idempotency_key;
                     output.invocation_status = Some(InvocationStatus::Complete);
                     response = output;
+                }
+                LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled)) => {
+                    response.invocation_status = Some(InvocationStatus::Cancelled)
                 }
                 LookupResult::Complete(Err(error)) => return Err(error),
                 LookupResult::Pending => {
@@ -305,13 +310,18 @@ where
                     .map_err(WorkerExecutorError::invalid_request)?,
                 activation.registered_tool.deployment_revision,
             )?;
-            let at = DateTime::from_timestamp(
-                timestamp.seconds,
-                timestamp.nanos.try_into().map_err(|_| {
-                    WorkerExecutorError::invalid_request("invalid schedule timestamp")
-                })?,
-            )
-            .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
+            crate::worker::require_canonical_command_path(
+                &activation,
+                &tool_name,
+                &tool.command_path,
+            )?;
+            if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid schedule timestamp",
+                ));
+            }
+            let at = jiff::Timestamp::new(timestamp.seconds, timestamp.nanos)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
             let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
@@ -377,13 +387,9 @@ where
         // A missing, replaced or deleting incarnation is answered before the call reads or
         // prepares it. A deletion that starts later cancels this session and waits for it before
         // it stops the agent.
-        let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
-            self,
-            &owned,
-            caller.clone(),
-            expected_fingerprint,
-        )
-        .await?;
+        let (worker, _response_lease) =
+            Worker::get_exact_existing_suspended_for_response(self, &owned, expected_fingerprint)
+                .await?;
         let bound = scope
             .bind(&worker.tasks)
             .map_err(WorkerExecutorError::runtime);
@@ -478,6 +484,7 @@ where
                     prepared: Some(acceptance.prepared),
                     durable_replayed: acceptance.replayed,
                     joined_origin_observer: acceptance.joined_origin_observer,
+                    queued: None,
                 })
                 .map_err(|_| {
                     WorkerExecutorError::runtime(
@@ -487,13 +494,13 @@ where
             Worker::start_if_needed(worker.clone()).await?;
         } else if mode == Mode::Schedule && request.schedule_at.is_some() {
             let timestamp = request.schedule_at.as_ref().unwrap();
-            let at = DateTime::from_timestamp(
-                timestamp.seconds,
-                timestamp.nanos.try_into().map_err(|_| {
-                    WorkerExecutorError::invalid_request("invalid schedule timestamp")
-                })?,
-            )
-            .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
+            if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid schedule timestamp",
+                ));
+            }
+            let at = jiff::Timestamp::new(timestamp.seconds, timestamp.nanos)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
             let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?

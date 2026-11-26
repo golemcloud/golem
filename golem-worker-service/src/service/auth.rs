@@ -100,6 +100,7 @@ impl RemoteAuthService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AuthService for RemoteAuthService {
     async fn invalidate_tokens_for_account(&self, account_id: AccountId) {
         let entries: Vec<TokenSecret> = self

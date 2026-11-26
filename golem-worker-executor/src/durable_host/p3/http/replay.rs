@@ -14,6 +14,7 @@
 
 use super::serialization::{deserialize_error_code, serialize_error_code, serialize_headers};
 use super::*;
+use crate::durable_host::attribution::with_import_access;
 use crate::durable_host::p3::{DurableP3, durable_worker_ctx, wasi_http_view};
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::oplog::Oplog;
@@ -176,7 +177,7 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
         progress.clone(),
         activity,
     );
-    let captured = store.with(|mut access| {
+    let captured = with_import_access(store, |mut access| {
         durable_worker_ctx::<Ctx, U>(access.data_mut())
             .attribution
             .capture()
@@ -210,7 +211,7 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
         activity,
         _phantom: PhantomData,
     };
-    let captured = store.with(|mut access| {
+    let captured = with_import_access(store, |mut access| {
         durable_worker_ctx::<Ctx, U>(access.data_mut())
             .attribution
             .capture()

@@ -20,6 +20,7 @@ use axum::{Json, Router};
 use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicAgentInvocationResult, PublicOplogEntry,
+    PublicOplogEntryWithIndex,
 };
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey};
 use golem_common::schema::SchemaValue;
@@ -336,25 +337,10 @@ async fn fork_idle_worker(
     )
     .await?;
 
-    let source_oplog = user
-        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
-        .await?;
+    let source_oplog = settled_oplog(&user, &source_agent_id).await?;
+    let cut = source_oplog.last().unwrap().oplog_index;
 
-    let log_record = source_oplog
-        .last()
-        .expect("Expect at least one entry in source oplog");
-
-    assert!(matches!(
-        &log_record.entry,
-        PublicOplogEntry::AgentInvocationFinished(_)
-    ));
-
-    let target_agent_id = user
-        .fork_worker(
-            &source_agent_id,
-            OplogIndex::from_u64(source_oplog.len() as u64),
-        )
-        .await?;
+    let target_agent_id = user.fork_worker(&source_agent_id, cut).await?;
 
     invoke_and_await_agent_by_id(
         &user,
@@ -555,39 +541,39 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
 
     let source_agent_name = source_agent_id.to_string();
 
-    let oplog = user
-        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
-        .await?;
+    let oplog = settled_oplog(&user, &source_agent_id).await?;
+    let cut = oplog.last().unwrap().oplog_index;
 
     // We fork the worker post the completion and see if oplog corresponding to environment value
     // has the same value as the source worker. As far as the fork cut off point is post the
     // completion, there shouldn't be any divergence for worker information even if forked
     // worker ID is different from the source worker ID
-    let target_agent_id = user
-        .fork_worker(&source_agent_id, OplogIndex::from_u64(oplog.len() as u64))
-        .await?;
+    let target_agent_id = user.fork_worker(&source_agent_id, cut).await?;
 
-    // Compare the retained cut entry; fork provenance is appended after the copied prefix.
+    // The fork retains every entry of the inclusive prefix, and fork provenance is appended after
+    // it. The fork rewrites the target's identity in `Create` and its wallet pins, so the kinds of
+    // the entries are compared, and the retained cut entry is compared in full.
     let forked_oplog = user
         .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
-
-    let source_last = oplog.last().unwrap();
-    let forked_last = forked_oplog
+    let forked_prefix = forked_oplog
         .iter()
-        .find(|entry| entry.oplog_index == source_last.oplog_index)
-        .expect("Forked worker must retain the entry at the cut index");
-
-    assert!(
-        matches!(
-            &source_last.entry,
-            PublicOplogEntry::AgentInvocationFinished(_)
-        ),
-        "Expected AgentInvocationFinished in source oplog"
-    );
-
+        .take_while(|entry| entry.oplog_index <= cut)
+        .collect::<Vec<_>>();
     assert_eq!(
-        source_last.entry, forked_last.entry,
+        oplog
+            .iter()
+            .map(|entry| (entry.oplog_index, std::mem::discriminant(&entry.entry)))
+            .collect::<Vec<_>>(),
+        forked_prefix
+            .iter()
+            .map(|entry| (entry.oplog_index, std::mem::discriminant(&entry.entry)))
+            .collect::<Vec<_>>(),
+        "Forked worker oplog should retain every entry of the source until cut off"
+    );
+    assert_eq!(
+        oplog.last().unwrap().entry,
+        forked_prefix.last().unwrap().entry,
         "Forked worker oplog should have the same entries as source until cut off"
     );
 
@@ -599,6 +585,42 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     );
 
     Ok(())
+}
+
+/// The oplog up to the `AgentInvocationSettled` that closes the last invocation. A method's
+/// result is returned at `AgentInvocationFinished`; the invocation's background work then drains
+/// and the agent becomes idle at its `AgentInvocationSettled`.
+async fn settled_oplog(
+    user: &impl TestDsl,
+    agent_id: &OwnedAgentId,
+) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let oplog = user.get_oplog(agent_id, OplogIndex::INITIAL).await?;
+        let finished = oplog
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationFinished(params) => {
+                    Some(params.invocation_id.clone())
+                }
+                _ => None,
+            })
+            .expect("Expected an AgentInvocationFinished in the source oplog");
+        if matches!(
+            &oplog.last().unwrap().entry,
+            PublicOplogEntry::AgentInvocationSettled(params) if params.invocation_id == finished
+        ) {
+            return Ok(oplog);
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "The last invocation did not settle as the last entry: {:?}",
+                oplog.last().unwrap()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 fn run_http_server(

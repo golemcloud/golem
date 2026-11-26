@@ -79,6 +79,7 @@ impl CompressedOplogArchiveService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchiveService for CompressedOplogArchiveService {
     async fn open(
         &self,
@@ -355,6 +356,7 @@ impl CompressedOplogArchive {
 /// so here it is not protected by a lock. If this changes, we need to add a lock here, similar
 /// to the `PrimaryOplog` implementation.
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for CompressedOplogArchive {
     async fn read_source(
         &self,

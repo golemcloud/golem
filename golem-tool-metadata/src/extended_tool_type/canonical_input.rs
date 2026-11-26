@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_schema::schema::tool::canonical::CanonicalSurfaceRef;
 
 impl CanonicalInputModel {
     pub fn from_fields(fields: Vec<CanonicalInputField>) -> Result<Self, ToolBuildError> {
@@ -134,7 +135,9 @@ impl ExtendedToolType {
         }
         result
     }
+}
 
+impl<S: ToolSchemaRepr> ExtendedToolType<S> {
     pub fn command_index_by_path(&self, command_path: &[String]) -> Option<usize> {
         let current = self.node_index_by_path(command_path)?;
         self.commands[current].body.as_ref().map(|_| current)
@@ -161,158 +164,71 @@ impl ExtendedToolType {
         Some(current)
     }
 
-    /// Projects the canonical-relevant subset of this descriptor onto the
-    /// shared native tool model: command tree topology, surface names/aliases,
-    /// and the input surface shapes (positionals, tail, options, flags).
-    /// Docs, constraints, results, errors, annotations, and the shared
-    /// definition registry are not part of the projection: it is used only to
-    /// resolve the shared canonical *ordering* (surface references), which
-    /// never inspects definitions. The per-field schema graphs stay the
-    /// original embedded graphs of this descriptor.
-    pub(super) fn canonical_projection(&self) -> native::Tool {
-        fn option_projection(option: &ExtendedOptionSpec) -> native::OptionSpec {
-            native::OptionSpec {
-                long: option.long.clone(),
-                short: option.short,
-                aliases: option.aliases.clone(),
-                doc: native::Doc::default(),
-                value_name: None,
-                shape: match &option.shape {
-                    ExtendedOptionShape::Scalar(g) => {
-                        native::OptionShape::Scalar(schema_graph_root(g))
-                    }
-                    ExtendedOptionShape::OptionalScalar(g) => {
-                        native::OptionShape::OptionalScalar(schema_graph_root(g))
-                    }
-                    ExtendedOptionShape::RepeatableList(r) => {
-                        native::OptionShape::RepeatableList(native::RepeatableListShape {
-                            repetition: repetition_projection(&r.repetition),
-                            item_type: schema_graph_root(&r.item_type),
-                        })
-                    }
-                    ExtendedOptionShape::RepeatableMap(r) => {
-                        native::OptionShape::RepeatableMap(native::RepeatableMapShape {
-                            repetition: repetition_projection(&r.repetition),
-                            map_type: schema_graph_root(&r.map_type),
-                            duplicate_key_policy: match r.duplicate_key_policy {
-                                wire::DuplicateKeyPolicy::Reject => {
-                                    native::DuplicateKeyPolicy::Reject
-                                }
-                                wire::DuplicateKeyPolicy::LastWins => {
-                                    native::DuplicateKeyPolicy::LastWins
-                                }
-                            },
-                        })
-                    }
-                },
-                default: None,
-                required: option.required,
-                env_var: None,
-            }
-        }
-
-        fn repetition_projection(repetition: &wire::Repetition) -> native::Repetition {
-            match repetition {
-                wire::Repetition::Repeated => native::Repetition::Repeated,
-                wire::Repetition::Delimited(c) => native::Repetition::Delimited(*c),
-                wire::Repetition::Either(c) => native::Repetition::Either(*c),
-            }
-        }
-
-        fn flag_projection(flag: &FlagSpec) -> native::FlagSpec {
-            native::FlagSpec {
-                long: flag.long.clone(),
-                short: flag.short,
-                aliases: flag.aliases.clone(),
-                doc: native::Doc::default(),
-                shape: match &flag.shape {
-                    wire::FlagShape::BoolFlag(shape) => {
-                        native::FlagShape::BoolFlag(native::BoolFlagShape {
-                            default: shape.default,
-                            negatable: shape.negatable,
-                        })
-                    }
-                    wire::FlagShape::CountFlag(max) => native::FlagShape::CountFlag(*max),
-                },
-                env_var: None,
-            }
-        }
-
-        let nodes = self
+    pub(crate) fn canonical_input_surfaces(
+        &self,
+        command_index: usize,
+    ) -> Vec<CanonicalSurfaceRef> {
+        use golem_schema::schema::tool::canonical::{CanonicalInputLayout, CanonicalNamedSurfaces};
+        let mut layout = CanonicalInputLayout {
+            globals: self
+                .path_to(command_index)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|index| {
+                    let node = self.commands.get(index)?;
+                    Some((
+                        index,
+                        CanonicalNamedSurfaces {
+                            options: node
+                                .globals
+                                .options
+                                .iter()
+                                .map(|o| (o.long.as_str(), o.aliases.as_slice()))
+                                .collect(),
+                            flags: node
+                                .globals
+                                .flags
+                                .iter()
+                                .map(|f| (f.long.as_str(), f.aliases.as_slice()))
+                                .collect(),
+                        },
+                    ))
+                })
+                .collect(),
+            ..Default::default()
+        };
+        if let Some(body) = self
             .commands
-            .iter()
-            .map(|node| native::CommandNode {
-                name: node.name.clone(),
-                aliases: node.aliases.clone(),
-                doc: native::Doc::default(),
-                http: None,
-                globals: native::Globals {
-                    options: node.globals.options.iter().map(option_projection).collect(),
-                    flags: node.globals.flags.iter().map(flag_projection).collect(),
-                },
-                subcommands: node
-                    .subcommands
+            .get(command_index)
+            .and_then(|node| node.body.as_ref())
+        {
+            layout.positionals = body
+                .positionals
+                .fixed
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect();
+            layout.tail = body.positionals.tail.as_ref().map(|p| p.name.as_str());
+            layout.local = CanonicalNamedSurfaces {
+                options: body
+                    .options
                     .iter()
-                    .map(|idx| native::CommandIndex(*idx))
+                    .map(|o| (o.long.as_str(), o.aliases.as_slice()))
                     .collect(),
-                body: node.body.as_ref().map(|body| native::CommandBody {
-                    positionals: native::Positionals {
-                        fixed: body
-                            .positionals
-                            .fixed
-                            .iter()
-                            .map(|p| native::Positional {
-                                name: p.name.clone(),
-                                doc: native::Doc::default(),
-                                value_name: None,
-                                type_: schema_graph_root(&p.type_),
-                                default: None,
-                                required: p.required,
-                                accepts_stdio: p.accepts_stdio,
-                            })
-                            .collect(),
-                        tail: body
-                            .positionals
-                            .tail
-                            .as_ref()
-                            .map(|t| native::TailPositional {
-                                name: t.name.clone(),
-                                doc: native::Doc::default(),
-                                value_name: None,
-                                item_type: schema_graph_root(&t.item_type),
-                                min: t.min,
-                                max: t.max,
-                                separator: t.separator.clone(),
-                                verbatim: t.verbatim,
-                                accepts_stdio: t.accepts_stdio,
-                            }),
-                    },
-                    options: body.options.iter().map(option_projection).collect(),
-                    flags: body.flags.iter().map(flag_projection).collect(),
-                    constraints: Vec::new(),
-                    stdin: None,
-                    stdout: None,
-                    stderr: None,
-                    result: None,
-                    errors: Vec::new(),
-                    annotations: None,
-                }),
-            })
-            .collect();
-
-        native::Tool {
-            version: self.version.clone(),
-            requires_filesystem: self.requires_filesystem,
-            http_mount: None,
-            commands: native::CommandTree { nodes },
-            schema: SchemaGraph::empty(),
+                flags: body
+                    .flags
+                    .iter()
+                    .map(|f| (f.long.as_str(), f.aliases.as_slice()))
+                    .collect(),
+            };
         }
+        layout.into_surfaces()
     }
+}
 
+impl ExtendedToolType {
     pub fn canonical_input_fields(&self, command_index: usize) -> Vec<CanonicalInputField> {
-        let projection = self.canonical_projection();
-        projection
-            .canonical_input_surfaces(command_index)
+        self.canonical_input_surfaces(command_index)
             .into_iter()
             .map(|surface| {
                 self.canonical_field_for_surface(command_index, surface)
@@ -437,10 +353,12 @@ impl ExtendedToolType {
             .map_err(CanonicalInputDecodeError::Model)?;
         model.decode_record(value)
     }
+}
 
+impl<S: ToolSchemaRepr> ExtendedToolType<S> {
     fn path_to(&self, command_index: usize) -> Option<Vec<usize>> {
-        fn visit(
-            nodes: &[ExtendedCommandNode],
+        fn visit<S: ToolSchemaRepr>(
+            nodes: &[ExtendedCommandNode<S>],
             cur: usize,
             target: usize,
             path: &mut Vec<usize>,

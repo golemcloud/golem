@@ -23,7 +23,7 @@
 //! query or header variable, or read from the request body.
 
 use golem_common::model::agent::{
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding,
+    AgentIdBinding, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
 use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_or_raw_kind};
 use golem_common::schema::{
@@ -44,6 +44,42 @@ pub fn build_http_agent_constructor_parameters<E>(
     schema: &InputSchema,
     make_error: &impl Fn(String) -> E,
 ) -> Result<Vec<ConstructorParameter>, E> {
+    if let Some(selector) = &mount.agent_id_binding {
+        let expected = match selector {
+            AgentIdBinding::Path(details) => Some(details.name.as_str()),
+            AgentIdBinding::Query(_) => None,
+        };
+        let mut captures = 0;
+        for segment in &mount.path_prefix {
+            match segment {
+                PathSegment::Segment(schema_http::PathSegment::PathVariable(variable))
+                    if Some(variable.variable_name.as_str()) == expected =>
+                {
+                    captures += 1;
+                }
+                PathSegment::Segment(
+                    schema_http::PathSegment::PathVariable(_)
+                    | schema_http::PathSegment::RemainingPathVariable(_),
+                ) => {
+                    return Err(make_error(
+                        "Agent ID selection cannot bind constructor path parameters".into(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if captures != usize::from(expected.is_some()) {
+            return Err(make_error(
+                "Agent ID path selector must name exactly one ordinary capture".into(),
+            ));
+        }
+        if mount.phantom_agent {
+            return Err(make_error(
+                "Agent ID selection cannot use phantomAgent".into(),
+            ));
+        }
+        return Ok(Vec::new());
+    }
     let fields = schema.fields();
 
     let path_bindings = collect_path_bindings_from_segments(
@@ -201,7 +237,7 @@ pub fn build_http_agent_method_parameters<E>(
     let method_parameters: Vec<MethodParameter> = per_field.into_iter().flatten().collect();
 
     let mut query_names: Vec<(&str, bool)> = Vec::new();
-    if let Some(PhantomIdBinding::Query(selector)) = &mount.phantom_id_binding {
+    if let Some(AgentIdBinding::Query(selector)) = &mount.agent_id_binding {
         query_names.push((&selector.name, false));
     }
     for parameter in &method_parameters {
@@ -616,7 +652,7 @@ mod test {
 
     #[test]
     fn query_bindings_have_one_owner_per_wire_key_and_map_namespace() {
-        use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+        use golem_common::model::agent::{AgentIdBinding, AgentIdBindingDetails};
 
         for (wire_name, extra_field) in [
             ("q", str_field("q")),
@@ -645,9 +681,8 @@ mod test {
             assert!(error.contains("conflicting bindings"));
         }
         let mut mount = empty_mount();
-        mount.phantom_id_binding = Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+        mount.agent_id_binding = Some(AgentIdBinding::Query(AgentIdBindingDetails {
             name: "instance".into(),
-            optional: true,
         }));
         let mut endpoint = empty_post_endpoint();
         endpoint.http_method = HttpMethod::Method(schema_http::HttpMethod::Delete(Empty {}));
@@ -664,12 +699,11 @@ mod test {
 
     #[test]
     fn query_selector_conflicts_use_wire_names_not_input_names() {
-        use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+        use golem_common::model::agent::{AgentIdBinding, AgentIdBindingDetails};
 
         let mut mount = empty_mount();
-        mount.phantom_id_binding = Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+        mount.agent_id_binding = Some(AgentIdBinding::Query(AgentIdBindingDetails {
             name: "instance".into(),
-            optional: true,
         }));
         for method in [
             schema_http::HttpMethod::Post(Empty {}),
@@ -710,6 +744,34 @@ mod test {
             matches!(&parameters[0], MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == "q")
         );
 
+        for header in [false, true] {
+            let mut bound = empty_post_endpoint();
+            bound.http_method = HttpMethod::Method(schema_http::HttpMethod::Get(Empty {}));
+            if header {
+                bound.header_vars = vec![HeaderVariable {
+                    header_name: "X-Instance".into(),
+                    variable_name: "instance".into(),
+                }];
+            } else {
+                bound.path_suffix = vec![PathSegment::Segment(
+                    schema_http::PathSegment::PathVariable(PathVariable {
+                        variable_name: "instance".into(),
+                    }),
+                )];
+            }
+            let (body, parameters) = build_http_agent_method_parameters(
+                &mount,
+                &bound,
+                &empty_graph(),
+                &input(vec![str_field("instance")]),
+                &|error| error,
+            )
+            .unwrap();
+            assert!(matches!(body, RequestBodySchema::Unused));
+            assert_eq!(parameters.len(), 1);
+            assert!(!matches!(parameters[0], MethodParameter::Query { .. }));
+        }
+
         endpoint.query_vars[0].query_param_name = "instance".into();
         endpoint.query_vars[0].variable_name = "search".into();
         assert!(
@@ -722,6 +784,50 @@ mod test {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn id_selection_does_not_bind_constructor_fields_even_with_the_same_name() {
+        use golem_common::model::agent::{AgentIdBinding, AgentIdBindingDetails};
+        for query in [false, true] {
+            let mut mount = empty_mount();
+            mount.agent_id_binding = Some(if query {
+                AgentIdBinding::Query(AgentIdBindingDetails {
+                    name: "instance".into(),
+                })
+            } else {
+                mount.path_prefix = vec![PathSegment::Segment(
+                    schema_http::PathSegment::PathVariable(PathVariable {
+                        variable_name: "instance".into(),
+                    }),
+                )];
+                AgentIdBinding::Path(AgentIdBindingDetails {
+                    name: "instance".into(),
+                })
+            });
+            let parameters = build_http_agent_constructor_parameters(
+                &mount,
+                &empty_graph(),
+                &input(vec![str_field("instance"), str_field("required")]),
+                &|error| error,
+            )
+            .unwrap();
+            assert!(parameters.is_empty());
+            mount.path_prefix.push(PathSegment::Segment(
+                schema_http::PathSegment::PathVariable(PathVariable {
+                    variable_name: "required".into(),
+                }),
+            ));
+            assert!(
+                build_http_agent_constructor_parameters(
+                    &mount,
+                    &empty_graph(),
+                    &input(vec![str_field("instance"), str_field("required")]),
+                    &|error| error
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -741,7 +847,8 @@ mod test {
             ],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -778,7 +885,8 @@ mod test {
             ))],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -808,7 +916,8 @@ mod test {
             )],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -838,7 +947,8 @@ mod test {
             )],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -903,13 +1013,22 @@ mod test {
         .unwrap();
 
         assert!(let RequestBodySchema::JsonBody { .. } = body);
-        assert_eq!(params.len(), 2);
-
-        assert!(
-            params
-                .iter()
-                .all(|p| matches!(p, MethodParameter::JsonObjectBodyField { .. }))
+        assert_eq!(
+            params,
+            vec![
+                MethodParameter::JsonObjectBodyField {
+                    field_index: 0.into()
+                },
+                MethodParameter::JsonObjectBodyField {
+                    field_index: 1.into()
+                },
+            ]
         );
+        for parameter in params {
+            let encoded: golem_api_grpc::proto::golem::customapi::MethodParameter =
+                parameter.clone().into();
+            assert_eq!(MethodParameter::try_from(encoded).unwrap(), parameter);
+        }
     }
 
     #[test]
@@ -1004,7 +1123,8 @@ mod test {
             ],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -1044,7 +1164,8 @@ mod test {
             ],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -1229,7 +1350,8 @@ mod test {
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },

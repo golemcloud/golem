@@ -16,7 +16,7 @@ use super::golem_config::WorkerServiceGrpcConfig;
 use super::rpc::DurableStreamRemoteError;
 use crate::worker::target::ResolvedTarget;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use desert_rust::BinaryCodec;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
@@ -45,7 +45,7 @@ use golem_common::model::agent::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -133,6 +133,7 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -162,7 +163,7 @@ pub trait WorkerProxy: Send + Sync {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -222,12 +223,15 @@ pub trait WorkerProxy: Send + Sync {
         card: &StoredCard,
     ) -> Result<(), WorkerProxyError>;
 
+    /// Asks the worker service to update an agent. `requester` is who asked for the update; the
+    /// target records it in the update's `PendingUpdate` entries.
     async fn update(
         &self,
         owned_agent_id: &OwnedAgentId,
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
@@ -270,12 +274,14 @@ pub trait WorkerProxy: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError>;
 
+    /// Cancels a scheduled call. `canceller` is the agent or tool that cancels; the target
+    /// cancels only when it is the immediate caller recorded for the call.
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
         key: InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError>;
 
@@ -300,6 +306,7 @@ pub trait WorkerProxy: Send + Sync {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &Caller,
     ) -> Result<(), WorkerProxyError>;
 }
 
@@ -416,11 +423,13 @@ impl RemoteWorkerProxy {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl WorkerProxy for RemoteWorkerProxy {
     async fn prepare(
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -458,6 +467,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }),
                     caller: Some(caller.clone().into()),
                     method_name: Some(method_name.to_string()),
+                    invocation: invocation.clone(),
                     idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: match freshness_disposition {
                         InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
@@ -518,6 +528,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }),
                     caller: Some(caller.clone().into()),
                     method_name: None,
+                    invocation: None,
                     idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: 0,
                 }))
@@ -547,7 +558,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -568,8 +579,8 @@ impl WorkerProxy for RemoteWorkerProxy {
         let proto_mode = proto_mode as i32;
 
         let proto_schedule_at = schedule_at.map(|dt| prost_types::Timestamp {
-            seconds: dt.timestamp(),
-            nanos: dt.timestamp_subsec_nanos() as i32,
+            seconds: dt.as_nanosecond().div_euclid(1_000_000_000) as i64,
+            nanos: dt.as_nanosecond().rem_euclid(1_000_000_000) as i32,
         });
 
         let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
@@ -685,6 +696,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key,
                         oplog_index,
                         agent_fingerprint,
+                        background_failure: None,
                     },
                     None => AgentInvocationOutput {
                         result: AgentInvocationResult::AgentInitialization,
@@ -695,6 +707,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key,
                         oplog_index,
                         agent_fingerprint,
+                        background_failure: None,
                     },
                 };
                 Ok(output)
@@ -900,6 +913,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to revision {target_revision} in {mode:?} mode");
@@ -914,6 +928,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
                     environment_id: Some(owned_agent_id.environment_id.into()),
+                    caller: Some(requester.clone().into()),
                 }))
             })
             .await?
@@ -1012,7 +1027,6 @@ impl WorkerProxy for RemoteWorkerProxy {
                     resolved_revert: resolved_revert.clone().map(|resolved| {
                         golem_api_grpc::proto::golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
-                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
                         }
                     }),
                 }))
@@ -1098,7 +1112,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         target: &OwnedAgentId,
         key: InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         let response = self
@@ -1110,9 +1124,9 @@ impl WorkerProxy for RemoteWorkerProxy {
                     auth_ctx: Some(auth.clone().into()),
                     scheduled: Some(
                         golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                            owner_agent_id: Some((*owner).into()),
                             schedule_id: Some(receipt.id.into()),
                             target_environment_id: Some(target.environment_id.into()),
+                            canceller: Some(canceller.clone().into()),
                         },
                     ),
                     environment_id: Some(target.environment_id.into()),
@@ -1202,6 +1216,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &Caller,
     ) -> Result<(), WorkerProxyError> {
         debug!(target_agent_id=%target_agent_id, "Processing oplog entries on remote agent");
 
@@ -1220,6 +1235,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     entries: entries.clone(),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     component_id: Some(component_id.into()),
+                    caller: Some(caller.clone().into()),
                 }))
             })
             .await?
@@ -1427,6 +1443,7 @@ mod tests {
     }
 
     #[tonic::async_trait]
+    #[golem_async_trait::region_simple]
     impl WorkerService for FlakyWorkerService {
         type InvokeAgentSessionStream =
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
@@ -1838,6 +1855,7 @@ mod tests {
                 .prepare(
                     &target,
                     "transform",
+                    None,
                     &caller,
                     HashMap::new(),
                     InvocationContextStack::fresh(),

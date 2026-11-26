@@ -23,11 +23,12 @@ use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_client::api::{AgentClient, AgentError, RegistryServiceClient};
 use golem_client::model::WorkersMetadataRequest;
-use golem_common::model::account::{AccountRevision, AccountSetPlan};
+use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, AgentMode, AgentTypeName,
     OwnedAgentId,
 };
+use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
@@ -43,7 +44,8 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerLogEventStream, update_counts};
 use golem_test_framework::model::IFSEntry;
 use integration_tests::agents::{
-    agent_type_id, create_agent_with, invoke_agent_by_id, keyed_agent_id, try_create_agent,
+    agent_type_id, create_agent_with, invoke_agent_by_id, invoke_and_await_agent_by_id,
+    keyed_agent_id, try_create_agent,
 };
 use pretty_assertions::assert_eq;
 use rand::seq::IteratorRandom;
@@ -460,7 +462,7 @@ async fn rest_invoke_gives_the_account_pair(
         .name("golem-it:agent-sdk-rust")
         .store()
         .await?;
-    let agent_id = agent_key!("ReadonlyAgent", "rest-principal-1");
+    let agent_id = agent_key!("InvocationContextProbe", "rest-principal-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
@@ -1472,7 +1474,7 @@ async fn auto_update_on_idle_via_host_function(
         .store()
         .await?;
     let host_api_agent_id = agent_key!("GolemHostApi", "updater-1");
-    let _host_api_agent_id = user
+    let updater = user
         .start_agent(&host_api_component.id, host_api_agent_id.clone())
         .await?;
 
@@ -1512,6 +1514,153 @@ async fn auto_update_on_idle_via_host_function(
     assert_eq!(result.into_return_value(), Some(SchemaValue::U64(0)));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    // The update has the caller of every call that an agent makes. The account that called the
+    // updating agent is the original requester, and the updating agent is the immediate one.
+    let requesters = update_requesters(&user, &agent_id).await?;
+    assert_eq!(requesters.len(), 2, "{requesters:?}");
+    for requester in requesters {
+        let PublicPrincipal::Account(account) = &requester.original else {
+            panic!("expected the account that called the updating agent, got {requester:?}");
+        };
+        assert_eq!(account.account_id, user.account_id);
+        let PublicPrincipal::Agent(agent) = &requester.immediate else {
+            panic!("expected the updating agent as the immediate requester, got {requester:?}");
+        };
+        assert_eq!(agent.agent_id, updater.agent_id);
+        assert_eq!(agent.agent_type, "GolemHostApi");
+        assert!(requester.tokens.is_empty());
+    }
+    Ok(())
+}
+
+/// The requester of every `PendingUpdate` and every queued manual update in the agent's public
+/// oplog, in oplog order.
+async fn update_requesters(
+    user: &impl TestDsl,
+    agent_id: &OwnedAgentId,
+) -> anyhow::Result<Vec<PublicCaller>> {
+    Ok(user
+        .get_oplog(agent_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::PendingUpdate(params) => Some(params.requester),
+            PublicOplogEntry::PendingAgentInvocation(params) => match params.invocation {
+                golem_common::model::oplog::PublicAgentInvocation::ManualUpdate(manual) => {
+                    Some(manual.requester)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect())
+}
+
+/// The requester is the account of the REST request's token, in both roles, without tokens or
+/// claims: its pair is the Golem issuer and `account:<id>`.
+fn assert_requested_by_the_account(requester: &PublicCaller, account_id: &AccountId) {
+    let PublicPrincipal::Account(account) = &requester.original else {
+        panic!("expected the account as the requester, got {requester:?}");
+    };
+    assert_eq!(&account.account_id, account_id);
+    assert_eq!(
+        account.pair,
+        golem_common::model::caller::Pair::new(
+            golem_test_framework::components::TEST_GOLEM_ISSUER,
+            format!("account:{}", account_id.0.hyphenated()),
+        )
+    );
+    assert_eq!(
+        account.authentication,
+        golem_common::model::caller::AccountAuthentication::ApiToken
+    );
+    assert_eq!(requester.immediate, requester.original);
+    assert!(requester.tokens.is_empty());
+    let json = serde_json::to_value(requester).unwrap();
+    assert!(json["original"].get("claims").is_none(), "{json}");
+}
+
+/// An automatic update through REST records the account of the request as its requester, in the
+/// admission and in the strategy entry that the executor writes later.
+#[test]
+#[tracing::instrument]
+#[timeout(300000)]
+async fn rest_update_records_the_requester(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let parsed_agent_id = agent_key!("UpdateTest");
+    let agent_id = user
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    let updated_component = user
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    user.auto_update_worker(&agent_id, updated_component.revision, false)
+        .await?;
+    user.invoke_and_await_agent(&component, &parsed_agent_id, "f2", data_value!())
+        .await?;
+    assert_eq!(
+        user.get_worker_metadata(&agent_id)
+            .await?
+            .component_revision,
+        updated_component.revision
+    );
+
+    let requesters = update_requesters(&user, &agent_id).await?;
+    assert_eq!(requesters.len(), 2, "{requesters:?}");
+    for requester in &requesters {
+        assert_requested_by_the_account(requester, &user.account_id);
+    }
+    Ok(())
+}
+
+/// A manual update through REST records the account of the request in the queued manual update
+/// and in the `PendingUpdate` written after the snapshot save.
+#[test]
+#[tracing::instrument]
+#[timeout(300000)]
+async fn rest_manual_update_records_the_requester(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    // Revision 2 saves a snapshot and revision 3 loads it, so the manual update succeeds.
+    let component = user
+        .component(&env.id, "it_agent_update_v2_release")
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let parsed_agent_id = agent_key!("UpdateTest");
+    let agent_id = user
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    let target = user
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+
+    user.manual_update_worker(&agent_id, target.revision, false)
+        .await?;
+    user.wait_for_component_revision(&agent_id, target.revision, Duration::from_secs(60))
+        .await?;
+
+    let requesters = update_requesters(&user, &agent_id).await?;
+    assert_eq!(requesters.len(), 2, "{requesters:?}");
+    for requester in &requesters {
+        assert_requested_by_the_account(requester, &user.account_id);
+    }
     Ok(())
 }
 
@@ -1578,6 +1727,33 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
         invoke_count >= 3,
         "Expected at least 3 AgentInvocationStarted entries for golem:agent/guest.{{invoke}}, got {invoke_count}"
     );
+
+    // Each start shows the calling account in both roles and no tokens. An account has no claims.
+    let callers = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                invocation:
+                    golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(params),
+                ..
+            }) if params.method_name == "generate_idempotency_keys" => Some(&params.caller),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for caller in callers {
+        let golem_common::model::caller::PublicPrincipal::Account(account) = &caller.original
+        else {
+            panic!("expected the calling account at the root, got {caller:?}");
+        };
+        assert_eq!(account.account_id, user.account_id);
+        assert_eq!(account.pair.subject, format!("account:{}", user.account_id));
+        assert_eq!(
+            account.authentication,
+            golem_common::model::caller::AccountAuthentication::ApiToken
+        );
+        assert_eq!(caller.immediate, caller.original);
+        assert!(caller.tokens.is_empty());
+    }
 
     Ok(())
 }
@@ -1845,15 +2021,15 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
     user.start_agent(&component.id, client_parsed.clone())
         .await?;
 
-    let due = chrono::Utc::now() + chrono::Duration::seconds(5);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
     user.invoke_and_await_agent(
         &component,
         &client_parsed,
         "schedule_at",
         data_value!(
             server_name.clone(),
-            due.timestamp() as u64,
-            due.timestamp_subsec_nanos()
+            due.as_second() as u64,
+            due.subsec_nanosecond() as u32
         ),
     )
     .await?;
@@ -1873,7 +2049,7 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
     let key = scheduled_key(&user.get_oplog(&server, OplogIndex::INITIAL).await?)
         .ok_or_else(|| anyhow!("the schedule must be committed in the target oplog"))?;
     assert!(
-        chrono::Utc::now() < due,
+        jiff::Timestamp::now() < due,
         "the commit must be observed before the deadline"
     );
 
@@ -2596,7 +2772,12 @@ async fn agent_update_constructor_signature(
     user.log_output(&old_singleton).await?;
 
     let result1b = user
-        .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
+        .invoke_and_await_agent(
+            &component,
+            &old_singleton_id,
+            "call",
+            data_value!(golem_schema::model::AgentId::from(agent1.agent_id.0)),
+        )
         .await?;
     assert_eq!(result1b.into_return_value(), Some(SchemaValue::U32(2)));
 
@@ -2619,10 +2800,25 @@ async fn agent_update_constructor_signature(
         .await?;
     assert_eq!(result2b.into_return_value(), Some(SchemaValue::U32(2)));
 
-    // Still able to call both agents
-    let result3a = user
+    let old_key_error = user
         .invoke_and_await_agent(&component, &agent1_id, "increment", data_value!())
-        .await?;
+        .await
+        .expect_err("a key must satisfy the deployed constructor schema");
+    assert!(matches!(
+        old_key_error.downcast_ref::<golem_client::Error<AgentError>>(),
+        Some(golem_client::Error::Item(AgentError::Error400(body)))
+            if body.code == golem_common::base_model::api::error_code::TYPE_CHECKER_ERROR
+    ));
+
+    // The existing agent keeps its constructor schema and is reachable by ID.
+    let result3a = invoke_and_await_agent_by_id(
+        &user,
+        &agent1_id.agent_type,
+        &agent1,
+        "increment",
+        data_value!(),
+    )
+    .await?;
 
     let result4a = user
         .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
@@ -2632,9 +2828,14 @@ async fn agent_update_constructor_signature(
     assert_eq!(result4a.into_return_value(), Some(SchemaValue::U32(3)));
 
     // Still able to do RPC
-    let result3b = user
-        .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
-        .await?;
+    let result3b = invoke_and_await_agent_by_id(
+        &user,
+        &old_singleton_id.agent_type,
+        &old_singleton,
+        "call",
+        data_value!(golem_schema::model::AgentId::from(agent1.agent_id.0)),
+    )
+    .await?;
     assert_eq!(result3b.into_return_value(), Some(SchemaValue::U32(4)));
 
     let result4b = user

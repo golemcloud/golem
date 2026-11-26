@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
-use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::suspendable_wait::{
-    chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
+    ephemeral_sleep_too_long_error, signed_duration_to_nanos, std_duration_to_nanos,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
-use chrono::Duration;
+
 use futures::pin_mut;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
@@ -28,7 +27,6 @@ use golem_common::model::oplog::{
     HostResponsePollResult,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
-use std::future::Future;
 use std::pin::Pin;
 use tracing::debug;
 use wasmtime::component::{Accessor, Linker, Resource, ResourceType};
@@ -177,22 +175,17 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // its result was persisted, and the file operation it gates re-executes for real during
         // replay. Await the real readiness too, so subsequent (non-durable) reads/writes observe
         // the same stream state as the recorded run (see
-        // `PrivateDurableWorkerState::file_stream_pollables`). TCP connect likewise re-executes
-        // natively, so its recorded readiness must precede synchronous `finish_connect`.
-        if !was_live && is_ready {
-            if self.state.file_stream_pollables.contains(&rep) {
-                let pollable = Resource::<Pollable>::new_borrow(rep);
-                let interrupt = self.create_interrupt_signal();
-                let mut view = self.as_wasi_view();
-                crate::wasi_filesystem::observe_filesystem_operation(
-                    interrupt,
-                    HostPollable::block(&mut view.io_data(), pollable),
-                )
-                .await
-                .map_err(wasmtime::Error::from)??;
-            } else if self.state.tcp_connect_replay.needs_readiness(rep) {
-                self.revalidate_tcp_connect(rep).await?;
-            }
+        // `PrivateDurableWorkerState::file_stream_pollables`).
+        if !was_live && is_ready && self.state.file_stream_pollables.contains(&rep) {
+            let pollable = Resource::<Pollable>::new_borrow(rep);
+            let interrupt = self.create_interrupt_signal();
+            let mut view = self.as_wasi_view();
+            crate::wasi_filesystem::observe_filesystem_operation(
+                interrupt,
+                HostPollable::block(&mut view.io_data(), pollable),
+            )
+            .await
+            .map_err(wasmtime::Error::from)??;
         }
 
         Ok(is_ready)
@@ -221,7 +214,6 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // Only unclassify after the resource is really gone: reps are recycled by the
         // resource table, and a failed drop leaves the pollable live.
         self.state.file_stream_pollables.remove(&child_rep);
-        self.state.tcp_connect_replay.drop_pollable(child_rep);
         self.state.p2_timer_deadlines.remove(&child_rep);
 
         // If this child belonged to a FutureInvokeResult whose drop was deferred,
@@ -273,33 +265,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         // operations they gate re-execute for real during replay. Await their
                         // real readiness too, so subsequent (non-durable) reads/writes observe
                         // the same stream state as the recorded run (see
-                        // `PrivateDurableWorkerState::file_stream_pollables`). A reconstructed
-                        // TCP connect also needs its native future driven before `finish_connect`.
-                        // Other network pollables do not share that reconstruction contract.
+                        // `PrivateDurableWorkerState::file_stream_pollables`). Network
+                        // pollables do not share that reconstruction contract.
                         if let Ok(ready_indices) = &response.result {
-                            let ready_reconstructed_pollables = ready_indices
+                            let ready_file_pollables = ready_indices
                                 .iter()
                                 .filter_map(|idx| in_.get(*idx as usize))
                                 .map(|pollable| pollable.rep())
-                                .filter(|rep| {
-                                    self.state.file_stream_pollables.contains(rep)
-                                        || self.state.tcp_connect_replay.needs_readiness(*rep)
-                                })
+                                .filter(|rep| self.state.file_stream_pollables.contains(rep))
                                 .collect::<Vec<_>>();
-                            for rep in ready_reconstructed_pollables {
-                                if self.state.file_stream_pollables.contains(&rep) {
-                                    let pollable = Resource::<Pollable>::new_borrow(rep);
-                                    let interrupt = self.create_interrupt_signal();
-                                    let mut view = self.as_wasi_view();
-                                    crate::wasi_filesystem::observe_filesystem_operation(
-                                        interrupt,
-                                        HostPollable::block(&mut view.io_data(), pollable),
-                                    )
-                                    .await
-                                    .map_err(wasmtime::Error::from)??;
-                                } else {
-                                    self.revalidate_tcp_connect(rep).await?;
-                                }
+                            for rep in ready_file_pollables {
+                                let pollable = Resource::<Pollable>::new_borrow(rep);
+                                let interrupt = self.create_interrupt_signal();
+                                let mut view = self.as_wasi_view();
+                                crate::wasi_filesystem::observe_filesystem_operation(
+                                    interrupt,
+                                    HostPollable::block(&mut view.io_data(), pollable),
+                                )
+                                .await
+                                .map_err(wasmtime::Error::from)??;
                             }
                         }
                         break 'poll response;
@@ -339,7 +323,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let max = self.state.config.suspend.ephemeral_max_sleep;
                 return Err(wasmtime::Error::from_anyhow(handle.trap(
                     ephemeral_sleep_too_long_error(
-                        chrono_duration_to_nanos(duration),
+                        signed_duration_to_nanos(duration),
                         std_duration_to_nanos(max),
                     ),
                 )));
@@ -356,28 +340,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         response.result.map_err(wasmtime::Error::msg)
     }
-}
-
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    /// The recorded call is already closed. Only its reconstructed native connect can be
-    /// interrupted here; replay resolution and its mandatory completion are never raced.
-    async fn revalidate_tcp_connect(&mut self, rep: u32) -> wasmtime::Result<()> {
-        let wait = NativeIoWait::new(self.interrupt_sources());
-        let readiness = async {
-            let mut view = self.as_wasi_view();
-            HostPollable::block(&mut view.io_data(), Resource::new_borrow(rep)).await
-        };
-        wait_tcp_connect(wait, readiness).await
-    }
-}
-
-pub(super) async fn wait_tcp_connect(
-    wait: NativeIoWait,
-    readiness: impl Future<Output = wasmtime::Result<()>>,
-) -> wasmtime::Result<()> {
-    wait.wait(readiness)
-        .await
-        .unwrap_or_else(|kind| Err(wasmtime::Error::from_anyhow(kind.into())))
 }
 
 #[derive(Debug)]
@@ -406,13 +368,13 @@ async fn poll_borrowed(
     }
 }
 
-fn is_suspend_for_sleep<T>(result: &Result<T, wasmtime::Error>) -> Option<Duration> {
+fn is_suspend_for_sleep<T>(result: &Result<T, wasmtime::Error>) -> Option<jiff::SignedDuration> {
     if let Err(err) = result {
         // Walk the error source chain, since wasmtime::Error may wrap the original error
         let mut current: Option<&dyn std::error::Error> = Some(err.as_ref());
         while let Some(e) = current {
             if let Some(SuspendForSleep(duration)) = e.downcast_ref::<SuspendForSleep>() {
-                return Some(Duration::from_std(*duration).unwrap());
+                return Some(jiff::SignedDuration::try_from(*duration).unwrap());
             }
             current = e.source();
         }
@@ -554,6 +516,7 @@ mod tests {
     struct Pending;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl wasmtime_wasi::Pollable for Pending {
         async fn ready(&mut self) {
             pending::<()>().await

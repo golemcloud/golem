@@ -420,7 +420,8 @@ async fn raw_tool_return_boundary(
             }
             return Ok(());
         }
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        // Disposal drops the Store-bound timer and the only guest that could resume its tail.
+        let disposed = tokio::time::timeout(Duration::from_secs(5), disposals.recv()).await?;
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let entity_starts: Vec<_> = entries.iter().filter_map(|entry| {
             matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke")
@@ -428,7 +429,7 @@ async fn raw_tool_return_boundary(
         }).collect();
         assert_eq!(entity_starts.len(), 1);
         assert_eq!(
-            tokio::time::timeout(Duration::from_secs(5), disposals.recv()).await?,
+            disposed,
             Some(entity_starts[0]),
             "the returned Store must be destroyed while the executor remains alive: {command}"
         );
@@ -860,6 +861,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         let key = IdempotencyKey::fresh();
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
+                allow_streams: true,
                 target: Some(crate::agent::id_target(&worker)),
                 method_name: Some("produce_terminal".to_string()),
                 input: Some(input.try_into().map_err(anyhow::Error::msg)?),
@@ -902,7 +904,8 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             match response.response {
-                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(invocation_response::Response::Accepted(_))
+                | Some(invocation_response::Response::Ready(_)) => {}
                 Some(invocation_response::Response::Result(_)) => result_seen = true,
                 Some(invocation_response::Response::OutputItem(item)) => {
                     assert!(result_seen, "producer ran before its stream was returned");

@@ -165,10 +165,11 @@ private[golem] object AgentRequestBuilder {
     JsHttpMountDetails(
       pathPrefix = encodePathSegments(mount.pathPrefix),
       phantomAgent = mount.phantomAgent,
-      phantomIdBinding = mount.phantomIdBinding.map {
-        case PhantomIdBinding.Path(name, optional)  => JsPhantomIdBinding.path(name, optional)
-        case PhantomIdBinding.Query(name, optional) => JsPhantomIdBinding.query(name, optional)
+      agentIdBinding = mount.agentIdBinding.map {
+        case AgentIdBinding.Path(name)  => JsAgentIdBinding.path(name)
+        case AgentIdBinding.Query(name) => JsAgentIdBinding.query(name)
       }.orUndefined,
+      createRoute = mount.createRoute.map(encodePathSegments).orUndefined,
       corsOptions = JsCorsOptions(js.Array(mount.corsAllowedPatterns: _*)),
       webhookSuffix = encodePathSegments(mount.webhookSuffix),
       staticBindings = encodeFileMappings(mount.staticBindings),

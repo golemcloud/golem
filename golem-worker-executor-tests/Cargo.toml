@@ -38,7 +38,6 @@ base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 desert_rust = { workspace = true }
 futures = { workspace = true }
 goldenfile = { workspace = true }
@@ -48,6 +47,7 @@ hickory-resolver = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
+jiff = { workspace = true }
 log = { workspace = true }
 mac_address = { workspace = true, features = ["serde"] }
 pgvector = { workspace = true }

@@ -15,16 +15,16 @@
 use super::{
     AcceptanceRace, AgentInvocationResult, Arc, HasAll, HashMap, InvocationAccepted,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
-    InvocationSessionResult, InvocationSessionState, Message, ResponseLease, SessionError,
+    InvocationSessionResult, InvocationSessionState, ResponseLease, SessionError,
     SessionStreamRole, StreamSession, UsesAllDeps, WorkerCtx, WorkerExecutorError,
-    WorkerExecutorImpl, decode_invocation_input, detach_durable_attachment,
-    durable_stream_mapping_to_proto, end_attachment_on_failure, ends_only_the_attachment,
-    invocation_request, invocation_response, invocation_session_completion,
-    invocation_session_result, mpsc, persisted_invocation_result, pre_acceptance_rejection_reason,
-    proto_agent_id_string, race_invocation_acceptance, rejection_worker_error, request_agent_id,
-    request_idempotency_key, route_durable_request, send_attachment_revocation,
-    send_protocol_failure, send_rejection, send_rejection_with_worker_error,
-    send_unvalidated_rejection, send_worker_failure, until_response_closed,
+    WorkerExecutorImpl, detach_durable_attachment, durable_stream_mapping_to_proto,
+    end_attachment_on_failure, ends_only_the_attachment, invocation_request, invocation_response,
+    invocation_session_completion, invocation_session_result, mpsc, persisted_invocation_result,
+    pre_acceptance_rejection_reason, proto_agent_id_string, race_invocation_acceptance,
+    rejection_worker_error, request_agent_id, request_idempotency_key, route_durable_request,
+    send_attachment_revocation, send_protocol_failure, send_rejection,
+    send_rejection_with_worker_error, send_unvalidated_rejection, send_worker_failure,
+    until_response_closed, with_input_server_terminals,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -79,7 +79,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
         let first = first.request.expect("validated request has a payload");
-        let mut start = match first {
+        let start = match first {
             invocation_request::Request::Start(start) => start,
             invocation_request::Request::ResumeAttach(resume) => {
                 self.run_resumed_agent_session(
@@ -104,7 +104,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let outward_forwarder = outward.clone();
         let forwarder_stopped = tokio_util::sync::CancellationToken::new();
         let forwarder_guard = forwarder_stopped.clone().drop_guard();
-        let forwarder = tokio::spawn(async move {
+        tokio::spawn(async move {
             let _guard = forwarder_guard;
             while let Some(response) = response_rx.recv().await {
                 if let Err(error) = response_state.lock().await.validate_response(&response) {
@@ -118,41 +118,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         });
 
-        let input_encoded_len = start.input.as_ref().map(Message::encoded_len);
-        let input = if start.external_tool.is_some()
-            || start.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
-        {
-            Ok(None)
-        } else {
-            match start.input.take() {
-                Some(input) => decode_invocation_input(input).map(Some),
-                None => Err("invocation start has no input".to_string()),
-            }
-        };
-        let input = match input {
-            Ok(input) => input,
-            Err(error) => {
-                send_rejection(
-                    &responses,
-                    InvocationRejectionReason::Protocol,
-                    error,
-                    &start,
-                )
-                .await;
-                drop(responses);
-                let _ = forwarder.await;
-                return;
-            }
-        };
-
         let (acceptance_committed_tx, mut acceptance_committed_rx) =
             tokio::sync::oneshot::channel();
         let (accepted_tx, mut accepted_rx) = tokio::sync::oneshot::channel();
         // Keep dispatch state off the transport's stack across its nested select loops.
         let mut invocation = Box::pin(self.invoke_agent_internal(
             &start,
-            input,
-            input_encoded_len,
             acceptance_committed_tx,
             accepted_tx,
             scope,
@@ -170,7 +141,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             },
         )
         .await;
-        let (accepted, early_output, mut early_inbound) = match acceptance {
+        let (mut accepted, mut early_output, mut early_inbound) = match acceptance {
             AcceptanceRace::Accepted {
                 acceptance,
                 early_output,
@@ -234,6 +205,110 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         };
 
+        let queued = accepted.queued.take();
+        let was_queued = queued.is_some();
+        if let Some((attached, mut readiness)) = queued {
+            *response_lease.lock().unwrap() = accepted
+                .durable_streams
+                .as_ref()
+                .and_then(StreamSession::response_lease);
+            let pending = InvocationAccepted {
+                agent_id: Some(accepted.agent_id.into()),
+                idempotency_key: Some(accepted.idempotency_key.into()),
+                attachment_id: (!accepted.joined_origin_observer)
+                    .then_some(attached.attachment_id.0.into()),
+                attempt_id: (!accepted.joined_origin_observer)
+                    .then_some(attached.attempt_id.0.into()),
+                // The session carries the current attachment epoch, which a revert or a
+                // takeover may have advanced past the retained record; readiness reports it too.
+                epoch: if accepted.joined_origin_observer {
+                    0
+                } else {
+                    accepted
+                        .durable_streams
+                        .as_ref()
+                        .map_or(attached.epoch, StreamSession::attachment_epoch)
+                },
+                joined_origin_observer: accepted.joined_origin_observer,
+                environment_id: accepted
+                    .durable_streams
+                    .as_ref()
+                    .map(|streams| streams.session_key().callee_environment_id.into()),
+                callee_fingerprint: accepted
+                    .durable_streams
+                    .as_ref()
+                    .map(|streams| streams.session_key().callee_fingerprint.0.into()),
+                method_name: start.method_name.clone(),
+                ..Default::default()
+            };
+            if responses
+                .send(InvocationResponse {
+                    response: Some(invocation_response::Response::Accepted(pending)),
+                })
+                .await
+                .is_err()
+            {
+                detach_durable_attachment(
+                    accepted
+                        .durable_streams
+                        .take()
+                        .filter(|_| !accepted.joined_origin_observer),
+                )
+                .await;
+                return;
+            }
+            let mut inbound_open = true;
+            let ready = loop {
+                tokio::select! {
+                    ready = &mut readiness => break ready,
+                    result = &mut invocation, if early_output.is_none() => early_output = Some(result),
+                    _ = outward.closed() => {
+                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
+                        return;
+                    },
+                    _ = forwarder_stopped.cancelled() => {
+                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
+                        return;
+                    },
+                    request = inbound.message(), if inbound_open => {
+                        if matches!(request, Ok(None)) && accepted.joined_origin_observer {
+                            inbound_open = false;
+                            continue;
+                        }
+                        if let Ok(Some(_)) = request {
+                            send_protocol_failure(&responses, "stream controls require execution readiness").await;
+                        }
+                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
+                        return;
+                    },
+                }
+            };
+            match ready {
+                Ok((prepared, streams)) => {
+                    if let Some(queued) = &accepted.durable_streams
+                        && !accepted.joined_origin_observer
+                        && queued.ensure_current_attachment().await.is_err()
+                    {
+                        send_attachment_revocation(&responses, Ok(())).await;
+                        return;
+                    }
+                    accepted.component_revision =
+                        Some(prepared.attempt.invocation.target_component_revision);
+                    accepted.prepared = Some(prepared);
+                    // The ready session replaces the queued one, so it keeps the queued
+                    // response's ephemeral lease until the response ends.
+                    let lease = accepted
+                        .durable_streams
+                        .as_ref()
+                        .and_then(StreamSession::response_lease);
+                    accepted.durable_streams = Some(streams.with_response_lease(lease));
+                }
+                Err(error) => {
+                    send_worker_failure(&responses, error).await;
+                    return;
+                }
+            }
+        }
         // Observation must never run attachment cleanup, even while the original is current.
         let durable_attachment = accepted
             .durable_streams
@@ -269,13 +344,52 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             HashMap::new()
         };
+        let stream_mappings = match &accepted.durable_streams {
+            Some(streams) => match streams.input_server_terminals().await.and_then(|terminals| {
+                with_input_server_terminals(
+                    streams
+                        .materialized_mappings()
+                        .iter()
+                        .map(|mapping| {
+                            durable_stream_mapping_to_proto(
+                                mapping,
+                                high_waters.get(&mapping.transport_stream_id),
+                            )
+                        })
+                        .collect(),
+                    &terminals,
+                )
+                .map_err(SessionError::from)
+            }) {
+                Ok(stream_mappings) => stream_mappings,
+                Err(error) => {
+                    tracing::warn!(
+                        target = ?start.target,
+                        attempt_id = ?start.attempt_id,
+                        error = %error,
+                        "Invocation session input terminal lookup failed"
+                    );
+                    send_rejection_with_worker_error(
+                        &responses,
+                        InvocationRejectionReason::Internal,
+                        error.to_string(),
+                        rejection_worker_error(&error),
+                        &start,
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => Vec::new(),
+        };
 
         let acceptance_forwarded = response_state_changed.notified();
         tokio::pin!(acceptance_forwarded);
         acceptance_forwarded.as_mut().enable();
         if responses
             .send(InvocationResponse {
-                response: Some(invocation_response::Response::Accepted(
+                response: Some((if was_queued { invocation_response::Response::Ready
+                } else { invocation_response::Response::Accepted })(
                     InvocationAccepted {
                         agent_id: Some(accepted.agent_id.into()),
                         idempotency_key: Some(accepted.idempotency_key.into()),
@@ -295,22 +409,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         epoch: accepted.durable_streams.as_ref()
                             .filter(|_| !accepted.joined_origin_observer)
                             .map(StreamSession::attachment_epoch).unwrap_or_default(),
-                        stream_mappings: accepted
-                            .durable_streams
-                            .as_ref()
-                            .map(|streams| {
-                                streams
-                                    .materialized_mappings()
-                                    .iter()
-                                    .map(|mapping| {
-                                        durable_stream_mapping_to_proto(
-                                            mapping,
-                                            high_waters.get(&mapping.transport_stream_id),
-                                        )
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
+                        stream_mappings,
                         environment_id: accepted.prepared.as_ref().map(|prepared| {
                             prepared.attempt.session_key.callee_environment_id.into()
                         }),
@@ -323,6 +422,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         tool_name: start.external_tool.as_ref().map(|tool| tool.tool_name.clone()),
                         command_path: start.external_tool.as_ref().map(|tool| tool.command_path.clone()).unwrap_or_default(),
                         terminal_cursor_stream_ids: Vec::new(),
+                        captured_method_input: start.captured_method_input.clone(),
                     },
                 )),
             })
@@ -600,6 +700,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 prepared.attempt.expected_callee_fingerprint.0.into()
                             }),
                             new_stream_mappings: persisted_result.1.clone(),
+                            background_failure: None,
                         },
                     )),
                 })
@@ -794,6 +895,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
         };
+        // Only an awaited method invocation queues its acceptance until readiness; lookup,
+        // trigger, schedule and tool sessions never receive a separate readiness frame.
+        if accepted.component_revision.is_none()
+            && start.mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32
+            && start.external_tool.is_none()
+            && let Some(revision) = output.component_revision
+            && responses.send(InvocationResponse {
+                response: Some(invocation_response::Response::Ready(InvocationAccepted {
+                    agent_id: Some(accepted.agent_id.into()),
+                    idempotency_key: Some(accepted.idempotency_key.into()),
+                    component_revision: Some(revision.get()),
+                    method_name: start.method_name.clone(),
+                    ..Default::default()
+                })),
+            }).await.is_err()
+        {
+            return;
+        }
         let (result, new_stream_mappings) = match output.result {
             AgentInvocationResult::ExternalTool { result } => {
                 let result = match result {
@@ -845,6 +964,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .agent_fingerprint
                             .map(|fingerprint| fingerprint.0.into()),
                         new_stream_mappings,
+                        background_failure: output.background_failure.clone().map(|failure| {
+                            WorkerExecutorError::from(failure).into()
+                        }),
                     },
                 )),
             })

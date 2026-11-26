@@ -31,7 +31,9 @@ use crate::storage::keyvalue::fault_injecting::{
 };
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use async_trait::async_trait;
+use golem_common::model::InvocationRequestOperation;
 use golem_common::model::RetryConfig;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::Timestamp;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentMode;
@@ -50,8 +52,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::OplogPayload;
 use golem_common::model::{
-    AgentFingerprint, AgentInvocationPayload, AgentMetadata, DurableStreamPublicBinding,
-    DurableStreamSessionIndex,
+    AgentFingerprint, AgentMetadata, DurableStreamPublicBinding, DurableStreamSessionIndex,
 };
 use golem_common::read_only_lock;
 use golem_service_base::model::component::Component;
@@ -70,6 +71,7 @@ fn local_reader(introducing_oplog_index: OplogIndex, binding_slot: u32) -> Local
 pub(crate) struct UnusedComponentService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for UnusedComponentService {
     async fn get(
         &self,
@@ -344,6 +346,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
     };
     let attachment_id = prepared.attempt.attachment_id;
     let attempt_id = prepared.attempt.attempt_id;
+    let acceptance = prepared.acceptance();
     append_session(oplog.as_ref(), StreamSessionRecord::Prepared(prepared)).await;
     let pending = append_pending_invocation(oplog.as_ref(), &key.idempotency_key).await;
     append_session(
@@ -351,6 +354,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: key.idempotency_key,
+            acceptance,
             attachment_id,
             attempt_id,
             epoch: 1,
@@ -908,6 +912,27 @@ async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> Oplog
         .add(DurableStreamOplogRecord::Session(None, Box::new(record)).into_inline_entry())
         .await
         .expect("oplog write")
+}
+
+async fn append_accepted_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> OplogIndex {
+    let StreamSessionRecord::Prepared(prepared) = &record else {
+        panic!("expected Prepared record")
+    };
+    let pending = append_pending_invocation(oplog, &prepared.session_key).await;
+    append_session(
+        oplog,
+        StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+            format_version: 1,
+            session_key: prepared.session_key,
+            acceptance: prepared.acceptance(),
+            attachment_id: prepared.attempt.attachment_id,
+            attempt_id: prepared.attempt.attempt_id,
+            epoch: 1,
+            pending_invocation_oplog_index: pending,
+        }),
+    )
+    .await;
+    append_session(oplog, record).await
 }
 
 async fn append_memory_hint(oplog: &dyn Oplog) -> OplogIndex {
@@ -1627,7 +1652,8 @@ async fn append_pending_invocation(oplog: &dyn Oplog, key: &InvocationId) -> Opl
         .add(OplogEntry::pending_agent_invocation(
             None,
             *key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -1645,9 +1671,16 @@ fn attached_record(
     epoch: u64,
     pending_invocation_oplog_index: OplogIndex,
 ) -> StreamSessionRecord {
+    let StreamSessionRecord::Prepared(prepared) = prepared_record(
+        &OwnedAgentId::new(session_key.callee_environment_id, &session_key.callee),
+        &session_key.idempotency_key,
+    ) else {
+        unreachable!()
+    };
     StreamSessionRecord::Attached(StreamSessionAttachedRecord {
         format_version: 1,
         session_key: session_key.idempotency_key,
+        acceptance: prepared.acceptance(),
         attachment_id,
         attempt_id,
         epoch,
@@ -2564,10 +2597,10 @@ async fn public_bindings_isolate_routes_and_recreated_generations_after_rebuild(
         prepared
     };
     for (scope, key) in scopes.iter().zip(&keys) {
-        append_session(oplog.as_ref(), prepare(key, Some(scope.clone()))).await;
+        append_accepted_session(oplog.as_ref(), prepare(key, Some(scope.clone()))).await;
     }
     // Ordinary invocation sessions never publish a route binding.
-    append_session(oplog.as_ref(), prepare(&InvocationId(Uuid::new_v4()), None)).await;
+    append_accepted_session(oplog.as_ref(), prepare(&InvocationId(Uuid::new_v4()), None)).await;
     append_session(
         oplog.as_ref(),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
@@ -2581,7 +2614,7 @@ async fn public_bindings_isolate_routes_and_recreated_generations_after_rebuild(
     )
     .await;
     let replacement = InvocationId(Uuid::new_v4());
-    append_session(
+    append_accepted_session(
         oplog.as_ref(),
         prepare(&replacement, Some(scopes[0].clone())),
     )
@@ -2952,6 +2985,45 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     record.public_session_id = public.into();
     record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 };
     record.expiry_deadline_millis = Some(40_000);
+    let pending = append_pending_invocation(oplog.as_ref(), &key).await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+            format_version: 1,
+            session_key: key,
+            acceptance: record.acceptance(),
+            attachment_id: record.attempt.attachment_id,
+            attempt_id: record.attempt.attempt_id,
+            epoch: 1,
+            pending_invocation_oplog_index: pending,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    for cold in [false, true] {
+        if cold {
+            service
+                .stream_session_index
+                .clear(&id, test_fingerprint())
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            service.stream_session_index.lookup_public_binding(
+                &id, AgentMode::Durable, test_fingerprint(), &test_route_scope(), public,
+            ).await.unwrap(),
+            Some(DurableStreamPublicBinding::Live { session_key, .. }) if session_key == key
+        ));
+        let status = service
+            .stream_session_index
+            .lookup_latest(&id, AgentMode::Durable, test_fingerprint(), &key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.prepared, None);
+        assert_eq!(status.attachment_epoch, Some(1));
+        assert_eq!(status.attachment_attached, Some(true));
+    }
     append_session(oplog.as_ref(), prepared).await;
     oplog.commit(CommitLevel::Always).await.unwrap();
 
@@ -3069,7 +3141,7 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     record.public_session_id = public.into();
     record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 };
     record.expiry_deadline_millis = Some(40_000);
-    append_session(oplog.as_ref(), prepared).await;
+    append_accepted_session(oplog.as_ref(), prepared).await;
     let discarded = append_memory_hint(oplog.as_ref()).await;
     oplog.commit(CommitLevel::Always).await.unwrap();
 
@@ -4095,6 +4167,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let first_attempt = prepared_record.attempt.attempt_id;
     let attachment_id = prepared_record.attempt.attachment_id;
     let session = prepared_record.attempt.session_key.clone();
+    let acceptance = prepared_record.acceptance();
     append_session(oplog.as_ref(), prepared).await;
     let pending_invocation_oplog_index = append_pending_invocation(oplog.as_ref(), &key).await;
     let attached = append_session(
@@ -4102,6 +4175,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session.idempotency_key,
+            acceptance,
             attachment_id,
             attempt_id: first_attempt,
             epoch: 1,

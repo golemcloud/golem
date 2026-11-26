@@ -878,10 +878,10 @@ fn effective_expiry_policy(
     Ok((policy, deadline))
 }
 
-fn expiry_datetime(millis: u64) -> Option<chrono::DateTime<chrono::Utc>> {
+fn expiry_datetime(millis: u64) -> Option<jiff::Timestamp> {
     i64::try_from(millis)
         .ok()
-        .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+        .and_then(|v| jiff::Timestamp::from_millisecond(v).ok())
 }
 
 pub(crate) fn response(

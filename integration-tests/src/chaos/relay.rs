@@ -112,7 +112,7 @@ use crate::chaos::split::{
 use crate::chaos::summary::LatencyStats;
 use crate::chaos::workload::{COUNTER_AGENT, WorkloadContext, rpc_callee_name};
 use crate::chaos::{RelayConfig, ScenarioCode};
-use chrono::{DateTime, Utc};
+
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -669,14 +669,14 @@ struct Tally {
     confirmed: u64,
     rejected: u64,
     indeterminate: u64,
-    served_at: Vec<DateTime<Utc>>,
+    served_at: Vec<jiff::Timestamp>,
     /// Durations of the operations *answered* in this window, so the latency
     /// stats and the served count describe the same set of operations.
     served_ms: Vec<u64>,
 }
 
 /// Which window an instant fell in.
-fn window_of(at: DateTime<Utc>, fault: Option<FaultWindow>) -> Window {
+fn window_of(at: jiff::Timestamp, fault: Option<FaultWindow>) -> Window {
     let Some(fault) = fault else {
         return Window::Unknown;
     };
@@ -702,8 +702,8 @@ pub fn build(
     config: &RelayConfig,
 ) -> RelayReport {
     let mut tallies: BTreeMap<(Placement, Window), Tally> = BTreeMap::new();
-    let mut first_submitted: BTreeMap<Placement, DateTime<Utc>> = BTreeMap::new();
-    let mut last_completed: BTreeMap<Placement, DateTime<Utc>> = BTreeMap::new();
+    let mut first_submitted: BTreeMap<Placement, jiff::Timestamp> = BTreeMap::new();
+    let mut last_completed: BTreeMap<Placement, jiff::Timestamp> = BTreeMap::new();
     let mut records_outside_the_pairing = 0u64;
 
     for record in records.iter().filter(|r| r.stream == Stream::Rpc) {
@@ -1160,8 +1160,8 @@ mod tests {
     use super::*;
     use crate::chaos::history::Phase;
 
-    fn at(secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(1_800_000_000 + secs, 0).unwrap()
+    fn at(secs: i64) -> jiff::Timestamp {
+        jiff::Timestamp::new(1_800_000_000 + secs, 0).unwrap()
     }
 
     fn fault() -> Option<FaultWindow> {

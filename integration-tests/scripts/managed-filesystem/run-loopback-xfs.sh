@@ -1,6 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+prepare_guest_snapshot() {
+  local host_selection=${GOLEM_MANAGED_XFS_SELECTION:?reuse requires GOLEM_MANAGED_XFS_SELECTION}
+  local host_digest=${GOLEM_MANAGED_XFS_SELECTION_DIGEST:?reuse requires GOLEM_MANAGED_XFS_SELECTION_DIGEST}
+  local executable_checksums=${GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS:?reuse requires GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS}
+  if [[ ${host_selection} != /* || ${executable_checksums} != /* || ! ${host_digest} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "managed XFS reuse requires absolute selection/checksum paths and a sha256 manifest digest" >&2
+    return 1
+  fi
+  printf '%s  %s\n' "${host_digest#sha256:}" "${host_selection}" | sha256sum --check --strict - || return
+  sha256sum --check --strict "${executable_checksums}" || return
+
+  # Re-resolve the guest loader and libraries, rather than trusting host library identities.
+  local guest_snapshot=${work_dir}/guest-snapshot
+  "${cargo_test_r}" snapshot --selection "${host_selection}" --out "${guest_snapshot}" \
+    --deadline 10m --kill-grace 10s || return
+  printf '%s  %s\n' "${host_digest#sha256:}" "${host_selection}" | sha256sum --check --strict - || return
+  sha256sum --check --strict "${executable_checksums}" || return
+  guest_selection=${guest_snapshot}/selection.json
+  guest_selection_digest=$(sha256sum "${guest_selection}") || return
+  guest_selection_digest=sha256:${guest_selection_digest%% *}
+  # Native staging is root-only. Permit traversal and manifest reads, not writes;
+  # executable modes remain exactly as recorded by snapshot.
+  chmod 0755 "${guest_snapshot}" "${guest_snapshot}/bin" || return
+  chmod 0644 "${guest_selection}" || return
+  "${cargo_test_r}" verify --selection "${guest_selection}" --expect-digest "${guest_selection_digest}" \
+    --deadline 10m --kill-grace 10s || return
+
+  local report_dir evidence_dir
+  report_dir=$(dirname "${executable_checksums}")
+  evidence_dir=$(mktemp -d "${report_dir}/guest-snapshot-evidence.XXXXXX") || return
+  cp "${guest_selection}" "${evidence_dir}/selection.json" || return
+  printf '%s\n' "${guest_selection_digest}" > "${evidence_dir}/selection.digest" || return
+  chmod 0755 "${evidence_dir}" || return
+  chmod 0644 "${evidence_dir}/selection.json" "${evidence_dir}/selection.digest" || return
+  echo "Managed XFS guest selection: ${guest_selection} ${guest_selection_digest}; evidence: ${evidence_dir}"
+}
+
 require_exactly_one_passed_test() {
   local result_file=$1
   local filter=$2
@@ -325,7 +362,7 @@ filesystem_image_size=$(select_filesystem_image_size \
   "${filesystem_workload_benchmark}" \
   "${filesystem_native_workload_baseline}")
 
-for command in flock getent losetup mkfs.xfs mount python3 setpriv stat tee timeout truncate; do
+for command in flock getent losetup mkfs.xfs mount setpriv sha256sum stat tee timeout truncate; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "missing required command: ${command}" >&2
     exit 1
@@ -441,6 +478,15 @@ if [[ ${validate_cache_only} == 1 ]]; then
   exit
 fi
 
+# Resolve the user's installation before running snapshot or tests as root.
+if ! resolved_cargo_test_r=$(run_vm_cargo bash -c 'command -v "$1"' bash "${cargo_test_r}"); then
+  echo "missing required command: ${cargo_test_r}" >&2
+  echo "Install cargo-test-r 2.2.14 in the build user's PATH (inside the VM when using Lima)." >&2
+  echo "Run as that user: cargo install --locked cargo-test-r --version 2.2.14" >&2
+  exit 1
+fi
+cargo_test_r=${resolved_cargo_test_r}
+
 work_dir=$(mktemp -d /tmp/golem-managed-xfs.XXXXXX)
 chmod 0755 "${work_dir}"
 loop_devices=()
@@ -529,7 +575,7 @@ build_test_binaries() {
   fi
   echo "Building managed XFS test binaries with profile ${cargo_profile_dir} and ${CARGO_BUILD_JOBS:-default} Cargo jobs" >&2
   local build_messages=${work_dir}/cargo-test-artifacts.jsonl
-  local selected_executables=${work_dir}/cargo-test-executables.tsv
+  local cargo_metadata=${work_dir}/cargo-metadata.json
   local lib_decoy=${target_dir}/${cargo_profile_dir}/deps/golem_worker_executor-stale-decoy
   local integration_decoy=${target_dir}/${cargo_profile_dir}/deps/integration-stale-decoy
   run_vm_cargo mkdir -p "${target_dir}/${cargo_profile_dir}/deps"
@@ -555,24 +601,18 @@ build_test_binaries() {
 
   lib_test_binary=
   integration_test_binary=
-  if ! run_vm_cargo python3 \
-    "${repo_root}/integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py" \
-    "${build_messages}" "${repo_root}" lib integration > "${selected_executables}"; then
+  if ! run_vm_cargo cargo metadata --no-deps --format-version 1 > "${cargo_metadata}" ||
+    ! lib_test_binary=$(run_vm_cargo "${cargo_test_r}" list \
+      --cargo-messages "${build_messages}" --cargo-metadata "${cargo_metadata}" \
+      --package golem-worker-executor --binary-id golem-worker-executor \
+      --expect-count 1 --output executable-path --deadline 10m --kill-grace 10s) ||
+    ! integration_test_binary=$(run_vm_cargo "${cargo_test_r}" list \
+      --cargo-messages "${build_messages}" --cargo-metadata "${cargo_metadata}" \
+      --package golem-worker-executor-tests --binary-id golem-worker-executor-tests::integration \
+      --expect-count 1 --output executable-path --deadline 10m --kill-grace 10s); then
     run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
     return 1
   fi
-  local target executable
-  while IFS=$'\t' read -r target executable; do
-    case ${target} in
-      lib) lib_test_binary=${executable} ;;
-      integration) integration_test_binary=${executable} ;;
-      *)
-        echo "unexpected Cargo test target selected: ${target}" >&2
-        run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
-        return 1
-        ;;
-    esac
-  done < "${selected_executables}"
   run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
   if [[ -z ${lib_test_binary} || -z ${integration_test_binary} ]]; then
     echo "cargo did not emit both managed XFS test executables" >&2
@@ -635,10 +675,7 @@ run_selected_test() {
   fi
 
   if [[ ${reuse_test_binaries} == 1 ]]; then
-    local target_args=()
-    if [[ -n ${GOLEM_MANAGED_XFS_BINARIES_METADATA:-} ]]; then
-      target_args=(--binaries-metadata "${GOLEM_MANAGED_XFS_BINARIES_METADATA}")
-    fi
+    local target_args=(--selection "${guest_selection}" --expect-digest "${guest_selection_digest}")
     if [[ ${target} == integration ]]; then
       target_args+=(--package golem-worker-executor-tests --test integration)
     else
@@ -648,6 +685,7 @@ run_selected_test() {
       timeout --kill-after=30s 5m \
       "${runner[@]}" \
       "${cargo_test_r}" run "${target_args[@]}" \
+      --deadline 5m --kill-grace 10s \
       "${filter}" -- --exact --include-ignored --nocapture --report-time
     return
   fi
@@ -674,7 +712,7 @@ run_selected_test() {
 run_filesystem_benchmark() {
   local mode=$1
   local selected=$2
-  local filter=wasi::filesystem_guest_latency_benchmark
+  local filter=wasi::linux::filesystem_guest_latency_benchmark
   local capable_binary=${work_dir}/integration-benchmark-${mode}
   local result_file=${work_dir}/filesystem-benchmark-${mode}.result
   local perf_file=${work_dir}/filesystem-benchmark-${mode}.perf
@@ -817,6 +855,8 @@ lib_test_binary=
 integration_test_binary=
 if [[ ${reuse_test_binaries} == 0 ]]; then
   build_test_binaries
+else
+  prepare_guest_snapshot
 fi
 
 if [[ ${filesystem_benchmark} == true || ${filesystem_workload_benchmark} == true || ${filesystem_native_workload_baseline} == true ]]; then
@@ -856,105 +896,105 @@ run_privileged_test \
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::xfs::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::xfs::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_seed_charges_the_project_and_follows_the_placement
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::xfs::managed_xfs_seed_charges_the_project_and_follows_the_placement
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem::lifecycle::tests::managed_xfs_allocated_bytes_flow_through_resource_billing
+  services::agent_filesystem::lifecycle::tests::managed_xfs::managed_xfs_allocated_bytes_flow_through_resource_billing
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem::lifecycle::tests::managed_xfs_lifecycle_installs_limits_and_deletes_verified
+  services::agent_filesystem::lifecycle::tests::managed_xfs::managed_xfs_lifecycle_installs_limits_and_deletes_verified
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem_snapshots::tests::managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
+  services::agent_filesystem_snapshots::tests::native_pressure::linux::managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem_pressure::tests::managed_xfs_reobserves_fresh_space_after_verified_deletion
+  filesystem_pressure::tests::linux::managed_xfs_reobserves_fresh_space_after_verified_deletion
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::p2_p3_quota_classification_on_managed_xfs
+  wasi::linux::p2_p3_quota_classification_on_managed_xfs
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write
+  wasi::linux::managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::managed_xfs_resource_billing_survives_idle_and_replay
+  wasi::linux::managed_xfs_resource_billing_survives_idle_and_replay
 
 # Keep each native storage interruption case explicit: the selector check rejects missing tests.
 for interruption_test in \
-  host::sleep::p2::durable_p2_sleep_managed_xfs_storage_quota \
-  host::sleep::p2::ephemeral_p2_sleep_managed_xfs_storage_quota \
-  host::sleep::p3::durable_p3_sleep_managed_xfs_storage_quota \
-  host::sleep::p3::ephemeral_p3_sleep_managed_xfs_storage_quota \
-  host::rpc::durable_sync_rpc_managed_xfs_storage_quota \
-  host::rpc::ephemeral_sync_rpc_managed_xfs_storage_quota \
-  host::rpc::durable_async_rpc_managed_xfs_storage_quota \
-  host::rpc::ephemeral_async_rpc_managed_xfs_storage_quota \
-  host::p2::tcp::poll::durable_p2_block_managed_xfs_storage_quota \
-  host::p2::tcp::poll::ephemeral_p2_block_managed_xfs_storage_quota \
-  host::p2::tcp::multi_poll::durable_p2_multi_poll_managed_xfs_storage_quota \
-  host::p2::tcp::multi_poll::ephemeral_p2_multi_poll_managed_xfs_storage_quota \
-  host::p2::tcp::input::durable_p2_blocking_read_managed_xfs_storage_quota \
-  host::p2::tcp::input::ephemeral_p2_blocking_read_managed_xfs_storage_quota \
-  host::p2::tcp::input::durable_p2_blocking_skip_managed_xfs_storage_quota \
-  host::p2::tcp::input::ephemeral_p2_blocking_skip_managed_xfs_storage_quota \
-  host::p2::tcp::input::durable_p2_blocking_splice_managed_xfs_storage_quota \
-  host::p2::tcp::input::ephemeral_p2_blocking_splice_managed_xfs_storage_quota \
-  host::p2::tcp::input::cross_socket::durable_p2_cross_socket_splice_managed_xfs_storage_quota \
-  host::p2::tcp::input::cross_socket::ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota \
+  host::sleep::p2::storage::durable_p2_sleep_managed_xfs_storage_quota \
+  host::sleep::p2::storage::ephemeral_p2_sleep_managed_xfs_storage_quota \
+  host::sleep::p3::storage::durable_p3_sleep_managed_xfs_storage_quota \
+  host::sleep::p3::storage::ephemeral_p3_sleep_managed_xfs_storage_quota \
+  host::rpc::storage::durable_sync_rpc_managed_xfs_storage_quota \
+  host::rpc::storage::ephemeral_sync_rpc_managed_xfs_storage_quota \
+  host::rpc::storage::durable_async_rpc_managed_xfs_storage_quota \
+  host::rpc::storage::ephemeral_async_rpc_managed_xfs_storage_quota \
+  host::p2::tcp::poll::storage::durable_p2_block_managed_xfs_storage_quota \
+  host::p2::tcp::poll::storage::ephemeral_p2_block_managed_xfs_storage_quota \
+  host::p2::tcp::multi_poll::storage::durable_p2_multi_poll_managed_xfs_storage_quota \
+  host::p2::tcp::multi_poll::storage::ephemeral_p2_multi_poll_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::durable_p2_blocking_read_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::ephemeral_p2_blocking_read_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::durable_p2_blocking_skip_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::ephemeral_p2_blocking_skip_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::durable_p2_blocking_splice_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::ephemeral_p2_blocking_splice_managed_xfs_storage_quota \
+  host::p2::tcp::input::cross_socket::storage::durable_p2_cross_socket_splice_managed_xfs_storage_quota \
+  host::p2::tcp::input::cross_socket::storage::ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota \
   host::p2::tcp::input::repeated_stop::durable_claimed_quota_stop_preserves_reason_after_policy_update \
   host::p2::tcp::input::repeated_stop::ephemeral_claimed_quota_stop_preserves_reason_after_policy_update \
   host::p2::tcp::input::repeated_stop::durable_claimed_user_stop_preserves_reason_after_policy_update \
   host::p2::tcp::input::repeated_stop::ephemeral_claimed_user_stop_preserves_reason_after_policy_update \
-  host::p3::udp::durable_p3_udp_receive_managed_xfs_storage_quota \
-  host::p3::udp::ephemeral_p3_udp_receive_managed_xfs_storage_quota \
-  host::p3::promise::durable_p3_promise_managed_xfs_storage_quota \
-  host::p3::promise::ephemeral_p3_promise_managed_xfs_storage_quota \
-  host::p3::http::headers::durable_p3_http_headers_managed_xfs_storage_quota \
-  host::p3::http::headers::ephemeral_p3_http_headers_managed_xfs_storage_quota \
-  host::p3::http::body::durable_p3_http_body_managed_xfs_storage_quota \
-  host::p3::http::body::ephemeral_p3_http_body_managed_xfs_storage_quota \
-  host::websocket::durable_websocket_receive_managed_xfs_storage_quota \
-  host::websocket::ephemeral_websocket_receive_managed_xfs_storage_quota \
-  host::websocket::handshake::durable_websocket_handshake_managed_xfs_storage_quota \
-  host::websocket::handshake::ephemeral_websocket_handshake_managed_xfs_storage_quota \
-  host::websocket::pool::durable_websocket_initial_pool_managed_xfs_storage_quota \
-  host::websocket::pool::ephemeral_websocket_initial_pool_managed_xfs_storage_quota \
-  host::websocket::reader_lock::durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota \
-  host::websocket::reader_lock::ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota \
-  host::websocket::timed_receive::durable_websocket_timed_receive_managed_xfs_storage_quota \
-  host::websocket::timed_receive::ephemeral_websocket_timed_receive_managed_xfs_storage_quota \
-  host::websocket::reconnect_handshake::durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota \
-  host::websocket::reconnect_handshake::durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota \
-  host::websocket::reconnect_pool::durable_websocket_reconnect_pool_receive_managed_xfs_storage_quota \
-  host::websocket::reconnect_pool::durable_websocket_reconnect_pool_close_managed_xfs_storage_quota \
-  metering::storage::durable_pending_managed_xfs_storage_suspends_and_recovers \
-  metering::storage::ephemeral_pending_managed_xfs_storage_fails_with_matching_resource_error \
-  metering::storage::nonmatching::durable_pending_nonmatching_managed_xfs_storage_remains_running \
-  metering::storage::nonmatching::ephemeral_pending_nonmatching_managed_xfs_storage_remains_running
+  host::p3::udp::storage::durable_p3_udp_receive_managed_xfs_storage_quota \
+  host::p3::udp::storage::ephemeral_p3_udp_receive_managed_xfs_storage_quota \
+  host::p3::promise::storage::durable_p3_promise_managed_xfs_storage_quota \
+  host::p3::promise::storage::ephemeral_p3_promise_managed_xfs_storage_quota \
+  host::p3::http::headers::storage::durable_p3_http_headers_managed_xfs_storage_quota \
+  host::p3::http::headers::storage::ephemeral_p3_http_headers_managed_xfs_storage_quota \
+  host::p3::http::body::storage::durable_p3_http_body_managed_xfs_storage_quota \
+  host::p3::http::body::storage::ephemeral_p3_http_body_managed_xfs_storage_quota \
+  host::websocket::storage::durable_websocket_receive_managed_xfs_storage_quota \
+  host::websocket::storage::ephemeral_websocket_receive_managed_xfs_storage_quota \
+  host::websocket::handshake::storage::durable_websocket_handshake_managed_xfs_storage_quota \
+  host::websocket::handshake::storage::ephemeral_websocket_handshake_managed_xfs_storage_quota \
+  host::websocket::pool::storage::durable_websocket_initial_pool_managed_xfs_storage_quota \
+  host::websocket::pool::storage::ephemeral_websocket_initial_pool_managed_xfs_storage_quota \
+  host::websocket::reader_lock::storage::durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota \
+  host::websocket::reader_lock::storage::ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota \
+  host::websocket::timed_receive::storage::durable_websocket_timed_receive_managed_xfs_storage_quota \
+  host::websocket::timed_receive::storage::ephemeral_websocket_timed_receive_managed_xfs_storage_quota \
+  host::websocket::reconnect_handshake::storage::durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota \
+  host::websocket::reconnect_handshake::storage::durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota \
+  host::websocket::reconnect_pool::storage::durable_websocket_reconnect_pool_receive_managed_xfs_storage_quota \
+  host::websocket::reconnect_pool::storage::durable_websocket_reconnect_pool_close_managed_xfs_storage_quota \
+  metering::storage::linux::durable_pending_managed_xfs_storage_suspends_and_recovers \
+  metering::storage::linux::ephemeral_pending_managed_xfs_storage_fails_with_matching_resource_error \
+  metering::storage::linux::nonmatching::durable_pending_nonmatching_managed_xfs_storage_remains_running \
+  metering::storage::linux::nonmatching::ephemeral_pending_nonmatching_managed_xfs_storage_remains_running
 do
   run_privileged_test integration "${integration_test_binary}" "api::interruption::${interruption_test}"
 done
@@ -962,32 +1002,32 @@ done
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  filesystem_snapshots::managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
+  filesystem_snapshots::linux::managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  filesystem_snapshots::managed_xfs_manual_update_brings_the_files_into_the_target_revision
+  filesystem_snapshots::linux::managed_xfs_manual_update_brings_the_files_into_the_target_revision
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::filesystem_downgrade_blocks_guest_until_limit_recovers
+  wasi::linux::filesystem_downgrade_blocks_guest_until_limit_recovers
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::an_empty_standard_seed_succeeds_after_root_retirement
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::root_retirement::an_empty_standard_seed_succeeds_after_root_retirement
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::linux_volume_seed_batch_uses_the_root_path_without_root_admission
+  filesystem::sandbox::host_adapter::tree_copy::tests::linux_batch::linux_volume_seed_batch_uses_the_root_path_without_root_admission
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::reflink_xfs_copy_contents_and_seed_share_extents
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::xfs::reflink_xfs_copy_contents_and_seed_share_extents
 
 run_unprivileged_test \
   lib \
@@ -997,7 +1037,7 @@ run_unprivileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem::executor_directories::tests::reflink_xfs_a_provision_dropped_while_its_setup_is_queued_keeps_its_root_until_the_setup_ends
+  services::agent_filesystem::executor_directories::tests::linux::reflink_xfs_a_provision_dropped_while_its_setup_is_queued_keeps_its_root_until_the_setup_ends
 
 run_unprivileged_test \
   lib \
@@ -1012,24 +1052,24 @@ run_unprivileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem::executor_directories::tests::xfs_directory_checks::reflink_xfs_refuses_a_host_directory_with_a_project_identity
+  services::agent_filesystem::executor_directories::tests::linux::xfs_directory_checks::reflink_xfs_refuses_a_host_directory_with_a_project_identity
 
 run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
-  filesystem_snapshots::reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
+  filesystem_snapshots::linux::reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem_snapshots::tests::reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
+  services::agent_filesystem_snapshots::tests::native_pressure::linux::reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
 
 run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
-  filesystem_snapshots::reflink_xfs_with_filesystem_metering_fails_at_startup
+  filesystem_snapshots::linux::reflink_xfs_with_filesystem_metering_fails_at_startup
 
 run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write
+  wasi::linux::reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write

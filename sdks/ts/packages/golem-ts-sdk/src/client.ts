@@ -33,7 +33,7 @@ import {
 } from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
 import { compileConfig, ConfigDeclaration } from './config';
-import type { AgentId } from './agentId';
+import { AgentId } from './agentId';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec, SchemaValueWriter, SchemaValueReader } from './schema/codec';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
@@ -233,9 +233,9 @@ export interface RemoteClientFactory<
   ): Promise<RemoteClient<Methods>>;
   /**
    * Address the existing agent with this ID. Never creates the agent: an unknown ID, or the ID of
-   * an agent of another type, rejects with a `not-found` {@link RemoteCallError}.
+   * an agent of another type, throws a `not-found` {@link RemoteCallError}.
    */
-  getById(agentId: AgentId, options?: RemoteClientOptions): Promise<RemoteClient<Methods>>;
+  getById(agentId: AgentId, options?: RemoteClientOptions): RemoteClient<Methods>;
 }
 
 /** Creates logical ephemeral clients whose final identity is allocated per invocation. */
@@ -244,10 +244,7 @@ export interface EphemeralRemoteClientFactory<Id extends IdRecord, Methods exten
    * Create a logical client; each invocation runs on a new one-shot instance whose identity the
    * invocation returns. Host failures throw a {@link RemoteCallError}.
    */
-  upsert(
-    id: InferRecord<Id>,
-    options?: RemoteClientOptions,
-  ): RemoteClient<Methods, 'ephemeral'>;
+  upsert(id: InferRecord<Id>, options?: RemoteClientOptions): RemoteClient<Methods, 'ephemeral'>;
 }
 
 export type FullAgentClientFactory<
@@ -345,8 +342,8 @@ function defineAgentClientImpl(spec: {
   const methodCodecs = compileRemoteMethods(spec.methods);
   return Object.freeze({
     methods: spec.methods,
-    getById: async (agentId: AgentId, options?: RemoteClientOptions) => {
-      const registered = getAgentTypeByAgentId(agentId);
+    getById: (agentId: AgentId, options?: RemoteClientOptions) => {
+      const registered = getAgentTypeByAgentId(AgentId.toWit(agentId));
       if (registered === undefined) {
         throw new RemoteCallError(`Failed to connect to remote agent ${agentId.toString()}`, {
           tag: 'not-found',
@@ -362,7 +359,7 @@ function defineAgentClientImpl(spec: {
       return createRemoteClient<MethodsRecord, 'durable'>(
         methodCodecs,
         'durable',
-        await getRemoteAgentById(registered.agentType.typeName, agentId),
+        getRemoteAgentById(registered.agentType.typeName, agentId),
         options,
       );
     },
@@ -646,8 +643,7 @@ export function buildAgentClientSurface<
 
   const configDecls: ConfigDeclaration[] = compileConfig(def.config);
 
-  const encodeId = (id: InferRecord<Id>) =>
-    encodeRecord(idCodecs, id as Record<string, unknown>);
+  const encodeId = (id: InferRecord<Id>) => encodeRecord(idCodecs, id as Record<string, unknown>);
 
   const upsert = (id: InferRecord<Id>, options?: RemoteClientOptions) =>
     createRemoteClient<Methods, Mode>(
@@ -677,8 +673,7 @@ export function buildAgentClientSurface<
         });
         return durableClient(remote, options);
       },
-      getById: async (agentId, options) =>
-        durableClient(await getRemoteAgentById(def.name, agentId), options),
+      getById: (agentId, options) => durableClient(getRemoteAgentById(def.name, agentId), options),
     } as RemoteClientFactory<Id, Methods, Config>;
   }
 

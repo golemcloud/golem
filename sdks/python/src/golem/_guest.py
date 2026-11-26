@@ -254,7 +254,7 @@ class Tools(ToolGuest):
     def get_tool(self, name):
         raise Err(ToolError_InvalidToolName(name))
 
-    async def invoke(self, tool_name, command_path, input, stdin):
+    async def invoke(self, tool_name, command_path, input, stdin, stdout, stderr):
         raise Err(ToolError_InvalidToolName(tool_name))
 
 

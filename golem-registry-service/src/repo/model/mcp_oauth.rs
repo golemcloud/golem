@@ -4,10 +4,10 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
-use chrono::{DateTime, Utc};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_import::{McpImport, McpImportSource};
 use golem_mcp_import::oauth::AuthorizationServerMetadata;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
@@ -66,7 +66,7 @@ pub struct McpOAuthTokens {
     pub session: McpOAuthSession,
     pub access_token: String,
     pub refresh_token: Option<String>,
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<Timestamp>,
     pub scopes: Vec<String>,
 }
 

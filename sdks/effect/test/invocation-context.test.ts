@@ -27,6 +27,7 @@ import {
   toolPrincipal,
   userPrincipal,
 } from "./callers.js"
+import { agentIdFor } from "./invocation-metadata.js"
 
 const host = {
   original: userPrincipal("root"),
@@ -64,6 +65,8 @@ describe("Caller", () => {
     const caller = callerFromHost(host)
     expect(caller.original.kind).toBe("user")
     expect(caller.immediate.kind).toBe("agent")
+    if (caller.immediate.kind === "agent")
+      expect(caller.immediate.agentId).toBe(agentIdFor("worker"))
     expect(caller.tokens).toHaveLength(2)
     expect(caller.tokens[0]).toBeInstanceOf(TokenProvenance)
     expect(caller.tokens[0]!.maker?.toString()).toBe('("golem","account:1")')

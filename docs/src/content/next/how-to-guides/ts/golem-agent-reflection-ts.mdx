@@ -104,14 +104,14 @@ const PingClient = defineAgentClient({
   },
 });
 
-const client = await PingClient.getById(existingAgentId);
+const client = PingClient.getById(existingAgentId);
 const result = await client.ping();
 ```
 
 A method-only client contains only `methods`; it cannot declare `name`,
 `id`, `config`, or `mode`. It performs no discovery and uses durable result
 semantics. An ID whose type tag names no deployed agent type, an ephemeral agent
-type, or an unknown agent rejects with a `not-found` `RemoteCallError`.
+type, or an unknown agent throws a `not-found` `RemoteCallError`.
 `AgentId.parse` checks only the text form and throws a `TypeError` for text that
 is not a UUID.
 
@@ -138,14 +138,14 @@ const counter = CounterClient.client.upsert({ name: 'main' });
 const first = await counter.echo({ message: 'from Zod' });
 
 const agentId = await counter.agentId();
-const same = await CounterClient.client.getById(agentId);
+const same = CounterClient.client.getById(agentId);
 const second = await same.echo({ message: 'by ID' });
 ```
 
 The factories validate and pack constructor fields through the caller's
 schema library before opening RPC. `getById` connects only to an agent of the
 declared agent type; an unknown ID, or the ID of an agent of another type,
-rejects with a `not-found` `RemoteCallError`. For infrastructure that already
+throws a `not-found` `RemoteCallError`. For infrastructure that already
 owns a Golem `SchemaValue` for the constructor, use the reflected factory's
 `upsertValue(value)` or `createValue(value, options)`; record fields must be in
 the target constructor's declared order. When runtime metadata is available,
@@ -159,7 +159,7 @@ ID and bind it:
 ```typescript
 import { AgentId, getAgentTypeByAgentId } from '@golemcloud/golem-ts-sdk';
 
-async function bindExisting(agentId: AgentId) {
+function bindExisting(agentId: AgentId) {
   const reflected = getAgentTypeByAgentId(agentId);
   if (!reflected || reflected.mode !== 'durable') {
     throw new Error('No deployed durable agent type has the type tag of this ID');
@@ -170,10 +170,10 @@ async function bindExisting(agentId: AgentId) {
 
 `getAgentTypeByAgentId` reads the agent type from the type tag of the ID. It
 does not check that the agent exists, and returns `undefined` when no deployed
-agent type has that tag. `getById` never creates the agent: an unknown ID rejects
-with a `not-found` `RemoteCallError`. `AgentId.parse(text)` is the strict local
+agent type has that tag. `getById` never creates the agent: an unknown ID throws
+a `not-found` `RemoteCallError`. `AgentId.parse(text)` is the strict local
 operation when malformed ID text must be reported. Use
-`await DynamicAgentClient.getById(agentId)` only for lifecycle-free
+`DynamicAgentClient.getById(agentId)` only for lifecycle-free
 infrastructure that already holds schema-native values and intentionally
 invokes arbitrary method names without discovery.
 
@@ -186,12 +186,12 @@ without a key; only its ID reaches it again:
 ```typescript
 const created = await counterType.client.create({ name: 'main' });
 const createdId = await created.agentId();
-const again = await counterType.client.getById(createdId);
+const again = counterType.client.getById(createdId);
 ```
 
 For an ephemeral reflected type, only `upsert` and `upsertValue` are available;
-`create` and `getById` reject with a `TypeError`, and the client's `agentId()`
-throws one. Each invocation returns its allocated one-shot identity in metadata:
+`create` rejects with a `TypeError`, and `getById` and the client's `agentId()`
+throw one. Each invocation returns its allocated one-shot identity in metadata:
 
 ```typescript
 const requestType = getReflectedAgentType('RequestAgent');
@@ -202,7 +202,7 @@ if (!requestType || requestType.mode !== 'ephemeral') {
 const request = requestType.client.upsert({ route: 'summarize' });
 
 const result = await request.method('run').invoke({ text: 'hello' });
-console.log(result.metadata.agentId.toString(), result.metadata.invocationId.toString());
+console.log(result.metadata.agentId, result.metadata.invocationId.toString());
 ```
 
 Do not treat an ephemeral client as having a reusable agent ID. A one-shot
@@ -292,7 +292,7 @@ async function callDynamically() {
 
   try {
     const id = await type.client.upsert({ tenant: 'docs' }).agentId();
-    const dynamic = await DynamicAgentClient.getById(id);
+    const dynamic = DynamicAgentClient.getById(id);
     const result = await dynamic.method(method.name).invokeValue(input);
     if (!method.output || result.value === undefined) {
       throw new Error('search returned an unexpected unit result');
@@ -320,5 +320,5 @@ every returned stream according to the cleanup rules above.
 | Target definition and method known in source | `Target.client` |
 | Type or method selected at runtime | `getReflectedAgentType` / `getAllAgentTypes` |
 | Existing agent ID needs its current schema | `getAgentTypeByAgentId(agentId)`, then `client.getById(agentId)` |
-| Existing agent ID plus a caller-owned method-only or full client | `await clientDefinition.getById(agentId)` or `await clientDefinition.client.getById(agentId)` |
-| Lifecycle-free invocation with schema-native values | `await DynamicAgentClient.getById(agentId)` |
+| Existing agent ID plus a caller-owned method-only or full client | `clientDefinition.getById(agentId)` or `clientDefinition.client.getById(agentId)` |
+| Lifecycle-free invocation with schema-native values | `DynamicAgentClient.getById(agentId)` |

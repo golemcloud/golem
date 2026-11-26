@@ -160,6 +160,14 @@ pub trait GolemHostApi {
         agent_type: String,
         constructor: String,
     ) -> Result<String, String>;
+
+    /// Calls `method` on the existing agent with the ID `agent_id`.
+    fn outbound_agent_rpc_invoke_by_id_and_await_result(
+        &self,
+        agent_type: String,
+        agent_id: Uuid,
+        method: String,
+    ) -> Result<(), String>;
     fn outbound_agent_rpc_schedule_result(
         &self,
         agent_type: String,
@@ -205,7 +213,11 @@ pub trait GolemHostApi {
     /// Fails when the search has not ended after `max_batches` batches.
     fn continue_kept_oplog_search(&self, max_batches: u64) -> Result<Vec<u64>, String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
-    fn search_oplog_result(&self, agent_id: AgentId, query: String) -> Result<(), String>;
+    fn search_oplog_result(
+        &mut self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<u64>>, String>;
     /// Enriches a forged raw failed update at `entry_index` of the agent's own oplog, whose
     /// divergence names `divergence_index` with an expected host call of unknown request.
     fn enrich_forged_failed_update_result(
@@ -722,6 +734,19 @@ impl GolemHostApi for GolemHostApiImpl {
         Ok(golem_rust::Uuid::from(created.agent_id.uuid).to_string())
     }
 
+    fn outbound_agent_rpc_invoke_by_id_and_await_result(
+        &self,
+        agent_type: String,
+        agent_id: Uuid,
+        method: String,
+    ) -> Result<(), String> {
+        let rpc = WasmRpc::get_by_id(&agent_type, AgentId { uuid: agent_id }.into())
+            .map_err(|error| format!("{error:?}"))?;
+        rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
     fn outbound_agent_rpc_schedule_result(
         &self,
         agent_type: String,
@@ -930,11 +955,15 @@ impl GolemHostApi for GolemHostApiImpl {
             .map_err(|error| format!("{error:?}"))
     }
 
-    fn search_oplog_result(&self, agent_id: AgentId, query: String) -> Result<(), String> {
-        SearchOplog::new(wire_agent_id(agent_id), &query)
-            .get_next()
-            .map(|_| ())
-            .map_err(|error| format!("{error:?}"))
+    fn search_oplog_result(
+        &mut self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<u64>>, String> {
+        let search = SearchOplog::new(wire_agent_id(agent_id), &query);
+        let batch = search.get_next().map_err(|error| format!("{error:?}"))?;
+        self.kept_search = Some(search);
+        Ok(batch.map(|entries| entries.into_iter().map(|(index, _)| index).collect()))
     }
 
     fn enrich_forged_failed_update_result(
@@ -953,11 +982,13 @@ impl GolemHostApi for GolemHostApiImpl {
                 parent_start_index: None,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 carries_request: true,
                 request: None,
             }),
             actual: oplog::ReplayStep::EndOfHistory,
             mismatched: vec![],
+            replay_start: None,
         });
         let entry = oplog::OplogEntry::FailedUpdate(oplog::FailedUpdateParameters {
             timestamp: golem_rust::wasip3::clocks::system_clock::now(),

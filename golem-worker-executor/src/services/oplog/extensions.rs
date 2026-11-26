@@ -177,6 +177,45 @@ pub trait OplogOps: Oplog {
         }
     }
 
+    /// Splits the payload of a request into the operation its entry holds and uploads the rest.
+    async fn upload_request(
+        &self,
+        payload: AgentInvocationPayload,
+    ) -> Result<
+        (
+            InvocationRequestOperation,
+            OplogPayload<StoredAgentInvocationPayload>,
+        ),
+        String,
+    > {
+        let (operation, stored) = payload.into_stored();
+        Ok((operation, self.upload_payload_owned(stored).await?))
+    }
+
+    /// The full payload of the request whose entry holds `operation` and `payload`.
+    async fn download_request(
+        &self,
+        operation: InvocationRequestOperation,
+        payload: OplogPayload<StoredAgentInvocationPayload>,
+    ) -> Result<AgentInvocationPayload, String> {
+        self.download_payload(payload)
+            .await?
+            .with_operation(operation)
+    }
+
+    /// [`Self::download_request`], with a payload that does not match its operation classified
+    /// as corrupt.
+    async fn download_request_classified(
+        &self,
+        operation: InvocationRequestOperation,
+        payload: OplogPayload<StoredAgentInvocationPayload>,
+    ) -> Result<AgentInvocationPayload, OplogPayloadDownloadError> {
+        self.download_payload_classified(payload)
+            .await?
+            .with_operation(operation)
+            .map_err(|error| OplogPayloadDownloadError::Corrupt(anyhow::anyhow!(error)))
+    }
+
     /// Typed convenience wrapper over [`Oplog::add_start_with_reserved_raw_payload`]: serializes
     /// `request`, then reserves its payload and appends the `Start` (built by `build_start` from the
     /// payload reference), returning the `Start`'s index and the [`PendingUpload`] tracking the
@@ -275,6 +314,7 @@ pub trait OplogOps: Oplog {
             function_name,
             invocation_id,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: function_type,
             span_started: None,
@@ -328,9 +368,10 @@ pub trait OplogOps: Oplog {
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
         let (idempotency_key, invocation_payload, _) = invocation.into_parts();
-        let payload = self.upload_payload_owned(invocation_payload).await?;
+        let (operation, payload) = self.upload_request(invocation_payload).await?;
         Ok(self.agent_invocation_started_entry_from_payload(
             idempotency_key,
+            operation,
             payload,
             ctx,
             wallet_pin,
@@ -340,12 +381,14 @@ pub trait OplogOps: Oplog {
     async fn add_agent_invocation_started_from_pending(
         &self,
         idempotency_key: golem_common::model::InvocationId,
-        payload: OplogPayload<golem_common::model::AgentInvocationPayload>,
+        operation: InvocationRequestOperation,
+        payload: OplogPayload<StoredAgentInvocationPayload>,
         ctx: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogIndex, OplogError> {
         let entry = self.agent_invocation_started_entry_from_payload(
             idempotency_key,
+            operation,
             payload,
             ctx,
             wallet_pin,
@@ -356,7 +399,8 @@ pub trait OplogOps: Oplog {
     fn agent_invocation_started_entry_from_payload(
         &self,
         idempotency_key: golem_common::model::InvocationId,
-        payload: OplogPayload<golem_common::model::AgentInvocationPayload>,
+        operation: InvocationRequestOperation,
+        payload: OplogPayload<StoredAgentInvocationPayload>,
         ctx: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
     ) -> OplogEntry {
@@ -364,6 +408,7 @@ pub trait OplogOps: Oplog {
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: idempotency_key,
+            operation: Box::new(operation),
             payload,
             trace_id: ctx.trace_id,
             trace_states: ctx.trace_states,
@@ -379,6 +424,7 @@ pub trait OplogOps: Oplog {
         method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
+        awaits_settlement: bool,
     ) -> Result<OplogIndex, OplogError> {
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
@@ -394,8 +440,27 @@ pub trait OplogOps: Oplog {
             method_name,
             consumed_fuel,
             component_revision,
+            awaits_settlement,
         };
         self.add(entry).await
+    }
+
+    async fn add_agent_invocation_settled(
+        &self,
+        invocation_id: golem_common::model::InvocationId,
+        consumed_fuel: u64,
+    ) -> Result<OplogIndex, OplogError> {
+        let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
+            i64::MAX
+        } else {
+            consumed_fuel as i64
+        };
+
+        self.add(OplogEntry::agent_invocation_settled(
+            invocation_id,
+            consumed_fuel,
+        ))
+        .await
     }
 
     async fn create_snapshot_based_update_description(
