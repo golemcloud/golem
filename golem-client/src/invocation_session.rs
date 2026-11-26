@@ -7761,6 +7761,10 @@ mod tests {
                         encode_text(&PublicServerMessage::InvocationAccepted {
                             attempt_id,
                             agent_id: accepted_agent_id(),
+                            invocation_id: OwnedInvocationId::new(
+                                accepted_agent_id(),
+                                InvocationId(uuid::Uuid::from_u128(1)),
+                            ),
                             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                             mappings: vec![PublicStreamMapping {
                                 channel: 4,
@@ -7901,6 +7905,10 @@ mod tests {
                         encode_text(&PublicServerMessage::InvocationAccepted {
                             attempt_id,
                             agent_id: accepted_agent_id(),
+                            invocation_id: OwnedInvocationId::new(
+                                accepted_agent_id(),
+                                InvocationId(uuid::Uuid::from_u128(1)),
+                            ),
                             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                             mappings: vec![PublicStreamMapping {
                                 channel: 4,
