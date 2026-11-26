@@ -5577,6 +5577,70 @@ async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_s
     fixture.oplog.closed().await.unwrap();
 }
 
+/// The fold of a commit receipt does not load a stream session record in a region that a later
+/// entry of the same receipt reverts. A record that no region deletes must load, or the fold fails.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_committed_fold_does_not_load_a_stream_session_record_that_the_receipt_reverts() {
+    use crate::services::oplog::{CommitLevel, gated_ephemeral_fixture};
+
+    let test_case = TestCase::builder(1)
+        .agent_mode(AgentMode::Ephemeral)
+        .build();
+    let fixture = gated_ephemeral_fixture(100).await;
+    let baseline = test_case.entries[0].expected_status.clone();
+    let unloadable = OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: vec![0; 16],
+            cached: None,
+        },
+        summary: None,
+    };
+    let revert = OplogEntry::revert(OplogRegion {
+        start: OplogIndex::from_u64(2),
+        end: OplogIndex::from_u64(2),
+    });
+    let folds = futures::future::join_all(
+        [vec![unloadable.clone(), revert], vec![unloadable]]
+            .into_iter()
+            .map(|receipt| {
+                let entries: BTreeMap<OplogIndex, OplogEntry> =
+                    (2..).map(OplogIndex::from_u64).zip(receipt).collect();
+                let horizon = *entries.last_key_value().unwrap().0;
+                fold_committed_status(
+                    &test_case,
+                    &test_case.owned_agent_id,
+                    fixture.oplog.as_ref(),
+                    AgentMode::Ephemeral,
+                    CommitLevel::Always,
+                    horizon,
+                    baseline.clone(),
+                    entries,
+                )
+            }),
+    )
+    .await;
+    let [(reverted, reverted_gap, _), (retained, retained_gap, _)] =
+        <[_; 2]>::try_from(folds).unwrap();
+
+    let reverted = reverted
+        .expect("a reverted stream session record must not be loaded")
+        .unwrap();
+    assert!(!reverted_gap);
+    assert_eq!(reverted.oplog_idx, OplogIndex::from_u64(3));
+    assert!(reverted.durable_stream_sessions.iter().next().is_none());
+    assert!(
+        retained.is_err(),
+        "a stream session record that no region deletes must load"
+    );
+    assert!(!retained_gap);
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
 #[test]
 #[test_r::timeout("30s")]
 async fn bounded_reconstruction_reads_handoff_without_flushing_newer_buffer() {
