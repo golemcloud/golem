@@ -1891,7 +1891,7 @@ dependencies = [
 [[package]]
 name = "componentize-py"
 version = "0.25.0"
-source = "git+https://github.com/golemcloud/componentize-py?rev=58d479e5993b744314ec51a77a20e3b487c69aac#58d479e5993b744314ec51a77a20e3b487c69aac"
+source = "git+https://github.com/golemcloud/componentize-py?rev=cad25eefaa090c158bca5ba5882c389eade4bcac#cad25eefaa090c158bca5ba5882c389eade4bcac"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1920,7 +1920,7 @@ dependencies = [
 [[package]]
 name = "componentize-py-test-generator"
 version = "0.25.0"
-source = "git+https://github.com/golemcloud/componentize-py?rev=58d479e5993b744314ec51a77a20e3b487c69aac#58d479e5993b744314ec51a77a20e3b487c69aac"
+source = "git+https://github.com/golemcloud/componentize-py?rev=cad25eefaa090c158bca5ba5882c389eade4bcac#cad25eefaa090c158bca5ba5882c389eade4bcac"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -13964,7 +13964,7 @@ dependencies = [
 [[package]]
 name = "wit-component"
 version = "0.258.3"
-source = "git+https://github.com/golemcloud/componentize-py?rev=58d479e5993b744314ec51a77a20e3b487c69aac#58d479e5993b744314ec51a77a20e3b487c69aac"
+source = "git+https://github.com/golemcloud/wasm-tools?rev=801650b5c9e5e4aa32451283f7a6d14100f92889#801650b5c9e5e4aa32451283f7a6d14100f92889"
 dependencies = [
  "anyhow",
  "bitflags 2.13.2",
