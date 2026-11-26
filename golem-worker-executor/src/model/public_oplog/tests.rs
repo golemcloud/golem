@@ -4260,6 +4260,11 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
         read(Some(cursor_at(indices[4])), from, to, 10, allowance(100)).await,
         Err(WorkerExecutorError::InvalidRequest { .. })
     ));
+    // A cursor at `from` is inside the range: the page reads from `from`.
+    let at_from = read(Some(cursor_at(from)), from, to, 1, allowance(100))
+        .await
+        .unwrap();
+    assert_eq!(page_indices(&at_from.entries), vec![(from, true)]);
     // A cursor at `to` reads the last entry of the range, and the range ends.
     let last = read(Some(cursor_at(to)), from, to, 10, allowance(100))
         .await
