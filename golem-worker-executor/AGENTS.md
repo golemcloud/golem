@@ -51,7 +51,7 @@ effects, call identities, or terminal kinds.
 
 ## Invocation settlement
 
-The result of a successful constructor and of an agent method that uses no streams is recorded
+The result of a successful constructor and of an agent method whose declared result type contains no stream is recorded
 (`AgentInvocationFinished` or `AgentInvocationFailed`, with `awaits_settlement`) at the export's
 return, when the guest calls `task.return`. A constructor error is not recorded at the return: its
 background work drains first, within both `max_invocation_duration` and
@@ -63,10 +63,23 @@ bounded by neither `max_invocation_duration` nor `tail_work_settle_timeout`; cap
 staged until their parent ends are admitted at the end of the drain (`end_tool_parent`) and settle
 before `AgentInvocationSettled`. The end of the drain records the hint
 `AgentInvocationSettled { invocation_id, consumed_fuel }`, and only then does the next invocation
-start (`worker/invocation.rs::record_at_return_and_drain`). Methods that use streams (stream
-inputs or a stream result), snapshot save and load (including a manual update's),
+start (`worker/invocation.rs::record_at_return_and_drain`). Stream inputs do not delay this terminal.
+Input reads after the return are background work. An input still open at the end of the drain
+ends consumer-cancelled before `AgentInvocationSettled`; session completion waits for every
+input terminal, including forwarded inputs. Methods whose declared result type contains a stream,
+snapshot save and load (including a manual update's),
 oplog-processor batches and external-tool invocations keep the settled path: their terminal comes after their work, and they write no
 `AgentInvocationSettled`.
+
+A method whose declared result type contains a stream records `AgentInvocationReturned` with
+the value and its bindings in the same batch as its `StreamRegistered` entries. This includes
+an `option<stream>` that returns `none`, with no bindings. Its successful terminal holds
+`FinishedResult::Returned` and refers to that entry; the terminal of a scalar result holds
+`FinishedResult::Payload`. The callee writes no session `InvocationResult`. Cancellation or
+failure after an early return preserves the early value, but lookup reports completion only
+after a terminal. RPC caller journals and entity-attributed tool sessions retain their
+`InvocationResult` records. A tool session has a `Local` key but is not an agent invocation's
+result; an agent invocation return must have no entity attribution.
 
 - **Replay** consumes the terminal at the return, where the live run wrote it. The invocation's
   replay anchor stays open until its `AgentInvocationSettled` or the replay tail, so its

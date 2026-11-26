@@ -49,7 +49,7 @@ machine. Timeouts bound failures; they do not establish ordering.
   incomplete `Start` is expected only where the crash was injected; no positional `Start`/`End`
   of an invocation after its `AgentInvocationSettled`, or after its terminal
   (`AgentInvocationFinished` or `AgentInvocationFailed`) when it writes no `Settled`
-  (methods that use streams, through stream inputs or a stream result, snapshot save and load
+  (methods whose declared result type contains a stream, snapshot save and load
   including a manual update's, oplog-processor batches and external-tool invocations). `Start`/`End` entries between an invocation's terminal
   and its `Settled` are its background work and are expected. The exception is the terminal of a
   retained call or deferred destructor that a later invocation drives, or a task parked at a safe

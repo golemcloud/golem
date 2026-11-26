@@ -2867,7 +2867,7 @@ offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download 
 
 ### Settlement at the export's return
 
-A successful constructor and agent methods that use no streams record their result at the
+A successful constructor and agent methods whose declared result contains no stream record their result at the
 export's return (`worker/invocation.rs::record_at_return_and_drain`, `ReturnRecorder`).
 `run_guest_call_until_return` drives the export call until the guest calls `task.return`; the invocation deadline is disarmed,
 and `AgentInvocationFinished` (or `AgentInvocationFailed`) is appended with `awaits_settlement`,
@@ -2894,9 +2894,8 @@ and the status `Running`, so an interrupt or resume decision made in that step s
 agent. `Settled` is committed on its own when nothing is queued, for ephemeral agents (at
 `Deferred`), and at the replay tail. A crash before the next start loses at most the buffered
 `Settled`: replay reaches the replay tail with the anchor open and settles it live. Only the
-constructor and agent methods that use no streams can record at the return
-(`records_result_at_return`): methods that use streams
-(stream inputs or a stream result, which open a streaming session), snapshot save and load
+constructor and agent methods whose declared result contains no stream can record at the return
+(`records_result_at_return`): methods whose declared result contains a stream, snapshot save and load
 (including a manual update's), oplog-processor batches and external-tool invocations keep the
 settled path: their work settles before their terminal, and they write no
 `AgentInvocationSettled`. Of a constructor, only a success is recorded at the return. On a
@@ -2904,6 +2903,10 @@ constructor error, `dispatch_call` first drains the background work through
 `run_guest_call_settled`, within the invocation deadline and `tail_work_settle_timeout`; the error
 then takes the constructor's fatal path (`unrecorded_at_return`) with no `awaits_settlement`
 terminal.
+
+Stream inputs alone do not delay the terminal. Input reads after the return are background work. An input still open when the drain ends, including a reader held in agent state with no read in flight, ends consumer-cancelled before `AgentInvocationSettled`. Session completion waits for every input terminal, including forwarded inputs.
+
+For a declared stream result, `AgentInvocationReturned` stores the whole value and stream bindings in the same batch as its `StreamRegistered` entries. Classification uses the declared type, so `option<stream>` returning `none` records an early value with no bindings. The later successful terminal holds `FinishedResult::Returned(index)` rather than another payload. Scalar terminals hold `FinishedResult::Payload`. Agent invocation sessions read these invocation records. RPC caller journals and entity-attributed tool sessions retain `StreamSessionRecord::InvocationResult`; a tool session has a `Local` key but is not an agent invocation result. An agent invocation return must have no entity attribution. Lookup reports completion only from a terminal. Lookup, replay, public rendering and fork share `services/oplog/invocation_result.rs::resolve_finished_result`.
 
 Replay mirrors the live order. The invocation's anchor opens at its `AgentInvocationStarted`;
 replay consumes the terminal where the guest returns
