@@ -1,6 +1,6 @@
 ---
 name: golem-cli-structured-output
-description: "Understanding and parsing Golem CLI structured output. Use when using --format json, --format yaml, --format toon, discovering $type schemas with golem output-schema, or writing agents/tools that parse CLI output."
+description: "Understanding and parsing Golem CLI structured output. Use when using --format json, --format jsonl, --format yaml, --format toon, discovering $type schemas with golem output-schema, or writing agents/tools that parse CLI output."
 ---
 
 # Golem CLI Structured Output
@@ -18,6 +18,8 @@ golem --format toon agent stream <AGENT_ID>
 ```
 
 For automation, prefer `--format json` unless you specifically need YAML or TOON.
+
+`--format jsonl` (JSON Lines) prints the same compact JSON documents as `--format json`, one document on each line. `golem agent oplog --output <FILE>` writes its export as JSON Lines, so it needs the format `jsonl`: pass `--format jsonl`, or set `jsonl` as the default format of the profile or the manifest environment.
 
 Human logs, prompts, progress, and diagnostics are written to stderr in structured formats. Parse stdout as the structured payload.
 
