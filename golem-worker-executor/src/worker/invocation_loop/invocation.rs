@@ -70,6 +70,7 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
                     Err(error) => Err(error),
                 };
                 if let Err(error) = completion {
+                    self.parent.retire_if_shard_lost(&error);
                     tracing::warn!(%error, "Failed to complete durable streaming session at return");
                 }
             }

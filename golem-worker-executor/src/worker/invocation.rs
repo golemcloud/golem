@@ -1866,7 +1866,7 @@ async fn record_at_return_and_drain<Ctx: WorkerCtx>(
         let attribution = store.data().durable_ctx().attribution.clone();
         let invocation_key = store.data().durable_ctx().invocation_key();
         // Completion can acquire locks held by Store-owned input cleanup.
-        store
+        let completion = store
             .as_context_mut()
             .run_concurrent(async move |_accessor| {
                 attribution
@@ -1879,7 +1879,26 @@ async fn record_at_return_and_drain<Ctx: WorkerCtx>(
                     .await
             })
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
+            .map_err(|error| WorkerExecutorError::from(anyhow::Error::from(error)))
+            .and_then(|result| result);
+        if let Err(error) = completion {
+            let worker = store.data().get_public_state().worker();
+            if worker.retire_if_shard_lost(&error) {
+                return Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::ShardLost,
+                });
+            }
+            // Session persistence is infrastructure, not a failure of the recorded result or
+            // its background work. Reconstruct without consuming the guest's retry policy.
+            return Err(match error {
+                error @ (WorkerExecutorError::RecoveryRequired { .. }
+                | WorkerExecutorError::OplogFailed { .. }
+                | WorkerExecutorError::Interrupted { .. }) => error,
+                error => WorkerExecutorError::recovery_required(format!(
+                    "failed to settle durable streaming session: {error}"
+                )),
+            });
+        }
     }
     store
         .data_mut()
