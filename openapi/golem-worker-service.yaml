@@ -7031,8 +7031,8 @@ components:
           format: uint64
           description: |-
             The start of the range of a search that did not find the component revision at that start
-            yet. The search scans on for the revision from `next_oplog_index`, and then searches from
-            `scan_to`. A page read refuses a cursor with `scan_to`.
+            yet. The search scans on for the component revision from the next index of the cursor, and
+            then searches from this index. A page read refuses a cursor with this field.
     OplogErrorKind:
       type: string
       enum:

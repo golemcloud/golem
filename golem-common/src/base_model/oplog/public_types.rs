@@ -402,8 +402,8 @@ pub struct OplogCursor {
     /// an oplog read without a query. A read refuses a cursor of another query.
     pub query_hash: String,
     /// The start of the range of a search that did not find the component revision at that start
-    /// yet. The search scans on for the revision from `next_oplog_index`, and then searches from
-    /// `scan_to`. A page read refuses a cursor with `scan_to`.
+    /// yet. The search scans on for the component revision from the next index of the cursor, and
+    /// then searches from this index. A page read refuses a cursor with this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
     pub scan_to: Option<u64>,
