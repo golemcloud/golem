@@ -6240,8 +6240,7 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
             .unwrap();
     }
 
-    let expires_at =
-        SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours((1) * 24));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(24));
     for (dimension, value) in [
         (AccountResourceOverrideDimension::MonthlyComputeGcu, 3),
         (
