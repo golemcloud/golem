@@ -1429,8 +1429,7 @@ reads the `Create` entry alone (`read_create_entry`). The expired error becomes
 `WorkerExecutorError::OplogFailed` with the cause `OplogFailure::Expired`. It crosses gRPC as
 `OplogExpired` and REST as HTTP 400 `OPLOG_EXPIRED`, and the guest oplog API gives it as
 `internal-error` whose text names the expired cause and the retained start
-(`guest_oplog_read_error`). A cursor at index 0 is stale (`StaleCursorReason::BeforeFirstEntry`),
-because no page gives one. A status fold from a cached status that is two or more entries below the
+(`guest_oplog_read_error`). A status fold from a cached status that is two or more entries below the
 retained start, so that its fold reads below it, is expired, and the status goes on to the clean
 status checkpoint. An initialization whose result is below the
 start is answered from the status while the status holds that result (its exact membership or its

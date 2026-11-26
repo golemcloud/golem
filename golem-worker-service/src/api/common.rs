@@ -769,7 +769,6 @@ mod tests {
                 last_oplog_index: golem_common::model::OplogIndex::from_u64(17),
             },
             StaleCursorReason::QueryMismatch,
-            StaleCursorReason::BeforeFirstEntry,
         ] {
             let api_error: ApiEndpointError =
                 WorkerServiceError::GolemError(WorkerExecutorError::StaleCursor {

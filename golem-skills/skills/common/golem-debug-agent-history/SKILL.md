@@ -37,7 +37,7 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 | `--keep-error-text` | Requires `--obfuscate`. Keep the free text of error messages. Leaks any customer value that the text contains, such as a URL, an input value or a file name. |
 | `--max-entry-bytes <N>` | Requires `--obfuscate`. Read an entry that the oplog page omitted only when its size is at most `N` bytes (default 16777216). A larger entry stays omitted with its size. The `Create` entry is always read in full. |
 | `--page` | Read one page of at most 50 entries (the HTTP batch size) and print it as one `agent.oplog-page` document, with a `cursor` when the oplog has entries after the page. A search page can end early at the server's scan budget, so it can have fewer entries, or none, and still have a cursor. Cannot be combined with `--html`, `--serve` or `--obfuscate`. |
-| `--cursor <CURSOR>` | With `--page`: read the page after the one that returned `CURSOR`. Pass the cursor back unchanged, with the same `--query`. The server refuses a cursor of another query, a cursor at index 0, or one past the end of the oplog, with `STALE_CURSOR`. A cursor below the retained start of the oplog gives `OPLOG_EXPIRED`. |
+| `--cursor <CURSOR>` | With `--page`: read the page after the one that returned `CURSOR`. Pass the cursor back unchanged, with the same `--query`. The server refuses a cursor of another query, or one past the end of the oplog, with `STALE_CURSOR`. A cursor below the retained start of the oplog gives `OPLOG_EXPIRED`. |
 
 If neither `--from` nor `--query` is provided, the entire retained oplog is streamed, from its retained start. Without `--page`, the CLI follows the cursors to the end of the oplog.
 

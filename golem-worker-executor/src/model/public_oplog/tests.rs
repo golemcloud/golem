@@ -3312,8 +3312,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         }
     }
 
-    // A cursor at index 0 never came from a page either. It is stale, not expired, because the
-    // oplog keeps every entry.
+    // A cursor at index 0 starts at index 1, as `from` does.
     assert_eq!(
         oplog_page_start(
             oplog_service.clone(),
@@ -3328,11 +3327,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             None,
         )
         .await,
-        Err(WorkerExecutorError::StaleCursor {
-            agent_id: owned_agent_id.agent_id,
-            next_oplog_index: OplogIndex::NONE,
-            reason: StaleCursorReason::BeforeFirstEntry,
-        })
+        Ok((OplogIndex::INITIAL, updated_revision))
     );
 }
 
@@ -4155,7 +4150,6 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
     assert_eq!(first.scan.charged_entries, charged_before + 2);
     assert!(!first.scan.exhausted);
     let cursor = first.next.clone().expect("the range goes on");
-    let cursor_template = cursor.clone();
     assert_eq!(cursor.next_oplog_index, indices[7].as_u64());
     assert_eq!(
         cursor.current_component_revision,
@@ -4172,19 +4166,6 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
     assert_eq!(second.scan.charged_entries, 2);
     assert!(!second.scan.exhausted);
     assert!(second.last_index > to);
-    // A cursor at index 0 is stale, not a cursor outside the range.
-    let mut before_first = cursor_template.clone();
-    before_first.next_oplog_index = 0;
-    assert!(
-        matches!(
-            read(Some(before_first), from, to, 10, allowance(100)).await,
-            Err(WorkerExecutorError::StaleCursor {
-                reason: StaleCursorReason::BeforeFirstEntry,
-                ..
-            })
-        ),
-        "a cursor at 0 is stale"
-    );
 
     // Exactly the allowance completes the range; one entry less stops before `to`.
     let exact = read(None, from, to, 10, allowance(charged_before + 4))
@@ -4905,18 +4886,6 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         range_to(None, 5, Some(cursor_at(3))).await.err(),
         Some(range_expired.clone()),
         "a cursor below the start of a range without `from` is expired"
-    );
-    // A cursor at index 0 points before the first entry of every oplog: it is stale, also in a
-    // range page whose start is above 1.
-    assert!(
-        matches!(
-            range_to(None, 5, Some(cursor_at(0))).await,
-            Err(WorkerExecutorError::StaleCursor {
-                reason: StaleCursorReason::BeforeFirstEntry,
-                ..
-            })
-        ),
-        "a cursor at 0 is stale"
     );
     assert!(
         matches!(

@@ -784,8 +784,7 @@ pub fn oplog_range_allowance(
 
 /// Checks the request of a range page from `from` to `to` that `cursor` continues, and gives the
 /// start of the range: `from`, or index 1 when `from` is 0, or the retained start without `from`.
-/// A cursor at index 0 is stale, before the other checks. A `to` or a cursor below the retained
-/// start is expired, before the checks of the range, because a range without `from` starts at the
+/// A `to` or a cursor below the retained start is expired, before the checks of the range, because a range without `from` starts at the
 /// retained start. Then a range that ends before its start, or a cursor outside the range, is an
 /// invalid request.
 fn checked_range_start(
@@ -795,7 +794,6 @@ fn checked_range_start(
     to: OplogIndex,
     cursor: Option<&OplogCursor>,
 ) -> Result<OplogIndex, WorkerExecutorError> {
-    check_cursor_after_first_entry(agent_id, cursor)?;
     let from = from.map_or(retention.start(), |from| from.max(OplogIndex::INITIAL));
     retention.check_agent_from(agent_id, to.max(OplogIndex::INITIAL))?;
     if let Some(cursor) = cursor {
@@ -1205,22 +1203,6 @@ pub fn check_oplog_cursor_query(
     }
 }
 
-/// Refuses a cursor at index 0 as stale: it points before the first entry of every oplog, so no
-/// page gave it.
-fn check_cursor_after_first_entry(
-    agent_id: &golem_common::model::AgentId,
-    cursor: Option<&OplogCursor>,
-) -> Result<(), WorkerExecutorError> {
-    match cursor {
-        Some(cursor) if cursor.next_oplog_index == 0 => Err(WorkerExecutorError::StaleCursor {
-            agent_id: *agent_id,
-            next_oplog_index: OplogIndex::NONE,
-            reason: StaleCursorReason::BeforeFirstEntry,
-        }),
-        _ => Ok(()),
-    }
-}
-
 /// Where a paged oplog read starts, and the component revision to decode its first entry with:
 /// the cursor of the previous page, or else `from` with the revision that
 /// [`find_component_revision_at`] gives there. Without a
@@ -1233,8 +1215,7 @@ fn check_cursor_after_first_entry(
 /// was deleted and created again since, or the cursor was made up. It is refused as stale, instead
 /// of read as an empty page, which a caller would take for the end of the oplog. The revision of
 /// the cursor is not checked, because that would scan the oplog up to the cursor on every page.
-/// A cursor at index 0 points before the first entry of every oplog, so it is refused as stale
-/// too, before the check of the retained start.
+/// A cursor at index 0 starts at index 1, as `from` does.
 pub async fn oplog_page_start(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -1243,10 +1224,9 @@ pub async fn oplog_page_start(
     cursor: Option<OplogCursor>,
     from: Option<OplogIndex>,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
-    check_cursor_after_first_entry(&owned_agent_id.agent_id, cursor.as_ref())?;
     let start = cursor.as_ref().map_or_else(
         || from.map_or(retention.start(), |from| from.max(OplogIndex::INITIAL)),
-        |cursor| OplogIndex::from_u64(cursor.next_oplog_index),
+        |cursor| OplogIndex::from_u64(cursor.next_oplog_index).max(OplogIndex::INITIAL),
     );
     retention.check_agent_from(&owned_agent_id.agent_id, start)?;
     match cursor {
@@ -1268,7 +1248,7 @@ pub async fn oplog_page_start(
                     "the oplog cursor {cursor} has an invalid component revision: {e}"
                 ))
             })?;
-            Ok((OplogIndex::from_u64(cursor.next_oplog_index), revision))
+            Ok((start, revision))
         }
         None => {
             let revision = find_component_revision_at(

@@ -68,7 +68,6 @@ message StaleCursor {
   oneof reason {
     StaleCursorPastEnd past_end = 3;
     StaleCursorQueryMismatch query_mismatch = 4;
-    StaleCursorBeforeFirstEntry before_first_entry = 5;
   }
 }
 
@@ -79,9 +78,6 @@ message StaleCursorPastEnd {
 
 // The cursor came from the pages of another query.
 message StaleCursorQueryMismatch {}
-
-// The cursor points to index 0, before the first entry of every oplog.
-message StaleCursorBeforeFirstEntry {}
 
 message ComponentServiceUnavailable {
   golem.component.ComponentId component_id = 1;

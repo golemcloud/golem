@@ -1967,9 +1967,9 @@ pub mod worker {
             page: bool,
             /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,
             /// with the same `--query`. The cursor is opaque; use `--from` to start at an oplog
-            /// index. A cursor of another query, a cursor at index 0, or one past the end of the
-            /// oplog, is refused as stale (`STALE_CURSOR`). A cursor below the retained start of
-            /// the oplog is expired (`OPLOG_EXPIRED`).
+            /// index. A cursor of another query, or one past the end of the oplog, is refused as
+            /// stale (`STALE_CURSOR`). A cursor below the retained start of the oplog is expired
+            /// (`OPLOG_EXPIRED`).
             #[arg(long, requires = "page")]
             cursor: Option<OplogCursor>,
             #[command(flatten)]
