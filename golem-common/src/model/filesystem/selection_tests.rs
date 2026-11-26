@@ -307,7 +307,10 @@ fn file_read_heads_preserve_lookup_status_and_timestamp() {
         (-62_135_596_800, 0),
         (-1, 123_456_789),
         (0, 0),
-        (253_402_300_799, 999_999_999),
+        (
+            JiffTimestamp::MAX.as_second(),
+            JiffTimestamp::MAX.subsec_nanosecond(),
+        ),
     ] {
         let head = FileReadHead::File(FileReadMetadata {
             total_size: 4,
@@ -315,7 +318,7 @@ fn file_read_heads_preserve_lookup_status_and_timestamp() {
                 offset: 1,
                 length: 3,
             },
-            modified_at: DateTime::from_timestamp(seconds, nanos),
+            modified_at: Some(JiffTimestamp::new(seconds, nanos).unwrap()),
         });
         assert_eq!(
             FileReadHead::try_from(proto::FileReadHead::from(head.clone())).unwrap(),
@@ -350,9 +353,11 @@ fn file_read_heads_preserve_lookup_status_and_timestamp() {
 #[test]
 fn file_read_heads_omit_unrepresentable_optional_timestamp() {
     for (seconds, nanos) in [
-        (253_402_300_800, 0),
         (-62_135_596_801, 0),
-        (59, 1_000_000_000),
+        (
+            JiffTimestamp::MIN.as_second(),
+            JiffTimestamp::MIN.subsec_nanosecond(),
+        ),
     ] {
         let metadata = FileReadMetadata {
             total_size: 7,
@@ -360,7 +365,7 @@ fn file_read_heads_omit_unrepresentable_optional_timestamp() {
                 offset: 2,
                 length: 5,
             },
-            modified_at: Some(DateTime::from_timestamp(seconds, nanos).unwrap()),
+            modified_at: Some(JiffTimestamp::new(seconds, nanos).unwrap()),
         };
         let wire = proto::FileReadHead::from(FileReadHead::File(metadata.clone()));
         assert_eq!(

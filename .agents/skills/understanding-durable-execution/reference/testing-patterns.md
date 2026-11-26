@@ -69,7 +69,7 @@ the proxy has seen two identical attempts and the target oplog holds exactly one
 `CardTransferred`. `tests/rpc.rs::counter_resource_test_2_with_restart` (counter reads `1`
 before and `2` after the restart: reconstruction neither lost nor repeated the increment).
 `tests/rpc.rs::ephemeral_rpc_invocations_get_distinct_final_identities` (distinct *logical*
-invocations must get distinct phantom identities; the same one must not).
+invocations must get distinct target IDs; the same one must not).
 
 ## Pattern 3: gate a crash at a named window
 

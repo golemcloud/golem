@@ -616,7 +616,7 @@ class RpcCodegenSpec extends munit.FunSuite {
       s"missing create in:\n$content"
     )
     assert(
-      content.contains("def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[CounterRemote]"),
+      content.contains("def getById(agentId: _root_.golem.AgentId): CounterRemote ="),
       s"missing getById in:\n$content"
     )
     removedConstructors.foreach { name =>

@@ -161,15 +161,15 @@ instead of registering a duplicate agent type. Import every implementation modul
 ## Save and Reconnect by Agent ID
 
 Read the typed `AgentId` of a created agent with `remote.agentId`. Persist it in
-schema-serializable durable state with the `Ids.AgentId` schema, or as text with
-`AgentId.format`, if another invocation must reconnect later:
+schema-serializable durable state with the `Ids.AgentId` schema, or as text (an `AgentId` is a
+branded string), if another invocation must reconnect later:
 
 ```typescript
 import { AgentId } from "@golemcloud/effect-golem";
 
 const first = yield* Collector.client.create({ name: "shared" });
 const firstId = yield* first.agentId;
-const savedText: string = AgentId.format(firstId);
+const savedText: string = firstId;
 
 const sameInstance = yield* Collector.client.getById(yield* AgentId.parse(savedText));
 const values = yield* sameInstance.getValues({});

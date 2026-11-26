@@ -16,7 +16,7 @@ use crate::Tracing;
 use crate::durability::assert_snapshot_recovery_loaded;
 use crate::tool_discovery::deployment_state;
 use async_trait::async_trait;
-use chrono::Utc;
+
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::{AgentConfigEntryDto, RevertToOplogIndex, RevertWorkerTarget};
@@ -451,7 +451,7 @@ struct ScopeCardService {
 
 fn card_is_expired(card: &StoredCard) -> bool {
     card.expires_at()
-        .is_some_and(|expires_at| expires_at <= Utc::now())
+        .is_some_and(|expires_at| expires_at <= jiff::Timestamp::now())
 }
 
 /// Decrements `counter` if it is positive, and returns whether it was.
@@ -952,9 +952,9 @@ async fn hidden_scope_card_roots_survive_replay_finished_during_the_drain(
     let witness_worker = executor.start_agent(&component.id, witness.clone()).await?;
 
     // Whole seconds, so the expiry survives any timestamp encoding unchanged.
-    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+    let now = jiff::Timestamp::from_second(jiff::Timestamp::now().as_second())
         .expect("the current time is a valid timestamp");
-    let root_expiry = now + chrono::Duration::seconds(40);
+    let root_expiry = now + jiff::SignedDuration::from_secs(40);
     let expiring_root = concrete_inspect_card(root_card, Some(root_expiry));
     let expiring_root_id = expiring_root.card_id();
     authority.add_card(expiring_root.clone());
@@ -981,8 +981,8 @@ async fn hidden_scope_card_roots_survive_replay_finished_during_the_drain(
                 witness_name,
                 witness_release.clone(),
                 (
-                    root_expiry.timestamp(),
-                    root_expiry.timestamp_subsec_nanos()
+                    root_expiry.as_second(),
+                    root_expiry.subsec_nanosecond() as u32
                 )
             ),
         )
@@ -1010,7 +1010,7 @@ async fn hidden_scope_card_roots_survive_replay_finished_during_the_drain(
             Duration::from_secs(15),
         )
         .await?;
-    let until_expiry = (root_expiry - Utc::now()).to_std().map_err(|_| {
+    let until_expiry = Duration::try_from(root_expiry - jiff::Timestamp::now()).map_err(|_| {
         anyhow::anyhow!("the root expired before the callee's replay finished; the test cannot run")
     })?;
     tokio::time::sleep(until_expiry + Duration::from_secs(1)).await;
@@ -1721,7 +1721,7 @@ fn concrete_card_granting(parent: CardId, verb: &str) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -2030,7 +2030,7 @@ async fn an_install_denial_keeps_its_outcome_after_a_later_grant_on_reconstructi
 }
 
 /// A concrete card derived from `parent` that grants card inspection.
-fn concrete_inspect_card(parent: CardId, expires_at: Option<chrono::DateTime<Utc>>) -> StoredCard {
+fn concrete_inspect_card(parent: CardId, expires_at: Option<jiff::Timestamp>) -> StoredCard {
     StoredCard::Concrete(Card {
         card_id: CardId::new(),
         parent_ids: vec![parent],
@@ -2041,7 +2041,7 @@ fn concrete_inspect_card(parent: CardId, expires_at: Option<chrono::DateTime<Utc
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at,
         system_card: false,
         managed_by: None,
@@ -2184,13 +2184,13 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
     // does not expire. Only the minimum gives one hour: the first, the last
     // and the latest expiring parent all differ from it.
     // Whole seconds, so the expiry survives any timestamp encoding unchanged.
-    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+    let now = jiff::Timestamp::new(jiff::Timestamp::now().as_second(), 0)
         .expect("the current time is a valid timestamp");
-    let earliest_expiry = now + chrono::Duration::hours(1);
+    let earliest_expiry = now + jiff::SignedDuration::from_hours(1);
     let parent_expiries = [
-        now + chrono::Duration::hours(2),
+        now + jiff::SignedDuration::from_hours(2),
         earliest_expiry,
-        now + chrono::Duration::hours(3),
+        now + jiff::SignedDuration::from_hours(3),
     ];
     for expires_at in parent_expiries {
         let card = concrete_inspect_card(root_card, Some(expires_at));
@@ -2201,11 +2201,16 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
     }
     let parent_expiries = parent_expiries
         .iter()
-        .map(|expires_at| (expires_at.timestamp(), expires_at.timestamp_subsec_nanos()))
+        .map(|expires_at| {
+            (
+                expires_at.as_second(),
+                expires_at.subsec_nanosecond() as u32,
+            )
+        })
         .collect::<Vec<_>>();
     let expected = Some((
-        earliest_expiry.timestamp(),
-        earliest_expiry.timestamp_subsec_nanos(),
+        earliest_expiry.as_second(),
+        earliest_expiry.subsec_nanosecond() as u32,
     ));
 
     let (earliest, scope_expiry, (listed, callee_expiry)) = executor
@@ -4428,7 +4433,7 @@ async fn p3_tcp_expiration_is_enforced_at_the_first_due_live_boundary(
         .await?;
     let caller = agent_key!("Networking", "permission-expiration");
     configure_scope_card_root(&authority, &component, &caller)?;
-    let expiration = Utc::now() + chrono::Duration::seconds(30);
+    let expiration = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(30);
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let expiring_card = StoredCard::Polymorphic(PolymorphicCard {
         card_id: CardId::new(),
@@ -4437,7 +4442,7 @@ async fn p3_tcp_expiration_is_enforced_at_the_first_due_live_boundary(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: Some(expiration),
         system_card: false,
     });
@@ -4453,7 +4458,12 @@ async fn p3_tcp_expiration_is_enforced_at_the_first_due_live_boundary(
     assert_eq!(first, Ok("authorized".to_string()));
     assert_eq!(connection_count.load(Ordering::SeqCst), 1);
 
-    tokio::time::sleep((expiration - Utc::now()).to_std().unwrap_or_default()).await;
+    tokio::time::sleep(
+        (expiration - jiff::Timestamp::now())
+            .try_into()
+            .unwrap_or_default(),
+    )
+    .await;
     let denied = executor
         .invoke_and_await_agent(&component, &caller, "tcp_collect_p3", data_value!(port))
         .await?
@@ -9390,7 +9400,8 @@ async fn derive_from_a_card_that_expires_before_its_creation_records_card_expire
     );
     let expire_during_creation = async {
         create_gate.entered().await?;
-        let remaining = (child_expires_at - Utc::now()).to_std().unwrap_or_default();
+        let remaining =
+            Duration::try_from(child_expires_at - jiff::Timestamp::now()).unwrap_or_default();
         tokio::time::sleep(remaining + Duration::from_millis(500)).await;
         create_gate.release();
         Ok::<_, anyhow::Error>(())
@@ -9545,7 +9556,7 @@ fn unparented_card(verb: &str) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -9854,5 +9865,94 @@ async fn template_transfer_repaired_after_its_derived_child_reuses_the_child(
         .await?
         .into_typed::<Vec<(SchemaCardId, Vec<SchemaCardId>, String)>>()?;
     assert_eq!(installed.len(), 1);
+    Ok(())
+}
+
+/// A type-wide owner grant matches the agent's type from its `Create` entry, never from its ID or
+/// its key: it covers an agent of the type created without a key and a fork of it, and a grant
+/// for another type covers neither.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn a_type_wide_grant_covers_an_unkeyed_agent_and_its_fork_and_no_other_type(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let card_authority = authority.clone();
+    let executor = crate::fork::start_with_local_resume_and(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            create_card_service: Some(Arc::new(move || {
+                Arc::new(ScopeCardService {
+                    authority: card_authority.clone(),
+                })
+            })),
+            ..TestExecutorOverrides::agent_sockets_enabled()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("FileSystem")
+        .try_update_agent_provision_config("FileSystem", |config| {
+            for grant in [
+                "filesystem(?component/FileSystem(*)) @ * : write : /typed.txt",
+                "filesystem(?component/GolemHostApi(*)) @ * : write : /other-type.txt",
+            ] {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .push(parse_polymorphic_permission(grant)?);
+            }
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let constructor = agent_key!("FileSystem", "type-wide");
+    configure_scope_card_root(&authority, &component, &constructor)?;
+    let unkeyed = crate::agent::create_unkeyed_agent(&executor, &component, &constructor).await?;
+    let write = async |agent: &OwnedAgentId, path: &str| -> anyhow::Result<Result<(), String>> {
+        crate::agent::invoke_and_await_agent_by_id(
+            &executor,
+            &component,
+            agent,
+            None,
+            "write_file",
+            data_value!(path, "written"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()
+    };
+
+    assert_eq!(write(&unkeyed, "/typed.txt").await?, Ok(()));
+    let cutoff = executor.oplog_max_index(&unkeyed).await?;
+    let fork = executor.fork_worker(&unkeyed, cutoff).await?;
+    assert_eq!(
+        executor.get_worker_metadata(&fork).await?.canonical_key,
+        None
+    );
+    for agent in [&unkeyed, &fork] {
+        assert_eq!(write(agent, "/typed.txt").await?, Ok(()), "{agent}");
+        let denied = write(agent, "/other-type.txt").await?;
+        assert!(
+            denied
+                .as_ref()
+                .is_err_and(|error| error.contains("not permitted")),
+            "{agent}: {denied:?}"
+        );
+        assert!(
+            executor
+                .get_file_contents(agent, "/other-type.txt")
+                .await
+                .is_err(),
+            "{agent}"
+        );
+    }
     Ok(())
 }

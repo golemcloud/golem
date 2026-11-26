@@ -222,12 +222,7 @@ impl DurableStreamsHandler {
             .await?;
         let target = match suffix.fork.as_deref() {
             Some(fork) => RoutedTarget::existing(
-                AgentId::durable_stream_fork(
-                    route.route.environment_id,
-                    root.agent_id,
-                    &scope,
-                    fork,
-                ),
+                AgentId::durable_stream_fork(route.route.environment_id, root.agent_id, fork),
                 root.agent_type.clone(),
             ),
             None => root.clone(),
@@ -884,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    async fn session_and_fork_addressing_uses_family_scope_not_endpoint_identity() {
+    async fn sessions_use_the_family_scope_and_forks_ignore_the_route() {
         use crate::custom_api::model::RichCompiledRoute;
         use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
         use golem_common::model::invocation_id::InvocationRequestKey;
@@ -968,11 +963,7 @@ mod tests {
                     "session"
                 )
             );
-            let fork = AgentId::durable_stream_fork(environment_id, root, &scope, "fork");
-            assert_eq!(
-                fork,
-                AgentId::durable_stream_fork(environment_id, root, &expected_scope, "fork")
-            );
+            let fork = AgentId::durable_stream_fork(resolved.route.environment_id, root, "fork");
 
             for dimension in ["environment", "revision", "family"] {
                 let route = &resolved.route;
@@ -1007,9 +998,11 @@ mod tests {
                 let isolated_scope = route_scope(&resolved);
                 assert_ne!(isolated_scope, expected_scope, "{dimension}");
                 assert_ne!(owner(isolated_scope.clone()), owner(expected_scope.clone()));
-                assert_ne!(
-                    AgentId::durable_stream_fork(environment_id, root, &isolated_scope, "fork"),
-                    fork,
+                // A fork name names one fork of the root in every revision and route family.
+                assert_eq!(
+                    AgentId::durable_stream_fork(resolved.route.environment_id, root, "fork")
+                        == fork,
+                    dimension != "environment",
                     "{dimension}"
                 );
                 assert_ne!(

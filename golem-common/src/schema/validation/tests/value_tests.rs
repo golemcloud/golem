@@ -25,7 +25,7 @@ use crate::schema::schema_value::{
 };
 use crate::schema::validation::subtyping::is_assignable;
 use crate::schema::validation::value::{ValueError, ValuePathSegment, validate_value};
-use chrono::Utc;
+use jiff::Timestamp as JiffTimestamp;
 use proptest::prelude::*;
 use test_r::test;
 
@@ -111,7 +111,9 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
         )),
         Just((
             SchemaType::datetime(),
-            SchemaValue::Datetime { value: Utc::now() }
+            SchemaValue::Datetime {
+                value: JiffTimestamp::now()
+            }
         )),
         any::<i64>().prop_map(|n| (
             SchemaType::duration(),
@@ -136,7 +138,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                 secret_id: uuid::Uuid::nil(),
                 config_key: None,
                 version: 0,
-                resolved_at: Utc::now(),
+                resolved_at: JiffTimestamp::now(),
                 category: None,
             })
         )),
@@ -151,7 +153,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                     resource_name: resource,
                     expected_use: 1,
                     last_credit: 0,
-                    last_credit_at: Utc::now(),
+                    last_credit_at: JiffTimestamp::now(),
                 }),
             )
         }),
@@ -434,7 +436,7 @@ fn secret_category_mismatch_is_reported() {
         secret_id: uuid::Uuid::nil(),
         config_key: Some(vec!["secret".to_string()]),
         version: 1,
-        resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        resolved_at: jiff::Timestamp::new(0, 0).unwrap(),
         category: Some("password".to_string()),
     });
 

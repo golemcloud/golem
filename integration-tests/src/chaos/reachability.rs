@@ -51,7 +51,7 @@ use crate::chaos::split::{
     window_start,
 };
 use crate::chaos::summary::LatencyStats;
-use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -247,7 +247,7 @@ struct Tally {
     /// Keyed on the window a confirmation *landed* in rather than the one its
     /// operation was offered in, which is the only way either of the numbers
     /// derived from it means what it says.
-    served_at: Vec<DateTime<Utc>>,
+    served_at: Vec<jiff::Timestamp>,
 }
 
 impl ReachabilityReport {
@@ -268,8 +268,8 @@ impl ReachabilityReport {
     ) -> Self {
         let mut tallies: BTreeMap<(Group, Window), Tally> = BTreeMap::new();
         let mut records_outside_the_split = 0u64;
-        let mut first_submitted: Option<DateTime<Utc>> = None;
-        let mut last_completed: Option<DateTime<Utc>> = None;
+        let mut first_submitted: Option<jiff::Timestamp> = None;
+        let mut last_completed: Option<jiff::Timestamp> = None;
 
         for record in records.iter().filter(|r| r.stream == Stream::Durable) {
             let Some(group) = split.group_of(&record.agent) else {
@@ -387,7 +387,7 @@ impl ReachabilityReport {
                     .min();
                 match first {
                     Some(at) => {
-                        let gap = (at - healed).num_milliseconds().max(0) as u64;
+                        let gap = (at - healed).as_millis().max(0) as u64;
                         if gap > recovery_budget.as_millis() as u64 {
                             over_budget += 1;
                         }
@@ -673,17 +673,15 @@ mod tests {
     use super::*;
     use crate::chaos::errors::ErrorClass;
     use crate::chaos::history::{AttemptRecord, Phase};
-    use chrono::TimeDelta;
+
     use std::time::Duration;
     use test_r::test;
 
     const ISOLATED: &str = "chaos-s3-durable-0000";
     const CONTROL: &str = "chaos-s3-durable-0001";
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-08-24T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
+    fn t0() -> jiff::Timestamp {
+        str::parse::<jiff::Timestamp>("2026-08-24T12:00:00Z").unwrap()
     }
 
     fn split() -> PodSplit {
@@ -700,14 +698,14 @@ mod tests {
     fn fault() -> FaultWindow {
         FaultWindow {
             injected_at: t0(),
-            recovered_at: Some(t0() + TimeDelta::seconds(180)),
+            recovered_at: Some(t0() + jiff::SignedDuration::from_secs(180)),
         }
     }
 
     /// One operation, submitted `offset` seconds from the moment the partition
     /// was injected. Negative offsets are the baseline.
     fn op(agent: &str, offset_secs: i64, outcome: Outcome) -> OperationRecord {
-        let submitted_at = t0() + TimeDelta::seconds(offset_secs);
+        let submitted_at = t0() + jiff::SignedDuration::from_secs(offset_secs);
         OperationRecord {
             op_id: 0,
             stream: Stream::Durable,
@@ -716,7 +714,7 @@ mod tests {
             method: "increment".to_string(),
             idempotency_key: format!("{agent}-{offset_secs}"),
             submitted_at,
-            completed_at: Some(submitted_at + TimeDelta::milliseconds(20)),
+            completed_at: Some(submitted_at + jiff::SignedDuration::from_millis(20)),
             attempts: 1,
             outcome,
             duration_ms: 20,
@@ -741,7 +739,7 @@ mod tests {
     fn stalled(agent: &str, offset_secs: i64) -> OperationRecord {
         let mut record = op(agent, offset_secs, Outcome::Indeterminate);
         record.duration_ms = 245_000;
-        record.completed_at = Some(record.submitted_at + TimeDelta::seconds(245));
+        record.completed_at = Some(record.submitted_at + jiff::SignedDuration::from_secs(245));
         record.returned_value = None;
         record.attempts = 2;
         record.error_class = Some(ErrorClass::Transport);
@@ -900,7 +898,7 @@ mod tests {
         let mut records = history(0, 180);
         // Submitted mid-fault, answered five seconds after the heal.
         let mut late = op(ISOLATED, 100, Outcome::Confirmed);
-        late.completed_at = Some(t0() + TimeDelta::seconds(185));
+        late.completed_at = Some(t0() + jiff::SignedDuration::from_secs(185));
         records.retain(|r| !(r.agent == ISOLATED && r.submitted_at > t0()));
         records.push(late);
 
@@ -1002,7 +1000,7 @@ mod tests {
     fn a_slow_recovery_is_an_attention_line_rather_than_a_finding() {
         let mut records = history(0, 180);
         let mut slow = op(ISOLATED, 100, Outcome::Confirmed);
-        slow.completed_at = Some(t0() + TimeDelta::seconds(300));
+        slow.completed_at = Some(t0() + jiff::SignedDuration::from_secs(300));
         records.retain(|r| !(r.agent == ISOLATED && r.submitted_at > t0()));
         records.push(slow);
 
@@ -1022,7 +1020,8 @@ mod tests {
     fn caught(agent: &str, timed_out_attempts: u32) -> OperationRecord {
         let mut record = op(agent, -1, Outcome::Confirmed);
         record.duration_ms = 178_000;
-        record.completed_at = Some(record.submitted_at + TimeDelta::milliseconds(178_000));
+        record.completed_at =
+            Some(record.submitted_at + jiff::SignedDuration::from_millis(178_000));
         record.attempts = timed_out_attempts + 1;
         record.attempt_log = (1..=timed_out_attempts)
             .map(|attempt| AttemptRecord {
@@ -1056,7 +1055,7 @@ mod tests {
         records.retain(|r| {
             !(r.agent == ISOLATED
                 && r.submitted_at >= t0()
-                && r.submitted_at < t0() + TimeDelta::seconds(180))
+                && r.submitted_at < t0() + jiff::SignedDuration::from_secs(180))
         });
         records.push(caught(ISOLATED, 1));
 
@@ -1096,10 +1095,10 @@ mod tests {
         records.retain(|r| {
             !(r.agent == ISOLATED
                 && r.submitted_at >= t0()
-                && r.submitted_at < t0() + TimeDelta::seconds(180))
+                && r.submitted_at < t0() + jiff::SignedDuration::from_secs(180))
         });
         let mut late = caught(ISOLATED, 1);
-        late.completed_at = Some(t0() + TimeDelta::seconds(200));
+        late.completed_at = Some(t0() + jiff::SignedDuration::from_secs(200));
         late.duration_ms = 201_000;
         records.push(late);
 
@@ -1122,7 +1121,7 @@ mod tests {
         records.retain(|r| {
             !(r.agent == ISOLATED
                 && r.submitted_at >= t0()
-                && r.submitted_at < t0() + TimeDelta::seconds(180))
+                && r.submitted_at < t0() + jiff::SignedDuration::from_secs(180))
         });
         // A late tail, exactly as the heal window produces.
         for offset in 176..180 {
@@ -1168,11 +1167,11 @@ mod tests {
         records.retain(|r| {
             !(r.agent == ISOLATED
                 && r.submitted_at >= t0()
-                && r.submitted_at < t0() + TimeDelta::seconds(180))
+                && r.submitted_at < t0() + jiff::SignedDuration::from_secs(180))
         });
         for offset in 0..120 {
             let mut record = op(ISOLATED, offset, Outcome::Confirmed);
-            record.completed_at = Some(t0() + TimeDelta::seconds(181));
+            record.completed_at = Some(t0() + jiff::SignedDuration::from_secs(181));
             record.duration_ms = (181 - offset) as u64 * 1_000;
             records.push(record);
         }
@@ -1195,7 +1194,7 @@ mod tests {
         records.retain(|r| {
             !(r.agent == ISOLATED
                 && r.submitted_at >= t0()
-                && r.submitted_at < t0() + TimeDelta::seconds(180))
+                && r.submitted_at < t0() + jiff::SignedDuration::from_secs(180))
         });
         let mut lost = caught(ISOLATED, 2);
         lost.outcome = Outcome::Indeterminate;

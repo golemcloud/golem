@@ -141,7 +141,7 @@ const id = client.agentId();
 async function created(): Promise<void> {
   const keyed: GuestAgent = await GuestAgent.create('example', [], undefined, new Map(), { seconds: 0n, nanoseconds: 0 }, 1n, { keyed: true, config: { limits: { maximum: 5n } }, env: { MODE: 'test' } });
   const fresh: GuestAgent = await GuestAgent.create('example', [], undefined, new Map(), { seconds: 0n, nanoseconds: 0 }, 1n);
-  const found: GuestAgent = await GuestAgent.getById(await keyed.agentId());
+  const found: GuestAgent = GuestAgent.getById(await keyed.agentId());
   // @ts-expect-error config values are typed by the config path
   await GuestAgent.create('example', [], undefined, new Map(), { seconds: 0n, nanoseconds: 0 }, 1n, { config: { limits: { maximum: 'x' } } });
   void [fresh, found];
@@ -971,7 +971,8 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(!source.contains("base.createAgent"));
     assert!(source.contains("static upsert("));
     assert!(source.contains("static async create("));
-    assert!(source.contains("static async getById("));
+    assert!(source.contains("static getById("));
+    assert!(!source.contains("static async getById("));
     assert!(
         source.contains(
             "const resolved = base.upsertRemoteAgent(\"GuestAgent\", constructorPayload);"
@@ -980,9 +981,9 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(source.contains(
         "const resolved = await base.createRemoteAgent(\"GuestAgent\", constructorPayload, { keyed: options?.keyed ?? false, config: agentConfig, env: Object.entries(options?.env ?? {}) });"
     ));
-    assert!(source.contains(
-        "return new GuestAgent(await base.getRemoteAgentById(\"GuestAgent\", agentId));"
-    ));
+    assert!(
+        source.contains("return new GuestAgent(base.getRemoteAgentById(\"GuestAgent\", agentId));")
+    );
     assert!(source.contains(
         "Connects to the keyed agent of the constructor parameters, and creates it when it is missing."
     ));

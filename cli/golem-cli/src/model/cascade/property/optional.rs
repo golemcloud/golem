@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::cascade::layer::Layer;
-use golem_common::cascade::property::Property;
+use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::Property;
 use serde_derive::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +48,18 @@ impl<L: Layer, V> Default for OptionalProperty<L, V> {
 }
 
 impl<L: Layer, V> OptionalProperty<L, V> {
+    pub fn for_each_value_mut(&mut self, mut visit: impl FnMut(&mut V)) {
+        if let Some(value) = &mut self.value {
+            visit(value);
+        }
+        for element in &mut self.trace {
+            match element {
+                OptionalPropertyTraceElem::Override { value, .. } => visit(value),
+                OptionalPropertyTraceElem::Skip { .. } => {}
+            }
+        }
+    }
+
     pub fn new(value: Option<V>) -> Self {
         Self {
             value,
@@ -134,8 +146,8 @@ impl<V: Clone, L: Layer> Property<L> for OptionalProperty<L, V> {
 #[cfg(test)]
 mod test {
     use super::{OptionalProperty, OptionalPropertyTraceElem};
+    use crate::model::cascade::property::Property;
     use crate::model::cascade::property::test_support::TestLayer;
-    use golem_common::cascade::property::Property;
     use test_r::test;
 
     #[test]

@@ -19,7 +19,7 @@ use crate::base_model::tool_release::{
     ToolReleaseReference,
 };
 use crate::{declare_enums, declare_structs, newtype_uuid};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 newtype_uuid!(EnvironmentToolGrantId);
 
@@ -30,7 +30,11 @@ declare_enums! {
     }
 }
 
-declare_structs! {
+crate::declare_datetime_struct! {
+    crate::base_model::environment_tool_grant::EnvironmentToolGrant,
+    [],
+    [],
+    [],
     pub struct EnvironmentToolGrant {
         pub id: EnvironmentToolGrantId,
         pub environment_id: EnvironmentId,
@@ -39,11 +43,13 @@ declare_structs! {
         pub automatic: bool,
         pub follow_coordinates: bool,
         pub lifecycle: EnvironmentToolGrantLifecycle,
-        pub created_at: DateTime<Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub created_by: AccountId,
-        pub state_changed_at: DateTime<Utc>,
+        pub state_changed_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub state_changed_by: AccountId,
     }
+}
+declare_structs! {
 
     pub struct EnvironmentToolGrantWithDetails {
         pub grant: EnvironmentToolGrant,
@@ -73,4 +79,5 @@ declare_structs! {
     pub struct EnvironmentToolValidationResult {
         pub publication_plan: Vec<ToolPublicationPlanEntry>,
     }
+
 }

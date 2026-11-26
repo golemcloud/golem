@@ -37,7 +37,7 @@ use golem_common::schema::{
 };
 use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_schema::schema::fingerprint::schema_fingerprint_v1;
-use golem_schema::schema::validation::validate_value;
+use golem_schema::schema::validation::{ValueError, validate_value};
 use prost::Message;
 
 /// Domain result of creating or replay-attaching a stream session.
@@ -480,7 +480,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let deadline = i64::try_from(deadline_millis)
             .ok()
-            .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+            .and_then(|v| jiff::Timestamp::from_millisecond(v).ok())
             .ok_or_else(|| WorkerExecutorError::invalid_request("stream expiry is out of range"))?;
         self.deps
             .scheduler_service()
@@ -809,7 +809,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(None);
         };
-        self.clone().wait_method_session_ready(session_key).await?;
+        // A fork target's session holds no preparation of its own: its content is the prepared
+        // session of the fork source's invocation.
+        let content_key = self.stream_session_content_key(&session_key).await?;
+        self.clone().wait_method_session_ready(content_key).await?;
         let producer = self.durable_stream_producer().await?;
         let Some(slot) = producer
             .with_metadata_activity(self.resolve_stream_slot(
@@ -1330,9 +1333,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
         if matches!(request.admission, StreamSlotReadAdmission::WaitReady) {
-            self.clone()
-                .wait_method_session_ready(binding.invocation_key)
+            let content_key = self
+                .stream_session_content_key(&binding.invocation_key)
                 .await?;
+            self.clone().wait_method_session_ready(content_key).await?;
         }
         let Some(mut slot) = producer
             .with_metadata_activity(self.resolve_stream_slot_by_key(
@@ -1822,8 +1826,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let SlotSource::Stream(handle) = slot.source else {
                         return Err(WorkerExecutorError::runtime("input slot has no stream").into());
                     };
+                    let invalid_item = |errors: Vec<ValueError>| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "invalid stream item: {}",
+                            errors
+                                .iter()
+                                .map(ValueError::diagnostic)
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        ))
+                    };
                     match &payload {
-                        Some(StreamItemsPayload::PackedU8(_)) if slot.bytes => {}
+                        Some(StreamItemsPayload::PackedU8(bytes)) if slot.bytes => {
+                            let mut validated = [false; 256];
+                            for byte in bytes {
+                                if !std::mem::replace(&mut validated[*byte as usize], true) {
+                                    validate_value(
+                                        &slot.graph,
+                                        &slot.graph.root,
+                                        &SchemaValue::U8(*byte),
+                                    )
+                                    .map_err(invalid_item)?;
+                                }
+                            }
+                        }
                         Some(StreamItemsPayload::Values(values)) if !slot.bytes => {
                             for encoded in values {
                                 let proto =
@@ -1833,13 +1859,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 let value: SchemaValue = proto
                                     .try_into()
                                     .map_err(WorkerExecutorError::invalid_request)?;
-                                validate_value(&slot.graph, &slot.graph.root, &value).map_err(
-                                    |errors| {
-                                        WorkerExecutorError::invalid_request(format!(
-                                            "invalid stream item: {errors:?}"
-                                        ))
-                                    },
-                                )?;
+                                validate_value(&slot.graph, &slot.graph.root, &value)
+                                    .map_err(invalid_item)?;
                             }
                         }
                         None => {}

@@ -4,10 +4,10 @@ use crate::model::cli_output::{
 };
 use crate::model::deploy::DeployPlanView;
 use crate::model::masking::MaskingConfig;
-use chrono::{TimeZone, Utc};
 use golem_common::model::card::{
     CardId, PolymorphicCard, PublicInvocationWalletPin, WalletVersionToken,
 };
+use jiff::Timestamp as JiffTimestamp;
 use proptest::prelude::*;
 use quote::ToTokens;
 use serde_json::{Value, json};
@@ -1197,12 +1197,18 @@ fn component_metadata_displays_tools_middlewares_and_files() {
 
 #[test]
 fn component_manifest_trace_structured_output_masks_secret_payloads() {
+    use crate::model::app::{AgentLayerId, ComponentLayerId};
+    use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::map::MapMergeMode;
+    use crate::model::cascade::property::vec::VecMergeMode;
+    use crate::model::masking::Masked;
+
     let mut field = arb_static_config_field()
         .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
         .unwrap()
         .current();
     field.fill = json!({"password": "resolved-config-secret"}).into();
-    let trace = crate::model::component::ComponentManifestTraceView {
+    let mut trace = crate::model::component::ComponentManifestTraceView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
         properties: sample_component_layer_properties(),
         agents: std::collections::BTreeMap::from([(
@@ -1211,6 +1217,66 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
         )]),
         resolved_config: Some(vec![field]),
     };
+    let component_layer = ComponentLayerId::ComponentCommon(trace.component_name.clone());
+    for mode in [
+        MapMergeMode::Upsert,
+        MapMergeMode::Remove,
+        MapMergeMode::Replace,
+    ] {
+        trace.properties.env.apply_layer(
+            &component_layer,
+            None,
+            (
+                mode,
+                indexmap::IndexMap::from([
+                    ("API_TOKEN".into(), "updated-env-secret".into()),
+                    ("PUBLIC_LABEL".into(), "visible-label".into()),
+                ]),
+            ),
+        );
+    }
+    for mode in [VecMergeMode::Prepend, VecMergeMode::Replace] {
+        trace.properties.plugins.apply_layer(
+            &component_layer,
+            None,
+            (
+                mode,
+                vec![crate::model::app_raw::PluginInstallation {
+                    account: None,
+                    name: "plugin".into(),
+                    version: "1.0.0".into(),
+                    parameters: std::collections::HashMap::from([(
+                        "token".into(),
+                        "updated-plugin-secret".into(),
+                    )]),
+                }],
+            ),
+        );
+    }
+    let mut nested_schema = trace.properties.config_schema.value().clone().unwrap();
+    nested_schema.declarations[0].default_value = Some(golem_common::schema::SchemaValue::Record {
+        fields: vec![golem_common::schema::SchemaValue::String(
+            "nested-default-secret".into(),
+        )],
+    });
+    trace
+        .properties
+        .config_schema
+        .apply_layer(&component_layer, None, Some(nested_schema));
+    trace
+        .properties
+        .config_schema
+        .apply_layer(&component_layer, None, None);
+    let properties = trace.agents.values_mut().next().unwrap();
+    let agent_layer =
+        AgentLayerId::AgentCommon(golem_common::model::agent::AgentTypeName("Agent".into()));
+    for value in [
+        Some(json!({"db": {"password": "updated-config-secret"}, "other": [false, 23, null]})),
+        Some(json!(["replaced-config-secret"])),
+        None,
+    ] {
+        properties.config.apply_layer(&agent_layer, None, value);
+    }
     let visible =
         to_structured_output_value_masked(trace.clone(), MaskingConfig::show_secrets()).unwrap();
     assert_eq!(
@@ -1223,9 +1289,12 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
     );
     assert_eq!(
         visible["properties"]["configSchema"]["value"]["declarations"][0]["default_value"],
-        json!({"kind": "string", "value": "manifest-default-secret"})
+        json!({"kind": "record", "value": {"fields": [{"kind": "string", "value": "nested-default-secret"}]}})
     );
     assert!(visible["properties"].get("config").is_none());
+    let masked = trace.clone().masked(MaskingConfig::hide_secrets()).unwrap();
+    let yaml_value = serde_yaml::to_value(&masked).unwrap();
+    let yaml_json = serde_json::to_value(yaml_value).unwrap();
     let value = hidden_structured_output(trace);
 
     assert!(COMMAND_OUTPUT_SCHEMA_VALIDATOR.is_valid(&visible));
@@ -1234,17 +1303,31 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
         value["properties"]["configSchema"]["value"]["declarations"][0]["default_value"],
         json!({"kind": "string", "value": "***"})
     );
-    assert_no_plaintext(
-        &value,
-        &[
-            "manifest-config-secret",
-            "manifest-env-secret",
-            "manifest-plugin-secret",
-            "resolved-config-secret",
-            "manifest-default-secret",
-            "agent-config-secret",
-            "agent-env-secret",
-        ],
+    let secrets = [
+        "manifest-config-secret",
+        "manifest-env-secret",
+        "manifest-plugin-secret",
+        "resolved-config-secret",
+        "manifest-default-secret",
+        "agent-config-secret",
+        "agent-env-secret",
+        "updated-env-secret",
+        "updated-plugin-secret",
+        "nested-default-secret",
+        "updated-config-secret",
+        "replaced-config-secret",
+    ];
+    assert_no_plaintext(&value, &secrets);
+    assert_no_plaintext(&yaml_json, &secrets);
+    for secret in secrets {
+        assert!(
+            visible.to_string().contains(secret),
+            "show-secrets lost {secret}"
+        );
+    }
+    assert_eq!(
+        value["properties"]["env"]["value"]["PUBLIC_LABEL"],
+        "visible-label"
     );
     assert!(
         value.to_string().contains("FROM_AGENT"),
@@ -1261,7 +1344,6 @@ fn deploy_diff_and_plan_structured_outputs_mask_secret_payloads() {
         deployment_diff: &diff,
         tool_publications: &Default::default(),
         environment_setup: None,
-        static_config: &[],
     });
 
     for value in [diff_value, plan_value] {
@@ -1301,6 +1383,7 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
             "Agent".to_string(),
         )),
         agent_key: Some("Agent()".to_string()),
+        origin: golem_common::model::agent::AgentOrigin::Keyed,
         fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
         created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
         environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
@@ -1350,12 +1433,13 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                     "API_TOKEN".to_string(),
                     "component-env-secret".to_string(),
                 )]),
-                config: golem_common::model::component_metadata::OwnerConfig::from_captures(vec![
+                config: vec![
                     golem_common::model::agent::TypedAgentConfigEntry {
                         path: vec!["db".to_string(), "password".to_string()],
                         value: typed_schema_string("component-config-secret"),
-                    },
-                ]),
+                    }
+                    .into(),
+                ],
                 plugins: vec![golem_common::model::component::InstalledPlugin {
                     environment_plugin_grant_id:
                         golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId(
@@ -1552,7 +1636,7 @@ fn typed_schema_string(value: &str) -> golem_common::schema::TypedSchemaValue {
 }
 
 fn sample_agent_layer_properties() -> crate::model::app::AgentLayerProperties {
-    use golem_common::cascade::property::Property;
+    use crate::model::cascade::property::Property;
 
     let layer = crate::model::app::AgentLayerId::AgentCommon(
         golem_common::model::agent::AgentTypeName("Agent".to_string()),
@@ -1589,7 +1673,7 @@ fn sample_agent_layer_properties() -> crate::model::app::AgentLayerProperties {
 }
 
 fn sample_component_layer_properties() -> crate::model::app::ComponentLayerProperties {
-    use golem_common::cascade::property::Property;
+    use crate::model::cascade::property::Property;
 
     let layer = crate::model::app::ComponentLayerId::ComponentCommon(
         golem_common::model::component::ComponentName("component".to_string()),
@@ -1602,7 +1686,7 @@ fn sample_component_layer_properties() -> crate::model::app::ComponentLayerPrope
     );
     properties
         .config_layers
-        .push(golem_common::schema::config::ConfigLayer {
+        .push(crate::model::config::resolver::ConfigLayer {
             origin: golem_common::schema::config::ConfigOrigin {
                 file: "golem.yaml".into(),
                 path: vec!["components".into(), "component".into(), "config".into()],
@@ -1845,7 +1929,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
             secret_id,
             config_key: Some(vec!["database".to_string(), "password".to_string()]),
             version: 7,
-            resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            resolved_at: JiffTimestamp::new(1_700_000_000, 0).unwrap(),
             category: Some("api-key".to_string()),
         }),
     );
@@ -2935,7 +3019,7 @@ fn arb_small_u64() -> BoxedStrategy<u64> {
 }
 
 fn arb_timestamp_string() -> BoxedStrategy<String> {
-    arb_datetime().prop_map(|value| value.to_rfc3339()).boxed()
+    arb_datetime().prop_map(|value| value.to_string()).boxed()
 }
 
 fn arb_timestamp() -> BoxedStrategy<golem_common::model::Timestamp> {
@@ -2950,19 +3034,16 @@ fn arb_url_string() -> BoxedStrategy<String> {
         .boxed()
 }
 
-fn arb_datetime() -> BoxedStrategy<chrono::DateTime<chrono::Utc>> {
+fn arb_datetime() -> BoxedStrategy<JiffTimestamp> {
     (0i64..4_102_444_800i64)
         .prop_map(|seconds| {
-            chrono::DateTime::from_timestamp(seconds, 0)
-                .expect("generated timestamp should be in range")
+            JiffTimestamp::new(seconds, 0).expect("generated timestamp should be in range")
         })
         .boxed()
 }
 
-fn fixed_datetime() -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
-        .expect("fixed timestamp should parse")
-        .with_timezone(&chrono::Utc)
+fn fixed_datetime() -> JiffTimestamp {
+    JiffTimestamp::UNIX_EPOCH
 }
 
 fn arb_hash() -> BoxedStrategy<golem_common::model::diff::Hash> {
@@ -5266,6 +5347,13 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                 )),
                 agent_key: (component_revision % 2 == 0)
                     .then(|| format!("GeneratedAgent(\"{agent_id}\")")),
+                origin: if component_revision % 2 == 0 {
+                    golem_common::model::agent::AgentOrigin::Keyed
+                } else if retry_count % 2 == 0 {
+                    golem_common::model::agent::AgentOrigin::Created
+                } else {
+                    golem_common::model::agent::AgentOrigin::Forked
+                },
                 fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::from_u128(
                     u128::from(retry_count),
                 )),
@@ -5576,13 +5664,13 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                         reason: grant_reason,
                         actor_account_id:
                             golem_common::model::account::AccountId(account_id),
-                        granted_at: chrono::DateTime::from_timestamp(
+                        granted_at: JiffTimestamp::new(
                             1_700_000_000,
                             0,
                         )
                         .unwrap(),
                         expires_at: Some(
-                            chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+                            JiffTimestamp::new(1_800_000_000, 0).unwrap(),
                         ),
                     };
                     let active_grant = |dimension| {
@@ -5608,7 +5696,7 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                             latest_owner_transition: Some(
                                 golem_common::model::account_usage::MonthlyUsageModeTransition {
                                     actor_account_id: golem_common::model::account::AccountId(account_id),
-                                    changed_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                                    changed_at: JiffTimestamp::new(1_700_000_000, 0).unwrap(),
                                     source: golem_common::model::account_usage::MonthlyUsageModeTransitionSource::Owner,
                                     previous_mode: golem_common::model::account_usage::MonthlyUsageMode::HardLimit,
                                     new_mode: golem_common::model::account_usage::MonthlyUsageMode::AllowOverage,
@@ -5711,7 +5799,7 @@ fn arb_account_usage_view() -> BoxedStrategy<crate::model::account::AccountUsage
                             year,
                             month,
                         },
-                        as_of: Utc.with_ymd_and_hms(2026, 4, 2, 3, 4, 5).unwrap(),
+                        as_of: "2026-04-02T03:04:05Z".parse().unwrap(),
                         metering: golem_common::model::account_usage::AccountUsageMetering {
                             compute: metering_status,
                             memory: metering_status,
@@ -6692,7 +6780,7 @@ fn arb_agent_layer_properties() -> BoxedStrategy<crate::model::app::AgentLayerPr
     )
         .prop_map(
             |(layer_id, second_layer_id, selection, config, grants, env, plugins, files)| {
-                use golem_common::cascade::property::Property;
+                use crate::model::cascade::property::Property;
 
                 let mut properties = crate::model::app::AgentLayerProperties::default();
                 let selection = selection.as_ref();
@@ -6790,7 +6878,7 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
         ),
     )
         .prop_map(|(left, right)| {
-            use golem_common::cascade::property::Property;
+            use crate::model::cascade::property::Property;
 
             let (
                 layer_id,
@@ -6895,7 +6983,7 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             properties.config_layers =
                 [(&layer_id, config_first), (&second_layer_id, config_second)]
                     .into_iter()
-                    .map(|(id, value)| golem_common::schema::config::ConfigLayer {
+                    .map(|(id, value)| crate::model::config::resolver::ConfigLayer {
                         origin: golem_common::schema::config::ConfigOrigin {
                             file: "golem.yaml".into(),
                             path: vec!["components".into(), "generated".into(), "config".into()],
@@ -7290,14 +7378,13 @@ fn arb_agent_type_provision_config()
         arb_polymorphic_card(),
     )
         .prop_map(|(env, config, plugins, files, initial_permission)| {
-            let mut config =
-                golem_common::model::component_metadata::OwnerConfig::from_captures(config);
-            if !config.entries.is_empty() {
-                config.source_meta.insert(
-                    "/audit~1member/0".into(),
-                    golem_common::model::component_metadata::ConfigSourceMetadata {
-                        source: "golem.yaml".into(),
-                        path: vec!["config".into()],
+            let mut config = config.into_iter().map(golem_common::model::component_metadata::ConfigBinding::from).collect::<Vec<_>>();
+            if let Some(binding) = config.first_mut() {
+                binding.origins.push(
+                    golem_common::model::component_metadata::ConfigBindingOrigin {
+                        value_path: vec!["member".into()],
+                        location: golem_common::model::component_metadata::ConfigOriginLocation::Manifest { file: "golem.yaml".into() },
+                        source_path: vec!["config".into()],
                         layer: "prod".into(),
                     },
                 );
@@ -7490,11 +7577,8 @@ fn arb_config_get_result() -> OutputDocumentStrategy {
 }
 
 fn arb_deploy_plan_result() -> OutputDocumentStrategy {
-    (
-        any::<bool>(),
-        proptest::collection::vec(arb_static_config_field(), 0..3),
-    )
-        .prop_map(|(include_environment_setup, fields)| {
+    any::<bool>()
+        .prop_map(|include_environment_setup| {
             let deployment_diff = empty_deployment_diff();
             let environment_setup =
                 include_environment_setup.then(crate::model::deploy::EnvironmentSetupPlan::default);
@@ -7503,7 +7587,6 @@ fn arb_deploy_plan_result() -> OutputDocumentStrategy {
                     deployment_diff: &deployment_diff,
                     tool_publications: &Default::default(),
                     environment_setup: environment_setup.as_ref(),
-                    static_config: &fields,
                 },
                 MaskingConfig::hide_secrets(),
             )
@@ -8645,7 +8728,7 @@ fn arb_plugin_registration()
 
 fn arb_profile_create_result() -> OutputDocumentStrategy {
     serialized_output((any::<bool>(), arb_small_string(), any::<bool>()).prop_map(
-        |(created, profile, set_active)| crate::model::config::profile::ProfileCreateResult {
+        |(created, profile, set_active)| crate::model::cli_config::profile::ProfileCreateResult {
             created,
             profile: crate::config::ProfileName(profile),
             set_active,
@@ -8660,11 +8743,11 @@ fn arb_profile_get_result() -> OutputDocumentStrategy {
 fn arb_profile_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_profile_view(), 0..5)
-            .prop_map(|profiles| crate::model::config::profile::ProfileListView { profiles }),
+            .prop_map(|profiles| crate::model::cli_config::profile::ProfileListView { profiles }),
     )
 }
 
-fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
+fn arb_profile_view() -> BoxedStrategy<crate::model::cli_config::ProfileView> {
     (
         any::<bool>(),
         arb_small_string(),
@@ -8676,7 +8759,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
     )
         .prop_map(
             |(is_active, name, url, worker_url, allow_insecure, authenticated, default_format)| {
-                crate::model::config::ProfileView {
+                crate::model::cli_config::ProfileView {
                     is_active,
                     name: crate::config::ProfileName(name),
                     url: url.map(|url| url.parse().expect("generated URL should parse")),
@@ -8694,7 +8777,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
 fn arb_profile_switch_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(switched, profile)| {
-            crate::model::config::profile::ProfileSwitchResult {
+            crate::model::cli_config::profile::ProfileSwitchResult {
                 switched,
                 profile: crate::config::ProfileName(profile),
             }
@@ -8705,7 +8788,7 @@ fn arb_profile_switch_result() -> OutputDocumentStrategy {
 fn arb_profile_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, profile)| {
-            crate::model::config::profile::ProfileDeleteView {
+            crate::model::cli_config::profile::ProfileDeleteView {
                 deleted,
                 profile: crate::config::ProfileName(profile),
             }
@@ -8715,10 +8798,12 @@ fn arb_profile_delete_result() -> OutputDocumentStrategy {
 
 fn arb_profile_config_set_format_result() -> OutputDocumentStrategy {
     serialized_output((any::<bool>(), arb_small_string(), arb_format()).prop_map(
-        |(updated, profile, format)| crate::model::config::profile::ProfileConfigSetFormatResult {
-            updated,
-            profile: crate::config::ProfileName(profile),
-            format,
+        |(updated, profile, format)| {
+            crate::model::cli_config::profile::ProfileConfigSetFormatResult {
+                updated,
+                profile: crate::config::ProfileName(profile),
+                format,
+            }
         },
     ))
 }

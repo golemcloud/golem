@@ -360,13 +360,16 @@ fn build_params(
 /// GNU's timestamp style differs by format: unified/side-by-side use
 /// `%Y-%m-%d %H:%M:%S%.9f %z`; context uses ctime-style `%a %b %e %H:%M:%S %Y`. The
 /// `diffutilslib` engines always format in the first style regardless of selected format —
-/// [`apply_header`] replaces the header line it produced with this instead.
+/// [`apply_header`] replaces the header line it produced with this instead. An unrepresentable
+/// timestamp is marked unavailable with `-`, as in `stat`.
 fn format_mtime(format: Format, mtime: Option<SystemTime>) -> String {
-    use chrono::{DateTime, Local};
-    let t: DateTime<Local> = mtime.unwrap_or_else(SystemTime::now).into();
+    let Ok(t) = jiff::Timestamp::try_from(mtime.unwrap_or_else(SystemTime::now)) else {
+        return "-".to_string();
+    };
+    let t = t.to_zoned_datetime(jiff::tz::TimeZone::system());
     match format {
-        Format::Context => t.format("%a %b %e %H:%M:%S %Y").to_string(),
-        _ => t.format("%Y-%m-%d %H:%M:%S%.9f %z").to_string(),
+        Format::Context => t.strftime("%a %b %e %H:%M:%S %Y").to_string(),
+        _ => t.strftime("%Y-%m-%d %H:%M:%S%.9f %z").to_string(),
     }
 }
 
@@ -1981,6 +1984,26 @@ pub(crate) fn run_cmp(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headers_mark_out_of_range_mtimes_unavailable() {
+        let mtimes = [
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(253_402_300_799),
+            SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(377_705_023_202),
+        ];
+        for format in [Format::Unified, Format::Context] {
+            let (first, second) = header_prefixes(format);
+            for mtime in mtimes {
+                let body = format!("{first}a\told\n{second}b\told\nbody\n").into_bytes();
+                assert_eq!(
+                    apply_header(body, format, "a", "b", None, None, Some(mtime), Some(mtime)),
+                    format!("{first}a\t-\n{second}b\t-\nbody\n").into_bytes()
+                );
+            }
+            assert_ne!(format_mtime(format, Some(SystemTime::UNIX_EPOCH)), "-");
+            assert_ne!(format_mtime(format, None), "-");
+        }
+    }
 
     #[test]
     // A single-line delete/insert/change range collapses to a bare number ("1d0", not "1,1d0")

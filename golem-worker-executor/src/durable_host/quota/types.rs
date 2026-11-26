@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::services::quota::LeaseInterest;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::Reservation;
 use golem_common::model::quota::ResourceName;
@@ -30,7 +30,7 @@ pub struct PendingAcquire {
     /// then updated by each replayed reserve/commit entry).
     pub last_credit: i64,
     /// Timestamp at which `last_credit` was recorded (from the replayed entry).
-    pub last_credit_at: DateTime<Utc>,
+    pub last_credit_at: jiff::Timestamp,
 }
 
 /// State of the lease held by a `QuotaTokenEntry`.
@@ -63,7 +63,7 @@ impl QuotaTokenEntry {
         resource_name: ResourceName,
         expected_use: u64,
         last_credit: i64,
-        last_credit_at: DateTime<Utc>,
+        last_credit_at: jiff::Timestamp,
     ) -> Self {
         Self {
             lease: LeaseInterestHandle::Pending(PendingAcquire {
@@ -120,7 +120,7 @@ impl QuotaTokenEntry {
         }
     }
 
-    pub fn last_credit_at(&self) -> &DateTime<Utc> {
+    pub fn last_credit_at(&self) -> &jiff::Timestamp {
         match &self.lease {
             LeaseInterestHandle::Live(i) => &i.last_credit_value_at,
             LeaseInterestHandle::Pending(p) => &p.last_credit_at,
@@ -131,7 +131,7 @@ impl QuotaTokenEntry {
     pub fn update_replayed_credit(
         &mut self,
         credit: i64,
-        at: DateTime<Utc>,
+        at: jiff::Timestamp,
     ) -> Result<(), WorkerExecutorError> {
         match &mut self.lease {
             LeaseInterestHandle::Live(_) => Err(WorkerExecutorError::runtime(

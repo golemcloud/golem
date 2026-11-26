@@ -181,21 +181,24 @@ impl ComponentRevisionRecord {
                 upper_positive: provision.initial_permissions.upper_positive.clone(),
                 upper_negative: provision.initial_permissions.upper_negative.clone(),
             },
-            config: provision
-                .config
-                .captures()
-                .iter()
-                .map(|entry| {
-                    Ok((entry.path.join("."), NormalizedJsonValue::new(
+            config:
+                provision
+                    .config
+                    .iter()
+                    .map(|entry| {
+                        let golem_common::model::component_metadata::ConfigBindingSource::Static(
+                            value,
+                        ) = &entry.value_source;
+                        Ok((entry.path.join("."), NormalizedJsonValue::new(
                     golem_schema::schema::render::to_json_value(
-                        entry.value.graph(), entry.value.root_type(), entry.value.value()
+                        value.graph(), value.root_type(), value.value()
                     ).map_err(|reason| diff::DiffError::TypedConfigJsonConversion {
                         operation: "component revision to_diffable component config conversion",
                         path: entry.path.join("."), reason: reason.to_string(),
                     })?
                 )))
-                })
-                .collect::<Result<_, _>>()?,
+                    })
+                    .collect::<Result<_, _>>()?,
             env: provision.env.clone(),
             files_by_path: provision
                 .files
@@ -240,16 +243,16 @@ impl ComponentRevisionRecord {
                             env: config.env.clone(),
                             config: config
                                 .config
-                                .captures()
                                 .iter()
                                 .map(|e| {
+                                    let golem_common::model::component_metadata::ConfigBindingSource::Static(value) = &e.value_source;
                                     Ok((
                                         e.path.join("."),
                                         NormalizedJsonValue::new(
                                             golem_schema::schema::render::to_json_value(
-                                                e.value.graph(),
-                                                e.value.root_type(),
-                                                e.value.value(),
+                                                value.graph(),
+                                                value.root_type(),
+                                                value.value(),
                                             )
                                             .map_err(|reason| {
                                                 diff::DiffError::TypedConfigJsonConversion {

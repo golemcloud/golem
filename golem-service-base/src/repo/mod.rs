@@ -15,6 +15,7 @@
 mod blob;
 mod datetime;
 mod numeric;
+pub mod postgres_temporal;
 
 pub use self::blob::Blob;
 pub use self::datetime::SqlDateTime;

@@ -5,19 +5,19 @@
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
 use super::super::{RichRequest, RouteExecutionResult};
-use chrono::{DateTime, SecondsFormat, Utc};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     StreamSessionExpiryPolicy, stream_session_expiry_policy,
 };
 use golem_schema::proto::golem::common::Empty;
 use http::{HeaderName, HeaderValue};
+use jiff::Timestamp;
 
 const MAX_CACHE_SECONDS: u64 = 31_536_000;
 
 pub(super) fn parse_expiry_policy(
     request: &RichRequest,
 ) -> Result<Option<StreamSessionExpiryPolicy>, ()> {
-    parse_expiry_policy_at(request.headers(), Utc::now().timestamp_millis())
+    parse_expiry_policy_at(request.headers(), Timestamp::now().as_millisecond())
 }
 
 fn parse_expiry_policy_at(
@@ -44,8 +44,12 @@ fn parse_expiry_policy_at(
             if !matches!(value.as_bytes().get(10), Some(b'T' | b't')) {
                 return Err(());
             }
-            let parsed = DateTime::parse_from_rfc3339(value).map_err(|_| ())?;
-            let expires_at_millis = parsed.timestamp_millis();
+            let parsed =
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .map_err(|_| ())?;
+            let parsed =
+                Timestamp::from_nanosecond(parsed.unix_timestamp_nanos()).map_err(|_| ())?;
+            let expires_at_millis = parsed.as_millisecond();
             if expires_at_millis <= now_millis {
                 return Err(());
             }
@@ -112,8 +116,8 @@ pub(super) fn add_expiry_headers(
 fn canonical_expires_at(expires_at_millis: u64) -> Option<String> {
     i64::try_from(expires_at_millis)
         .ok()
-        .and_then(DateTime::<Utc>::from_timestamp_millis)
-        .map(|value| value.to_rfc3339_opts(SecondsFormat::AutoSi, true))
+        .and_then(|value| Timestamp::from_millisecond(value).ok())
+        .map(|value| value.to_string())
 }
 
 pub(super) fn cache_control(
@@ -125,7 +129,7 @@ pub(super) fn cache_control(
         policy,
         expiry_deadline_millis,
         cacheable,
-        Utc::now().timestamp_millis(),
+        Timestamp::now().as_millisecond(),
     )
 }
 

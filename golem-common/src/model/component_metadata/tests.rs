@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::{ExportedInstance, TopLevelExport};
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::AgentTypeName;
@@ -126,10 +127,10 @@ fn component_metadata_helpers_use_exact_known_export_names() {
 }
 
 #[test]
-fn owner_config_preserves_native_captures_and_optional_audit_metadata() {
+fn config_bindings_preserve_static_values_and_origins() {
     use poem_openapi::types::{ParseFromJSON, ToJSON};
 
-    let captures = vec![TypedAgentConfigEntry {
+    let entry = TypedAgentConfigEntry {
         path: vec!["limits".into(), "maximum".into()],
         value: TypedSchemaValue::new(
             SchemaGraph {
@@ -138,40 +139,43 @@ fn owner_config_preserves_native_captures_and_optional_audit_metadata() {
             },
             SchemaValue::U64(u64::MAX),
         ),
-    }];
-    let mut config = OwnerConfig::from_captures(captures.clone());
-    config.source_meta.insert(
-        "/limits/maximum".into(),
-        ConfigSourceMetadata {
-            source: "golem.yaml".into(),
-            path: vec!["config".into(), "limits".into(), "maximum".into()],
-            layer: "prod".into(),
+    };
+    let mut binding = ConfigBinding::from(entry);
+    binding.origins.push(ConfigBindingOrigin {
+        value_path: vec![],
+        location: ConfigOriginLocation::Manifest {
+            file: "golem.yaml".into(),
         },
-    );
-    assert_eq!(config.captures(), captures);
-    let json = serde_json::to_value(&config).unwrap();
-    assert_eq!(json, config.to_json().unwrap());
+        source_path: vec!["config".into(), "limits".into(), "maximum".into()],
+        layer: "prod".into(),
+    });
+    let json = serde_json::to_value(&binding).unwrap();
+    assert_eq!(json["valueSource"]["kind"], "static");
+    assert_eq!(json, binding.to_json().unwrap());
     assert_eq!(
-        OwnerConfig::parse_from_json(Some(json.clone())).unwrap(),
-        config
+        ConfigBinding::parse_from_json(Some(json.clone())).unwrap(),
+        binding
     );
-    assert_eq!(serde_json::from_value::<OwnerConfig>(json).unwrap(), config);
+    assert_eq!(
+        serde_json::from_value::<ConfigBinding>(json).unwrap(),
+        binding
+    );
+    let config: ConfigBindings = vec![binding.clone()];
     let binary = crate::serialization::serialize(&config).unwrap();
     assert_eq!(
-        crate::serialization::deserialize::<OwnerConfig>(&binary).unwrap(),
+        crate::serialization::deserialize::<ConfigBindings>(&binary).unwrap(),
         config
     );
-    let proto: golem_api_grpc::proto::golem::component::OwnerConfig =
-        config.clone().try_into().unwrap();
-    assert_eq!(OwnerConfig::try_from(proto.clone()).unwrap(), config);
+    let proto: golem_api_grpc::proto::golem::component::ConfigBinding =
+        binding.clone().try_into().unwrap();
+    assert_eq!(ConfigBinding::try_from(proto.clone()).unwrap(), binding);
     let mut invalid = proto;
-    invalid.entries[0].source = None;
-    assert!(OwnerConfig::try_from(invalid).is_err());
-    config.source_meta.clear();
-    assert_eq!(config.captures(), captures);
-    let json = serde_json::to_value(&config).unwrap();
-    assert!(json.get("sourceMeta").is_none());
-    assert_eq!(json, config.to_json().unwrap());
+    invalid.value_source = None;
+    assert!(ConfigBinding::try_from(invalid).is_err());
+    binding.origins.clear();
+    let json = serde_json::to_value(&binding).unwrap();
+    assert!(json.get("origins").is_none());
+    assert_eq!(json, binding.to_json().unwrap());
 }
 
 #[test]
@@ -187,7 +191,7 @@ fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -201,7 +205,7 @@ fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
             AgentTypeProvisionConfig {
                 initial_permissions: card.clone(),
                 env: BTreeMap::new(),
-                config: OwnerConfig::default(),
+                config: vec![],
                 plugins: Vec::new(),
                 files: Vec::new(),
             },

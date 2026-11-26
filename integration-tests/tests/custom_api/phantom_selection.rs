@@ -9,7 +9,7 @@ use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::{AgentId, AgentStatus};
-use golem_service_base::custom_api::{CompiledRoutes, RouteBehaviour};
+use golem_service_base::custom_api::CompiledRoutes;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::agents::{agent_type_id, create_agent};
@@ -86,15 +86,9 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
             ("env", json!({})),
             ("config", json!([{"path": ["admin"], "value": true}])),
             ("config", json!([])),
+            ("keyed", json!(false)),
         ] {
-            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
-                agent_key!("SelectedQueryAgent", "constructor from body")
-                    .parameters
-                    .value()
-                    .clone(),
-            )
-            .map_err(anyhow::Error::msg)?;
-            let mut body = json!({"parameters": parameters});
+            let mut body = json!({"id": "constructor from body"});
             body[field] = value;
             let response = agent
                 .client
@@ -107,18 +101,11 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
         }
         let mut ids = Vec::new();
         for _ in 0..2 {
-            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
-                agent_key!("SelectedQueryAgent", "constructor from body")
-                    .parameters
-                    .value()
-                    .clone(),
-            )
-            .map_err(anyhow::Error::msg)?;
             let response = agent
                 .client
                 .post(agent.base_url.join(&format!("/{prefix}/create"))?)
                 .header("idempotency-key", &key)
-                .json(&json!({"parameters": parameters, "keyed": false}))
+                .json(&json!({"id": "constructor from body"}))
                 .send()
                 .await?;
             assert_eq!(response.status(), StatusCode::CREATED);
@@ -154,17 +141,14 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
             ("invalid keyed", true, StatusCode::BAD_REQUEST),
             ("fail", false, StatusCode::INTERNAL_SERVER_ERROR),
         ] {
-            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
-                agent_key!("SelectedQueryAgent", constructor)
-                    .parameters
-                    .value()
-                    .clone(),
-            )
-            .map_err(anyhow::Error::msg)?;
+            let mut body = json!({"id": constructor});
+            if keyed {
+                body["keyed"] = json!(true);
+            }
             let response = agent
                 .client
                 .post(agent.base_url.join(&format!("/{prefix}/create"))?)
-                .json(&json!({"parameters": parameters, "keyed": keyed}))
+                .json(&body)
                 .send()
                 .await?;
             assert_eq!(response.status(), expected);
@@ -620,25 +604,8 @@ async fn selected_stream_roots_forks_receipts_and_links(
         .ok_or_else(|| anyhow::anyhow!("missing deployed routes"))?
         .try_into()
         .map_err(anyhow::Error::msg)?;
-    let family = routes
-        .routes
-        .iter()
-        .find_map(|route| match &route.behavior {
-            RouteBehaviour::CallAgent(call)
-                if call.agent_type.0 == "SelectedQueryAgent" && call.method_name == "echo" =>
-            {
-                call.durable_streams.as_ref().map(|policy| policy.family_id)
-            }
-            _ => None,
-        })
-        .ok_or_else(|| anyhow::anyhow!("missing selected-query echo route family"))?;
-    let scope = golem_common::model::durable_stream::durable_stream_route_scope(
-        &routes.environment_id.to_string(),
-        &routes.deployment_revision.to_string(),
-        &family.to_string(),
-    );
     let root = AgentId(p);
-    let known_fork = AgentId::durable_stream_fork(routes.environment_id, root, &scope, "branch").0;
+    let known_fork = AgentId::durable_stream_fork(routes.environment_id, root, "branch").0;
     read(
         &agent,
         &selected(&source, Some(known_fork)),
@@ -705,7 +672,7 @@ async fn selected_stream_roots_forks_receipts_and_links(
     .await??;
     let failed = agent
         .client
-        .put(agent.base_url.join(&selected(&base, Some(p)))?)
+        .put(agent.base_url.join(&selected(base, Some(p)))?)
         .send()
         .await?;
     assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -713,7 +680,7 @@ async fn selected_stream_roots_forks_receipts_and_links(
 
     let unknown = unknown_agent(&agent, "SelectedQueryAgent").await?;
     assert_eq!(
-        status(&agent, Method::PUT, &selected(&base, Some(unknown))).await?,
+        status(&agent, Method::PUT, &selected(base, Some(unknown))).await?,
         StatusCode::NOT_FOUND
     );
     assert_not_created(&agent, unknown).await?;
@@ -721,11 +688,7 @@ async fn selected_stream_roots_forks_receipts_and_links(
     let generated_root = existing_agent(&agent, "SelectedQueryAgent", &id).await?;
     let generated = agent
         .client
-        .put(
-            agent
-                .base_url
-                .join(&selected(&base, Some(generated_root)))?,
-        )
+        .put(agent.base_url.join(&selected(base, Some(generated_root)))?)
         .send()
         .await?;
     assert_eq!(generated.status(), StatusCode::CREATED);

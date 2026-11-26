@@ -255,6 +255,7 @@ fn mapping(high_water: Option<u64>) -> DurableStreamMapping {
             highest_contiguous_sequence: sequence,
             resulting_offset: offset(sequence),
             terminal: false,
+            server_outcome: None,
         }),
         role: StreamMappingRole::Input as i32,
         tool_byte_stream_role: None,

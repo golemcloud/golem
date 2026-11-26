@@ -94,7 +94,7 @@ impl ResolvedTarget {
             Some(owner) => CreateIntent::Invocation {
                 owner: owner.clone(),
                 idempotency_key,
-                invocation,
+                invocation: invocation.map(Box::new),
             },
             None => CreateIntent::Existing,
         }

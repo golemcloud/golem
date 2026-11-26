@@ -582,6 +582,13 @@ pub fn preflight_proto_recursive_stream_value(
                 .to_string(),
         );
     }
+    proto_method_input_stream_references(value)
+}
+
+/// Returns the transport stream ID of each stream reference in a method input, in traversal
+/// order. A method input is not a durable stream item, so the 16 MiB logical value limit does
+/// not apply to it; the traversal depth and new stream handle limits do.
+pub fn proto_method_input_stream_references(value: &ProtoSchemaValue) -> Result<Vec<u64>, String> {
     let mut stream_references = Vec::new();
     decode_recursive_stream_value(value.clone(), |stream_id, _| {
         stream_references.push(stream_id);

@@ -450,8 +450,7 @@ description in the descriptor.
 - artifacts/peruser: TS `crypto.randomUUID()` is `Uuid::new_v4()`
   (`golem_rust::Uuid`, the `uuid` crate re-exported at
   `sdks/rust/golem-rust/src/lib.rs:18`, `v4` feature enabled in
-  `sdks/rust/golem-rust/Cargo.toml:90`; the SDK's own `new_phantom` uses
-  it, `docs/src/content/v1.6/how-to-guides/rust/golem-multi-instance-agent-rust.mdx:96`).
+  `sdks/rust/golem-rust/Cargo.toml:95`).
   TS `auth: true` is the unmarked `auth = true,` line of the mount, as in
   artifacts/login and artifacts/signin. TS `init` is `fn new(user)`
   (marked). `ask` keeps `&mut self` though it no longer mutates state.

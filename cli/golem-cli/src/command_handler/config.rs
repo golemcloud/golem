@@ -19,6 +19,7 @@ use crate::command_handler::Handlers;
 use crate::command_handler::template::EnvVarRenderer;
 use crate::context::Context;
 use crate::model::app::{Application, BuildConfig};
+use crate::model::config::resolver::{ConfigLayer, ConfigSchemaResolution, ConfigSourcePlan};
 use crate::model::config::{
     ConfigGetView, ConfigListView, StaticConfigFieldView, StaticConfigSource,
 };
@@ -28,9 +29,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, typed_schema_value_with_projected_defs,
 };
-use golem_common::schema::config::{
-    ConfigError, ConfigFieldSchema, ConfigLayer, ConfigOrigin, ConfigSchema, ConfigSourcePlan,
-};
+use golem_common::schema::config::{ConfigError, ConfigFieldSchema, ConfigOrigin, ConfigSchema};
 use golem_common::schema::render::to_json_value;
 use golem_common::schema::{AgentTypeSchema, SchemaGraph};
 use serde_json::Value;

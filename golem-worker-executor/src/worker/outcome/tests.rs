@@ -37,8 +37,7 @@ fn invocation_rejection_lookup_preserves_the_typed_error() {
     }
     assert!(matches!(
         lookup_result_from_cached_result(&status, &key, InvocationResult::Cancelled),
-        LookupResult::Complete(Err(error))
-            if error == WorkerExecutorError::invalid_request("Invocation was cancelled before execution")
+        LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
     ));
 }
 

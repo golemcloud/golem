@@ -13,10 +13,15 @@
 // limitations under the License.
 
 use super::*;
-use crate::schema::{
-    DiscriminatorRule, FieldDiscriminator, SchemaTypeDef, SecretSpec, UnionBranch, UnionSpec,
+use golem_common::model::agent::AgentConfigSource;
+use golem_common::schema::agent::AgentConfigDeclarationSchema;
+use golem_common::schema::config::*;
+use golem_common::schema::{
+    DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaGraph, SchemaTypeDef, SecretSpec,
+    TypeId, UnionBranch, UnionSpec,
 };
 use serde_json::json;
+use std::path::PathBuf;
 use test_r::test;
 
 fn origin(layer: &str) -> ConfigOrigin {
@@ -275,7 +280,7 @@ fn catalog_shared_omission_is_not_a_binding_or_fallback() {
     let absent = schema
         .resolve(&sources, &layers(vec![json!({})]), &origin("code"))
         .unwrap();
-    assert_eq!(absent[0].source, ConfigSourcePlan::CapturedAbsence);
+    assert_eq!(absent[0].source, ConfigSourcePlan::SharedAbsence);
     let bound = schema
         .resolve(
             &sources,
@@ -385,7 +390,7 @@ fn catalog_union_overlays_replace_cases_and_preserve_positions() {
             )
             .unwrap();
         let ConfigSourcePlan::Static(value) = &plan[0].source else {
-            panic!("static capture expected")
+            panic!("static value expected")
         };
         assert_eq!(
             to_json_value(&schema.graph, &schema.fields[0].value_type, value).unwrap(),
@@ -414,7 +419,7 @@ fn catalog_union_overlays_replace_cases_and_preserve_positions() {
             )
             .unwrap();
         let ConfigSourcePlan::Static(value) = &plan[0].source else {
-            panic!("static capture expected")
+            panic!("static value expected")
         };
         assert_eq!(
             to_json_value(&schema.graph, &schema.fields[0].value_type, value).unwrap(),
@@ -682,7 +687,7 @@ fn catalog_group_selection_is_atomic_and_groups_remain_required() {
         let plan = schema
             .resolve(&sources, &layers(input), &origin("code"))
             .unwrap();
-        assert_eq!(plan[0].source, ConfigSourcePlan::CapturedAbsence);
+        assert_eq!(plan[0].source, ConfigSourcePlan::SharedAbsence);
     }
     let plan = schema
         .resolve(
@@ -694,7 +699,7 @@ fn catalog_group_selection_is_atomic_and_groups_remain_required() {
             &origin("code"),
         )
         .unwrap();
-    assert_eq!(plan[0].source, ConfigSourcePlan::CapturedAbsence);
+    assert_eq!(plan[0].source, ConfigSourcePlan::SharedAbsence);
     schema.fields[0].value_type = SchemaType::u32();
     assert!(
         schema
@@ -721,7 +726,7 @@ fn catalog_group_selection_is_atomic_and_groups_remain_required() {
         );
         assert_eq!(result.is_ok(), valid);
         if let Ok(plan) = result {
-            assert_eq!(plan[0].source, ConfigSourcePlan::CapturedAbsence);
+            assert_eq!(plan[0].source, ConfigSourcePlan::SharedAbsence);
         }
     }
 }

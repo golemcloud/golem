@@ -18,9 +18,29 @@ pub mod optional;
 pub mod tool_bindings;
 pub mod vec;
 
+use crate::model::cascade::layer::Layer;
+
+pub trait Property<L: Layer> {
+    type Value;
+    type PropertyLayer;
+    type TraceElem;
+
+    fn value(&self) -> &Self::Value;
+    fn trace(&self) -> &[Self::TraceElem];
+
+    fn apply_layer(
+        &mut self,
+        id: &L::Id,
+        selection: Option<&L::AppliedSelection>,
+        layer: Self::PropertyLayer,
+    );
+
+    fn compact_trace(&mut self);
+}
+
 #[cfg(test)]
 pub(crate) mod test_support {
-    use golem_common::cascade::layer::Layer;
+    use crate::model::cascade::layer::Layer;
 
     #[derive(Debug, Clone, serde::Serialize)]
     pub struct TestLayer {

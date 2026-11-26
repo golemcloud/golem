@@ -169,10 +169,8 @@ fn symbolic_mode(mode: u32) -> String {
 /// `2026-07-10 09:12:33.123456789 +0000` (GNU stat's human timestamp; the agent runs in UTC), or
 /// `-` when the platform can't supply the time.
 fn human_time(t: Option<SystemTime>) -> String {
-    match t {
-        Some(t) => chrono::DateTime::<chrono::Utc>::from(t)
-            .format("%Y-%m-%d %H:%M:%S%.9f +0000")
-            .to_string(),
+    match t.and_then(|t| jiff::Timestamp::try_from(t).ok()) {
+        Some(t) => t.strftime("%Y-%m-%d %H:%M:%S%.9f +0000").to_string(),
         None => "-".to_string(),
     }
 }
