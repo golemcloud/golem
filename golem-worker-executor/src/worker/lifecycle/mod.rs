@@ -174,19 +174,54 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let mut worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
-        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        let mut reacquiring = false;
         loop {
+            // Preparation retires a cached generation before the replacement constructor is
+            // reserved. Own that whole interval independently of the initiating RPC.
+            let preparation = tokio::spawn({
+                let deps = deps.clone();
+                let id = owned_agent_id.clone();
+                async move {
+                    deps.active_agents()
+                        .prepare_sealed_deletion(&deps, &id, expected_fingerprint)
+                        .await
+                }
+            });
+            let prepared = preparation.await.map_err(|error| {
+                WorkerExecutorError::runtime(format!("Deletion preparation task failed: {error}"))
+            })?;
+            let prepared = match prepared {
+                Err(WorkerExecutorError::AgentNotFound { .. }) if reacquiring => return Ok(()),
+                result => result?,
+            };
+            if let Some(outcome) = prepared {
+                return outcome.handle().wait().await;
+            }
+            let worker = deps
+                .active_agents()
+                .get_existing_for_purpose(
+                    deps,
+                    owned_agent_id,
+                    Some(expected_fingerprint),
+                    crate::services::oplog::OplogOpenPurpose::Delete,
+                )
+                .await;
+            let worker = match worker {
+                Err(WorkerExecutorError::AgentNotFound { .. }) if reacquiring => return Ok(()),
+                result => result?,
+            };
+            // An ordinary initializer or a seal may have won the cache race. A frozen answer
+            // goes back through preparation unless deletion already owns its cleanup stages.
+            if downcast_oplog::<crate::services::oplog::sealed_reader::SealedOplog>(&worker.oplog)
+                .is_some()
+                && !worker.deletion_owns_retirement().await
+            {
+                continue;
+            }
             if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
                 return outcome.handle().wait().await;
             }
-            worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
-                Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
-                    worker
-                }
-                Ok(_) | Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
-                Err(error) => return Err(error),
-            };
+            reacquiring = true;
         }
     }
 

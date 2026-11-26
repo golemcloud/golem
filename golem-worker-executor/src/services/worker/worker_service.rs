@@ -459,6 +459,18 @@ impl WorkerService for DefaultWorkerService {
         operation.await
     }
 
+    async fn lock_deletion_preparation(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<WorkerDeletionGuard, WorkerExecutorError> {
+        let gate = self.lifecycle_gate(agent_id);
+        let guard = gate.gate.clone().write_owned().await;
+        Ok(WorkerDeletionGuard {
+            _guard: guard,
+            _gate: gate,
+        })
+    }
+
     async fn seal_generation<'a>(
         &self,
         metadata: AgentMetadata,

@@ -82,6 +82,17 @@ impl SealService {
     }
 
     /// Runs before deletion's early ownership assertion, which can itself write an epoch row.
+    pub(crate) async fn check_deletion_epoch(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.deletion_records(id, mode, epoch).await?;
+        Ok(())
+    }
+
+    /// Runs before deletion's early ownership assertion, which can itself write an epoch row.
     pub(crate) async fn prepare_deletion(
         &self,
         lifecycle: &mut OplogLifecycleGuard,

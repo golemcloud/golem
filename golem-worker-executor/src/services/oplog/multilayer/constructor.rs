@@ -78,6 +78,25 @@ impl OplogConstructor for CreateOplogConstructor {
         let agent_mode = self.agent_mode;
         let fingerprint = self.initial_worker_metadata.fingerprint;
 
+        // A deletion without stream history needs only the sealed fence path, not restored
+        // indexed authority. The stream-history case has already unsealed under both guards.
+        if lifecycle.open_purpose() == super::super::OplogOpenPurpose::Delete
+            && let Some(seal) = self.primary.seal_service()
+            && let super::super::seal::AgentSealState::Sealed(record) = seal
+                .state(&self.owned_agent_id)
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        {
+            return Ok(super::super::sealed_reader::SealedOplog::new(
+                self.owned_agent_id,
+                record,
+                seal.blobs.clone(),
+                self.primary,
+                self.shard_epoch,
+                close,
+            ));
+        }
+
         match agent_mode {
             AgentMode::Durable => {
                 let last_oplog_index = match self.last_oplog_index {

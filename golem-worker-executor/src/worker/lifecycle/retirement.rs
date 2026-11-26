@@ -19,6 +19,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.retired_for_seal()
     }
 
+    /// Evicts a disposable frozen observation before deletion opens a writable generation.
+    /// The caller holds the cold lifecycle guard and worker-service write gate.
+    pub(crate) async fn retire_frozen_for_deletion(
+        self: &Arc<Self>,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut cleanup = self.owner_cleanup.lock().await;
+        let instance = self.instance.lock().await;
+        instance.ensure_not_deleting()?;
+        self.state_actor.retire_for_seal();
+        self.owner_retirement_requested.cancel();
+        self.durable_stream_producer.fence();
+        drop(instance);
+        let forwarding = downcast_oplog::<ForwardingOplog>(&self.oplog);
+        let quiesced = self
+            .quiesce_for_owner_retirement(None, forwarding.as_deref())
+            .await;
+        self.remove_from_active_agents().await;
+        let stopped = self
+            .oplog
+            .stop_and_wait()
+            .await
+            .map_err(WorkerExecutorError::runtime);
+        *cleanup = OwnerCleanupState::Retired;
+        quiesced?;
+        stopped
+    }
+
     /// The caller holds both the cold oplog lifecycle guard and the worker-service write gate.
     /// No deletion state or lost-shard reason is installed for this disposable generation.
     pub(in crate::worker) async fn retire_for_seal(
@@ -388,7 +415,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
 /// The shard epoch the agent's oplog is opened to assert, read from this executor's current
 /// assignment. See [`shard_epoch_to_assert`].
-pub(in crate::worker) fn owned_shard_epoch<T: HasShardService>(
+pub(crate) fn owned_shard_epoch<T: HasShardService>(
     this: &T,
     agent_id: &AgentId,
 ) -> Result<Option<ShardEpoch>, WorkerExecutorError> {

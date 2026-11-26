@@ -58,6 +58,7 @@ type OplogSlot = Arc<Mutex<Option<OpenOplogEntry>>>;
 pub(crate) enum OplogOpenPurpose {
     Activation,
     Archive,
+    Delete,
 }
 
 /// Exclusive ownership of a logical oplog's cold lifecycle. The primary service owns the slot;

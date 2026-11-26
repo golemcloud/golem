@@ -513,6 +513,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         let _retired_lifecycle =
             if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
+                if worker
+                    .deletion_stage_completed(WorkerDeletionStage::DurableStateRemoved)
+                    .await
+                {
+                    return Ok(None);
+                }
                 if let Some(status) = worker.state_actor.observe_repaired_status().await? {
                     let mut metadata = worker.get_initial_worker_metadata();
                     metadata.last_known_status = status.as_ref().clone();
@@ -660,11 +666,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         &create_intent,
                     )
                     .await;
-                    worker.finish_construction(start, metadata).await
+                    worker
+                        .finish_construction(start, metadata, OplogOpenPurpose::Activation)
+                        .await
                 }
                 .boxed()
             };
-            let (started, result) = self.initialize_with(build).await;
+            let (started, result) = self
+                .initialize_with(build, OplogOpenPurpose::Activation)
+                .await;
             let newly_created = match result {
                 Err(
                     ConstructionError::RequestRejected(_)
@@ -856,11 +866,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .lock_lifecycle(&worker.owned_agent_id.agent_id)
                     .await;
-                lifecycle.set_open_purpose(if archive {
-                    OplogOpenPurpose::Archive
-                } else {
-                    OplogOpenPurpose::Activation
-                });
+                lifecycle.set_open_purpose(purpose);
                 // The epoch is read first, as in `get_or_create_worker_metadata`: a worker whose
                 // shard has already left the assignment is refused without touching storage, and
                 // the oplog opened below asserts the epoch this executor holds.
@@ -899,11 +905,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         })
                     });
                 worker
-                    .finish_construction(start, metadata.map_err(Into::into))
+                    .finish_construction(start, metadata.map_err(Into::into), purpose)
                     .await
             }
             .boxed();
-            let (started, result) = self.initialize_with(build).await;
+            let (started, result) = self.initialize_with(build, purpose).await;
             match result {
                 // A shared refusal answers the initiating caller's fingerprint and open purpose.
                 // Followers retry with their own, so an archive miss cannot refuse activation.
@@ -924,6 +930,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) async fn initialize_with(
         self: &Arc<Self>,
         build: BoxFuture<'static, Result<ConstructedWorker<Ctx>, ConstructionError>>,
+        purpose: OplogOpenPurpose,
     ) -> (bool, Result<bool, ConstructionError>) {
         let (started, completion) = {
             let mut instance = self.instance.lock().await;
@@ -979,13 +986,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             )
                             .into()),
                         };
-                        if published.is_ok() {
+                        if published.is_ok() && purpose != OplogOpenPurpose::Delete {
                             Self::start_durable_stream_attachment_reconciler(&worker);
                         }
                         drop(instance);
                         let resolved = published.is_ok();
                         let _ = sender.send(published);
-                        if resolved {
+                        if resolved && purpose != OplogOpenPurpose::Delete {
                             worker.retire_if_shard_left_during_construction().await;
                             if !worker.owner_retirement_requested.is_cancelled() {
                                 worker.register_pending_invocation_wakes().await;
@@ -1047,6 +1054,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         start: std::time::Instant,
         metadata: Result<GetOrCreateWorkerResult, ConstructionError>,
+        purpose: OplogOpenPurpose,
     ) -> Result<ConstructedWorker<Ctx>, ConstructionError> {
         let mut metadata = match metadata {
             Ok(result) => result,
@@ -1062,21 +1070,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         );
         let newly_created = metadata.newly_created;
         let construction_oplog = metadata.oplog.clone();
-        let (worker, reconstructed_ephemeral) = match self.prepare_worker_data(metadata).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                // The caller retains the cold lifecycle guard until all attempt-owned actors,
-                // transfers and monitors have exited. Persisted data belongs to the next retry.
-                let error = match construction_oplog.stop_and_wait().await {
-                    Ok(()) => error,
-                    Err(cleanup_error) => WorkerExecutorError::runtime(format!(
-                        "{error}; failed to stop construction work: {cleanup_error}"
-                    )),
-                };
-                crate::metrics::wasm::record_create_worker_failure(&error);
-                return Err(error.into());
-            }
-        };
+        let (worker, reconstructed_ephemeral) =
+            match self.prepare_worker_data(metadata, purpose).await {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    // The caller retains the cold lifecycle guard until all attempt-owned actors,
+                    // transfers and monitors have exited. Persisted data belongs to the next retry.
+                    let error = match construction_oplog.stop_and_wait().await {
+                        Ok(()) => error,
+                        Err(cleanup_error) => WorkerExecutorError::runtime(format!(
+                            "{error}; failed to stop construction work: {cleanup_error}"
+                        )),
+                    };
+                    crate::metrics::wasm::record_create_worker_failure(&error);
+                    return Err(error.into());
+                }
+            };
         crate::metrics::wasm::record_create_worker(start.elapsed());
 
         Ok(ConstructedWorker {
@@ -1088,6 +1097,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) async fn prepare_worker_data(
         self: &Arc<Self>,
         metadata: GetOrCreateWorkerResult,
+        purpose: OplogOpenPurpose,
     ) -> Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError> {
         let owned_agent_id = self.owned_agent_id.clone();
         let GetOrCreateWorkerResult {
@@ -1398,7 +1408,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
         }
-        if worker.last_known_status.load().has_durable_stream_history
+        if purpose != OplogOpenPurpose::Delete
+            && worker.last_known_status.load().has_durable_stream_history
             && !self
                 .durable_stream_producer_for(&worker)
                 .await?

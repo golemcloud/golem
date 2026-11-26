@@ -27,19 +27,22 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, stream_terminal,
 };
 use golem_common::config::DbPostgresConfig;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, ScheduledAction};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::{
     AttachmentId, DURABLE_STREAM_FORMAT_VERSION, StreamAttachmentKey,
-    StreamAttachmentPreparedRecord, StreamId, StreamRegisteredRecord, StreamSessionRecord,
+    StreamAttachmentPreparedRecord, StreamCascadeDependentResult, StreamError, StreamId,
+    StreamRegisteredRecord, StreamSessionRecord, StreamTerminal, StreamTerminalAuthor,
+    StreamTerminalOrigin, StreamTerminalRecord,
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     LogLevel, OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
+    PublicOplogEntryWithIndex,
 };
 use golem_common::model::{
     AgentFingerprint, AgentInvocation, AgentStatus, IdempotencyKey, InvocationId, OwnedAgentId,
-    ShardEpoch, ShardLeaseClock, ShardLeaseRevision, Timestamp,
+    PromiseId, ShardEpoch, ShardLeaseClock, ShardLeaseRevision, Timestamp,
 };
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_key, data_value};
@@ -65,13 +68,14 @@ use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageName
 use golem_worker_executor::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use golem_worker_executor::worker::{WorkerDeletionHook, WorkerDeletionStage};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, callers, scheduler_sqlite_storage_config,
     sqlite_storage_config, start, start_with_overrides,
 };
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
@@ -88,6 +92,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("agent_sdk_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -232,43 +240,636 @@ async fn sealed_ephemeral_duplicate(
     method: &str,
     leave_prepared_attachment: bool,
 ) -> anyhow::Result<()> {
+    sealed_duplicate(
+        last_unique_id,
+        deps,
+        agent_sdk_rust,
+        method,
+        leave_prepared_attachment,
+        AgentMode::Ephemeral,
+        None,
+    )
+    .await
+}
+
+#[test]
+#[timeout("8m")]
+async fn sealed_stream_deletion_replaces_frozen_duplicates_and_fences_activation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    sealed_duplicate(
+        last_unique_id,
+        deps,
+        agent_sdk_rust,
+        "identity",
+        true,
+        AgentMode::Ephemeral,
+        Some(SealedDeletionCheck::Delete),
+    )
+    .await
+}
+
+#[test]
+#[timeout("8m")]
+async fn sealed_durable_stream_deletion_from_uncached_source_fences_activation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    sealed_duplicate(
+        last_unique_id,
+        deps,
+        agent_sdk_rust,
+        "identity",
+        true,
+        AgentMode::Durable,
+        Some(SealedDeletionCheck::Delete),
+    )
+    .await
+}
+
+#[test]
+#[timeout("8m")]
+async fn sealed_deletion_without_stream_history_never_restores_indexed_authority(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        sealed_duplicate(
+            last_unique_id,
+            deps,
+            agent_sdk_rust,
+            "instance",
+            false,
+            mode,
+            Some(SealedDeletionCheck::Delete),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("8m")]
+async fn sealed_deletion_at_a_lower_epoch_refuses_without_indexed_writes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        for method in ["identity", "instance"] {
+            sealed_duplicate(
+                last_unique_id,
+                deps,
+                agent_sdk_rust,
+                method,
+                method == "identity",
+                mode,
+                Some(SealedDeletionCheck::StaleEpoch),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SealedDeletionCheck {
+    Delete,
+    StaleEpoch,
+    PostgresDelete,
+    NoHistoryOverlap,
+    NoHistoryTombstoneRetry,
+    UnresolvedAdmission,
+}
+
+#[test]
+#[timeout("8m")]
+async fn sealed_no_history_deletion_overlap_shares_failure_then_explicit_retry_succeeds(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        sealed_duplicate(
+            last_unique_id,
+            deps,
+            fixture,
+            "instance",
+            false,
+            mode,
+            Some(SealedDeletionCheck::NoHistoryOverlap),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("8m")]
+async fn sealed_no_history_deletion_retries_cleanup_after_tombstone_publication(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        sealed_duplicate(
+            last_unique_id,
+            deps,
+            fixture,
+            "instance",
+            false,
+            mode,
+            Some(SealedDeletionCheck::NoHistoryTombstoneRetry),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("8m")]
+async fn sealed_deletion_joins_unresolved_admission_without_starting_its_replacement(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        sealed_duplicate(
+            last_unique_id,
+            deps,
+            fixture,
+            "identity",
+            true,
+            mode,
+            Some(SealedDeletionCheck::UnresolvedAdmission),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("8m")]
+async fn postgres_sealed_stream_deletion_prefix_recovers_after_executor_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        sealed_duplicate(
+            last_unique_id,
+            deps,
+            agent_sdk_rust,
+            "identity",
+            true,
+            mode,
+            Some(SealedDeletionCheck::PostgresDelete),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
+async fn sealed_open_producer_deletion_preserves_ordinary_attached_consumer_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut resident_failure = None;
+    let mut resident_retry_failure = None;
+    for seal_producer in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                configure: Some(Arc::new(|config| {
+                    config.oplog.indexed_storage_layers = 2;
+                    config.oplog.blob_storage_layers = 1;
+                    config.oplog.entry_count_limit = 1_000_000;
+                    config.oplog.archive_interval = Duration::from_secs(3600);
+                    config.oplog.shard_lease_max_ttl = Duration::from_secs(300);
+                    config.oplog.skew_margin = Duration::from_secs(1);
+                    config.suspend.wait_suspend_grace = Duration::from_millis(100);
+                    config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+                    config.suspend.rpc_resume_after = Duration::from_secs(3600);
+                })),
+                wrap_shard_service: Some(Arc::new({
+                    let shard = shard.clone();
+                    move |inner| {
+                        assert!(shard.set(inner.clone()).is_ok());
+                        inner
+                    }
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        install_sealable_lease(shard.get().unwrap().as_ref())?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let consumer_key = agent_key!("StreamingRpcCaller", "sealed-open-producer");
+        let producer_key = agent_key!("StreamingRpcTarget", "sealed-open-producer");
+        let consumer = executor
+            .start_agent(&component.id, consumer_key.clone())
+            .await?;
+        let producer = executor
+            .start_agent(&component.id, producer_key.clone())
+            .await?;
+        let promise = executor
+            .invoke_and_await_agent(
+                &component,
+                &producer_key,
+                "create_output_gate",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<PromiseId>()?;
+        let key = IdempotencyKey::fresh();
+        let invocation = tokio::spawn({
+            let executor = executor.clone();
+            let component = component.clone();
+            let consumer_key = consumer_key.clone();
+            let key = key.clone();
+            let consumer = consumer.clone();
+            let promise = promise.clone();
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &consumer_key,
+                        &key,
+                        "fork_drop_inherited_output",
+                        data_value!(promise, consumer.agent_id.to_string(), false),
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let history = executor.get_oplog(&consumer, OplogIndex::INITIAL).await?;
+                let consumed = history.iter().any(|entry| match &entry.entry {
+                    PublicOplogEntry::StreamSession(params) => matches!(
+                        StreamSessionRecord::from_value(params.record.value()).unwrap(),
+                        StreamSessionRecord::ConsumerItemValue(_)
+                    ),
+                    _ => false,
+                });
+                if consumed
+                    && !invocation.is_finished()
+                    && executor.get_worker_metadata(&producer).await?.status
+                        == AgentStatus::Suspended
+                    && executor.get_worker_metadata(&consumer).await?.status
+                        == AgentStatus::Suspended
+                    && !executor.worker_is_loaded(&producer).await
+                    && !executor.worker_is_loaded(&consumer).await
+                {
+                    return anyhow::Ok(());
+                }
+                assert!(
+                    !invocation.is_finished(),
+                    "the open stream must wait for its producer promise"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let history = executor.get_oplog(&producer, OplogIndex::INITIAL).await?;
+        let attachments: Vec<_> = history
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StreamSession(params) => {
+                    match StreamSessionRecord::from_value(params.record.value()).unwrap() {
+                        StreamSessionRecord::AttachmentActivated(record)
+                            if record.key.consumer == consumer.agent_id =>
+                        {
+                            Some(record.key)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !attachments.is_empty(),
+            "the producer must retain an active attachment to the independent consumer"
+        );
+        assert!(
+            !history
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::StreamTerminal(_))),
+            "the producer output must still be open before deletion"
+        );
+        let indexed = SqliteIndexedStorage::configured(&derive_disjoint_sqlite_config(
+            &sqlite_storage_config(deps, &context),
+            "indexed",
+        ))
+        .await?;
+        if seal_producer {
+            let worker = executor.active_agents().try_get(&producer).await.unwrap();
+            let last = history.last().unwrap().oplog_index;
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while indexed
+                    .observe_agent("test", "seal_open_producer", &producer)
+                    .await?
+                    .has_data
+                {
+                    worker
+                        .worker_activator()
+                        .archive_oplog(&producer, last, ArchiveWait::Finished)
+                        .await?;
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                anyhow::Ok(())
+            })
+            .await??;
+            assert!(!executor.worker_is_cached(&producer).await);
+            assert_eq!(
+                executor.get_oplog(&producer, OplogIndex::INITIAL).await?,
+                history
+            );
+        }
+        let gate = Arc::new(SealedDeletionGate {
+            target: producer.clone(),
+            fail_preparation: false,
+            fail_cache_removal: AtomicBool::new(false),
+            preparation_calls: AtomicUsize::new(1),
+            removal_calls: AtomicUsize::new(0),
+            claims: tokio::sync::Semaphore::new(0),
+            started_claims: AtomicUsize::new(0),
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        executor.set_worker_deletion_hook(gate.clone());
+        let deletion = tokio::spawn({
+            let executor = executor.clone();
+            let producer = producer.clone();
+            async move { executor.delete_worker(&producer).await }
+        });
+        tokio::time::timeout(Duration::from_secs(30), gate.entered.acquire())
+            .await??
+            .forget();
+        let cascading = executor.get_oplog(&producer, OplogIndex::INITIAL).await?;
+        assert_eq!(&cascading[..history.len()], history);
+        let records: Vec<_> = cascading[history.len()..]
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StreamSession(params) => {
+                    Some(StreamSessionRecord::from_value(params.record.value()).unwrap())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(records.iter().any(|record| matches!(record,
+            StreamSessionRecord::ProducerDeleting(record)
+                if record.producer == producer.agent_id
+                    && record.producer_environment_id == producer.environment_id
+                    && record.producer_fingerprint == attachments[0].expected_producer_fingerprint
+        )), "both resident and sealed producers must commit their deletion barrier before removal: {records:?}");
+        let terminals: Vec<_> = cascading[history.len()..]
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StreamTerminal(params) => {
+                    Some(StreamTerminalRecord::from_value(params.record.value()).unwrap())
+                }
+                _ => None,
+            })
+            .collect();
+        let consumer_history = executor.get_oplog(&consumer, OplogIndex::INITIAL).await?;
+        for attachment in &attachments {
+            let terminal = terminals
+                .iter()
+                .find(|terminal| {
+                    StreamId::derive(
+                        producer.environment_id,
+                        &producer.agent_id,
+                        attachment.expected_producer_fingerprint,
+                        terminal.stream_id.0,
+                    ) == attachment.stream_id
+                })
+                .expect(
+                    "the previously open attached output must have a committed deletion terminal",
+                );
+            assert_eq!(terminal.authored_by, StreamTerminalAuthor::Host);
+            assert_eq!(terminal.origin, StreamTerminalOrigin::Control);
+            assert_eq!(
+                terminal.terminal,
+                StreamTerminal::Failed(StreamError::Interrupted("producer deleting".into()))
+            );
+            let outbox = records.iter().find_map(|record| match record {
+                StreamSessionRecord::CascadeOutbox(record) if record.key == *attachment => {
+                    Some(record)
+                }
+                _ => None,
+            }).expect("the independent active attachment must have committed cascade completion before removal");
+            let StreamCascadeDependentResult::SourceUnavailable {
+                first_unjournaled_offset,
+            } = &outbox.result
+            else {
+                panic!(
+                    "the suspended consumer must retain deterministic loss of the open stream: {outbox:?}"
+                );
+            };
+            assert!(*first_unjournaled_offset <= terminal.offset);
+            assert!(consumer_history.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::StreamSession(params) => matches!(
+                    StreamSessionRecord::from_value(params.record.value()).unwrap(),
+                    StreamSessionRecord::SourceUnavailable(record)
+                        if record.source_offset == *first_unjournaled_offset
+                            && record.session_key.idempotency_key() == &attachment.session_key.idempotency_key
+                ),
+                _ => false,
+            }), "cascade outbox must follow the independent consumer's committed source-unavailable journal");
+        }
+        gate.release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(30), deletion).await???;
+        assert!(executor.get_worker_metadata_opt(&producer).await?.is_none());
+        // The consumer's durable recheck is deliberately far in the future. Resume it explicitly
+        // so both the resident control and sealed producer exercise the same missing-source read.
+        if executor.get_worker_metadata(&consumer).await?.status == AgentStatus::Suspended {
+            executor.resume(&consumer, false).await?;
+        }
+        let failure = tokio::time::timeout(Duration::from_secs(30), invocation)
+            .await??
+            .unwrap_err();
+        let failure = failure.to_string();
+        // This fixture surfaces the missing-source failure as a guest trap.
+        // The committed terminal and consumer journal above identify the missing source.
+        assert!(
+            failure.contains("DeterministicTrap") && failure.contains("StreamingRpcCallerImpl"),
+            "{failure}"
+        );
+        if seal_producer {
+            assert_eq!(
+                Some(&failure),
+                resident_failure.as_ref(),
+                "sealing must preserve the resident producer-deletion outcome"
+            );
+        } else {
+            resident_failure = Some(failure.clone());
+        }
+        assert_eq!(
+            executor.get_worker_metadata(&consumer).await?.status,
+            AgentStatus::Failed
+        );
+        let history = executor.get_oplog(&consumer, OplogIndex::INITIAL).await?;
+        let duplicate = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &consumer_key,
+                &key,
+                "fork_drop_inherited_output",
+                data_value!(promise, consumer.agent_id.to_string(), false),
+            )
+            .await
+            .unwrap_err();
+        let duplicate = duplicate.to_string();
+        assert!(
+            duplicate.contains("PreviousInvocationFailed")
+                && duplicate.contains("DeterministicTrap")
+                && duplicate.contains("StreamingRpcCallerImpl"),
+            "an exact retry must observe the failed consumer's health: {duplicate}"
+        );
+        if seal_producer {
+            assert_eq!(
+                Some(&duplicate),
+                resident_retry_failure.as_ref(),
+                "sealing must preserve the resident producer-deletion retry outcome"
+            );
+        } else {
+            resident_retry_failure = Some(duplicate);
+        }
+        assert_eq!(
+            executor.get_oplog(&consumer, OplogIndex::INITIAL).await?,
+            history,
+            "an exact retry must not execute the failed consumer again"
+        );
+    }
+    Ok(())
+}
+
+async fn sealed_duplicate(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_sdk_rust: &PrecompiledComponent,
+    method: &str,
+    leave_prepared_attachment: bool,
+    mode: AgentMode,
+    deletion: Option<SealedDeletionCheck>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
+    let postgres = if deletion == Some(SealedDeletionCheck::PostgresDelete) {
+        Some(DockerPostgresRdb::new(&uuid::Uuid::new_v4().to_string(), false).await)
+    } else {
+        None
+    };
+    let postgres_config = postgres.as_ref().map(|postgres| {
+        let url = url::Url::parse(&postgres.public_connection_string()).unwrap();
+        IndexedStoragePostgresConfig {
+            postgres: DbPostgresConfig {
+                host: url.host_str().unwrap().to_string(),
+                port: url.port().unwrap(),
+                database: url.path().trim_start_matches('/').to_string(),
+                username: url.username().to_string(),
+                password: url.password().unwrap().to_string(),
+                max_connections: 10,
+                schema: None,
+                acquire_timeout: None,
+            },
+            drop_prefix_delete_batch_size: 1024,
+            max_concurrent_ops: None,
+        }
+    });
     let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
     let kv = Arc::new(OnceLock::<Arc<dyn KeyValueStorage + Send + Sync>>::new());
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
+    let collect_stream_deletion = method == "identity"
+        && matches!(
+            deletion,
+            Some(
+                SealedDeletionCheck::Delete
+                    | SealedDeletionCheck::PostgresDelete
+                    | SealedDeletionCheck::UnresolvedAdmission
+            )
+        );
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new({
+            let postgres_config = postgres_config.clone();
+            move |config| {
+                if let Some(postgres_config) = &postgres_config {
+                    config.indexed_storage =
+                        IndexedStorageConfig::Postgres(postgres_config.clone());
+                }
                 config.oplog.indexed_storage_layers = 2;
                 config.oplog.blob_storage_layers = 1;
                 config.oplog.entry_count_limit = 1_000_000;
                 config.oplog.shard_lease_max_ttl = Duration::from_secs(300);
                 config.oplog.skew_margin = Duration::from_secs(1);
-            })),
-            wrap_shard_service: Some(Arc::new({
-                let shard = shard.clone();
-                move |inner| {
-                    assert!(shard.set(inner.clone()).is_ok());
-                    inner
+                if deletion.is_some() {
+                    config.oplog.sweep.enabled = true;
+                    config.oplog.archive_interval = Duration::from_secs(3600);
                 }
-            })),
-            wrap_key_value_storage: Some(Arc::new({
-                let kv = kv.clone();
-                move |inner| {
-                    assert!(kv.set(inner.clone()).is_ok());
-                    inner
+                if collect_stream_deletion {
+                    config.oplog.shard_lease_max_ttl = Duration::from_secs(30);
+                    config.oplog.seal_put_timeout = Duration::from_secs(1);
+                    config.oplog.server_commit_bound = Duration::from_secs(1);
+                    config.oplog.archive_interval = Duration::from_secs(1);
+                    // Preserve the exact recovery action until the deletion assertions finish.
+                    // A reconstructed executor below runs the real scheduler through GC.
+                    config.scheduler.refresh_interval = Duration::from_secs(3600);
                 }
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
+            }
+        })),
+        wrap_shard_service: Some(Arc::new({
+            let shard = shard.clone();
+            move |inner| {
+                assert!(shard.set(inner.clone()).is_ok());
+                inner
+            }
+        })),
+        wrap_key_value_storage: Some(Arc::new({
+            let kv = kv.clone();
+            move |inner| {
+                assert!(kv.set(inner.clone()).is_ok());
+                inner
+            }
+        })),
+        ..Default::default()
+    };
+    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let constructor = agent_key!("EphemeralStreamAgent");
+    let durable = mode == AgentMode::Durable;
+    let constructor = if durable {
+        agent_key!("DurableStreamAgent", "sealed-deletion")
+    } else {
+        agent_key!("EphemeralStreamAgent")
+    };
+    let actual_method = if durable && method == "identity" {
+        "json"
+    } else {
+        method
+    };
     let invocation_key = IdempotencyKey::fresh();
     // A new attempt is an attachment conflict, not a reload of the retained response.
     // Clone the complete request so acceptance identity and execution configuration also match.
@@ -278,19 +879,35 @@ async fn sealed_ephemeral_duplicate(
             &component,
             &invocation_key,
             uuid::Uuid::new_v4(),
+            durable,
         )?)
     } else {
         None
     };
-    let owned = crate::agent::ephemeral_agent_id(
-        &executor,
-        component.environment_id,
-        &constructor,
-        &invocation_key,
-        method,
-    );
-    // Retirement runs immediately after the response. Its lease must already be sealable.
     let shard = shard.get().unwrap();
+    if deletion == Some(SealedDeletionCheck::StaleEpoch) {
+        let assignment = shard.current_assignment()?;
+        let epochs = assignment
+            .shard_epochs
+            .keys()
+            .map(|id| (*id, ShardEpoch(100)))
+            .collect();
+        shard.install_unexpiring(assignment.number_of_shards, &epochs);
+    }
+    let owned = if durable {
+        executor
+            .start_agent(&component.id, constructor.clone())
+            .await?
+    } else {
+        crate::agent::ephemeral_agent_id(
+            &executor,
+            component.environment_id,
+            &constructor,
+            &invocation_key,
+            method,
+        )
+    };
+    // Retirement runs immediately after the response. Its lease must already be sealable.
     let assignment = shard.current_assignment()?;
     shard.update_lease(
         &assignment.shard_epochs,
@@ -305,8 +922,8 @@ async fn sealed_ephemeral_duplicate(
         },
         assignment.executor_count,
     )?;
-    let (original, prepared_attachment) = if leave_prepared_attachment {
-        let mut success = executor.gate_next_agent_function_success(&owned.agent_id, "identity");
+    let (original, prepared_attachment, fingerprint) = if leave_prepared_attachment {
+        let mut success = executor.gate_next_agent_function_success(&owned.agent_id, actual_method);
         let original = tokio::spawn({
             let executor = executor.clone();
             let component = component.clone();
@@ -318,6 +935,7 @@ async fn sealed_ephemeral_duplicate(
                     &component,
                     &invocation_key,
                     stream_request.as_ref(),
+                    durable,
                 )
                 .await
             }
@@ -402,14 +1020,18 @@ async fn sealed_ephemeral_duplicate(
         worker
             .commit_oplog_and_update_state(CommitLevel::Always)
             .await?;
+        if collect_stream_deletion {
+            install_sealable_lease(shard.as_ref())?;
+        }
         success.release();
-        (original.await??, Some(prepared))
+        (original.await??, Some(prepared), fingerprint)
     } else {
         let result = ephemeral_duplicate_result(
             &executor,
             &component,
             &invocation_key,
             stream_request.as_ref(),
+            durable,
         )
         .await;
         let original = match result {
@@ -423,18 +1045,58 @@ async fn sealed_ephemeral_duplicate(
                 );
             }
         };
-        (original, None)
+        let fingerprint = executor.get_worker_metadata(&owned).await?.fingerprint;
+        (original, None, fingerprint)
     };
     let mut expected = Vec::new();
-    if method == "identity" {
+    if durable && method == "identity" {
+        expected.push("message-0000".to_string());
+    } else if method == "identity" {
         expected.push("sealed-stream-label".to_string());
     }
-    expected.push(owned.agent_id.as_uuid().to_string());
+    if !durable || method == "instance" {
+        expected.push(owned.agent_id.as_uuid().to_string());
+    }
     assert_eq!(original, EphemeralResponse::Items(expected));
 
+    if durable {
+        let worker = executor.active_agents().try_get(&owned).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while executor.worker_is_loaded(&owned).await {
+                executor.stop_worker_if_idle(&owned).await?;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            worker.wait_for_unload_cleanup().await?;
+            if collect_stream_deletion {
+                install_sealable_lease(shard.as_ref())?;
+            }
+            let last = worker.oplog_service().get_last_index(&owned, mode).await?;
+            loop {
+                match worker
+                    .worker_activator()
+                    .archive_oplog(&owned, last, ArchiveWait::Finished)
+                    .await?
+                {
+                    Some(true) => tokio::time::sleep(Duration::from_millis(10)).await,
+                    Some(false) => break,
+                    None => anyhow::bail!("durable fixture disappeared before sealing"),
+                }
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+    }
     let indexed_config =
         derive_disjoint_sqlite_config(&sqlite_storage_config(deps, &context), "indexed");
-    let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
+    let indexed: Arc<dyn IndexedStorage + Send + Sync> = if let Some(config) = &postgres_config {
+        Arc::new(
+            PostgresIndexedStorage::configured(config)
+                .await
+                .map_err(anyhow::Error::msg)?,
+        )
+    } else {
+        Arc::new(SqliteIndexedStorage::configured(&indexed_config).await?)
+    };
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let observation = indexed
@@ -451,11 +1113,29 @@ async fn sealed_ephemeral_duplicate(
     })
     .await??;
     assert!(!executor.worker_is_loaded(&owned).await);
+    assert_sealed_derived_kv_absent(kv.get().unwrap().as_ref(), &owned, fingerprint)
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{mode:?} {method}: seal cleanup before read-only metadata observation: {error}"
+            )
+        })?;
     let metadata = executor.get_worker_metadata(&owned).await?;
+    assert_eq!(metadata.fingerprint, fingerprint);
     assert_sealed_derived_kv_absent(kv.get().unwrap().as_ref(), &owned, metadata.fingerprint)
-        .await?;
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{mode:?} {method}: after read-only sealed metadata observation: {error}"
+            )
+        })?;
     let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
     assert!(!history.is_empty(), "retirement must retain sealed history");
+    assert_sealed_derived_kv_absent(kv.get().unwrap().as_ref(), &owned, fingerprint)
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("{mode:?} {method}: after read-only sealed oplog observation: {error}")
+        })?;
     if let Some(prepared) = &prepared_attachment {
         let records: Vec<_> = history
             .iter()
@@ -475,6 +1155,76 @@ async fn sealed_ephemeral_duplicate(
                 StreamSessionRecord::AttachmentFinalized(finalized) if finalized.key == prepared.key)),
             "the attachment must still need reconciliation at cold acquisition"
         );
+    }
+    if postgres_config.is_some() {
+        executor.retire_unloaded_worker(&owned).await?;
+        assert!(!executor.worker_is_cached(&owned).await);
+        if !durable {
+            let duplicate = ephemeral_duplicate_result(
+                &executor,
+                &component,
+                &invocation_key,
+                stream_request.as_ref(),
+                durable,
+            )
+            .await?;
+            if history.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::StreamSession(params) => matches!(
+                    StreamSessionRecord::from_value(params.record.value()).unwrap(),
+                    StreamSessionRecord::Detached(_)
+                ),
+                _ => false,
+            }) {
+                assert_eq!(duplicate, EphemeralResponse::AttachmentRevoked);
+            } else {
+                assert_eq!(duplicate, original);
+            }
+        }
+        assert!(
+            !indexed
+                .observe_agent("test", "postgres_sealed_observation", &owned)
+                .await?
+                .has_data
+        );
+        assert_eq!(
+            executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
+            history
+        );
+        executor = delete_sealed_stream_after_duplicate(
+            executor,
+            &owned,
+            mode,
+            &history,
+            indexed.as_ref(),
+            deps,
+            &context,
+            TestExecutorOverrides {
+                configure: overrides.configure.clone(),
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert!(executor.get_worker_metadata_opt(&owned).await?.is_none());
+        assert!(
+            !indexed
+                .observe_agent("test", "postgres_deleted", &owned)
+                .await?
+                .has_data
+        );
+        collect_deleted_stream_storage(
+            executor,
+            &owned,
+            mode,
+            deps,
+            &context,
+            TestExecutorOverrides {
+                configure: overrides.configure.clone(),
+                ..Default::default()
+            },
+            postgres_config.as_ref(),
+        )
+        .await?;
+        return Ok(());
     }
     let pool = sqlx::SqlitePool::connect_with(
         sqlx::sqlite::SqliteConnectOptions::new()
@@ -561,45 +1311,62 @@ async fn sealed_ephemeral_duplicate(
     // metadata read starts caching observation-only shells in the future.
     executor.retire_unloaded_worker(&owned).await?;
     assert!(!executor.worker_is_cached(&owned).await);
-    let duplicate = ephemeral_duplicate_result(
-        &executor,
-        &component,
-        &invocation_key,
-        stream_request.as_ref(),
-    )
-    .await
-    .map_err(|error| {
-        let sessions: Vec<_> = history
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::StreamSession(params) => {
-                    Some(StreamSessionRecord::from_value(params.record.value()))
-                }
-                _ => None,
-            })
-            .collect();
-        anyhow::anyhow!("cold sealed duplicate failed: {error}; recorded sessions: {sessions:?}")
-    })?;
-    // Ordinary transport completion can detach the original attachment before retirement.
-    // Exact retries preserve that recorded refusal, even with an unchanged epoch and attempt.
-    let detached = history.iter().any(|entry| match &entry.entry {
-        PublicOplogEntry::StreamSession(params) => matches!(
-            StreamSessionRecord::from_value(params.record.value()).unwrap(),
-            StreamSessionRecord::Detached(_)
-        ),
-        _ => false,
-    });
-    if detached {
-        assert_eq!(duplicate, EphemeralResponse::AttachmentRevoked);
+    if !durable {
+        let duplicate = ephemeral_duplicate_result(
+            &executor,
+            &component,
+            &invocation_key,
+            stream_request.as_ref(),
+            durable,
+        )
+        .await
+        .map_err(|error| {
+            let sessions: Vec<_> = history
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::StreamSession(params) => {
+                        Some(StreamSessionRecord::from_value(params.record.value()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            anyhow::anyhow!(
+                "cold sealed duplicate failed: {error}; recorded sessions: {sessions:?}"
+            )
+        })?;
+        // Transport completion can detach the original attachment before retirement.
+        // An exact retry preserves that recorded refusal without activating the ephemeral agent.
+        let detached = history.iter().any(|entry| match &entry.entry {
+            PublicOplogEntry::StreamSession(params) => matches!(
+                StreamSessionRecord::from_value(params.record.value()).unwrap(),
+                StreamSessionRecord::Detached(_)
+            ),
+            _ => false,
+        });
+        if detached {
+            assert_eq!(duplicate, EphemeralResponse::AttachmentRevoked);
+        } else {
+            assert_eq!(duplicate, original);
+        }
     } else {
-        assert_eq!(duplicate, original);
+        // Durable invocation ingress unseals even an exact duplicate. Observe the natural seal
+        // through metadata and oplog reads instead; neither API constructs a cached Worker.
+        assert_eq!(
+            executor.get_worker_metadata(&owned).await?.fingerprint,
+            fingerprint
+        );
+        assert_eq!(
+            executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
+            history
+        );
+        assert!(!executor.worker_is_cached(&owned).await);
     }
     assert!(!executor.worker_is_loaded(&owned).await);
     assert_sealed_derived_kv_absent(kv.get().unwrap().as_ref(), &owned, metadata.fingerprint)
         .await?;
     assert!(
         !indexed
-            .observe_agent("test", "duplicate", &owned)
+            .observe_agent("test", "sealed_observation", &owned)
             .await?
             .has_data
     );
@@ -616,7 +1383,7 @@ async fn sealed_ephemeral_duplicate(
         .await?;
     assert!(
         writes.is_empty(),
-        "sealed duplicate wrote indexed storage: {writes:?}"
+        "sealed observation or ephemeral duplicate wrote indexed storage: {writes:?}"
     );
     let kv_writes: Vec<String> =
         sqlx::query_scalar("SELECT source FROM sealed_duplicate_kv_writes")
@@ -624,11 +1391,963 @@ async fn sealed_ephemeral_duplicate(
             .await?;
     assert!(
         kv_writes.is_empty(),
-        "sealed duplicate wrote derived KV storage: {kv_writes:?}"
+        "sealed observation or ephemeral duplicate wrote derived KV storage: {kv_writes:?}"
     );
+    if deletion == Some(SealedDeletionCheck::StaleEpoch) {
+        let epochs = assignment
+            .shard_epochs
+            .keys()
+            .map(|id| (*id, ShardEpoch(99)))
+            .collect();
+        shard.install_unexpiring(assignment.number_of_shards, &epochs);
+        install_sealable_lease(shard.as_ref())?;
+        assert!(
+            executor.delete_worker(&owned).await.is_err(),
+            "a lower epoch must not delete sealed history"
+        );
+        assert_eq!(
+            executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
+            history
+        );
+        assert!(
+            !indexed
+                .observe_agent("test", "stale_delete", &owned)
+                .await?
+                .has_data
+        );
+        let writes: Vec<String> = sqlx::query_scalar("SELECT source FROM sealed_duplicate_writes")
+            .fetch_all(&pool)
+            .await?;
+        assert!(
+            writes.is_empty(),
+            "a stale delete must not write even a temporary epoch row: {writes:?}"
+        );
+        let epochs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM indexed_key_epoch WHERE key = ? OR (key >= ? || '#' AND key < ? || '$')")
+            .bind(&key).bind(&key).bind(&key).fetch_one(&pool).await?;
+        assert_eq!(epochs, 0);
+    } else if matches!(
+        deletion,
+        Some(
+            SealedDeletionCheck::Delete
+                | SealedDeletionCheck::NoHistoryOverlap
+                | SealedDeletionCheck::NoHistoryTombstoneRetry
+                | SealedDeletionCheck::UnresolvedAdmission
+        )
+    ) {
+        if method == "identity" {
+            if deletion == Some(SealedDeletionCheck::UnresolvedAdmission) {
+                delete_with_unresolved_admission(&executor, &owned, &history).await?;
+            } else {
+                executor = delete_sealed_stream_after_duplicate(
+                    executor,
+                    &owned,
+                    mode,
+                    &history,
+                    indexed.as_ref(),
+                    deps,
+                    &context,
+                    TestExecutorOverrides {
+                        configure: overrides.configure.clone(),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            }
+            let writes: Vec<String> =
+                sqlx::query_scalar("SELECT source FROM sealed_duplicate_writes")
+                    .fetch_all(&pool)
+                    .await?;
+            assert!(
+                writes.iter().any(|write| write == "index_storage:INSERT"),
+                "stream deletion must restore a writable primary before cascade: {writes:?}"
+            );
+        } else {
+            if deletion == Some(SealedDeletionCheck::NoHistoryOverlap) {
+                delete_sealed_no_history_with_overlap(&executor, &owned, &history).await?;
+            } else if deletion == Some(SealedDeletionCheck::NoHistoryTombstoneRetry) {
+                delete_sealed_no_history_after_tombstone(&executor, &owned, &history).await?;
+            } else {
+                executor.delete_worker(&owned).await?;
+            }
+            let writes: Vec<String> =
+                sqlx::query_scalar("SELECT source FROM sealed_duplicate_writes")
+                    .fetch_all(&pool)
+                    .await?;
+            assert!(
+                writes
+                    .iter()
+                    .all(|write| !write.starts_with("index_storage:")),
+                "no-stream deletion must not restore indexed authority: {writes:?}"
+            );
+            let shard_id = golem_common::model::ShardId::from_agent_id(
+                &owned.agent_id,
+                assignment.number_of_shards,
+            );
+            let epoch = assignment.shard_epochs[&shard_id];
+            let namespace = match mode {
+                AgentMode::Durable => "durable-worker-oplog",
+                AgentMode::Ephemeral => "ephemeral-worker-c1-oplog",
+            };
+            let fences: Vec<(String, String, i64)> = sqlx::query_as(
+                "SELECT namespace, key, epoch FROM indexed_key_epoch
+                 WHERE key = ? OR (key >= ? || '#' AND key < ? || '$')",
+            )
+            .bind(&key)
+            .bind(&key)
+            .bind(&key)
+            .fetch_all(&pool)
+            .await?;
+            assert_eq!(
+                fences,
+                vec![(namespace.to_string(), key.clone(), i64::try_from(epoch.0)?)],
+                "no-stream deletion must retain exactly its owning fence until tombstone collection"
+            );
+        }
+        assert!(executor.get_worker_metadata_opt(&owned).await?.is_none());
+        assert!(!executor.worker_is_cached(&owned).await);
+        assert!(
+            !indexed
+                .observe_agent("test", "deleted", &owned)
+                .await?
+                .has_data
+        );
+    }
     kv_pool.close().await;
     pool.close().await;
+    if collect_stream_deletion {
+        collect_deleted_stream_storage(
+            executor,
+            &owned,
+            mode,
+            deps,
+            &context,
+            TestExecutorOverrides {
+                configure: overrides.configure.clone(),
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+    }
     Ok(())
+}
+
+async fn scheduled_actions_for_agent(
+    pool: &sqlx::SqlitePool,
+    owned: &OwnedAgentId,
+) -> anyhow::Result<Vec<ScheduledAction>> {
+    let rows: Vec<Vec<u8>> = sqlx::query_scalar("SELECT action FROM scheduled_actions")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|bytes| golem_common::serialization::deserialize::<ScheduledAction>(&bytes).unwrap())
+        .filter(|action| action.owned_agent_id() == *owned)
+        .collect())
+}
+
+async fn collect_deleted_stream_storage(
+    executor: TestWorkerExecutor,
+    owned: &OwnedAgentId,
+    mode: AgentMode,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    mut overrides: TestExecutorOverrides,
+    postgres: Option<&IndexedStoragePostgresConfig>,
+) -> anyhow::Result<()> {
+    let scheduler_config = scheduler_sqlite_storage_config(deps, context);
+    let scheduler = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&scheduler_config.database)
+            .create_if_missing(false),
+    )
+    .await?;
+    let pending = scheduled_actions_for_agent(&scheduler, owned).await?;
+    assert!(
+        pending.iter().any(|action| matches!(action,
+            ScheduledAction::CollectTombstone { agent_mode, .. } if *agent_mode == mode
+        )),
+        "deletion must leave durable target-specific collection work: {pending:?}"
+    );
+    assert!(
+        pending.iter().any(|action| matches!(action,
+            ScheduledAction::ArchiveOplog { agent_mode, .. } if *agent_mode == mode
+        )),
+        "the restored history's archive action must also be drained: {pending:?}"
+    );
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let configure = overrides.configure.take().unwrap();
+    overrides.configure = Some(Arc::new(move |config| {
+        configure(config);
+        config.scheduler.refresh_interval = Duration::from_millis(100);
+    }));
+    let blobs = Arc::new(OnceLock::<Arc<dyn BlobStorage>>::new());
+    overrides.wrap_blob_storage = Some(Arc::new({
+        let blobs = blobs.clone();
+        move |inner| {
+            assert!(blobs.set(inner.clone()).is_ok());
+            inner
+        }
+    }));
+    let executor = start_with_overrides(deps, context, overrides).await?;
+    let blobs = blobs.get().unwrap();
+    let seals = std::path::Path::new("seals").join(agent_path_segment(&owned.agent_id));
+    let chunks = std::path::Path::new("chunks").join(agent_path_segment(&owned.agent_id));
+    let records = blobs
+        .with("test", "before_deleted_gc")
+        .list_page(
+            BlobStorageNamespace::SealRecords {
+                environment_id: owned.environment_id,
+                type_tag: owned.agent_id.type_tag(),
+                agent_mode: mode,
+            },
+            &seals,
+            None,
+            1000,
+        )
+        .await?;
+    assert!(
+        records.iter().any(|record| record
+            .path
+            .extension()
+            .is_some_and(|extension| extension == "deleted")),
+        "GC must start from a real tombstone, not only logical absence: {records:?}"
+    );
+    let gc_deadline_millis = records
+        .iter()
+        .filter(|record| {
+            record
+                .path
+                .extension()
+                .is_some_and(|extension| extension == "deleted")
+        })
+        .map(|record| record.last_modified_at.to_millis() + 34_000)
+        .max()
+        .unwrap();
+    let pg = if let Some(config) = postgres {
+        Some(
+            sqlx::PgPool::connect_with(
+                sqlx::postgres::PgConnectOptions::new()
+                    .host(&config.postgres.host)
+                    .port(config.postgres.port)
+                    .database(&config.postgres.database)
+                    .username(&config.postgres.username)
+                    .password(&config.postgres.password),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let sqlite = if pg.is_none() {
+        let config =
+            derive_disjoint_sqlite_config(&sqlite_storage_config(deps, context), "indexed");
+        Some(
+            sqlx::SqlitePool::connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&config.database)
+                    .create_if_missing(false),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    // T_gc is 30s lease TTL + 1s PUT timeout + 1s commit bound + twice the 1s skew.
+    // Do not delete test data or acknowledge actions here: the production scheduler must
+    // collect the tombstone and drain its own durable work after eligibility.
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let mut remaining_indexed = Vec::new();
+            for table in ["index_storage", "indexed_key_epoch"] {
+                let count: i64 = if let Some(pg) = &pg {
+                    sqlx::query_scalar(&format!(
+                        "SELECT COUNT(*) FROM {table} WHERE env = $1 AND agent = $2"
+                    ))
+                    .bind(owned.environment_id.0)
+                    .bind(owned.agent_id.as_uuid())
+                    .fetch_one(pg)
+                    .await?
+                } else {
+                    let key = owned.storage_key();
+                    sqlx::query_scalar(&format!(
+                        "SELECT COUNT(*) FROM {table} WHERE key = ? OR (key >= ? || '#' AND key < ? || '$')"
+                    ))
+                    .bind(&key)
+                    .bind(&key)
+                    .bind(&key)
+                    .fetch_one(sqlite.as_ref().unwrap())
+                    .await?
+                };
+                remaining_indexed.push((table, count));
+            }
+            let mut remaining_blobs = Vec::new();
+            for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+                for (namespace, prefix) in [
+                    (BlobStorageNamespace::SealRecords {
+                        environment_id: owned.environment_id,
+                        type_tag: owned.agent_id.type_tag(),
+                        agent_mode,
+                    }, &seals),
+                    (BlobStorageNamespace::CompressedOplog {
+                        environment_id: owned.environment_id,
+                        type_tag: owned.agent_id.type_tag(),
+                        agent_mode,
+                        level: 0,
+                    }, &chunks),
+                ] {
+                    remaining_blobs.extend(blobs.with("test", "after_deleted_gc")
+                        .list_page(namespace, prefix, None, 1).await?);
+                }
+            }
+            let remaining_actions = scheduled_actions_for_agent(&scheduler, owned).await?;
+            if remaining_indexed.iter().all(|(_, count)| *count == 0)
+                && remaining_blobs.is_empty()
+                && remaining_actions.is_empty()
+            {
+                assert!(
+                    Timestamp::now_utc().to_millis() >= gc_deadline_millis,
+                    "the target must not be collected before its tombstones become eligible"
+                );
+                break;
+            }
+            anyhow::ensure!(
+                started.elapsed() < Duration::from_secs(85),
+                "post-T_gc target residue: indexed={remaining_indexed:?}, blobs={remaining_blobs:?}, actions={remaining_actions:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        anyhow::Ok(())
+    }).await??;
+    assert!(executor.get_worker_metadata_opt(owned).await?.is_none());
+    assert!(
+        executor
+            .get_oplog(owned, OplogIndex::INITIAL)
+            .await
+            .is_err()
+    );
+    assert!(!executor.worker_is_cached(owned).await);
+    assert!(!executor.worker_is_loaded(owned).await);
+    assert_eq!(executor.instance_load_count(&owned.agent_id), 0);
+    scheduler.close().await;
+    if let Some(pg) = pg {
+        pg.close().await;
+    }
+    if let Some(sqlite) = sqlite {
+        sqlite.close().await;
+    }
+    Ok(())
+}
+
+struct SealedDeletionGate {
+    target: OwnedAgentId,
+    fail_preparation: bool,
+    fail_cache_removal: AtomicBool,
+    preparation_calls: AtomicUsize,
+    removal_calls: AtomicUsize,
+    claims: tokio::sync::Semaphore,
+    started_claims: AtomicUsize,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+#[async_trait::async_trait]
+impl WorkerDeletionHook for SealedDeletionGate {
+    fn claimed(&self, target: &OwnedAgentId, started: bool) {
+        if target == &self.target {
+            if started {
+                self.started_claims.fetch_add(1, Ordering::SeqCst);
+            }
+            self.claims.add_permits(1);
+        }
+    }
+
+    async fn before_stage(
+        &self,
+        target: &OwnedAgentId,
+        stage: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        if target != &self.target {
+            return Ok(());
+        }
+        let preparation = stage == WorkerDeletionStage::ExecutionFenced
+            && self.preparation_calls.fetch_add(1, Ordering::SeqCst) == 0;
+        let inspect_cascade = stage == WorkerDeletionStage::DurableStateRemoved
+            && self.removal_calls.fetch_add(1, Ordering::SeqCst) == 0;
+        if preparation || inspect_cascade {
+            self.entered.add_permits(1);
+            self.release.acquire().await.unwrap().forget();
+        }
+        if preparation && self.fail_preparation {
+            return Err(WorkerExecutorError::runtime(
+                "injected failure after sealed deletion preparation",
+            ));
+        }
+        if stage == WorkerDeletionStage::CacheRemoved
+            && self.fail_cache_removal.swap(false, Ordering::SeqCst)
+        {
+            return Err(WorkerExecutorError::runtime(
+                "injected failure after sealed deletion tombstone publication",
+            ));
+        }
+        Ok(())
+    }
+}
+
+async fn delete_sealed_no_history_with_overlap(
+    executor: &TestWorkerExecutor,
+    owned: &OwnedAgentId,
+    history: &[PublicOplogEntryWithIndex],
+) -> anyhow::Result<()> {
+    let loads = executor.instance_load_count(&owned.agent_id);
+    let gate = Arc::new(SealedDeletionGate {
+        target: owned.clone(),
+        fail_preparation: true,
+        fail_cache_removal: AtomicBool::new(false),
+        preparation_calls: AtomicUsize::new(0),
+        removal_calls: AtomicUsize::new(0),
+        claims: tokio::sync::Semaphore::new(0),
+        started_claims: AtomicUsize::new(0),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    executor.set_worker_deletion_hook(gate.clone());
+    let first = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move { executor.delete_worker(&owned).await }
+    });
+    tokio::time::timeout(Duration::from_secs(30), gate.entered.acquire())
+        .await??
+        .forget();
+    tokio::time::timeout(Duration::from_secs(10), gate.claims.acquire())
+        .await??
+        .forget();
+    let deleting = executor.active_agents().try_get(owned).await.unwrap();
+    let overlapping = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move { executor.delete_worker(&owned).await }
+    });
+    // Wait for the second caller to join the retained handle, not merely to start its RPC.
+    tokio::time::timeout(Duration::from_secs(10), gate.claims.acquire())
+        .await??
+        .forget();
+    assert_eq!(gate.started_claims.load(Ordering::SeqCst), 1);
+    assert_eq!(gate.preparation_calls.load(Ordering::SeqCst), 1);
+    assert!(Arc::ptr_eq(
+        &deleting,
+        &executor.active_agents().try_get(owned).await.unwrap()
+    ));
+    gate.release.add_permits(1);
+    let first = tokio::time::timeout(Duration::from_secs(30), first)
+        .await??
+        .unwrap_err();
+    let overlapping = tokio::time::timeout(Duration::from_secs(30), overlapping)
+        .await??
+        .unwrap_err();
+    assert!(
+        first
+            .to_string()
+            .contains("injected failure after sealed deletion preparation"),
+        "{first}"
+    );
+    assert_eq!(
+        overlapping.to_string(),
+        first.to_string(),
+        "overlapping callers must share the first attempt's failure"
+    );
+    assert_eq!(gate.started_claims.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history
+    );
+    assert_eq!(executor.instance_load_count(&owned.agent_id), loads);
+
+    let retry = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move { executor.delete_worker(&owned).await }
+    });
+    tokio::time::timeout(Duration::from_secs(30), gate.entered.acquire())
+        .await??
+        .forget();
+    assert_eq!(
+        gate.started_claims.load(Ordering::SeqCst),
+        2,
+        "only a later explicit call may claim the retry"
+    );
+    assert!(
+        Arc::ptr_eq(
+            &deleting,
+            &executor.active_agents().try_get(owned).await.unwrap()
+        ),
+        "a sealed no-history deletion must retain its generation across overlap and retry"
+    );
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history,
+        "the no-history retry must not append maintenance or guest execution records"
+    );
+    assert_eq!(executor.instance_load_count(&owned.agent_id), loads);
+    gate.release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(30), retry).await???;
+    Ok(())
+}
+
+async fn delete_sealed_no_history_after_tombstone(
+    executor: &TestWorkerExecutor,
+    owned: &OwnedAgentId,
+    history: &[PublicOplogEntryWithIndex],
+) -> anyhow::Result<()> {
+    let fingerprint = executor.get_worker_metadata(owned).await?.fingerprint;
+    let loads = executor.instance_load_count(&owned.agent_id);
+    let gate = Arc::new(SealedDeletionGate {
+        target: owned.clone(),
+        fail_preparation: false,
+        fail_cache_removal: AtomicBool::new(true),
+        preparation_calls: AtomicUsize::new(1),
+        removal_calls: AtomicUsize::new(0),
+        claims: tokio::sync::Semaphore::new(0),
+        started_claims: AtomicUsize::new(0),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    executor.set_worker_deletion_hook(gate.clone());
+    let first = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move { executor.delete_worker(&owned).await }
+    });
+    tokio::time::timeout(Duration::from_secs(30), gate.entered.acquire())
+        .await??
+        .forget();
+    let deleting = executor.active_agents().try_get(owned).await.unwrap();
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history
+    );
+    gate.release.add_permits(1);
+    let failure = tokio::time::timeout(Duration::from_secs(30), first)
+        .await??
+        .unwrap_err();
+    assert!(
+        failure
+            .to_string()
+            .contains("injected failure after sealed deletion tombstone publication"),
+        "{failure}"
+    );
+    assert_eq!(gate.started_claims.load(Ordering::SeqCst), 1);
+    assert!(executor.get_worker_metadata_opt(owned).await?.is_none());
+    assert!(
+        executor
+            .get_oplog(owned, OplogIndex::INITIAL)
+            .await
+            .is_err(),
+        "the published tombstone must hide the sealed history before cache cleanup retries"
+    );
+    assert!(
+        executor.worker_is_cached(owned).await,
+        "the failed final stage must leave cleanup owned by the cached deletion generation"
+    );
+    assert!(Arc::ptr_eq(
+        &deleting,
+        &executor.active_agents().try_get(owned).await.unwrap()
+    ));
+    let preparations = gate.preparation_calls.load(Ordering::SeqCst);
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        executor.delete_worker_with_fingerprint(owned, fingerprint),
+    )
+    .await??;
+    assert_eq!(
+        gate.started_claims.load(Ordering::SeqCst),
+        2,
+        "the tombstone must not turn explicit cleanup retry into a no-op"
+    );
+    assert_eq!(gate.preparation_calls.load(Ordering::SeqCst), preparations);
+    assert_eq!(
+        gate.removal_calls.load(Ordering::SeqCst),
+        1,
+        "retry must preserve completed durable removal and finish only the remaining cleanup"
+    );
+    assert!(!executor.worker_is_cached(owned).await);
+    assert!(executor.get_worker_metadata_opt(owned).await?.is_none());
+    assert_eq!(executor.instance_load_count(&owned.agent_id), loads);
+    Ok(())
+}
+
+async fn delete_with_unresolved_admission(
+    executor: &TestWorkerExecutor,
+    owned: &OwnedAgentId,
+    history: &[PublicOplogEntryWithIndex],
+) -> anyhow::Result<()> {
+    executor.retire_unloaded_worker(owned).await?;
+    assert!(!executor.worker_is_cached(owned).await);
+    let loads = executor.instance_load_count(&owned.agent_id);
+    let selected = Arc::new(tokio::sync::Semaphore::new(0));
+    let resolve = Arc::new(tokio::sync::Semaphore::new(0));
+    let acquisitions = Arc::new(AtomicUsize::new(0));
+    executor.set_existing_worker_acquisition_hook(Arc::new({
+        let owned = owned.clone();
+        let selected = selected.clone();
+        let resolve = resolve.clone();
+        let acquisitions = acquisitions.clone();
+        move |id| {
+            let pause = id == owned && acquisitions.fetch_add(1, Ordering::SeqCst) == 0;
+            let selected = selected.clone();
+            let resolve = resolve.clone();
+            async move {
+                if pause {
+                    selected.add_permits(1);
+                    resolve.acquire().await.unwrap().forget();
+                }
+            }
+            .boxed()
+        }
+    }));
+    let admission = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move { executor.resume(&owned, false).await }
+    });
+    // This hook runs after cold unresolved insertion and before ensure_existing initializes it.
+    tokio::time::timeout(Duration::from_secs(30), selected.acquire())
+        .await??
+        .forget();
+    assert!(executor.active_agents().try_get(owned).await.is_none());
+    assert_eq!(executor.instance_load_count(&owned.agent_id), loads);
+    let gate = Arc::new(SealedDeletionGate {
+        target: owned.clone(),
+        fail_preparation: false,
+        fail_cache_removal: AtomicBool::new(false),
+        preparation_calls: AtomicUsize::new(0),
+        removal_calls: AtomicUsize::new(0),
+        claims: tokio::sync::Semaphore::new(0),
+        started_claims: AtomicUsize::new(0),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    executor.set_worker_deletion_hook(gate.clone());
+    let deletion = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move { executor.delete_worker(&owned).await }
+    });
+    tokio::time::timeout(Duration::from_secs(30), gate.entered.acquire())
+        .await??
+        .forget();
+    let reserved = executor.active_agents().try_get(owned).await.unwrap();
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history
+    );
+    resolve.add_permits(1);
+    let refusal = tokio::time::timeout(Duration::from_secs(30), admission)
+        .await??
+        .unwrap_err();
+    let message = refusal.to_string().to_lowercase();
+    assert!(
+        message.contains("being deleted") || message.contains("not found"),
+        "{refusal}"
+    );
+    assert!(Arc::ptr_eq(
+        &reserved,
+        &executor.active_agents().try_get(owned).await.unwrap()
+    ));
+    assert!(!executor.worker_is_loaded(owned).await);
+    assert_eq!(
+        executor.instance_load_count(&owned.agent_id),
+        loads,
+        "ordinary acquisition must not start a guest through deletion's reserved replacement"
+    );
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history
+    );
+    gate.release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(30), gate.entered.acquire())
+        .await??
+        .forget();
+    let cascading = executor.get_oplog(owned, OplogIndex::INITIAL).await?;
+    assert_eq!(&cascading[..history.len()], history);
+    assert!(
+        !cascading[history.len()..]
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    );
+    assert_eq!(executor.instance_load_count(&owned.agent_id), loads);
+    gate.release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(30), deletion).await???;
+    Ok(())
+}
+
+async fn delete_sealed_stream_after_duplicate(
+    executor: TestWorkerExecutor,
+    owned: &OwnedAgentId,
+    mode: AgentMode,
+    history: &[PublicOplogEntryWithIndex],
+    indexed: &dyn IndexedStorage,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    mut restart_overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let frozen = executor.active_agents().try_get(owned).await;
+    if mode == AgentMode::Ephemeral {
+        assert!(
+            frozen.is_some(),
+            "the real duplicate must cache its frozen ephemeral generation"
+        );
+    } else {
+        assert!(
+            frozen.is_none(),
+            "read-only durable observation must leave the naturally sealed source uncached"
+        );
+    }
+    assert!(
+        !indexed
+            .observe_agent("test", "before_sealed_delete", owned)
+            .await?
+            .has_data
+    );
+    let loads = executor.instance_load_count(&owned.agent_id);
+    let config = scheduler_sqlite_storage_config(deps, context);
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&config.database)
+            .create_if_missing(false),
+    )
+    .await?;
+    // A durable invocation can leave an older archive row. It must not satisfy the unseal check.
+    let existing: Vec<(String, Vec<u8>)> =
+        sqlx::query_as("SELECT schedule_id, action FROM scheduled_actions")
+            .fetch_all(&pool)
+            .await?;
+    for (id, bytes) in existing {
+        if matches!(golem_common::serialization::deserialize::<ScheduledAction>(&bytes),
+            Ok(ScheduledAction::ArchiveOplog { owned_agent_id, .. }) if owned_agent_id == *owned)
+        {
+            sqlx::query("DELETE FROM scheduled_actions WHERE schedule_id = ?")
+                .bind(id)
+                .execute(&pool)
+                .await?;
+        }
+    }
+    let gate = Arc::new(SealedDeletionGate {
+        target: owned.clone(),
+        fail_preparation: true,
+        fail_cache_removal: AtomicBool::new(false),
+        preparation_calls: AtomicUsize::new(0),
+        removal_calls: AtomicUsize::new(0),
+        claims: tokio::sync::Semaphore::new(0),
+        started_claims: AtomicUsize::new(0),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    executor.set_worker_deletion_hook(gate.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move { executor.delete_worker(&owned).await }
+    });
+    tokio::time::timeout(Duration::from_secs(30), gate.entered.acquire())
+        .await??
+        .forget();
+    let writable = executor.active_agents().try_get(owned).await.unwrap();
+    assert_eq!(writable.agent_mode(), mode);
+    let fingerprint = writable.get_initial_worker_metadata().fingerprint;
+    if let Some(frozen) = &frozen {
+        assert!(
+            !Arc::ptr_eq(frozen, &writable),
+            "Delete must evict the frozen ephemeral generation"
+        );
+    }
+    assert!(
+        !executor.worker_is_loaded(owned).await,
+        "Delete must not start the guest"
+    );
+    assert_eq!(executor.instance_load_count(&owned.agent_id), loads);
+    assert!(
+        indexed
+            .observe_agent("test", "deletion_prepared", owned)
+            .await?
+            .has_data
+    );
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history
+    );
+
+    // These operations run after preparation returned its lifecycle and gate locks.
+    let activation = tokio::time::timeout(
+        Duration::from_secs(10),
+        golem_worker_executor::worker::Worker::start_if_needed(writable.clone()),
+    )
+    .await?
+    .unwrap_err();
+    assert!(
+        activation.to_string().contains("being deleted"),
+        "{activation}"
+    );
+    let last = history.last().unwrap().oplog_index;
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            writable
+                .worker_activator()
+                .archive_oplog(owned, last, ArchiveWait::Finished),
+        )
+        .await??,
+        None
+    );
+    assert!(
+        indexed
+            .observe_agent("test", "refused_seal", owned)
+            .await?
+            .has_data
+    );
+    assert!(Arc::ptr_eq(
+        &writable,
+        &executor.active_agents().try_get(owned).await.unwrap()
+    ));
+
+    gate.release.add_permits(1);
+    let failure = tokio::time::timeout(Duration::from_secs(30), deleting)
+        .await??
+        .unwrap_err();
+    assert!(
+        failure
+            .to_string()
+            .contains("injected failure after sealed deletion preparation"),
+        "{failure}"
+    );
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history,
+        "failed preparation must leave the restored history readable"
+    );
+    let actions: Vec<Vec<u8>> = sqlx::query_scalar("SELECT action FROM scheduled_actions")
+        .fetch_all(&pool)
+        .await?;
+    pool.close().await;
+    assert!(
+        actions.iter().any(|bytes| matches!(
+            golem_common::serialization::deserialize::<ScheduledAction>(bytes),
+            Ok(ScheduledAction::ArchiveOplog { owned_agent_id, agent_mode, .. })
+                if owned_agent_id == *owned && agent_mode == mode
+        )),
+        "unsealed deletion must register ArchiveOplog even for ephemeral sweep-enabled agents"
+    );
+
+    // The injected failure leaves the durable prefix of a crash after unseal, before cascade.
+    // Shutdown and reconstruction discard the retained Deleting generation; this is not an
+    // abrupt process crash, and the recovered executor must need no in-memory deletion state.
+    drop(frozen);
+    drop(writable);
+    drop(gate);
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
+    restart_overrides.wrap_shard_service = Some(Arc::new({
+        let shard = shard.clone();
+        move |inner| {
+            assert!(shard.set(inner.clone()).is_ok());
+            inner
+        }
+    }));
+    let executor = start_with_overrides(deps, context, restart_overrides).await?;
+    install_sealable_lease(shard.get().unwrap().as_ref())?;
+    assert!(!executor.worker_is_cached(owned).await);
+    assert!(!executor.worker_is_loaded(owned).await);
+    assert!(
+        indexed
+            .observe_agent("test", "reconstructed_delete_prefix", owned)
+            .await?
+            .has_data
+    );
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history,
+        "the reconstructed executor must read the entire restored pre-cascade history"
+    );
+    assert_eq!(
+        executor.get_worker_metadata(owned).await?.fingerprint,
+        fingerprint
+    );
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&config.database)
+            .create_if_missing(false),
+    )
+    .await?;
+    let recovered_actions: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT action FROM scheduled_actions")
+            .fetch_all(&pool)
+            .await?;
+    pool.close().await;
+    assert!(
+        recovered_actions.iter().any(|bytes| matches!(
+            golem_common::serialization::deserialize::<ScheduledAction>(bytes),
+            Ok(ScheduledAction::ArchiveOplog { owned_agent_id, agent_mode, .. })
+                if owned_agent_id == *owned && agent_mode == mode && actions.contains(bytes)
+        )),
+        "the reconstructed executor must retain target-specific ArchiveOplog before explicit retry"
+    );
+    let gate = Arc::new(SealedDeletionGate {
+        target: owned.clone(),
+        fail_preparation: true,
+        fail_cache_removal: AtomicBool::new(false),
+        preparation_calls: AtomicUsize::new(1),
+        removal_calls: AtomicUsize::new(0),
+        claims: tokio::sync::Semaphore::new(0),
+        started_claims: AtomicUsize::new(0),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    executor.set_worker_deletion_hook(gate.clone());
+    let retry = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move { executor.delete_worker(&owned).await }
+    });
+    tokio::time::timeout(Duration::from_secs(30), gate.entered.acquire())
+        .await??
+        .forget();
+    let cascading = executor.get_oplog(owned, OplogIndex::INITIAL).await?;
+    assert_eq!(&cascading[..history.len()], history);
+    let records: Vec<_> = cascading[history.len()..]
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamSession(params) => {
+                Some(StreamSessionRecord::from_value(params.record.value()).unwrap())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        records
+            .iter()
+            .any(|record| matches!(record, StreamSessionRecord::ProducerDeleting(_))),
+        "cascade must commit ProducerDeleting before removal: {records:?}"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| matches!(record, StreamSessionRecord::AttachmentFinalized(_))),
+        "deletion must reconcile the retained prepared attachment: {records:?}"
+    );
+    assert!(
+        !cascading[history.len()..]
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
+        "deletion maintenance must not execute the guest"
+    );
+    gate.release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(30), retry).await???;
+    Ok(executor)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -642,8 +2361,13 @@ async fn ephemeral_duplicate_result(
     component: &ComponentDto,
     key: &IdempotencyKey,
     stream_request: Option<&InvocationRequest>,
+    durable: bool,
 ) -> anyhow::Result<EphemeralResponse> {
-    let constructor = agent_key!("EphemeralStreamAgent");
+    let constructor = if durable {
+        agent_key!("DurableStreamAgent", "sealed-deletion")
+    } else {
+        agent_key!("EphemeralStreamAgent")
+    };
     let Some(request) = stream_request else {
         return Ok(EphemeralResponse::Items(vec![
             executor
@@ -725,18 +2449,28 @@ fn ephemeral_duplicate_stream_request(
     component: &ComponentDto,
     key: &IdempotencyKey,
     attempt_id: uuid::Uuid,
+    durable: bool,
 ) -> anyhow::Result<InvocationRequest> {
-    let constructor = agent_key!("EphemeralStreamAgent");
+    let constructor = if durable {
+        agent_key!("DurableStreamAgent", "sealed-deletion")
+    } else {
+        agent_key!("EphemeralStreamAgent")
+    };
+    let method = if durable { "json" } else { "identity" };
     let (target, constructor) =
-        crate::agent::invocation_target(executor, component, &constructor, key, "identity")?;
-    let (_, input) = data_value!("sealed-stream-label".to_string()).into_parts();
+        crate::agent::invocation_target(executor, component, &constructor, key, method)?;
+    let (_, input) = if durable {
+        data_value!(1u32, 0u64).into_parts()
+    } else {
+        data_value!("sealed-stream-label".to_string()).into_parts()
+    };
     Ok(InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
             allow_streams: true,
             target: Some(target),
             constructor,
             component_id: Some(component.id.into()),
-            method_name: Some("identity".to_string()),
+            method_name: Some(method.to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             idempotency_key: Some(key.clone().into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -1544,9 +3278,10 @@ async fn assert_sealed_derived_kv_absent(
             .get_all_raw(namespace.clone())
             .await
             .map_err(anyhow::Error::msg)?;
-        assert!(
+        anyhow::ensure!(
             rows.is_empty(),
-            "sealed history retained derived rows in {namespace:?}"
+            "sealed history retained derived rows in {namespace:?}; fields: {:?}",
+            rows.iter().map(|(key, _)| key).collect::<Vec<_>>()
         );
     }
     Ok(())

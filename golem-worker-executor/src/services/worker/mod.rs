@@ -273,6 +273,17 @@ pub trait WorkerService: Send + Sync {
         operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError>;
 
+    /// Excludes metadata reads and promise writes while a sealed deletion restores and claims
+    /// its writable generation. The caller must already hold the oplog lifecycle guard.
+    async fn lock_deletion_preparation(
+        &self,
+        _agent_id: &AgentId,
+    ) -> Result<WorkerDeletionGuard, WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "Deletion preparation gate unavailable",
+        ))
+    }
+
     /// Retires one worker generation and seals its drained state while excluding local metadata
     /// readers and promise writers. `Some(false)` retries storage work; `None` waits for the
     /// resident runtime's idle transition instead of registering an archive polling loop.
@@ -571,6 +582,12 @@ struct AgentLifecycleGate {
     agent_id: AgentId,
     gate: Arc<RwLock<()>>,
     registry: Arc<AgentLifecycleGates>,
+}
+
+pub struct WorkerDeletionGuard {
+    // Release the owned lock before pruning its registry entry.
+    _guard: tokio::sync::OwnedRwLockWriteGuard<()>,
+    _gate: AgentLifecycleGate,
 }
 
 impl Drop for AgentLifecycleGate {

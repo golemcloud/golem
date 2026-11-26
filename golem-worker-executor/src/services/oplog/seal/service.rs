@@ -15,7 +15,9 @@
 use super::*;
 use crate::services::golem_config::OplogConfig;
 use crate::services::oplog::epoch::retry_storage_op_fenceable;
-use crate::services::oplog::{CreateStagedError, OplogError, OplogFence, OplogLifecycleGuard};
+use crate::services::oplog::{
+    CreateStagedError, OplogError, OplogFence, OplogLifecycleGuard, OplogOpenPurpose,
+};
 use crate::services::promise::{RedisPromiseState, promise_namespace_of};
 use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
@@ -605,7 +607,18 @@ impl SealService {
         else {
             return Err(WorkerExecutorError::worker_not_found(id.agent_id));
         };
-        if record.agent_mode != AgentMode::Durable {
+        self.unseal_record(id, epoch, &record, OplogOpenPurpose::Activation)
+            .await
+    }
+
+    pub(crate) async fn unseal_record(
+        &self,
+        id: &OwnedAgentId,
+        epoch: ShardEpoch,
+        record: &SealRecord,
+        purpose: OplogOpenPurpose,
+    ) -> Result<(), WorkerExecutorError> {
+        if record.agent_mode != AgentMode::Durable && purpose != OplogOpenPurpose::Delete {
             return Err(WorkerExecutorError::invalid_request(
                 "An ephemeral agent cannot unseal",
             ));
