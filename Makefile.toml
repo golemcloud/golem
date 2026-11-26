@@ -3366,7 +3366,7 @@ end
 description = "Prepares the Python SDK runtime and bindings in sdks/python/target/prepared"
 script_runner = "@duckscript"
 script = '''
-rev = set 58d479e5993b744314ec51a77a20e3b487c69aac
+rev = set cad25eefaa090c158bca5ba5882c389eade4bcac
 tools = set sdks/python/target/tools
 exec --fail-on-error cargo install --locked --git https://github.com/golemcloud/componentize-py --rev ${rev} --root ${tools} componentize-py
 rm -r sdks/python/target/prepared
