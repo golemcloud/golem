@@ -1,9 +1,17 @@
 name: On Demand Benchmark
 on:
   schedule:
-    # Runs every day at 02:00 UTC
+    # Runs every day at 02:00 UTC when the workflow is enabled.
     - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the merged schema-2 run (requires the schema-2 reader)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 env:
   WASM_RQUICKJS_VERSION: "0.5.5"
@@ -11,13 +19,20 @@ env:
   WASI_SDK_PATH: /opt/wasi-sdk
 
 jobs:
-  run-benchmark:
+  build-benchmarks:
     runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 360
+    outputs:
+      timestamp: ${{ steps.bundle.outputs.timestamp }}
+      attempt: ${{ github.run_attempt }}
+      bundle: benchmark-bundle-attempt${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
+          persist-credentials: false
       - name: Check benchmark publisher access
+        if: github.event_name == 'schedule' || inputs.publish
         timeout-minutes: 3
         env:
           BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
@@ -51,55 +66,152 @@ jobs:
           cache-save-if: 'true'
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.49.0
-        with:
-          redis-version: latest
-          auto-start: false
-
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
+          node-version: '24'
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
           install-cargo-component: 'true'
-
-      - name: Building release executables
+      - name: Build release executables
         run: cargo make --profile ci build-release
-
       - name: Build benchmark test components
         run: cargo make build-benchmark-components
+      - name: Build benchmark tools
+        run: cargo build --profile benchmarks -p integration-tests --bin benchmarks --bin benchmark-results
+      - name: Archive executables and fixtures
+        id: bundle
+        run: |
+          set -euo pipefail
+          target="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+          bundle="$RUNNER_TEMP/benchmark-bundle"
+          mkdir -p "$bundle/target/release" "$bundle/target/benchmarks" "$bundle/test-components"
+          for binary in golem-component-compilation-service golem-worker-service worker-executor golem-shard-manager golem-registry-service; do
+            cp "$target/release/$binary" "$bundle/target/release/"
+          done
+          cp "$target/benchmarks/benchmarks" "$target/benchmarks/benchmark-results" "$bundle/target/benchmarks/"
+          find test-components -maxdepth 1 -name '*.wasm' -exec cp -L '{}' "$bundle/test-components/" \;
+          while IFS= read -r artifact; do
+            mkdir -p "$bundle/$(dirname "$artifact")"
+            cp "$artifact" "$bundle/$artifact"
+          done < <(jq -r '.[].path' builtin-artifacts.json)
+          tar -czf "$RUNNER_TEMP/benchmark-bundle.tar.gz" -C "$bundle" .
+          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-bundle-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/benchmark-bundle.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
-      # The suite exits non-zero when any benchmark recorded failed attempts,
-      # after the results JSON has been written. The results are committed
-      # either way; the last step turns the recorded failures into a red run.
-      - name: Run benchmark suite
+  run-benchmark:
+    needs: build-benchmarks
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [startup, durability-echo, bulk, streaming]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build-benchmarks.outputs.bundle }}
+          path: ${{ runner.temp }}
+      - name: Extract benchmark bundle
+        run: |
+          tar -xzf "$RUNNER_TEMP/benchmark-bundle.tar.gz" -C "$GITHUB_WORKSPACE"
+          jq -r --arg root "$GITHUB_WORKSPACE" 'to_entries[] | "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__\(.key | ascii_upcase)__URL=file://\($root)/\(.value.path)"' builtin-artifacts.json >> "$GITHUB_ENV"
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.49.0
+        with:
+          redis-version: '8.0.2'
+          auto-start: false
+      - name: Run benchmark partition
         id: benchmark
         continue-on-error: true
+        env:
+          PARTITION: ${{ matrix.partition }}
+          LOGICAL_TIMESTAMP: ${{ needs.build-benchmarks.outputs.timestamp }}
+          BUILD_ATTEMPT: ${{ needs.build-benchmarks.outputs.attempt }}
         run: |
-          cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' \
-            --primary-only \
-            --retain-details \
-            --retain-selected-zero-counts \
-            suite \
-            --save-to-json "$RUNNER_TEMP/github-actions-benchmark-results.json" \
+          # Re-running only measurements would mix logical attempts.
+          if [[ "$GITHUB_RUN_ATTEMPT" != "$BUILD_ATTEMPT" ]]; then
+            echo 'Measurement retries require Re-run all jobs.' >&2
+            exit 1
+          fi
+          target/benchmarks/benchmarks \
+            --primary-only --retain-details --retain-selected-zero-counts \
+            suite --partition "$PARTITION" \
+            --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --timestamp "$LOGICAL_TIMESTAMP" \
+            --save-to-json "$RUNNER_TEMP/partial-$PARTITION.json" \
             --runner-id github-actions-blacksmith-32vcpu \
             --runner-label "GitHub Actions (Blacksmith 32 vCPU)" \
             --source-repository "$GITHUB_REPOSITORY" \
-            --source-commit-sha "$GITHUB_SHA" \
-            --source-ref "$GITHUB_REF" \
-            integration-tests/benchmark_suites/ci.yaml \
-            spawned
+            --source-commit-sha "$GITHUB_SHA" --source-ref "$GITHUB_REF" \
+            integration-tests/benchmark_suites/ci.yaml spawned
+      - name: Upload partial result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-partial-${{ matrix.partition }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/partial-${{ matrix.partition }}.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Fail on recorded benchmark failures
+        if: steps.benchmark.outcome != 'success'
+        run: exit 1
 
+  merge-and-publish:
+    needs: [build-benchmarks, run-benchmark]
+    if: ${{ always() && !cancelled() && needs.build-benchmarks.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build-benchmarks.outputs.bundle }}
+          path: ${{ runner.temp }}
+      - name: Extract benchmark runner
+        run: tar -xzf "$RUNNER_TEMP/benchmark-bundle.tar.gz" -C "$GITHUB_WORKSPACE" ./target/benchmarks/benchmarks
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: benchmark-partial-*-attempt${{ needs.build-benchmarks.outputs.attempt }}
+          path: ${{ runner.temp }}/partials
+          merge-multiple: true
+      - name: Merge and validate every expected partition
+        id: merge
+        continue-on-error: true
+        run: |
+          target/benchmarks/benchmarks suite \
+            --merge-partial "$RUNNER_TEMP/partials/partial-startup.json" \
+            --merge-partial "$RUNNER_TEMP/partials/partial-durability-echo.json" \
+            --merge-partial "$RUNNER_TEMP/partials/partial-bulk.json" \
+            --merge-partial "$RUNNER_TEMP/partials/partial-streaming.json" \
+            --source-commit-sha "$GITHUB_SHA" \
+            --runner-id github-actions-blacksmith-32vcpu \
+            --save-to-json "$RUNNER_TEMP/github-actions-benchmark-results.json" \
+            integration-tests/benchmark_suites/ci.yaml spawned
+      - name: Require a complete canonical result
+        run: test -s "$RUNNER_TEMP/github-actions-benchmark-results.json"
       - name: Validate and publish results
+        if: github.event_name == 'schedule' || inputs.publish
         env:
           BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
           GOLEM_BENCHMARK_RESULTS_INPUT: ${{ runner.temp }}/github-actions-benchmark-results.json
           GOLEM_BENCHMARK_RESULTS_ANALYSIS: ${{ runner.temp }}/github-actions-benchmark-analysis.json
           GOLEM_BENCHMARK_PUBLISH_DIR: ${{ runner.temp }}/benchmark-results-publish
           GOLEM_BENCHMARK_RUNNER_ID: github-actions-blacksmith-32vcpu
-        run: cargo make publish-benchmark-results
-
+        run: ./integration-tests/benchmark_suites/publish_results.sh
       - name: Upload benchmark artifacts
         if: always()
         uses: actions/upload-artifact@v6
@@ -109,10 +221,7 @@ jobs:
             ${{ runner.temp }}/github-actions-benchmark-results.json
             ${{ runner.temp }}/github-actions-benchmark-analysis.json
           if-no-files-found: warn
-          retention-days: 30
-
+          retention-days: 7
       - name: Fail on recorded benchmark failures
-        if: steps.benchmark.outcome != 'success'
-        run: |
-          echo "The benchmark suite exited with status ${{ steps.benchmark.outcome }}; see its FAILURES output above."
-          exit 1
+        if: steps.merge.outcome != 'success' || needs.run-benchmark.result != 'success'
+        run: exit 1
