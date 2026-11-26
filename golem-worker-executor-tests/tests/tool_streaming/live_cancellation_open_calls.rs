@@ -72,6 +72,30 @@ struct CancelledBody {
     ),
 }
 
+/// A caller agent whose tool body runs the provider `mode` through `cancel_run_then_receive`
+/// under `key` and waits at its `open-call-held` checkpoint `promise`, while its call
+/// `open_call` is in flight under the body's entity `Start` at `body`.
+struct OpenBody {
+    context: TestContext,
+    overrides: TestExecutorOverrides,
+    executor: TestWorkerExecutor,
+    caller_component: golem_common::model::component::ComponentDto,
+    agent_id: golem_common::model::agent::ParsedAgentKey,
+    worker_id: golem_common::model::OwnedAgentId,
+    key: IdempotencyKey,
+    promise: PromiseId,
+    websocket_url: String,
+    call: tokio::task::JoinHandle<anyhow::Result<String>>,
+    body: OplogIndex,
+    open_call: OplogIndex,
+    http_connections: Arc<AtomicUsize>,
+    checkpoint_server: tokio::task::JoinHandle<()>,
+    peers: (
+        tokio_util::task::AbortOnDropHandle<()>,
+        tokio_util::task::AbortOnDropHandle<()>,
+    ),
+}
+
 async fn cancel_body_with_open_call(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -80,6 +104,41 @@ async fn cancel_body_with_open_call(
     mode: &str,
     open_function: &str,
 ) -> anyhow::Result<CancelledBody> {
+    let open =
+        open_body_with_open_call(last_unique_id, deps, provider, caller, mode, open_function)
+            .await?;
+    open.executor
+        .complete_promise(&open.worker_id.environment_id, &open.promise, vec![])
+        .await?;
+    let result = tokio::time::timeout(Duration::from_secs(60), open.call)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("the cancelled tool call returned no result within 60 s")
+        })???;
+    open.checkpoint_server.abort();
+    Ok(CancelledBody {
+        context: open.context,
+        overrides: open.overrides,
+        executor: open.executor,
+        caller_component: open.caller_component,
+        agent_id: open.agent_id,
+        worker_id: open.worker_id,
+        result,
+        body: open.body,
+        open_call: open.open_call,
+        http_connections: open.http_connections,
+        _peers: open.peers,
+    })
+}
+
+async fn open_body_with_open_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    mode: &str,
+    open_function: &str,
+) -> anyhow::Result<OpenBody> {
     let (peer_port, _peer_connections, websocket_peer) = start_held_websocket_peer().await;
     let (http_port, http_connections, http_peer) = start_held_http_peer().await;
     let context = TestContext::new(last_unique_id);
@@ -136,17 +195,22 @@ async fn cancel_body_with_open_call(
             Vec::new(),
         )
         .await?;
+    let key = IdempotencyKey::fresh();
+    let websocket_url = format!("ws://127.0.0.1:{peer_port}/marker");
     let call_executor = executor.clone();
     let call_component = caller_component.clone();
     let call_agent = agent_id.clone();
+    let call_key = key.clone();
     let call_mode = mode.to_string();
+    let call_url = websocket_url.clone();
     let call = tokio::spawn(async move {
         call_executor
-            .invoke_and_await_agent(
+            .invoke_and_await_agent_with_key(
                 &call_component,
                 &call_agent,
+                &call_key,
                 "cancel_run_then_receive",
-                data_value!(call_mode, format!("ws://127.0.0.1:{peer_port}/marker")),
+                data_value!(call_mode, call_url),
             )
             .await?
             .into_typed::<String>()
@@ -156,33 +220,25 @@ async fn cancel_body_with_open_call(
     wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &checkpoint).await?;
     let (body, open_call) =
         await_open_call(&executor, &worker_id, checkpoint.oplog_idx, open_function).await?;
-    executor
-        .complete_promise(
-            &worker_id.environment_id,
-            &executor
-                .promise_id(&worker_id, checkpoint.oplog_idx)
-                .await?,
-            vec![],
-        )
+    let promise = executor
+        .promise_id(&worker_id, checkpoint.oplog_idx)
         .await?;
-    let result = tokio::time::timeout(Duration::from_secs(60), call)
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!("the cancelled tool call returned no result within 60 s")
-        })???;
-    checkpoint_server.abort();
-    Ok(CancelledBody {
+    Ok(OpenBody {
         context,
         overrides,
         executor,
         caller_component,
         agent_id,
         worker_id,
-        result,
+        key,
+        promise,
+        websocket_url,
+        call,
         body,
         open_call,
         http_connections,
-        _peers: (websocket_peer, http_peer),
+        checkpoint_server,
+        peers: (websocket_peer, http_peer),
     })
 }
 
@@ -409,5 +465,76 @@ async fn live_cancellation_of_a_wasm_tool_body_with_an_open_nested_invoke(
         .executor
         .delete_worker(&cancelled.worker_id)
         .await?;
+    Ok(())
+}
+
+/// A Wasm tool body holds an open request-body transmission when the executor crashes. The
+/// replay publishes the body live at the transmission's incomplete `Start`, and the caller then
+/// cancels it after its first stdout chunk. The re-executed transmission's wait must end on the
+/// cancellation as a live one does: the original invocation gets the cancelled result, the
+/// `Start` stays without a terminal under the body's `Cancelled`, and the request is not sent
+/// again.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn cancelling_a_replayed_body_cancels_its_open_request_body_transmission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let open = open_body_with_open_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "open-transmit-wait",
+        "http::types::request::body-transmission",
+    )
+    .await?;
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        open.executor.simulated_crash(&open.worker_id),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("simulated_crash did not return within 30 s"))??;
+    open.call.abort();
+    open.executor
+        .complete_promise(&open.worker_id.environment_id, &open.promise, vec![])
+        .await?;
+    let result: String = tokio::time::timeout(
+        Duration::from_secs(60),
+        open.executor.invoke_and_await_agent_with_key(
+            &open.caller_component,
+            &open.agent_id,
+            &open.key,
+            "cancel_run_then_receive",
+            data_value!("open-transmit-wait".to_string(), open.websocket_url.clone()),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the original invocation returned no result after the crash"))??
+    .into_typed()?;
+    open.checkpoint_server.abort();
+    assert_eq!(result, "open-call-held:Err(ToolRpcError::Cancelled):None");
+
+    let oplog = open
+        .executor
+        .get_oplog(&open.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "the replay recorded no error"
+    );
+    assert_cancelled_open_call_history(&oplog, open.body, open.open_call);
+    assert_eq!(
+        open.http_connections.load(Ordering::SeqCst),
+        1,
+        "the replayed body sent the held request again"
+    );
+    open.executor.delete_worker(&open.worker_id).await?;
     Ok(())
 }
