@@ -1287,9 +1287,8 @@ function fetchPage(params) {
 }
 // A page has a cursor while the oplog has entries after it. A search page can be empty and still
 // have a cursor, when the server spent its scan budget before a match or before the start of the
-// range, so this follows the cursor
-// until a page has entries that `keep` accepts or the cursor ends. The coverage it returns covers
-// every page it read.
+// range. So this follows the cursor until a page has entries that `keep` accepts or the cursor
+// ends. The coverage it returns covers every page it read.
 async function fetchEntries(params, keep) {
   let page = await fetchPage(params);
   let coverage = page.coverage || null;

@@ -575,9 +575,10 @@ pub async fn search_public_oplog_remote(
 /// `oplog_first`. The search stops when the result holds `count` matches or the page is full. It
 /// also stops at the end of the oplog, at the end of `range`, or when `scan` is spent. The scan
 /// counts the oplog entries that the search reads, matching or not, and the time since the scan
-/// started. The caller can charge other reads of the same call to `scan` first. Each chunk reads at most as many entries as the result still needs matches, so the
-/// result never holds more than `count` matches. A search always reads at least one chunk, and the
-/// result points to the first entry it did not read.
+/// started. The caller can charge other reads of the same call to `scan` first. Each chunk reads
+/// at most as many entries as the result still needs matches, so the result never holds more than
+/// `count` matches. A search always reads at least one chunk, and the result points to the first
+/// entry it did not read.
 #[allow(clippy::too_many_arguments)]
 async fn search_public_oplog_with<B: ChunkBuilder>(
     component_service: Arc<dyn ComponentService>,

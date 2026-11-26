@@ -244,10 +244,10 @@ impl OplogRange {
     }
 
     /// Where a search of the range continues from `cursor`. A cursor without `scan_to` continues
-    /// the search in the range, with the rule of [`Self::resume`]. A cursor with `scan_to` continues
-    /// the scan for the component revision. A range with a start must start at `scan_to`, and a
-    /// range without a start takes `scan_to` as its start. The cursor must point to an index from 1
-    /// to before `scan_to`, and the range must not end before `scan_to`.
+    /// the search in the range, with the rule of [`Self::resume`]. A cursor with `scan_to`
+    /// continues the scan for the component revision. A range with a start must start at
+    /// `scan_to`, and a range without a start takes `scan_to` as its start. The cursor must point
+    /// to an index from 1 to before `scan_to`, and the range must not end before `scan_to`.
     pub fn resume_search(
         &self,
         cursor: &OplogCursor,
