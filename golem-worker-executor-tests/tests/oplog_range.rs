@@ -240,9 +240,9 @@ const TRANSFER_AFTER: u64 = 32;
 /// compressed layer holds the next entries. The primary oplog holds the newest entries. The first
 /// executor archives the whole history to the blob layer. After a real restart, the second executor
 /// does not archive idle agents. It moves the primary oplog to the compressed layer once, after
-/// `TRANSFER_AFTER` entries. Every range read, with and without an end, returns each index of the
-/// range once, in order, with the entries of a full read. Its pages end and start exactly at each
-/// layer boundary.
+/// `TRANSFER_AFTER` entries. The paged reads, with and without an end, return each index of the
+/// range once, in order. Their pages end and start exactly at each layer boundary. The read of
+/// each range returns the entries of a full read.
 #[test]
 #[timeout("4m")]
 async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
