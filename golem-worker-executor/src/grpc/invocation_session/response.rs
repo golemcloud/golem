@@ -99,16 +99,18 @@ pub(super) async fn send_attachment_revocation(
         .await;
 }
 
-/// Answers an attachment check that failed. A check that the attachment state refuses revokes the
-/// attachment. A failed oplog read, a refused write and an incomplete output keep their type: the
-/// session finishes with the worker error, so the refusal is not taken as a revocation.
+/// Answers an attachment check that failed. A failed oplog read keeps its type: the session
+/// finishes with the worker error, so the read failure is not taken as a revocation. Every other
+/// failure revokes the attachment.
 pub(super) async fn send_failed_attachment_check(
     responses: &mpsc::Sender<InvocationResponse>,
     error: SessionError,
 ) {
     match error {
-        SessionError::Failed(_) => send_attachment_revocation(responses, Ok(())).await,
-        error => send_protocol_failure(responses, error).await,
+        error @ SessionError::Unreadable(_) => send_protocol_failure(responses, error).await,
+        SessionError::Fenced(_) | SessionError::IncompleteOutput(_) | SessionError::Failed(_) => {
+            send_attachment_revocation(responses, Ok(())).await
+        }
     }
 }
 
@@ -419,14 +421,19 @@ mod tests {
         });
     }
 
-    /// An attachment check that the attachment state refuses revokes the attachment, whatever its
-    /// text. A failed read keeps its typed worker error and is no revocation.
+    /// An attachment check that fails revokes the attachment, whatever its text, also when a
+    /// write is refused or an output is incomplete. Only a failed read keeps its typed worker
+    /// error and is no revocation.
     #[test]
-    fn a_failed_attachment_check_revokes_only_on_a_refused_attachment_state() {
+    fn a_failed_attachment_check_revokes_unless_a_read_failed() {
         let (responses, mut rx) = mpsc::channel(1);
         [
             SessionError::from("durable session has no attachment authority"),
             SessionError::from("an attachment state refusal with any text"),
+            SessionError::Fenced(crate::durable_host::durable_stream::tests::test_fence()),
+            SessionError::IncompleteOutput(golem_common::model::durable_stream::StreamId(
+                uuid::Uuid::from_u128(73),
+            )),
         ]
         .into_iter()
         .for_each(|error| {

@@ -22,7 +22,7 @@ use golem_common::model::OplogIndex;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, EphemeralCannotSuspendError};
 use golem_service_base::error::worker_executor::{
-    InterruptKind, OplogFailureStage, RecoveryCause, WorkerExecutorError,
+    InterruptKind, OplogFailureStage, WorkerExecutorError,
 };
 
 #[cfg(test)]
@@ -97,21 +97,15 @@ pub(crate) enum InvocationObservationFailure {
 
 impl InvocationObservationFailure {
     /// The failed stored read that caused `error`, and its kind: `PermanentRead` or
-    /// `RetryableRead`. The read is also found in the reason of a failed resume. A recovery is a
-    /// read only when its cause is a read. This is the only rule that tells a failed stored read
-    /// from other errors.
+    /// `RetryableRead`. [`WorkerExecutorError::is_oplog_read_failure`] is the rule that tells a
+    /// failed stored read from other errors. This finds the read in the reason of a failed resume
+    /// and names its kind: a read that can pass later is a required recovery.
     pub(crate) fn stored_read(error: &WorkerExecutorError) -> Option<(Self, &WorkerExecutorError)> {
         match error {
-            WorkerExecutorError::OplogFailed {
-                stage: OplogFailureStage::Read,
-                ..
-            } => Some((Self::PermanentRead, error)),
-            WorkerExecutorError::RecoveryRequired {
-                cause: RecoveryCause::OplogReadUnavailable,
-                ..
-            } => Some((Self::RetryableRead, error)),
+            _ if !error.is_oplog_read_failure() => None,
             WorkerExecutorError::FailedToResumeAgent { reason, .. } => Self::stored_read(reason),
-            _ => None,
+            WorkerExecutorError::RecoveryRequired { .. } => Some((Self::RetryableRead, error)),
+            _ => Some((Self::PermanentRead, error)),
         }
     }
 
@@ -368,17 +362,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         }
 
-        let latest_status = self.get_last_known_status().await;
-        let previous_error = if latest_status.last_error_kind == Some(OplogErrorKind::Recovery) {
-            match Ctx::get_last_error_and_retry_count(
-                self.all(),
-                &self.owned_agent_id,
-                self.agent_mode(),
-                &latest_status,
-            )
-            .await
-            {
-                Ok(previous_error) => previous_error,
+        // The history gives the retry point only when the error has none.
+        let retry_from = match recovery_retry_from(error) {
+            Some(retry_from) => retry_from,
+            None => match self.previous_recovery_retry_from().await {
+                Ok(Some(retry_from)) => retry_from,
+                Ok(None) => self.oplog.current_oplog_index().await,
                 // The retry point of the recorded failure is unknown. An entry without it would
                 // record a made-up retry point, so this failure adds no entry.
                 Err(unreadable) => {
@@ -389,13 +378,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     );
                     return;
                 }
-            }
-        } else {
-            None
+            },
         };
-        let retry_from = recovery_retry_from(error)
-            .or_else(|| previous_error.as_ref().map(|error| error.retry_from))
-            .unwrap_or(self.oplog.current_oplog_index().await);
         let infrastructure_failure = is_infrastructure_recovery_error(error);
         let error = recovery_agent_error(error);
         let retry_policy_state = (!infrastructure_failure && error != AgentError::OutOfMemory)
@@ -413,6 +397,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 None,
             ))
             .await;
+    }
+    /// The retry point of the last recorded failure, when that failure is a recovery failure.
+    async fn previous_recovery_retry_from(
+        &self,
+    ) -> Result<Option<OplogIndex>, crate::services::oplog::UnreadableOplog> {
+        let latest_status = self.get_last_known_status().await;
+        if latest_status.last_error_kind != Some(OplogErrorKind::Recovery) {
+            return Ok(None);
+        }
+        Ctx::get_last_error_and_retry_count(
+            self.all(),
+            &self.owned_agent_id,
+            self.agent_mode(),
+            &latest_status,
+        )
+        .await
+        .map(|previous| previous.map(|error| error.retry_from))
     }
     pub(crate) async fn await_invocation_result(
         self: Arc<Self>,

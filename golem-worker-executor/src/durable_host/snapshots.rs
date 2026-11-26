@@ -841,13 +841,12 @@ pub(in crate::durable_host) fn snapshot_entry_read_failure(
 /// record and whether a later read can pass.
 ///
 /// Candidate selection: a periodic record is skipped for the start attempt and the start retries
-/// at once (the caller marks it unavailable); nothing is recorded. The selected record of a
-/// snapshot-assisted update whose payload is missing or does not decode is a lost record, which
-/// the update reports.
+/// at once (the caller marks it unavailable); nothing is recorded.
 ///
-/// Every other baseline gets the read error as it is: a store that did not answer is a recovery
-/// that the read caused, and a payload that does not decode is a failed oplog. The start passes
-/// both in every column, so a read error is never a failed update or a failed invocation.
+/// Every other baseline, also the selected record of a snapshot-assisted update, gets the read
+/// error as it is: a store that did not answer is a recovery that the read caused, and a payload
+/// that is missing or does not decode is a failed oplog. The start passes both in every column, so
+/// a read error is never a failed update or a failed invocation.
 pub(in crate::durable_host) fn payload_download_failure(
     purpose: SnapshotReplayPurpose,
     unreadable: UnreadableOplog,
@@ -855,9 +854,6 @@ pub(in crate::durable_host) fn payload_download_failure(
     match purpose {
         SnapshotReplayPurpose::PeriodicRecovery => {
             SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
-        }
-        SnapshotReplayPurpose::AssistedUpdate if !unreadable.is_transient() => {
-            SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(unreadable.to_string()))
         }
         SnapshotReplayPurpose::AssistedUpdate
         | SnapshotReplayPurpose::AutomaticUpdate

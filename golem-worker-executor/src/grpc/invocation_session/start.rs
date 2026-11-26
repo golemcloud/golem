@@ -1257,7 +1257,7 @@ mod tests {
     }
 
     #[test]
-    async fn attachment_check_preserves_storage_errors_and_revokes_stale_attachments() {
+    async fn attachment_check_preserves_read_errors_and_revokes_stale_attachments() {
         use crate::services::oplog::{OplogFence, OplogReadError, UnreadableOplog};
         use golem_common::model::sharding::ShardEpoch;
         use golem_common::model::{AgentId, OplogIndex};
@@ -1267,6 +1267,11 @@ mod tests {
         [
             SessionError::from("StaleEpoch: durable attachment has been fenced"),
             SessionError::from("durable session has no attachment authority"),
+            SessionError::Fenced(OplogFence {
+                agent_id,
+                expected_epoch: ShardEpoch(1),
+                actual_epoch: Some(ShardEpoch(2)),
+            }),
         ]
         .into_iter()
         .for_each(|error| {
@@ -1278,38 +1283,28 @@ mod tests {
                 Some(invocation_response::Response::AttachmentRevoked(_))
             ));
         });
-        [
-            SessionError::Unreadable(UnreadableOplog::new(
-                &agent_id,
-                OplogReadError::Gap {
-                    start: OplogIndex::INITIAL,
-                    end: OplogIndex::INITIAL,
-                },
-            )),
-            SessionError::Fenced(OplogFence {
-                agent_id,
-                expected_epoch: ShardEpoch(1),
-                actual_epoch: Some(ShardEpoch(2)),
-            }),
-        ]
-        .into_iter()
-        .for_each(|error| {
-            let expected = Some(
-                error
-                    .clone()
-                    .into_worker_executor_error(WorkerExecutorError::runtime)
-                    .into(),
-            );
-            send_failed_attachment_check(&responses, error)
-                .now_or_never()
-                .unwrap();
-            let Some(invocation_response::Response::Finished(InvocationSessionCompletion {
-                outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
-            })) = rx.try_recv().unwrap().response
-            else {
-                panic!("expected a worker failure frame");
-            };
-            assert_eq!(failure.worker_error, expected);
-        });
+        let error = SessionError::Unreadable(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::INITIAL,
+            },
+        ));
+        let expected = Some(
+            error
+                .clone()
+                .into_worker_executor_error(WorkerExecutorError::runtime)
+                .into(),
+        );
+        send_failed_attachment_check(&responses, error)
+            .now_or_never()
+            .unwrap();
+        let Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+            outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
+        })) = rx.try_recv().unwrap().response
+        else {
+            panic!("expected a worker failure frame");
+        };
+        assert_eq!(failure.worker_error, expected);
     }
 }

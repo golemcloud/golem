@@ -273,7 +273,12 @@ impl PrimaryOplog {
                         // every later add, commit and flush fails on the latch without asking the
                         // storage again.
                         match state.auto_commit().await {
-                            Ok(()) | Err(OplogError::Fenced(_) | OplogError::Unreadable(_)) => {}
+                            Ok(())
+                            | Err(
+                                OplogError::Fenced(_)
+                                | OplogError::Unreadable(_)
+                                | OplogError::Unconfirmed(_),
+                            ) => {}
                             Err(error) => panic!("oplog write: {error}"),
                         }
                         let _ = done.send(());

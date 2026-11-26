@@ -861,6 +861,7 @@ mod read_error_tests {
     use crate::services::oplog::{CommitLevel, PrimaryOplogService};
     use crate::services::worker::session_index_tests::UnusedComponentService;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use futures::StreamExt;
     use golem_common::model::account::AccountId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{RetryConfig, Timestamp};
@@ -898,9 +899,14 @@ mod read_error_tests {
             )
             .await
             .unwrap();
-        for size in 1..=5 {
-            oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
-        }
+        futures::stream::iter(1..=5)
+            .for_each(|size| {
+                let oplog = &oplog;
+                async move {
+                    oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
+                }
+            })
+            .await;
         oplog
             .add(OplogEntry::End {
                 timestamp: Timestamp::now_utc(),

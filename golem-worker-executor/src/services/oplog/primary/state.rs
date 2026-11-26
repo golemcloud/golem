@@ -239,8 +239,18 @@ impl PrimaryOplogState {
     /// memory for that report, up to the latest `max_retained_auto_commit_batches` commits. Beyond
     /// it the oldest batch is dropped: the report stays complete, because it reads every
     /// unreported entry before the retained ones back from storage.
+    ///
+    /// An append whose outcome is unknown also notifies the listener. Its report gives the
+    /// latched refusal, so the owner learns of it without a write of its own.
     pub(super) async fn auto_commit(&mut self) -> Result<(), OplogError> {
-        let committed = self.commit(CommitLevel::Always).await?;
+        let committed = self
+            .commit(CommitLevel::Always)
+            .await
+            .inspect_err(|error| {
+                if matches!(error, OplogError::Unconfirmed(_)) {
+                    self.auto_commit_listener.notify();
+                }
+            })?;
         let listener_notified = !committed.is_empty() && self.auto_commit_listener.notify();
         let (report, _) = report::transition(
             std::mem::take(&mut self.commit_report),

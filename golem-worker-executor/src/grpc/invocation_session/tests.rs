@@ -972,3 +972,113 @@ async fn an_undecodable_stored_result_leaves_the_attachment_without_a_detach() {
     AttachmentCleanup::new(Some(streams.clone())).finish().await;
     assert!(streams.oplog.current_oplog_index().await > tail);
 }
+
+#[test]
+async fn a_failed_resume_after_readiness_writes_no_detach() {
+    let (streams, _state, _handle) = routed_stream_session(SessionStreamRole::Output).await;
+    let tail = streams.oplog.current_oplog_index().await;
+    let read_failures = [
+        WorkerExecutorError::from(unreadable()),
+        WorkerExecutorError::oplog_read_unavailable("primary storage timed out"),
+        WorkerExecutorError::failed_to_resume_worker(
+            AgentId::from_parts(7, 1),
+            WorkerExecutorError::from(unreadable()),
+        ),
+        WorkerExecutorError::failed_to_resume_worker(
+            AgentId::from_parts(7, 1),
+            WorkerExecutorError::oplog_read_unavailable("primary storage timed out"),
+        ),
+    ];
+    let other_failures = [
+        WorkerExecutorError::runtime("resume refused"),
+        WorkerExecutorError::recovery_required("generation replaced"),
+    ];
+    let phases = futures::future::join_all(read_failures.into_iter().chain(other_failures).map(
+        |error| {
+            let streams = streams.clone();
+            async move {
+                let mut cleanup = AttachmentCleanup::new(Some(streams));
+                cleanup.observe(CleanupEvent::of_failed_resume(&error));
+                let phase = cleanup.phase();
+                cleanup.finish().await;
+                phase
+            }
+        },
+    ))
+    .await;
+    assert_eq!(
+        phases,
+        [
+            CleanupPhase::Unsettled,
+            CleanupPhase::Unsettled,
+            CleanupPhase::Unsettled,
+            CleanupPhase::Unsettled,
+            CleanupPhase::Released,
+            CleanupPhase::Released,
+        ]
+    );
+    assert_eq!(streams.oplog.current_oplog_index().await, tail);
+
+    // Control: a held attachment writes its detach.
+    AttachmentCleanup::new(Some(streams.clone())).finish().await;
+    assert!(streams.oplog.current_oplog_index().await > tail);
+}
+
+/// The read error of a Prepared input that does not decode names the entry and the input. It does
+/// not show the decoder text, because that text can hold stored values.
+#[test]
+fn an_undecodable_prepared_input_names_its_entry_without_the_decoder_text() {
+    use crate::durable_host::durable_stream::tests::identity;
+    use crate::services::oplog::OplogReadSource;
+    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::durable_stream::{
+        StartAttemptDescriptor, StreamSessionExpiryPolicy, StreamSessionPreparedRecord,
+    };
+
+    let identity = identity();
+    let prepared = StreamSessionPreparedRecord {
+        format_version: DURABLE_STREAM_FORMAT_VERSION,
+        session_key: identity.invocation.idempotency_key,
+        public_session_id: identity.invocation.idempotency_key.to_string(),
+        route_scope: None,
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
+        attempt: StartAttemptDescriptor {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: identity.invocation.clone(),
+            attachment_id: AttachmentId::primary(
+                identity.environment_id,
+                &identity.agent_id,
+                &identity.invocation.idempotency_key,
+            )
+            .unwrap(),
+            expected_callee_fingerprint: identity.fingerprint,
+            attempt_id: AttemptId::fresh(),
+            invocation: PersistedStreamInvocationDescriptor {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: identity.invocation.clone(),
+                target_component_revision: ComponentRevision::INITIAL,
+                target: PersistedInvocationTarget::AgentMethod {
+                    method_name: "run".into(),
+                },
+                invocation_value: vec![0x0a, 0x7f, 0x13, 0x37],
+                stream_handles: Vec::new(),
+                execution_config: vec![],
+                effective_identity: vec![],
+            },
+            effective_identity: vec![],
+            live_join_buffer_events: 8,
+        },
+        stream_mappings: vec![],
+    };
+
+    let error = resumed_input_schema(&prepared)
+        .expect_err("the stored input does not decode")
+        .at(OplogIndex::from_u64(43));
+    assert_eq!(error.agent_id, identity.invocation.callee);
+    let OplogReadError::Corruption { source, detail } = &error.error else {
+        panic!("an undecodable input is corrupt history, got {error:?}");
+    };
+    assert_eq!(*source, OplogReadSource::Other("prepared session input"));
+    assert_eq!(detail, "invalid prepared session input at oplog index 43");
+}

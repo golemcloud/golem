@@ -73,7 +73,7 @@ use golem_common::model::{
 };
 use golem_common::schema::SchemaValue;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailureStage, WorkerExecutorError};
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -386,8 +386,8 @@ impl From<WorkerExecutorError> for RpcAwaitError {
 }
 
 /// Separates the result of an awaited call, which `observer` records, from the error that leaves
-/// the call without a result. That error is the recovery of `observer` that
-/// [`observation_recovery`] gives.
+/// the call without a result. [`observed_read_failure`] tells which a failed read of a stored
+/// history is: a read of another agent's history that failed for good is the failure of the call.
 pub fn rpc_await_outcome<T>(
     observer: &AgentId,
     result: Result<T, RpcAwaitError>,
@@ -395,28 +395,34 @@ pub fn rpc_await_outcome<T>(
     match result {
         Ok(value) => Ok(Ok(value)),
         Err(RpcAwaitError::Outcome(error)) => Ok(Err(error)),
-        Err(RpcAwaitError::Unobserved(error)) => Err(observation_recovery(observer, *error)),
+        Err(RpcAwaitError::Unobserved(error)) => {
+            observed_read_failure(observer, *error).map(|failure| Err(failure.into()))
+        }
     }
 }
 
-/// The error with which `observer` stops a host call when the read of a stored history gave
-/// `error`. A failed oplog of `observer` stays as it is, so `observer` fails. A failed oplog of
-/// another agent fails only that agent: for `observer` it is a read that failed for a time, so
-/// `observer` recovers and reads again. The error makes no oplog entry of `observer`.
-pub(crate) fn observation_recovery(
+/// What `observer` does with `error`, the failed read of a stored history by one of its host
+/// calls. `Ok` is the failure of that call: a read of another agent's history that failed for
+/// good. `observer` records it as it records any failed call, and does not read again. The error
+/// names the other agent, the entry and the version byte. `Err` stops the host call without an
+/// outcome and without an oplog entry: a read that failed for a time, of any agent, after which
+/// `observer` recovers and reads again, and a failed read of the oplog of `observer`, which fails
+/// `observer`. The read error of a failed resume is found in its reason. Every other error is an
+/// `Err` as it is.
+pub(crate) fn observed_read_failure(
     observer: &AgentId,
     error: WorkerExecutorError,
-) -> WorkerExecutorError {
+) -> Result<WorkerExecutorError, WorkerExecutorError> {
     match error {
         WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
-            observation_recovery(observer, *reason)
+            observed_read_failure(observer, *reason)
         }
-        WorkerExecutorError::OplogFailed {
-            agent_id, details, ..
-        } if agent_id != *observer => WorkerExecutorError::oplog_read_unavailable(format!(
-            "the oplog of agent {agent_id} failed: {details}"
-        )),
-        error => error,
+        failure @ WorkerExecutorError::OplogFailed {
+            agent_id,
+            stage: OplogFailureStage::Read,
+            ..
+        } if agent_id != *observer => Ok(failure),
+        error => Err(error),
     }
 }
 

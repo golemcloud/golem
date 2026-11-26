@@ -362,9 +362,8 @@ enum LatchEvent<'a> {
 impl WriteLatch {
     /// The one transition of the latch: the latch that `event` sets on a handle whose latch is
     /// `current`, or `None` when the latch does not change. A set latch never changes. A fence
-    /// sets it, and so does an append that fails as unreadable, because the append retries return
-    /// that error only when they cannot read back an append whose outcome is unknown. Every other
-    /// failure leaves the handle open.
+    /// sets it, and so does an append whose outcome is unknown. Every other failure leaves the
+    /// handle open.
     fn transition(current: Option<&WriteLatch>, event: LatchEvent<'_>) -> Option<WriteLatch> {
         match (current, event) {
             (Some(_), _) => None,
@@ -374,7 +373,7 @@ impl WriteLatch {
             (None, LatchEvent::AppendFailed(OplogError::Fenced(fence))) => {
                 Some(Self::Fenced(fence.clone()))
             }
-            (None, LatchEvent::AppendFailed(OplogError::Unreadable(unreadable))) => {
+            (None, LatchEvent::AppendFailed(OplogError::Unconfirmed(unreadable))) => {
                 Some(Self::Unconfirmed(unreadable.clone()))
             }
             (
@@ -382,7 +381,8 @@ impl WriteLatch {
                 LatchEvent::AppendFailed(
                     OplogError::Payload(_)
                     | OplogError::Maintenance(_)
-                    | OplogError::ArchiveWrite(_),
+                    | OplogError::ArchiveWrite(_)
+                    | OplogError::Unreadable(_),
                 ),
             ) => None,
         }
@@ -408,7 +408,7 @@ impl WriteLatch {
     fn error(&self) -> OplogError {
         match self {
             Self::Fenced(fence) => OplogError::Fenced(fence.clone()),
-            Self::Unconfirmed(unreadable) => OplogError::Unreadable(unreadable.clone()),
+            Self::Unconfirmed(unreadable) => OplogError::Unconfirmed(unreadable.clone()),
         }
     }
 }

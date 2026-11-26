@@ -111,9 +111,6 @@ pub(crate) enum SnapshotRecoveryResult {
     /// The load could not run or did not finish with the error; the provenance tells where the
     /// failure came from.
     Unavailable(WorkerExecutorError, FailureProvenance),
-    /// The payload of the application snapshot of the selected record of a snapshot-assisted
-    /// update is missing or does not decode: the record is lost.
-    Lost(WorkerExecutorError),
     Retry(RetryDecision),
 }
 
@@ -456,8 +453,6 @@ enum StartProblem {
     },
     LoadRetry,
     LoadUnavailable,
-    /// The payload of the selected record is lost; only a snapshot-assisted attempt reports it.
-    LoadLost,
     LoadFailed,
     ManualLoadFailed,
     ManualLoadInterrupted,
@@ -533,7 +528,6 @@ impl StartProblem {
                     WorkerExecutorError::Interrupted { .. } => Self::Interrupted,
                     _ => Self::LoadUnavailable,
                 },
-                SnapshotRecoveryResult::Lost(_) => Self::LoadLost,
                 SnapshotRecoveryResult::Failed(_, _) => Self::LoadFailed,
                 SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                     Self::ReplayError
@@ -812,7 +806,7 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             | Problem::AgentFailed
             | Problem::ReplayError => fail,
             Problem::Disabled => coded(Code::RestoreNeedsFilesystemSnapshots),
-            Problem::Restore(RestoreClass::Lost) | Problem::LoadLost => Cell::Fail(Failure {
+            Problem::Restore(RestoreClass::Lost) => Cell::Fail(Failure {
                 code: Some(Code::SnapshotUnavailable),
                 fault: Some(SnapshotFault::Unavailable),
                 reject_selected: true,
@@ -958,7 +952,6 @@ fn problem_class(problem: StartProblem) -> UpdateFailureClass {
         | Problem::Disabled
         | Problem::Restore(_)
         | Problem::RestoreConflict
-        | Problem::LoadLost
         | Problem::LoadFailed
         | Problem::ManualLoadFailed
         | Problem::ManualLoadExited
@@ -1056,8 +1049,7 @@ fn raw_text(error: &RawStartError<'_>) -> String {
         RawStartError::Filesystem(error) | RawStartError::Finish(error) => error.to_string(),
         RawStartError::Load(result) => match result {
             SnapshotRecoveryResult::Failed(error, _)
-            | SnapshotRecoveryResult::Unavailable(error, _)
-            | SnapshotRecoveryResult::Lost(error) => error.to_string(),
+            | SnapshotRecoveryResult::Unavailable(error, _) => error.to_string(),
             SnapshotRecoveryResult::NotAttempted => {
                 "the update did not attempt its required snapshot".to_string()
             }
@@ -1088,8 +1080,7 @@ impl RawStartError<'_> {
             RawStartError::Instantiation(failure) => Some(&failure.error),
             RawStartError::Load(
                 SnapshotRecoveryResult::Failed(error, _)
-                | SnapshotRecoveryResult::Unavailable(error, _)
-                | SnapshotRecoveryResult::Lost(error),
+                | SnapshotRecoveryResult::Unavailable(error, _),
             ) => Some(error),
             _ => None,
         }

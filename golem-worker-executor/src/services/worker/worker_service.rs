@@ -452,14 +452,9 @@ impl WorkerService for DefaultWorkerService {
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        value
-            .transpose()
-            .map(|indexes| indexes.into_iter().flatten().collect())
-            .map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "rejected periodic snapshots do not decode: {error}"
-                ))
-            })
+        // The stored rejections are a hint: a set that does not decode is a miss. A start can
+        // select a rejected entry again and reject it again.
+        Ok(value.and_then(Result::ok).into_iter().flatten().collect())
     }
 
     async fn reject_periodic_snapshots(
@@ -482,14 +477,11 @@ impl WorkerService for DefaultWorkerService {
                 .get_raw(namespace.clone(), &field)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
-            let current_indexes = match &current {
-                Some(current) => decode::<Vec<OplogIndex>>(current).map_err(|error| {
-                    WorkerExecutorError::runtime(format!(
-                        "rejected periodic snapshots do not decode: {error}"
-                    ))
-                })?,
-                None => Vec::new(),
-            };
+            // A stored set that does not decode is a miss, and this write replaces it.
+            let current_indexes = current
+                .as_deref()
+                .and_then(|current| decode::<Vec<OplogIndex>>(current).ok())
+                .unwrap_or_default();
             let Some(to_store) = rejections_to_store(current_indexes, status, oplog_indexes) else {
                 return Ok(());
             };

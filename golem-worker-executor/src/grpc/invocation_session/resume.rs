@@ -138,7 +138,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     return Err(ResumeStop::AttachmentCheck(error));
                 }
             }
-            Ok::<_, ResumeStop>(worker.resume_durable_streaming_invocation(attempt).await?)
+            Ok::<_, ResumeStop>(
+                worker
+                    .resume_durable_streaming_invocation(attempt)
+                    .await
+                    .inspect_err(|error| {
+                        queued_cleanup.observe(CleanupEvent::of_failed_resume(error))
+                    })?,
+            )
         }
         .await;
         let mut acceptance = match result {

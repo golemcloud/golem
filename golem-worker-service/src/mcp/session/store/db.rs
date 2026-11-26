@@ -425,10 +425,9 @@ mod tests {
         [first, second].into_iter().for_each(|read| {
             assert!(
                 matches!(
-                    read,
-                    Err(McpSessionStoreError::Undecodable(
-                        DecodeError::UnknownVersion(255)
-                    ))
+                    &read,
+                    Err(McpSessionStoreError::Undecodable(error))
+                        if **error == DecodeError::UnknownVersion(255)
                 ),
                 "{read:?}"
             )

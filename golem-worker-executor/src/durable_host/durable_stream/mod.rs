@@ -460,7 +460,9 @@ impl From<OplogError> for StreamStoreError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            OplogError::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            OplogError::Unreadable(unreadable) | OplogError::Unconfirmed(unreadable) => {
+                Self::Unreadable(unreadable)
+            }
             error @ (OplogError::Payload(_)
             | OplogError::Maintenance(_)
             | OplogError::ArchiveWrite(_)) => Self::Oplog(error.to_string()),
@@ -567,7 +569,9 @@ impl From<OplogError> for SessionError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            OplogError::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            OplogError::Unreadable(unreadable) | OplogError::Unconfirmed(unreadable) => {
+                Self::Unreadable(unreadable)
+            }
             error @ (OplogError::Payload(_)
             | OplogError::Maintenance(_)
             | OplogError::ArchiveWrite(_)) => Self::Failed(error.to_string()),

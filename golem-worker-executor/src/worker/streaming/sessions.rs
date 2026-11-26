@@ -204,7 +204,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             &attached.acceptance,
             &requested,
         )
-        .map_err(|error| self.stream_execution_config_read_error(index, error))?
+        .map_err(|error| self.stream_origin_read_error(index, error))?
         {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "IdempotencyConflict: queued observer differs from the retained origin request for the attachment at oplog index {index}"
@@ -255,6 +255,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             OplogPayloadDownloadError::Corrupt(error.into()),
         )
         .into()
+    }
+
+    /// The read error of the retained origin field at `index` that does not decode.
+    pub(super) fn stream_origin_read_error(
+        &self,
+        index: OplogIndex,
+        error: UndecodableOrigin,
+    ) -> WorkerExecutorError {
+        match error {
+            UndecodableOrigin::Identity(error) => self.stream_identity_read_error(index, error),
+            UndecodableOrigin::ExecutionConfig(error) => {
+                self.stream_execution_config_read_error(index, error)
+            }
+        }
     }
 
     pub(super) fn validate_retained_stream_descriptor_config(
@@ -951,10 +965,19 @@ pub(in crate::worker) fn stream_internal_authority(
     Ok(matches!(caller.immediate, Principal::Agent(_) | Principal::Tool(_)).then_some(authority))
 }
 
+/// A retained field of the origin of a stream invocation that does not decode.
+#[derive(Debug, PartialEq)]
+pub(crate) enum UndecodableOrigin {
+    /// The effective identity, with its auth context and principal.
+    Identity(DecodeError),
+    /// The execution configuration.
+    ExecutionConfig(DecodeError),
+}
+
 pub(crate) fn same_origin_stream_invocation(
     persisted: &StartAttemptDescriptor,
     requested: &StartAttemptDescriptor,
-) -> Result<bool, DecodeError> {
+) -> Result<bool, UndecodableOrigin> {
     let original = &persisted.invocation;
     let retry = &requested.invocation;
     if persisted.format_version != requested.format_version
@@ -991,7 +1014,7 @@ fn same_origin_queued_request(
     retry: &AgentInvocationPayload,
     accepted: &StreamSessionAcceptance,
     requested: &StreamSessionAcceptance,
-) -> Result<bool, DecodeError> {
+) -> Result<bool, UndecodableOrigin> {
     use golem_common::model::agent::AgentMethodInput;
     let (
         AgentInvocationPayload::AgentMethod {
@@ -1069,7 +1092,7 @@ fn same_origin_stream_authority(
     retry_execution: &[u8],
     original_handles: &[golem_common::model::durable_stream::DurableStreamHandle],
     retry_handles: &[golem_common::model::durable_stream::DurableStreamHandle],
-) -> Result<bool, DecodeError> {
+) -> Result<bool, UndecodableOrigin> {
     if original_handles.len() != retry_handles.len()
         || original_handles
             .iter()
@@ -1081,12 +1104,13 @@ fn same_origin_stream_authority(
     // The original identity is stored, so it must decode. A retry identity that does not decode
     // is a request that does not match.
     let (Some(original_authority), Some(retry_authority)) = (
-        stream_internal_authority(original_identity)?,
+        stream_internal_authority(original_identity).map_err(UndecodableOrigin::Identity)?,
         stream_internal_authority(retry_identity).ok().flatten(),
     ) else {
         return Ok(false);
     };
-    let mut original = decode_stream_execution(original_execution)?;
+    let mut original =
+        decode_stream_execution(original_execution).map_err(UndecodableOrigin::ExecutionConfig)?;
     let Ok(mut retry) = decode_stream_execution(retry_execution) else {
         return Ok(false);
     };
@@ -1116,7 +1140,8 @@ fn same_origin_stream_authority(
         }
     }
     let (Some(original_auth), Some(retry_auth)) = (
-        normalize_stream_join_authority(original_authority, &mut original.start)?,
+        normalize_stream_join_authority(original_authority, &mut original.start)
+            .map_err(UndecodableOrigin::Identity)?,
         normalize_stream_join_authority(retry_authority, &mut retry.start)
             .ok()
             .flatten(),

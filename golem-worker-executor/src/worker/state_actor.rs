@@ -531,11 +531,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     .commit_and_update_state(level, committed)
                                     .await
                                     .inspect_err(|refusal| {
-                                        // The entries are stored, but the status was not rebuilt.
                                         // A caller that took the receipt may no longer wait for
-                                        // this reply, so the owner is woken to repair the detached
-                                        // status itself before it chooses more work.
-                                        if matches!(refusal, OplogRefusal::Unreadable(_)) {
+                                        // this reply, so the owner acts on the refusal itself.
+                                        if refusal_wakes_owner(refusal) {
                                             queue_status_notification(
                                                 &status_lifecycle_jobs,
                                                 &status_notification_queued,
@@ -683,10 +681,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             .await
                         {
                             // An index that moved past entries without effect wakes nobody:
-                            // nothing the invocation loop chooses work from has changed.
-                            Ok(outcome) => outcome.fields_changed,
-                            // The owner repairs the detached status before it chooses more work.
-                            Err(refusal) => matches!(refusal, OplogRefusal::Unreadable(_)),
+                            // nothing the invocation loop chooses work from has changed. A report
+                            // stores nothing, so it refuses nothing after an append whose outcome
+                            // is unknown. The owner is woken for that append, to stop its
+                            // generation.
+                            Ok(outcome) => {
+                                outcome.fields_changed || state.oplog.unconfirmed_append().is_some()
+                            }
+                            Err(refusal) => refusal_wakes_owner(&refusal),
                         };
                         if notify {
                             queue_status_notification(
@@ -1324,6 +1326,17 @@ fn confirmation_after_append(
         ConfirmOutcome::Confirmed
     } else {
         ConfirmOutcome::Deferred
+    }
+}
+
+/// Whether a refused commit wakes the owner of the agent. After an `Unreadable` refusal, the owner
+/// repairs the detached status before it chooses more work. After an `Unconfirmed` refusal, the
+/// owner stops its generation, because the handle refuses every later write. A fence and a failed
+/// archive write retire or fail the agent on their own paths.
+fn refusal_wakes_owner(refusal: &OplogRefusal) -> bool {
+    match refusal {
+        OplogRefusal::Unreadable(_) | OplogRefusal::Unconfirmed(_) => true,
+        OplogRefusal::Fenced(_) | OplogRefusal::ArchiveWrite(_) => false,
     }
 }
 

@@ -213,7 +213,7 @@ fn unconfirmed_append(
         }
         _ => OplogReadError::source_failure(OplogReadSource::Primary, detail),
     };
-    OplogError::Unreadable(UnreadableOplog::new(agent_id, error))
+    OplogError::Unconfirmed(UnreadableOplog::new(agent_id, error))
 }
 
 /// What the attempts of an append have shown about its batch.
@@ -256,7 +256,7 @@ impl AppendPhase {
 
 /// Writes `append` to the oplog of `agent_id` under the retry policy. A write whose outcome is
 /// unknown is read back. A fence gives `OplogError::Fenced`. A read back that fails, after its own
-/// retries and the retries of the write, gives `OplogError::Unreadable`: the entries are neither
+/// retries and the retries of the write, gives `OplogError::Unconfirmed`: the entries are neither
 /// confirmed nor taken as absent. Stored entries that differ from the append, and write failures
 /// that no read explains, stop the executor.
 #[allow(clippy::too_many_arguments)]
@@ -863,8 +863,8 @@ pub(super) mod tests {
             .await
             .expect_err("an unconfirmed append is not a commit");
 
-        let OplogError::Unreadable(unreadable) = &error else {
-            panic!("expected an unreadable oplog, got {error:?}");
+        let OplogError::Unconfirmed(unreadable) = &error else {
+            panic!("expected an unconfirmed append, got {error:?}");
         };
         assert_eq!(unreadable.agent_id, agent_id);
         let OplogReadError::SourceUnavailable { source, detail } = &unreadable.error else {
@@ -922,8 +922,8 @@ pub(super) mod tests {
             .await
             .expect_err("an unconfirmed append is not a commit");
 
-        let OplogError::Unreadable(unreadable) = &error else {
-            panic!("expected an unreadable oplog, got {error:?}");
+        let OplogError::Unconfirmed(unreadable) = &error else {
+            panic!("expected an unconfirmed append, got {error:?}");
         };
         assert_eq!(oplog.unconfirmed_append().as_ref(), Some(unreadable));
         storage.confirm();
@@ -961,8 +961,8 @@ pub(super) mod tests {
             .await
             .expect_err("an unconfirmed append is not a commit");
 
-        let OplogError::Unreadable(unreadable) = &error else {
-            panic!("expected an unreadable oplog, got {error:?}");
+        let OplogError::Unconfirmed(unreadable) = &error else {
+            panic!("expected an unconfirmed append, got {error:?}");
         };
         assert_eq!(oplog.unconfirmed_append().as_ref(), Some(unreadable));
         storage.confirm();
@@ -1031,7 +1031,7 @@ pub(super) mod tests {
         assert_eq!(
             WriteLatch::transition(
                 None,
-                LatchEvent::AppendFailed(&OplogError::Unreadable(unconfirmed.clone()))
+                LatchEvent::AppendFailed(&OplogError::Unconfirmed(unconfirmed.clone()))
             ),
             Some(latched.clone())
         );
@@ -1070,8 +1070,8 @@ pub(super) mod tests {
             .await
             .expect_err("an unconfirmed flush reached no replica");
 
-        let OplogError::Unreadable(unreadable) = &error else {
-            panic!("expected an unreadable oplog, got {error:?}");
+        let OplogError::Unconfirmed(unreadable) = &error else {
+            panic!("expected an unconfirmed append, got {error:?}");
         };
         assert_eq!(unreadable.agent_id, agent_id);
         let OplogReadError::SourceUnavailable { detail, .. } = &unreadable.error else {
@@ -1108,7 +1108,7 @@ pub(super) mod tests {
         assert!(
             matches!(
                 &second,
-                OplogError::Unreadable(UnreadableOplog {
+                OplogError::Unconfirmed(UnreadableOplog {
                     agent_id: failed,
                     error: OplogReadError::SourceFailure { detail, .. },
                 }) if *failed == agent_id && detail.contains("oplog entries 2..=3")
@@ -1146,7 +1146,7 @@ pub(super) mod tests {
             ..
         } = &error
         else {
-            panic!("expected an unreadable oplog, got {error:?}");
+            panic!("expected an unconfirmed append, got {error:?}");
         };
         assert_eq!(*failed, agent_id);
         assert!(details.contains("oplog entries 1..=1"), "{details}");

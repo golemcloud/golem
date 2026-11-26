@@ -122,6 +122,14 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
                 ResidentWakeup::CommandChannelClosed => break,
             };
+            // A background flush can latch an append whose outcome is unknown while the loop
+            // waits. The status actor wakes the loop for it. The handle refuses every write, so
+            // the loop ends, and the outer loop stops the generation.
+            if self.parent.oplog().unconfirmed_append().is_some() {
+                self.deferred_wakeups.push_front(cmd);
+                final_decision = Some(RetryDecision::Immediate);
+                break;
+            }
             let cmd = match cmd {
                 WorkerCommand::UpdateFilesystemLimit {
                     allocated_bytes,

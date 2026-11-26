@@ -277,7 +277,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Commits the buffered entries and folds them into the published status.
     ///
     /// A commit the oplog refused is returned as the refusal: `OplogError::Fenced`, for which the
-    /// agent is marked retired for a lost shard, `OplogError::ArchiveWrite`, or
+    /// agent is marked retired for a lost shard, `OplogError::ArchiveWrite`,
+    /// `OplogError::Unconfirmed` when an append has an unknown outcome, or
     /// `OplogError::Unreadable` when the status after the commit does not read. It has to be
     /// reported rather than folded into "nothing changed": below the
     /// commit threshold an add only buffers, so this commit is where a takeover is found, and a
@@ -540,8 +541,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// A refusal is returned rather than acknowledged: the management request that wrote the
     /// entry must not report it as accepted. `OplogError::Unreadable` tells that the commit
-    /// stored the entry and only the status after it does not read: the wakeup is sent, and the
-    /// caller must not take the error as a write that did not happen.
+    /// stored the entry and only the status after it does not read. Then the wakeup is sent, and
+    /// the caller must not take the error as a write that did not happen.
+    /// `OplogError::Unconfirmed` tells that the append has an unknown outcome: the entry can be
+    /// stored or absent. Then no wakeup is sent, and the caller must not take the entry as
+    /// stored.
     pub(in crate::worker) async fn add_and_commit_oplog_internal(
         &self,
         instance_guard: &WorkerLifecycle,

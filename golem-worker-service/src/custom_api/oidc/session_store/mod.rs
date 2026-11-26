@@ -40,11 +40,10 @@ pub enum SessionStoreError {
     InternalError(#[from] anyhow::Error),
     /// A stored record is there but does not decode. A missing record is `None`, not this error.
     /// The error names the record and the decode problem, not the stored bytes.
-    #[error("stored {record} does not decode: {error}")]
-    Undecodable {
-        record: &'static str,
-        error: golem_common::serialization::DecodeError,
-    },
+    /// The payload is the record name and the decode error. It is rare, so it is boxed and the
+    /// error stays small.
+    #[error("stored {} does not decode: {}", .0.0, .0.1)]
+    Undecodable(Box<(&'static str, golem_common::serialization::DecodeError)>),
 }
 
 /// Decodes the stored `record`. A record that does not decode is `Undecodable`.
@@ -53,7 +52,7 @@ pub(super) fn decode_record<R: desert_rust::BinaryDeserializer>(
     record: &'static str,
 ) -> Result<R, SessionStoreError> {
     golem_common::serialization::decode(bytes)
-        .map_err(|error| SessionStoreError::Undecodable { record, error })
+        .map_err(|error| SessionStoreError::Undecodable(Box::new((record, error))))
 }
 
 error_forwarding!(SessionStoreError, RepoError);
@@ -619,11 +618,9 @@ mod tests {
             .expect_err("an undecodable record is not a missing record");
         assert!(
             matches!(
-                error,
-                SessionStoreError::Undecodable {
-                    record: "PendingOidcLogin",
-                    error: DecodeError::UnknownVersion(255),
-                }
+                &error,
+                SessionStoreError::Undecodable(undecodable)
+                    if **undecodable == ("PendingOidcLogin", DecodeError::UnknownVersion(255))
             ),
             "{error:?}"
         );

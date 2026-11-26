@@ -7367,9 +7367,14 @@ async fn buffered_and_revert_reads_refuse_without_new_entries(
 
     let fixture = gated_ephemeral_fixture(100).await;
     fixture.archive.release(100);
-    for entry in &test_case.entries {
-        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
-    }
+    futures::stream::iter(&test_case.entries)
+        .for_each(|entry| {
+            let oplog = &fixture.oplog;
+            async move {
+                oplog.add(entry.oplog_entry.clone()).await.unwrap();
+            }
+        })
+        .await;
     let sampled = fixture.oplog.current_oplog_index().await;
     let receipt = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
     let (result, _, _) = fold_committed_status(

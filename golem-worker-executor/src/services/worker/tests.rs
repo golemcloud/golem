@@ -656,6 +656,48 @@ async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() 
     );
 }
 
+/// The stored rejections are a hint that a start can lose: a set that does not decode is a miss,
+/// not a failed start, and the next rejection replaces it.
+#[test]
+async fn undecodable_stored_rejections_are_a_miss_that_the_next_rejection_replaces() {
+    let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
+    let fingerprint = AgentFingerprint::new();
+    service
+        .key_value_storage
+        .with_entity("test", "corrupt_rejections", "oplog_indexes")
+        .set_raw(
+            DefaultWorkerService::rejected_periodic_snapshots_namespace(&owned_agent_id),
+            &DefaultWorkerService::rejected_periodic_snapshots_field(fingerprint),
+            &[0xff, 0x13, 0x37],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .get_rejected_periodic_snapshots(&owned_agent_id, fingerprint)
+            .await
+            .unwrap(),
+        HashSet::new()
+    );
+    service
+        .reject_periodic_snapshots(
+            &owned_agent_id,
+            fingerprint,
+            &with_candidates(12, Some(7)),
+            &HashSet::from([OplogIndex::from_u64(12)]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .get_rejected_periodic_snapshots(&owned_agent_id, fingerprint)
+            .await
+            .unwrap(),
+        HashSet::from([OplogIndex::from_u64(12)])
+    );
+}
+
 #[test]
 async fn unreadable_status_cache_is_refolded_and_replaced() {
     let storage = Arc::new(InMemoryKeyValueStorage::new());

@@ -46,8 +46,9 @@ pub enum McpSessionStoreError {
     InternalError(#[from] anyhow::Error),
     /// A stored record is there but does not decode. A missing record is `None`, not this error.
     /// The error names the decode problem, not the stored bytes.
+    /// It is rare, so it is boxed and the error stays small.
     #[error("stored MCP session record does not decode: {0}")]
-    Undecodable(golem_common::serialization::DecodeError),
+    Undecodable(Box<golem_common::serialization::DecodeError>),
 }
 
 error_forwarding!(McpSessionStoreError, RepoError);
@@ -111,7 +112,8 @@ impl McpSessionRecord {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, McpSessionStoreError> {
-        golem_common::serialization::decode(bytes).map_err(McpSessionStoreError::Undecodable)
+        golem_common::serialization::decode(bytes)
+            .map_err(|error| McpSessionStoreError::Undecodable(Box::new(error)))
     }
 }
 

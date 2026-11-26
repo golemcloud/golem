@@ -21,6 +21,7 @@ use crate::model::ExecutionStatus;
 use crate::services::oplog::tests::{ReadCountingBlobStorage, ReadCountingIndexedStorage};
 use crate::services::oplog::{CommitLevel, PrimaryOplogService};
 use arc_swap::ArcSwap;
+use futures::StreamExt;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
@@ -810,13 +811,14 @@ async fn an_undecodable_lineage_record_keeps_its_index_and_class() {
     let identity = owner("source");
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(41));
     let fixture = ServiceFixture::new(&identity, fingerprint).await;
-    for size in 1..=3 {
-        fixture
-            .oplog
-            .add(OplogEntry::grow_memory(size))
-            .await
-            .unwrap();
-    }
+    futures::stream::iter(1..=3)
+        .for_each(|size| {
+            let oplog = &fixture.oplog;
+            async move {
+                oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
+            }
+        })
+        .await;
     let unreadable_index = fixture
         .oplog
         .add(OplogEntry::StreamSession {

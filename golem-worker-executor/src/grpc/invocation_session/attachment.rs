@@ -70,6 +70,16 @@ impl CleanupEvent {
         }
     }
 
+    /// The event of a resume that fails after its queued attachment became ready. A failed read
+    /// leaves the attachment unsettled. Any other failure leaves the attachment to the worker that
+    /// refused the resume. So the transport writes no detach.
+    pub(super) fn of_failed_resume(error: &WorkerExecutorError) -> Self {
+        match Self::of_observation_failure(error) {
+            Self::ReadFailed => Self::ReadFailed,
+            Self::AuthorityEnded | Self::OtherFailure => Self::AuthorityEnded,
+        }
+    }
+
     /// The event of a failed session operation.
     pub(super) fn of_session_error(error: &SessionError) -> Self {
         match error {

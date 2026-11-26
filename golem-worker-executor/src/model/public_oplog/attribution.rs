@@ -421,6 +421,7 @@ mod tests {
     use crate::services::oplog::{CommitLevel, PrimaryOplogService};
     use crate::services::worker::session_index_tests::UnusedComponentService;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use futures::StreamExt;
     use golem_common::model::account::AccountId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::DurableFunctionType;
@@ -459,9 +460,14 @@ mod tests {
             )
             .await
             .unwrap();
-        for size in 1..=4 {
-            oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
-        }
+        futures::stream::iter(1..=4)
+            .for_each(|size| {
+                let oplog = &oplog;
+                async move {
+                    oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
+                }
+            })
+            .await;
         let start_index = oplog
             .add(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),

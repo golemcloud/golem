@@ -428,9 +428,7 @@ fn code(cell: Cell) -> &'static str {
 /// `AfterReplay` (a filesystem failure after the replay, which passes in every column),
 /// `BlobStorageRefused` (a refused initial-file source at the update point),
 /// `InitialFileRefused` (a refused initial-file source that the start loads, which fails only a
-/// pending manual update, because only its start loads the files of the target), and
-/// `LoadLost` (a lost payload of the selected record, which only a snapshot-assisted attempt
-/// reports).
+/// pending manual update, because only its start loads the files of the target).
 #[test]
 fn the_outcome_table() {
     use StartProblem as Problem;
@@ -444,7 +442,7 @@ fn the_outcome_table() {
         Column::AssistedPromoted,
     ];
     let refused = FetchProblem::Refused(ComponentServiceRefusal::Unauthorized);
-    let table: [(Problem, [&str; 7]); 38] = [
+    let table: [(Problem, [&str; 7]); 37] = [
         (Problem::StaleSource, ["P", "P", "P", "P", "P", "F", "P"]),
         (Problem::TargetExecutor, ["P", "P", "P", "P", "P", "P", "P"]),
         (
@@ -517,7 +515,6 @@ fn the_outcome_table() {
             Problem::LoadUnavailable,
             ["P", "F", "V2", "P", "Fr", "F", "P"],
         ),
-        (Problem::LoadLost, ["P", "P", "P", "P", "P", "Fu", "P"]),
         (Problem::LoadFailed, ["R", "F", "V2", "P", "Fr", "Fi", "V2"]),
         (
             Problem::ManualLoadFailed,
@@ -910,7 +907,6 @@ fn a_failed_stored_read_fails_the_start_in_every_column() {
                 read.clone(),
                 crate::model::FailureProvenance::Host,
             );
-            let lost = SnapshotRecoveryResult::Lost(read.clone());
             let read_creation = creation(read);
             let errors = [
                 RawStartError::Replay {
@@ -925,7 +921,6 @@ fn a_failed_stored_read_fails_the_start_in_every_column() {
                 },
                 RawStartError::Load(&failed),
                 RawStartError::Load(&unavailable),
-                RawStartError::Load(&lost),
                 RawStartError::Instantiation(&read_creation),
                 RawStartError::TargetLoad(read),
                 RawStartError::TargetFetch(read),

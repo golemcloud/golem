@@ -247,10 +247,10 @@ impl WorkerService {
     }
 
     /// The result of a terminal invocation, read through the existing result lookup. A lookup
-    /// failure that is the recorded outcome is the result. A lookup that a failed oplog read
-    /// refuses fails with an internal error that does not show the details of the read. Every
-    /// other lookup failure, for example a missing agent, a denied permission or a routing miss,
-    /// is the error of the read.
+    /// failure that is the recorded outcome is the result. A missing agent, a denied access and a
+    /// routing refusal keep their own error. Every other lookup failure, also a failed oplog read,
+    /// fails with an internal error. That error does not show the details of the lookup failure,
+    /// because they can contain stored data.
     async fn invocation_outcome(
         &self,
         agent: &ManagedAgent,
@@ -281,12 +281,14 @@ impl WorkerService {
                 {
                     return Ok(Some(InvocationOutcome::Failure(failure)));
                 }
-                if !refused_by_a_failed_read(&error) {
+                let failed_read = refused_by_a_failed_read(&error);
+                if !failed_read && keeps_its_own_error(&error) {
                     return Err(error);
                 }
                 warn!(
                     invocation_id = %invocation_id,
-                    "The result of a terminal invocation cannot be read from the oplog"
+                    failed_read,
+                    "The result of a terminal invocation cannot be read"
                 );
                 return Err(WorkerServiceError::Internal(format!(
                     "the result of invocation {invocation_id} cannot be read"
@@ -367,8 +369,8 @@ pub(super) fn background_failure(failure: BackgroundFailure) -> InvocationFailur
     }
 }
 
-/// The recorded failure of an invocation, as the result lookup gives it. Any other error is a
-/// failure to read the result, such as an unavailable executor, and is not the outcome.
+/// Whether a failed oplog read refused the result lookup, also when an accepted invocation or a
+/// failed resume wraps the read error.
 fn refused_by_a_failed_read(error: &WorkerServiceError) -> bool {
     match error {
         WorkerServiceError::AcceptedInvocation { source, .. } => refused_by_a_failed_read(source),
@@ -377,6 +379,32 @@ fn refused_by_a_failed_read(error: &WorkerServiceError) -> bool {
     }
 }
 
+/// Whether a failed result lookup keeps its own error: a missing agent or component, a denied
+/// access, or a refusal of the routing to the executor. These errors do not contain stored data.
+fn keeps_its_own_error(error: &WorkerServiceError) -> bool {
+    match error {
+        WorkerServiceError::AcceptedInvocation { source, .. } => keeps_its_own_error(source),
+        WorkerServiceError::AgentNotFound(_)
+        | WorkerServiceError::InvocationNotFound(_)
+        | WorkerServiceError::ComponentNotFound(_)
+        | WorkerServiceError::AccountIdNotFound(_)
+        | WorkerServiceError::AgentAccessDenied(_)
+        | WorkerServiceError::AuthError(_)
+        | WorkerServiceError::InternalCallError(_) => true,
+        WorkerServiceError::GolemError(error) => matches!(
+            error,
+            WorkerExecutorError::AgentNotFound { .. }
+                | WorkerExecutorError::ComponentNotFound { .. }
+                | WorkerExecutorError::PermissionDenied { .. }
+                | WorkerExecutorError::InvalidShardId { .. }
+                | WorkerExecutorError::ShardingNotReady
+        ),
+        _ => false,
+    }
+}
+
+/// The recorded failure of an invocation, as the result lookup gives it. Any other error is a
+/// failure to read the result, such as an unavailable executor, and is not the outcome.
 fn recorded_failure(error: &WorkerServiceError) -> Option<InvocationFailure> {
     match error {
         WorkerServiceError::AcceptedInvocation { source, .. } => recorded_failure(source),

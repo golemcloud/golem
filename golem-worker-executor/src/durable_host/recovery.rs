@@ -965,8 +965,7 @@ impl AttemptFailure {
         match self {
             Self::Load(
                 SnapshotRecoveryResult::Failed(error, _)
-                | SnapshotRecoveryResult::Unavailable(error, _)
-                | SnapshotRecoveryResult::Lost(error),
+                | SnapshotRecoveryResult::Unavailable(error, _),
             )
             | Self::Replay(ReplayFailure { error, .. }) => error,
             Self::Load(_) => WorkerExecutorError::runtime(

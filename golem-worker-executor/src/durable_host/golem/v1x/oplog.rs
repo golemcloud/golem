@@ -32,7 +32,7 @@ use crate::preview2::golem_api_1_x::oplog::HostSearchOplog;
 use crate::preview2::golem_api_1_x::oplog::OplogReadError;
 use crate::preview2::golem_api_1_x::oplog::SearchOplog;
 use crate::services::HasOplogService;
-use crate::services::rpc::observation_recovery;
+use crate::services::rpc::observed_read_failure;
 use crate::worker::InvocationObservationFailure;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -216,7 +216,8 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
 const GUEST_CLAIM_VISIBILITY: ClaimVisibility = ClaimVisibility::Hidden;
 
 /// The result of a stored read for a guest call: a failed oplog read is the outer error, which
-/// stops the call without its `End`; any other error is the text that the call records.
+/// the call gives to [`observed_read_failure`]; any other error is the text that the call
+/// records.
 fn stored_read<T>(
     result: Result<T, WorkerExecutorError>,
 ) -> Result<Result<T, String>, WorkerExecutorError> {
@@ -228,8 +229,7 @@ fn stored_read<T>(
 }
 
 /// The result of a public oplog read for a guest call. An entry that does not read goes through
-/// [`stored_read`], so it stops the call without its `End`; an entry that has no public form is the
-/// text that the call records.
+/// [`stored_read`]; an entry that has no public form is the text that the call records.
 fn public_read<T>(
     result: Result<T, PublicEntryError>,
 ) -> Result<Result<T, String>, WorkerExecutorError> {
@@ -433,9 +433,10 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 
             let result = match get_oplog_chunk(self, &entry).await {
                 Ok(result) => result,
-                Err(error) => {
-                    return Err(handle.trap(observation_recovery(self.agent_id(), error)));
-                }
+                Err(error) => match observed_read_failure(self.agent_id(), error) {
+                    Ok(failure) => Err(failure.to_string()),
+                    Err(error) => return Err(handle.trap(error)),
+                },
             };
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
@@ -627,9 +628,10 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
 
             let result = match get_search_oplog_chunk(self, &entry).await {
                 Ok(result) => result,
-                Err(error) => {
-                    return Err(handle.trap(observation_recovery(self.agent_id(), error)));
-                }
+                Err(error) => match observed_read_failure(self.agent_id(), error) {
+                    Ok(failure) => Err(failure.to_string()),
+                    Err(error) => return Err(handle.trap(error)),
+                },
             };
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
@@ -880,9 +882,10 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                     .await,
             ) {
                 Ok(identity) => identity,
-                Err(error) => {
-                    return Err(handle.trap(observation_recovery(self.agent_id(), error)));
-                }
+                Err(error) => match observed_read_failure(self.agent_id(), error) {
+                    Ok(failure) => Err(failure.to_string()),
+                    Err(error) => return Err(handle.trap(error)),
+                },
             };
             let result = async {
                 let component_service = self.state.component_service.clone();
@@ -928,9 +931,10 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             .await;
             let result = match public_read(result) {
                 Ok(result) => result,
-                Err(error) => {
-                    return Err(handle.trap(observation_recovery(self.agent_id(), error)));
-                }
+                Err(error) => match observed_read_failure(self.agent_id(), error) {
+                    Ok(failure) => Err(failure.to_string()),
+                    Err(error) => return Err(handle.trap(error)),
+                },
             };
 
             handle

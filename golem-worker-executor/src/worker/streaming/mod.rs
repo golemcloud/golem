@@ -894,9 +894,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 && (!stream_attempt_matches(&prepared.attempt, &requested_attempt)
                     || prepared.attempt.invocation.stream_handles
                         != requested_attempt.invocation.stream_handles)
-                && same_origin_stream_invocation(&prepared.attempt, &requested_attempt).map_err(
-                    |error| self.stream_execution_config_read_error(prepared_index, error),
-                )?
+                && same_origin_stream_invocation(&prepared.attempt, &requested_attempt)
+                    .map_err(|error| self.stream_origin_read_error(prepared_index, error))?
                 && prepared.stream_mappings.len() == foreign_mappings.len()
                 && prepared
                     .stream_mappings

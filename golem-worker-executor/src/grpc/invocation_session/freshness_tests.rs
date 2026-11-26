@@ -1124,9 +1124,11 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     );
     let mut unreadable = original.clone();
     unreadable.invocation.execution_config = vec![99];
+    // The error names the retained field that does not decode.
     assert_eq!(
-        same_origin_stream_invocation(&unreadable, &fork_attempt),
-        Err(golem_common::serialization::DecodeError::UnknownVersion(99))
+        same_origin_stream_invocation(&unreadable, &fork_attempt)
+            .map_err(|error| format!("{error:?}")),
+        Err("ExecutionConfig(UnknownVersion(99))".to_string())
     );
     // A retry whose configuration does not decode diverges; it is not a read error.
     let mut undecodable_retry = fork_attempt.clone();
@@ -1146,10 +1148,9 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
         attempt
     };
     assert_eq!(
-        same_origin_stream_invocation(&with_identity(&original), &fork_attempt),
-        Err(golem_common::serialization::DecodeError::InvalidData(
-            "invalid stream effective identity framing".to_string()
-        ))
+        same_origin_stream_invocation(&with_identity(&original), &fork_attempt)
+            .map_err(|error| format!("{error:?}")),
+        Err("Identity(InvalidData(\"invalid stream effective identity framing\"))".to_string())
     );
     assert_eq!(
         same_origin_stream_invocation(&original, &with_identity(&fork_attempt)),

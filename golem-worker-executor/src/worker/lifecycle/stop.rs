@@ -507,9 +507,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let mut origins = self.external_invocation_origins.write().await;
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
-        // A failed stored read, also in the reason of a failed resume, a required recovery and an
-        // archive write that did not store the oplog explain why this generation stopped, not how its pending invocations ended. Tell their
-        // waiters without manufacturing a result that blocks later pickup.
+        // Some errors tell why this generation stopped, not how its pending invocations ended: a
+        // failed stored read, also as the reason of a failed resume, a required recovery, and an
+        // archive write that did not store the oplog. For these errors, tell the waiters and make
+        // no result, because a result blocks a later pickup.
         let observer_only = lost_shard
             || matches!(
                 InvocationObservationFailure::classify(&error),

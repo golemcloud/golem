@@ -23,6 +23,7 @@ use crate::model::public_oplog::with_expected_request;
 use crate::services::{HasAgentTypesService, HasComponentService, HasOplogService};
 use golem_common::model::agent::{AgentKey, ParsedAgentKey};
 use golem_common::model::type_id::TypeId;
+use tracing::warn;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -172,13 +173,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut result = Vec::new();
 
         for worker_metadata in workers {
-            let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
+            let owned_agent_id = worker_metadata.owned_agent_id();
+            // An agent whose error history does not read is listed with its status and no last
+            // error. The other agents of the page are not affected.
+            let last_error_and_retry_count = match Ctx::get_last_error_and_retry_count(
                 self,
-                &worker_metadata.owned_agent_id(),
+                &owned_agent_id,
                 worker_metadata.agent_mode,
                 &worker_metadata.last_known_status,
             )
-            .await?;
+            .await
+            {
+                Ok(last_error) => last_error,
+                Err(unreadable) => {
+                    warn!(
+                        agent_id = %owned_agent_id,
+                        transient = unreadable.is_transient(),
+                        "The last error of the agent does not read; listing the agent without it"
+                    );
+                    None
+                }
+            };
             let worker_metadata = self.with_expected_requests(worker_metadata).await;
             let metadata =
                 Self::create_proto_metadata(worker_metadata, last_error_and_retry_count)?;

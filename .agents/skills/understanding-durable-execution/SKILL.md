@@ -241,10 +241,10 @@ executor took over, and no record at all refuses too. An append only buffers, so
 swallowing it, so a refused `PendingAgentInvocation` commit is not acknowledged as accepted and a
 refused `AgentInvocationFinished` commit is not published to waiters. The first refusal latches:
 every later add, commit and flush on that handle is refused locally, without reaching storage, a
-later prefix drop does nothing, and the agent is retired for its lost shard instead of retried. The refusal travels as a typed error
-(`OplogError::Fenced`, `StreamStoreError::Fenced`, `SessionError::Fenced`,
-`WorkerExecutorError::OplogFenced`) to whoever acts on it; nothing re-reads the latch to
-reinterpret a failure that already happened.
+later prefix drop does nothing, and the agent is retired for its lost shard instead of retried.
+The refusal travels as a typed error (`OplogError::Fenced`, `StreamStoreError::Fenced`,
+`SessionError::Fenced`, `WorkerExecutorError::OplogFenced`) to whoever acts on it; nothing
+re-reads the latch to reinterpret a failure that already happened.
 
 The shared direct and accessor durable-call start paths commit `WriteRemote` with
 `CommitLevel::DurableOnly` after appending the actual `Start` and before returning the session
@@ -266,11 +266,26 @@ A primary oplog read returns a decode error as `UnreadableOplog`, as an archive 
 
 A commit report can fail after storage or ordered writer handoff succeeded. Then the status actor answers the receipt as committed and returns `Unreadable` to the full transaction. Before it returns, it detaches the status and waits until the flusher invalidates its baseline. Admission repairs that status before it checks a key, so a retry cannot append a second `PendingAgentInvocation` for stored work that the failed report did not include. `Fenced` and `ArchiveWrite` refuse the receipt.
 
-An append can also have an unknown outcome: the write reports `Indeterminate`, and the read back of its indices fails after its retries. The entries can be stored or absent. The primary oplog returns `Unreadable` and latches the append on its handle (`Oplog::unconfirmed_append`). The status actor then refuses the receipt with `OplogRefusal::Unconfirmed`, so no caller reports the entries as committed. The handle refuses every later add, commit and flush, and it refuses to read the entries of the append from its buffer. The open-oplog cache does not give the handle to a new opener. The invocation loop does not try again on that handle: it stops the generation, gives the waiters the read error and removes the worker from the active-agent cache. The next activation opens a new handle and reads the history from the storage.
+An append can also have an unknown outcome: the write reports `Indeterminate`, and the read back
+of its indices fails after its retries. The entries can be stored or absent. The primary oplog
+returns `OplogError::Unconfirmed`, not `Unreadable`, and latches the append on its handle
+(`Oplog::unconfirmed_append`). The status actor then refuses the receipt with
+`OplogRefusal::Unconfirmed`, so no caller reports the entries as committed or as stored. The
+handle refuses every later add, commit and flush, and it refuses to read the entries of the append
+from its buffer. The open-oplog cache does not give the handle to a new opener. The invocation
+loop does not try again on that handle: it stops the generation, gives the waiters the read error
+and removes the worker from the active-agent cache. When a background flush latches the append,
+the status actor wakes the idle owner, so that the generation stops too. The next activation
+opens a new handle and reads the history from the storage.
 
 On the durable primary oplog, `ReportOnly` reports the earlier commits and does not store the buffered tail. On an ephemeral oplog it returns an empty report.
 
-`AppendInvocationIfVersion` keeps a refusal before storage apart from `StoredButUnreadable`, which follows the append and commit of the job itself. After it releases its guards, the immediate admission owner requests a normal startup for the stored work and reports the read error. A scheduled admission registers the wake at the stored deadline instead. Scheduled delivery repairs a detached status before it decides whether the key is still pending. If the repair fails, the wake stays retryable.
+`AppendInvocationIfVersion` keeps a refusal before storage apart from
+`InvocationAppendOutcome::Appended(StoredAppend::Unreported)`, which follows the append and
+commit of the job itself. After it releases its guards, the immediate admission owner requests a
+normal startup for the stored work and reports the read error. A scheduled admission registers
+the wake at the stored deadline instead. Scheduled delivery repairs a detached status before it
+decides whether the key is still pending. If the repair fails, the wake stays retryable.
 
 PostgreSQL indexed SELECT cancellation with SQLSTATE `57014` is transient. The read classifier keeps the structured database error and formats it after it classifies it. The write classification does not change. Lazy hydration of a `Finished` result keeps a backend error apart from a corrupt payload, names the requested agent and the terminal index, and leaves the result lazy when it fails. Revert preflight computes its deletion mask before it hydrates retained payloads, including processor delivery snapshots. A corrupt nested delivery in the deleted suffix does not reject a warm revert, but corruption in retained history does. An unreadable outer entry can fail the revert before preflight has a decoded history.
 

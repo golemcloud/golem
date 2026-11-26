@@ -35,22 +35,29 @@ use std::task::{Context, Poll, Waker};
 use test_r::test;
 
 /// A payload of an application snapshot that does not download skips a periodic record for
-/// the start attempt, whatever the read error is. A snapshot-assisted attempt whose payload store
-/// fails retries with the same record through the recovery path that the read caused: the
-/// outcome table writes no failed update and rejects nothing for it. A snapshot-assisted attempt
-/// whose payload is missing or does not decode fails the update as a lost record and rejects the
-/// record.
+/// the start attempt, whatever the read error is. Every other start gets the read error as it is:
+/// a store that did not answer is a recovery that the read caused, and a payload that is missing
+/// or does not decode is a failed oplog. This holds for a snapshot-assisted attempt, for the start
+/// of a pending automatic update and for a start without an update. The outcome table passes both
+/// in every start column, with the purpose that the start replays for: it writes no failed update,
+/// rejects no record and reports no failed invocation. A snapshot record that does not read gives
+/// the same.
 #[test]
-fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_store_failed() {
+fn a_payload_that_does_not_download_passes_its_read_error_through_every_start() {
+    use crate::services::oplog::OplogPayloadDownloadError;
     use golem_common::model::{
         AssistedSelection, PendingUpdateKind, PendingUpdateRef, UsableAutomaticSnapshot,
     };
-    let head = PendingUpdateRef {
+    use golem_service_base::error::worker_executor::{OplogFailureStage, RecoveryCause};
+    let head = |kind: PendingUpdateKind| PendingUpdateRef {
         timestamp: Timestamp::from(1_000),
         oplog_index: OplogIndex::from_u64(12),
         admission_index: OplogIndex::from_u64(10),
         target_revision: ComponentRevision::new(3).unwrap(),
-        kind: PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+        kind,
+    };
+    let assisted = head(PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(
+        AssistedSelection {
             source_revision_start_index: OplogIndex::from_u64(4),
             snapshot: UsableAutomaticSnapshot {
                 index: OplogIndex::from_u64(7),
@@ -58,19 +65,13 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
                 filesystem_snapshot: None,
                 bootstrap: None,
             },
-        })),
-    };
+        },
+    )));
+    let manual = head(PendingUpdateKind::SnapshotBased {
+        filesystem_snapshot: None,
+    });
+    let automatic = head(PendingUpdateKind::Automatic);
     let agent_id = AgentId::from_parts(7, 1);
-    let decide = |result: &SnapshotRecoveryResult| {
-        start_outcome::decide(
-            &start_outcome::BaselineRole::AssistedPending(Arc::new(head.clone())),
-            Some(&head),
-            start_outcome::RawStartError::Load(result),
-            &agent_id,
-            false,
-        )
-    };
-    use crate::services::oplog::OplogPayloadDownloadError;
     let unreadable = |error: OplogPayloadDownloadError| {
         UnreadableOplog::of_payload(
             &agent_id,
@@ -89,54 +90,106 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
             "referenced oplog payload is missing"
         )))
     };
-    let unavailable = payload_download_failure(SnapshotReplayPurpose::AssistedUpdate, store_down());
-    let lost = payload_download_failure(SnapshotReplayPurpose::AssistedUpdate, missing());
+    let is_transient_read = |error: &WorkerExecutorError| {
+        matches!(
+            error,
+            WorkerExecutorError::RecoveryRequired {
+                cause: RecoveryCause::OplogReadUnavailable,
+                ..
+            }
+        )
+    };
+    let is_permanent_read = |error: &WorkerExecutorError| {
+        matches!(
+            error,
+            WorkerExecutorError::OplogFailed {
+                stage: OplogFailureStage::Read,
+                ..
+            }
+        )
+    };
 
     assert!([store_down(), missing()].into_iter().all(|read| matches!(
         payload_download_failure(SnapshotReplayPurpose::PeriodicRecovery, read),
         SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
     )));
-    assert!(matches!(
-        unavailable,
-        SnapshotRecoveryResult::Unavailable(
-            WorkerExecutorError::RecoveryRequired {
-                cause:
-                    golem_service_base::error::worker_executor::RecoveryCause::OplogReadUnavailable,
-                ..
-            },
-            _
-        )
-    ));
-    assert!(matches!(
-        decide(&unavailable),
-        start_outcome::StartAction::Error(WorkerExecutorError::RecoveryRequired { .. })
-    ));
-    match decide(&lost) {
-        start_outcome::StartAction::FailUpdate {
-            entry:
-                OplogEntry::FailedUpdate {
-                    details,
-                    snapshot_assisted_details: Some(assisted),
-                    snapshot_fault,
-                    ..
-                },
-            reject,
-        } => {
-            assert!(
-                details.as_deref().is_some_and(
-                    |details| details.starts_with(start_outcome::UPDATE_SNAPSHOT_UNAVAILABLE)
-                ),
-                "{details:?}"
-            );
-            assert_eq!(assisted.snapshot_index, OplogIndex::from_u64(7));
-            assert_eq!(
-                snapshot_fault,
-                Some(golem_common::model::oplog::SnapshotFault::Unavailable)
-            );
-            assert_eq!(reject, Some(OplogIndex::from_u64(7)));
-        }
-        other => panic!("a lost payload fails the update, got {other:?}"),
-    }
+    let purposes = [
+        SnapshotReplayPurpose::AssistedUpdate,
+        SnapshotReplayPurpose::AutomaticUpdate,
+        SnapshotReplayPurpose::None,
+    ];
+    let kinds = purposes
+        .iter()
+        .map(|purpose| {
+            let transient = match payload_download_failure(*purpose, store_down()) {
+                SnapshotRecoveryResult::Unavailable(error, _) => is_transient_read(&error),
+                _ => false,
+            };
+            let permanent = match payload_download_failure(*purpose, missing()) {
+                SnapshotRecoveryResult::Unavailable(error, _) => is_permanent_read(&error),
+                _ => false,
+            };
+            (*purpose, transient, permanent)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        kinds
+            .iter()
+            .all(|(_, transient, permanent)| *transient && *permanent),
+        "{kinds:?}"
+    );
+
+    let starts = [
+        (
+            start_outcome::BaselineRole::AssistedPending(Arc::new(assisted.clone())),
+            Some(&assisted),
+        ),
+        (
+            start_outcome::BaselineRole::ManualPending(Arc::new(manual.clone())),
+            Some(&manual),
+        ),
+        (start_outcome::BaselineRole::ManualPromoted, None),
+        (
+            start_outcome::BaselineRole::ManualPromoted,
+            Some(&automatic),
+        ),
+        (start_outcome::BaselineRole::AssistedPromoted, None),
+        (
+            start_outcome::BaselineRole::AssistedPromoted,
+            Some(&automatic),
+        ),
+        (start_outcome::BaselineRole::InitialFiles, Some(&automatic)),
+    ];
+    let wrong = starts
+        .iter()
+        .flat_map(|(role, head)| {
+            let purpose = role.purpose(*head);
+            [
+                payload_download_failure(purpose, store_down()),
+                payload_download_failure(purpose, missing()),
+                snapshot_entry_read_failure(store_down()),
+                snapshot_entry_read_failure(missing()),
+            ]
+            .into_iter()
+            .map(|result| {
+                let action = start_outcome::decide(
+                    role,
+                    *head,
+                    start_outcome::RawStartError::Load(&result),
+                    &agent_id,
+                    false,
+                );
+                (role, purpose, action)
+            })
+            .filter(|(_, _, action)| {
+                !matches!(action, start_outcome::StartAction::Error(error)
+                    if is_transient_read(error) || is_permanent_read(error))
+            })
+            .map(|(role, purpose, action)| format!("{role:?} / {purpose:?}: {action:?}"))
+            .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// An out-of-memory trap while the application snapshot loads retries the start with its

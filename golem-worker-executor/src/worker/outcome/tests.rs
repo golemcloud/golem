@@ -522,6 +522,14 @@ struct ResidentWorker {
 
 impl ResidentWorker {
     async fn start() -> Self {
+        Self::start_on(None).await
+    }
+
+    /// A resident worker whose primary oplog writes to `unconfirmed`, when it is given, so that a
+    /// test can make an append whose outcome is unknown.
+    async fn start_on(
+        unconfirmed: Option<Arc<crate::services::oplog::UnconfirmedAppends>>,
+    ) -> Self {
         use crate::services::HasShardService;
         use crate::services::golem_config::*;
         use crate::services::oplog::tests::{
@@ -552,9 +560,14 @@ impl ResidentWorker {
 
         let _ = rustls::crypto::ring::default_provider().install_default();
         let indexed = Arc::new(ReadCountingIndexedStorage::new());
+        let oplog_storage: Arc<dyn crate::storage::indexed::IndexedStorage + Send + Sync> =
+            match unconfirmed {
+                Some(unconfirmed) => unconfirmed,
+                None => indexed.clone(),
+            };
         let service = Arc::new(
             PrimaryOplogService::new(
-                indexed.clone(),
+                oplog_storage,
                 Arc::new(InMemoryBlobStorage::new()),
                 0,
                 0,
@@ -729,6 +742,40 @@ impl ResidentWorker {
             shutdown,
             _tasks: tasks,
         }
+    }
+
+    /// Installs a running generation whose commands the test receives, without an instance.
+    async fn install_running(&self) -> tokio::sync::mpsc::UnboundedReceiver<WorkerCommand> {
+        use crate::worker::lifecycle::state::LifecycleTransition;
+        use crate::worker::{RunningWorker, WaitingWorker};
+        let (sender, commands) = tokio::sync::mpsc::unbounded_channel();
+        let start_attempt = uuid::Uuid::new_v4();
+        let mut lifecycle = self.worker.instance.lock().await;
+        let LifecycleTransition::Unloaded(unloaded) = lifecycle.transition() else {
+            panic!("a resident worker starts unloaded");
+        };
+        unloaded.wait_for_permit(WaitingWorker {
+            handle: tokio::spawn(async {}),
+            start_attempt,
+        });
+        let LifecycleTransition::WaitingForPermit(waiting) = lifecycle.transition() else {
+            unreachable!()
+        };
+        waiting.install_running(RunningWorker {
+            handle: tokio::spawn(async {}),
+            sender,
+            queue: Default::default(),
+            waiting_for_command: Default::default(),
+            concurrent_agent_permit_held: Default::default(),
+            filesystem_activity: Default::default(),
+            filesystem_snapshot_slot: Default::default(),
+            unload_request: Default::default(),
+            idle_since_millis: Default::default(),
+            interrupts: Default::default(),
+            start_attempt,
+            owner_generation_started: false,
+        });
+        commands
     }
 
     async fn stop(self) {
@@ -1051,8 +1098,9 @@ async fn a_retried_automatic_update_after_a_failed_report_appends_no_second_upda
 }
 
 /// A keyless manual update whose commit stored its entry but whose status after the commit did
-/// not read fails with the read error, not as a write that did not happen. The repaired status
-/// holds the stored update, which the duplicate check of a retried update reads.
+/// not read fails with the read error, not as a write that did not happen. The stored update
+/// wakes the running loop. The repaired status holds the stored update, which the duplicate check
+/// of a retried update reads.
 #[test]
 #[test_r::timeout("60s")]
 async fn a_manual_update_after_a_failed_report_is_stored_and_found_by_the_repaired_status() {
@@ -1060,6 +1108,7 @@ async fn a_manual_update_after_a_failed_report_is_stored_and_found_by_the_repair
 
     let resident = ResidentWorker::start().await;
     let worker = &resident.worker;
+    let mut commands = resident.install_running().await;
     let tail = resident.oplog.current_oplog_index().await;
     let target = ComponentRevision::new(3).unwrap();
     resident
@@ -1076,6 +1125,14 @@ async fn a_manual_update_after_a_failed_report_is_stored_and_found_by_the_repair
         "{first:?}"
     );
     assert_eq!(resident.oplog.current_oplog_index().await, tail.next());
+    let woken = std::iter::from_fn(|| commands.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        woken
+            .iter()
+            .any(|command| matches!(command, WorkerCommand::WorkAvailable)),
+        "the stored update must wake the loop, got {} commands",
+        woken.len()
+    );
     let status = worker.try_get_repaired_status().await.unwrap();
     assert!(
         status
@@ -1084,6 +1141,207 @@ async fn a_manual_update_after_a_failed_report_is_stored_and_found_by_the_repair
             .any(|pending| pending.manual_update_target_revision == Some(target)),
         "{:?}",
         status.pending_invocations
+    );
+    resident.stop().await;
+}
+
+/// An append whose outcome is unknown is `Unconfirmed` for a lifecycle write, not `Unreadable`,
+/// so the caller cannot take it as a stored entry, and the write sends no wakeup for it. The
+/// status actor wakes the owner, because the handle refuses every later write.
+#[test]
+#[test_r::timeout("60s")]
+async fn an_unconfirmed_lifecycle_write_is_not_reported_as_stored() {
+    use crate::services::oplog::{OplogError, UnconfirmedAppends};
+    use crate::storage::indexed::IndexedStorageError;
+
+    let storage = Arc::new(UnconfirmedAppends::default());
+    let resident = ResidentWorker::start_on(Some(storage.clone())).await;
+    let worker = &resident.worker;
+    let mut commands = resident.install_running().await;
+    storage.unconfirm(IndexedStorageError::Transient(
+        "read-back outage".to_string(),
+    ));
+    let guard = worker.lock_non_stopping_worker().await;
+    let written = worker
+        .add_and_commit_oplog_internal(
+            &guard,
+            OplogEntry::grow_memory(5),
+            Some(WorkerCommand::WorkAvailable),
+        )
+        .await;
+    drop(guard);
+
+    let unconfirmed = resident.oplog.unconfirmed_append().expect("latched");
+    assert_eq!(written, Err(OplogError::Unconfirmed(unconfirmed)));
+    let woken = tokio::time::timeout(std::time::Duration::from_secs(10), commands.recv())
+        .await
+        .expect("the owner is woken")
+        .expect("the channel stays open");
+    assert!(
+        matches!(woken, WorkerCommand::InternalStatusChanged),
+        "a write with an unknown outcome sends no wakeup of its own"
+    );
+    resident.stop().await;
+}
+
+/// A background flush that latches an append whose outcome is unknown wakes the owner, which
+/// waits for work and makes no write of its own, so that its generation stops.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_background_flush_with_an_unknown_outcome_wakes_the_owner() {
+    use crate::services::oplog::{OplogError, UnconfirmedAppends};
+    use crate::storage::indexed::IndexedStorageError;
+
+    let storage = Arc::new(UnconfirmedAppends::default());
+    let resident = ResidentWorker::start_on(Some(storage.clone())).await;
+    let mut commands = resident.install_running().await;
+    storage.unconfirm(IndexedStorageError::Transient(
+        "read-back outage".to_string(),
+    ));
+
+    let flushed = resident.oplog.add(OplogEntry::grow_memory(6)).await;
+
+    assert!(
+        matches!(flushed, Err(OplogError::Unconfirmed(_))),
+        "{flushed:?}"
+    );
+    let woken = tokio::time::timeout(std::time::Duration::from_secs(10), commands.recv())
+        .await
+        .expect("the owner is woken")
+        .expect("the channel stays open");
+    assert!(matches!(woken, WorkerCommand::InternalStatusChanged));
+    resident.stop().await;
+}
+
+/// A generation that starts on a handle with an unconfirmed append stops before it creates an
+/// instance. The waiters of the start get the read error of the append.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_start_on_a_handle_with_an_unconfirmed_append_stops_with_its_read_error() {
+    use crate::services::HasEvents;
+    use crate::services::events::Event;
+    use crate::services::oplog::UnconfirmedAppends;
+    use crate::storage::indexed::IndexedStorageError;
+
+    let storage = Arc::new(UnconfirmedAppends::default());
+    let resident = ResidentWorker::start_on(Some(storage.clone())).await;
+    let worker = &resident.worker;
+    storage.unconfirm(IndexedStorageError::Transient(
+        "read-back outage".to_string(),
+    ));
+    let _ = resident.oplog.add(OplogEntry::grow_memory(7)).await;
+    let unconfirmed = resident.oplog.unconfirmed_append().expect("latched");
+    let agent_id = worker.agent_id();
+    let mut events = worker.events().subscribe();
+
+    Worker::start_if_needed(worker.clone()).await.unwrap();
+    let loaded = events
+        .wait_for(|event| match event {
+            Event::WorkerLoaded {
+                agent_id: loaded,
+                result,
+                ..
+            } if *loaded == agent_id => Some(result.clone()),
+            _ => None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(loaded, Err(WorkerExecutorError::from(unconfirmed)));
+    resident.stop().await;
+}
+
+/// A recovery failure that is not a read and that names its retry point adds its error entry,
+/// also when the error history does not read: the history is read only for a retry point. A
+/// recovery failure without a retry point needs the history, so it adds no entry while the
+/// history does not read.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_recovery_failure_reads_the_history_only_without_a_retry_point() {
+    use crate::storage::indexed::IndexedStorageError;
+
+    let resident = ResidentWorker::start().await;
+    let worker = &resident.worker;
+    worker
+        .record_recovery_failure(&WorkerExecutorError::recovery_required(
+            "the component download did not answer",
+        ))
+        .await;
+    let tail = resident.oplog.current_oplog_index().await;
+    assert_eq!(
+        worker.get_last_known_status().await.last_error_kind,
+        Some(OplogErrorKind::Recovery)
+    );
+    resident
+        .indexed
+        .set_read_error(Some(IndexedStorageError::Transient(
+            "error history unavailable".into(),
+        )));
+    let reads = resident.indexed.reads();
+
+    worker
+        .record_recovery_failure(&WorkerExecutorError::recovery_required(
+            "the component download did not answer again",
+        ))
+        .await;
+    assert!(
+        resident.indexed.reads() > reads,
+        "the history read must reach storage"
+    );
+    assert_eq!(resident.oplog.current_oplog_index().await, tail);
+
+    let retry_point = OplogIndex::from_u64(1);
+    worker
+        .record_recovery_failure(&WorkerExecutorError::recovery_required_from(
+            "the component download failed at a known point",
+            retry_point,
+        ))
+        .await;
+    resident.indexed.set_read_error(None);
+    assert_eq!(resident.oplog.current_oplog_index().await, tail.next());
+    let recorded = resident.oplog.read(tail.next()).await.unwrap();
+    assert!(
+        matches!(&recorded, OplogEntry::Error { retry_from, .. } if *retry_from == retry_point),
+        "{recorded:?}"
+    );
+    resident.stop().await;
+}
+
+/// A failed agent whose error history does not read refuses new work with the read error, not
+/// with a made-up prior failure.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_failed_agent_with_an_unreadable_history_refuses_with_the_read_error() {
+    use crate::storage::indexed::IndexedStorageError;
+
+    let resident = ResidentWorker::start().await;
+    let worker = &resident.worker;
+    worker
+        .record_recovery_failure(&WorkerExecutorError::invalid_request(
+            "the constructor parameters do not decode",
+        ))
+        .await;
+    let status = worker.get_last_known_status().await;
+    assert_eq!(status.status, AgentStatus::Failed);
+    resident
+        .indexed
+        .set_read_error(Some(IndexedStorageError::Transient(
+            "error history unavailable".into(),
+        )));
+
+    let refused = Worker::<crate::workerctx::default::Context>::ensure_not_failed(
+        &worker.deps,
+        &worker.owned_agent_id,
+        worker.agent_mode(),
+        &status,
+    )
+    .await;
+    resident.indexed.set_read_error(None);
+
+    assert!(
+        matches!(&refused, Err(WorkerExecutorError::RecoveryRequired { details, .. })
+            if details.contains("error history unavailable")),
+        "{refused:?}"
     );
     resident.stop().await;
 }

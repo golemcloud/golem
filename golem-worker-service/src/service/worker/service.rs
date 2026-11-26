@@ -10561,8 +10561,9 @@ mod tests {
     }
 
     /// A completed invocation whose result a failed oplog read refuses is an internal error, not
-    /// an invocation without a result, also when a failed resume wraps the read. The error does
-    /// not show the stored details. A lookup refusal that no read caused keeps its own error.
+    /// an invocation without a result, also when a failed resume wraps the read. Any other lookup
+    /// failure that is not a missing agent, a denied access or a routing refusal is an internal
+    /// error too. The internal error does not show the details of the lookup failure.
     #[test]
     async fn a_completed_invocation_with_an_unreadable_result_is_an_error() {
         use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -10600,13 +10601,15 @@ mod tests {
         let unavailable = WorkerExecutorError::oplog_read_unavailable(
             "primary storage did not answer for entry 43 with version 255",
         );
-        let reads = [
+        let redacted = [
             failed.clone(),
             unavailable.clone(),
             WorkerExecutorError::failed_to_resume_worker(agent_id, failed),
             WorkerExecutorError::failed_to_resume_worker(agent_id, unavailable),
+            WorkerExecutorError::runtime("stored entry 43 with version 255 did not match"),
+            WorkerExecutorError::unknown("stored entry 43 with version 255"),
         ];
-        futures::stream::iter(reads)
+        futures::stream::iter(redacted)
             .for_each(|read| async {
                 let described = format!("{read:?}");
                 let error = read_with(read).await;
@@ -10627,6 +10630,17 @@ mod tests {
                 error,
                 WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { agent_id: missing })
                     if missing == agent_id
+            ),
+            "{error:?}"
+        );
+        let error = read_with(WorkerExecutorError::permission_denied(
+            "no oplog read grant",
+        ))
+        .await;
+        assert!(
+            matches!(
+                error,
+                WorkerServiceError::GolemError(WorkerExecutorError::PermissionDenied { .. })
             ),
             "{error:?}"
         );

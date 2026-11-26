@@ -489,7 +489,7 @@ pub struct OplogFence {
 impl OplogFence {
     /// The fence a refused storage write reports for `agent_id`. Every caller passes an
     /// `IndexedStorageError::Fenced` that it has matched; the append retries build their fence
-    /// themselves and return an append whose outcome is unknown as `OplogError::Unreadable`.
+    /// themselves and return an append whose outcome is unknown as `OplogError::Unconfirmed`.
     pub(crate) fn refused(agent_id: AgentId, error: IndexedStorageError) -> Self {
         match error {
             IndexedStorageError::Fenced {
@@ -515,11 +515,14 @@ impl OplogFence {
 /// `ArchiveWrite` is a write to an archive layer that failed after its retries: it is latched, so
 /// the agent stops, and only that agent.
 ///
-/// `Unreadable` is a read of the oplog that failed. It has two sources on a write path. A commit
-/// stored its entries, but its report or the status after it does not read. Or the primary oplog
-/// cannot read back an append whose outcome is unknown: the entries can be stored or absent, the
-/// handle latches the append, and [`Oplog::unconfirmed_append`] returns it. In both cases the
-/// agent stops with the cause, and only that agent.
+/// `Unreadable` is a read of the oplog that failed. On a write path, the commit stored its
+/// entries, but its report or the status after it does not read.
+///
+/// `Unconfirmed` is an append of the primary oplog whose outcome is unknown: its read back failed,
+/// so the entries can be stored or absent. The handle latches the append, and
+/// [`Oplog::unconfirmed_append`] returns it. A caller must not take it as a stored entry.
+///
+/// In both cases the agent stops with the read error, and only that agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
@@ -527,6 +530,7 @@ pub enum OplogError {
     Maintenance(String),
     ArchiveWrite(ArchiveWriteFailure),
     Unreadable(UnreadableOplog),
+    Unconfirmed(UnreadableOplog),
 }
 
 /// A write of the oplog of `agent_id` to the archive layer `level` that failed after its retries.
@@ -570,7 +574,9 @@ impl OplogError {
     pub fn agent_failure(&self) -> Option<WorkerExecutorError> {
         match self {
             Self::ArchiveWrite(failure) => Some(failure.clone().into()),
-            Self::Unreadable(unreadable) => Some(unreadable.clone().into()),
+            Self::Unreadable(unreadable) | Self::Unconfirmed(unreadable) => {
+                Some(unreadable.clone().into())
+            }
             Self::Fenced(_) | Self::Payload(_) | Self::Maintenance(_) => None,
         }
     }
@@ -593,7 +599,9 @@ impl From<OplogError> for WorkerExecutorError {
             OplogError::Payload(details) => WorkerExecutorError::runtime(details),
             OplogError::Maintenance(details) => WorkerExecutorError::runtime(details),
             OplogError::ArchiveWrite(failure) => WorkerExecutorError::from(failure),
-            OplogError::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
+            OplogError::Unreadable(unreadable) | OplogError::Unconfirmed(unreadable) => {
+                WorkerExecutorError::from(unreadable)
+            }
         }
     }
 }
@@ -614,7 +622,9 @@ impl Display for OplogError {
             OplogError::Payload(details) => write!(f, "oplog payload error: {details}"),
             OplogError::Maintenance(details) => write!(f, "oplog maintenance error: {details}"),
             OplogError::ArchiveWrite(failure) => write!(f, "{failure}"),
-            OplogError::Unreadable(unreadable) => write!(f, "{unreadable}"),
+            OplogError::Unreadable(unreadable) | OplogError::Unconfirmed(unreadable) => {
+                write!(f, "{unreadable}")
+            }
         }
     }
 }
@@ -636,8 +646,7 @@ impl std::error::Error for OplogError {}
 pub enum OplogRefusal {
     Fenced(OplogFence),
     ArchiveWrite(ArchiveWriteFailure),
-    /// The append that [`Oplog::unconfirmed_append`] returns. As an [`OplogError`] it is
-    /// `Unreadable`, the error that the oplog returned for it.
+    /// The append that [`Oplog::unconfirmed_append`] returns.
     Unconfirmed(UnreadableOplog),
     Unreadable(UnreadableOplog),
 }
@@ -659,6 +668,7 @@ impl OplogError {
             Self::Fenced(fence) => Ok(OplogRefusal::Fenced(fence)),
             Self::ArchiveWrite(failure) => Ok(OplogRefusal::ArchiveWrite(failure)),
             Self::Unreadable(unreadable) => Ok(OplogRefusal::Unreadable(unreadable)),
+            Self::Unconfirmed(unreadable) => Ok(OplogRefusal::Unconfirmed(unreadable)),
             error @ (Self::Payload(_) | Self::Maintenance(_)) => Err(error),
         }
     }
@@ -669,9 +679,8 @@ impl From<OplogRefusal> for OplogError {
         match refusal {
             OplogRefusal::Fenced(fence) => Self::Fenced(fence),
             OplogRefusal::ArchiveWrite(failure) => Self::ArchiveWrite(failure),
-            OplogRefusal::Unconfirmed(unreadable) | OplogRefusal::Unreadable(unreadable) => {
-                Self::Unreadable(unreadable)
-            }
+            OplogRefusal::Unconfirmed(unreadable) => Self::Unconfirmed(unreadable),
+            OplogRefusal::Unreadable(unreadable) => Self::Unreadable(unreadable),
         }
     }
 }
@@ -808,9 +817,9 @@ pub trait Oplog: Any + Debug + Send + Sync {
     }
 
     /// Commits buffered entries at the requested level and reports the committed entries.
-    /// `Unreadable` has two meanings. Report collection failed after the storage or
-    /// ordered-handoff milestone succeeded. Or an append has an unknown outcome, which is not a
-    /// commit: then [`Self::unconfirmed_append`] returns it after this call. For a durable primary
+    /// `Unreadable` tells that report collection failed after the storage or ordered-handoff
+    /// milestone succeeded. `Unconfirmed` tells that an append has an unknown outcome, which is
+    /// not a commit: [`Self::unconfirmed_append`] returns it after this call. For a durable primary
     /// oplog, `ReportOnly` reports prior commits without storing the buffered tail. For an
     /// ephemeral oplog it returns an empty report.
     async fn commit(

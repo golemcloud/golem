@@ -583,21 +583,18 @@ pub(crate) fn build_durable_streaming_request(
 }
 
 /// A committed Prepared record whose invocation input does not decode. The record is history of
-/// the callee, so the callee fails with it.
+/// the callee, so the callee fails with it. The decoder text can hold stored values, so the error
+/// does not keep it.
 #[derive(Debug)]
 pub(crate) struct UndecodablePreparedInput {
     callee: AgentId,
-    /// The detail lives only until the caller turns the error into the read error of its
-    /// Prepared entry, so it stays an owned `String` and is not boxed or shared.
-    detail: String,
 }
 
 impl UndecodablePreparedInput {
     /// The read error of the Prepared record at `index`.
     pub(crate) fn at(self, index: golem_common::model::oplog::OplogIndex) -> UnreadableOplog {
         self.read_error(format!(
-            "invalid prepared session input at oplog index {index}: {}",
-            self.detail
+            "invalid prepared session input at oplog index {index}"
         ))
     }
 
@@ -613,7 +610,7 @@ impl UndecodablePreparedInput {
 impl From<UndecodablePreparedInput> for WorkerExecutorError {
     fn from(value: UndecodablePreparedInput) -> Self {
         value
-            .read_error(format!("invalid prepared session input: {}", value.detail))
+            .read_error("invalid prepared session input".to_string())
             .into()
     }
 }
@@ -621,9 +618,8 @@ impl From<UndecodablePreparedInput> for WorkerExecutorError {
 pub(crate) fn resumed_input_schema(
     prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
 ) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), UndecodablePreparedInput> {
-    decode_prepared_input(prepared).map_err(|detail| UndecodablePreparedInput {
+    decode_prepared_input(prepared).map_err(|_| UndecodablePreparedInput {
         callee: prepared.attempt.session_key.callee,
-        detail,
     })
 }
 
