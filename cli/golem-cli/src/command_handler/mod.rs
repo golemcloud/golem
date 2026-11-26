@@ -131,17 +131,34 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     async fn new_context(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
+        allow_manifest_upgrades: bool,
+        defer_application_writes: bool,
     ) -> anyhow::Result<Arc<Context>> {
         Ok(Arc::new(
-            Context::new(global_flags, log_output_for_help).await?,
+            Context::new(
+                global_flags,
+                log_output_for_help,
+                allow_manifest_upgrades,
+                defer_application_writes,
+            )
+            .await?,
         ))
     }
 
     async fn new_context_with_init_hint_error_handler(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
+        allow_manifest_upgrades: bool,
+        defer_application_writes: bool,
     ) -> anyhow::Result<Arc<Context>> {
-        match Self::new_context(global_flags.clone(), log_output_for_help).await {
+        match Self::new_context(
+            global_flags.clone(),
+            log_output_for_help,
+            allow_manifest_upgrades,
+            defer_application_writes,
+        )
+        .await
+        {
             Ok(ok) => Ok(ok),
             Err(error) => {
                 set_log_output(Output::Stderr);
@@ -255,6 +272,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 let ctx = Self::new_context_with_init_hint_error_handler(
                     fallback_command.global_flags.clone(),
                     Some(Output::Stderr),
+                    false,
+                    false,
                 )
                 .await;
 
@@ -320,6 +339,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     build: build_args,
                 } => {
+                    ctx.defer_application_writes = true;
                     ctx.get_or_init()
                         .await?
                         .app_handler()
@@ -327,20 +347,26 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .await
                 }
                 GolemCliSubcommand::Install { source } => {
-                    crate::package::install(&ctx.global_flags, &source).await
+                    ctx.allow_manifest_upgrades = false;
+                    ctx.defer_application_writes = true;
+                    let flags = ctx.global_flags.clone();
+                    ctx.get_or_init()
+                        .await?
+                        .app_handler()
+                        .cmd_install(&flags, &source)
+                        .await
                 }
                 GolemCliSubcommand::Package {
                     subcommand: crate::command::PackageSubcommand::Pack { output },
                 } => {
-                    let ctx = ctx.get_or_init().await?;
-                    let (report, bytes) = ctx.component_handler().pack_application().await?;
-                    crate::package::write_package(&output, &bytes)?;
-                    ctx.log_handler().log_output(report)
+                    ctx.get_or_init()
+                        .await?
+                        .app_handler()
+                        .cmd_pack(output)
+                        .await
                 }
                 GolemCliSubcommand::Publish { dry_run: _ } => {
-                    let ctx = ctx.get_or_init().await?;
-                    let (report, _) = ctx.component_handler().pack_application().await?;
-                    ctx.log_handler().log_output(report)
+                    ctx.get_or_init().await?.app_handler().cmd_publish().await
                 }
                 GolemCliSubcommand::GenerateBridge {
                     language,
@@ -672,6 +698,8 @@ struct LazyContext<Hooks: CommandHandlerHooks> {
     #[allow(unused)]
     hooks: Arc<Hooks>,
     ctx: Option<Arc<Context>>,
+    allow_manifest_upgrades: bool,
+    defer_application_writes: bool,
 }
 
 impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
@@ -680,6 +708,8 @@ impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
             global_flags,
             hooks,
             ctx: None,
+            allow_manifest_upgrades: true,
+            defer_application_writes: false,
         }
     }
 
@@ -692,6 +722,8 @@ impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
             global_flags,
             hooks,
             ctx: Some(ctx),
+            allow_manifest_upgrades: true,
+            defer_application_writes: false,
         }
     }
 
@@ -703,6 +735,8 @@ impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
                 CommandHandler::<Hooks>::new_context_with_init_hint_error_handler(
                     self.global_flags.clone(),
                     None,
+                    self.allow_manifest_upgrades,
+                    self.defer_application_writes,
                 )
                 .await?,
             );

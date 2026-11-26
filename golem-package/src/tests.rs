@@ -148,7 +148,7 @@ struct MemoryEffects {
 }
 
 #[async_trait::async_trait]
-impl PackageEffects for MemoryEffects {
+impl PackageReader for MemoryEffects {
     fn authorize(&self, _: &str, _: &FilePin) -> anyhow::Result<()> {
         ensure!(!self.deny_source, "Source denied");
         Ok(())
@@ -157,8 +157,12 @@ impl PackageEffects for MemoryEffects {
         Ok(self.cache.get(digest).cloned())
     }
     async fn fetch(&mut self, _: &FilePin, _: u64) -> anyhow::Result<Vec<u8>> {
-        self.source.take().context("Source is unavailable")
+        self.source.clone().context("Source is unavailable")
     }
+}
+
+#[async_trait::async_trait]
+impl PackageEffects for MemoryEffects {
     async fn cache(&mut self, digest: &str, bytes: &[u8]) -> anyhow::Result<()> {
         self.cache.insert(digest.into(), bytes.into());
         Ok(())
@@ -258,17 +262,29 @@ async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
     let pins = Pins::from([("example".into(), pin)]);
     let root = Path::new("unpack");
     let mut effects = MemoryEffects {
-        cache: BTreeMap::from([(digest.clone(), wrong)]),
+        cache: BTreeMap::from([(digest.clone(), wrong.clone())]),
         source: Some(bytes.clone()),
         ..Default::default()
     };
-    let expanded = expand(&pins, &pins, root, &mut effects).await.unwrap();
+    let inspection = inspect(&pins, &pins, &mut effects).await.unwrap();
+    assert!(effects.files.is_empty());
+    assert_eq!(effects.cache[&digest], wrong);
+    let repeated = inspect(&pins, &pins, &mut effects).await.unwrap();
+    assert_eq!(inspection.identity().unwrap(), repeated.identity().unwrap());
+    assert_eq!(inspection.assets(), repeated.assets());
+
+    effects.source = Some(wrong.clone());
+    assert!(materialize(&inspection, root, &mut effects).await.is_err());
+    assert!(effects.files.is_empty());
+    assert_eq!(effects.cache[&digest], wrong);
+    effects.source = Some(bytes.clone());
+    materialize(&inspection, root, &mut effects).await.unwrap();
+    let expanded = inspection.bind(root);
     assert_eq!(
         expanded.calls["example"],
         BTreeSet::from([AgentTypeName("SupportCall".into())])
     );
     assert_eq!(effects.cache[&digest], bytes);
-    assert!(effects.source.is_none());
     let declaration = serde_json::to_value(expanded.declarations).unwrap();
     for (name, byte) in [("first", 1), ("second", 2)] {
         let component = &declaration["components"][name];
@@ -276,6 +292,19 @@ async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
         let path = Path::new(component["componentWasm"].as_str().unwrap());
         assert!(path.starts_with("example/wasm"));
         assert_eq!(effects.files[path], [byte]);
+        assert_eq!(
+            expanded.components[&ComponentName(name.into())].wasm_path,
+            root.join(path)
+        );
+        assert_eq!(
+            inspection.assets()[path],
+            PackageAsset::File {
+                layer: spec.components[&ComponentName(name.into())].wasm.clone(),
+                entry: None,
+                digest: format!("sha256:{:x}", Sha256::digest([byte])),
+                size: 1,
+            }
+        );
     }
     effects.files.clear();
     assert!(expand(&pins, &pins, root, &mut effects).await.is_ok());

@@ -1861,6 +1861,14 @@ impl Application {
         Path::new(TEMP_DIR)
     }
 
+    pub(crate) fn operation_lock_path(app_root: &Path) -> PathBuf {
+        app_root.join(TEMP_DIR).join("operation.lock")
+    }
+
+    pub(crate) fn package_preparation_dir(app_root: &Path) -> PathBuf {
+        app_root.join(TEMP_DIR).join("package-unpack")
+    }
+
     pub fn task_result_marker_dir(&self) -> PathBuf {
         self.temp_dir().join("task-results")
     }
@@ -3854,8 +3862,11 @@ impl ComponentProperties {
         merged: &ComponentLayerProperties,
         node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     ) -> Self {
-        let files =
-            InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
+        let files = merged
+            .provision_files()
+            .into_iter()
+            .filter_map(|file| InitialComponentFile::from_raw(validation, &file.source, file.file))
+            .collect();
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
 
@@ -4080,17 +4091,6 @@ impl InitialComponentFile {
                 permissions: file.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
             },
         })
-    }
-
-    pub fn from_raw_vec(
-        validation: &mut ValidationBuilder,
-        source: &Path,
-        files: Vec<app_raw::InitialComponentFile>,
-    ) -> Vec<Self> {
-        files
-            .into_iter()
-            .filter_map(|file| InitialComponentFile::from_raw(validation, source, file))
-            .collect::<Vec<_>>()
     }
 }
 
@@ -4797,6 +4797,8 @@ mod app_builder {
                 builder.add_raw_app_preload_only(&mut validation, app);
             }
 
+            builder.validate_unique_sources(&mut validation);
+
             if builder.default_environment_names.len() > 1 {
                 validation.add_error(format!(
                     "Only one environment can be marked as default! Environments marked as default: {}",
@@ -4916,7 +4918,9 @@ mod app_builder {
                 vec![("source", app.source.to_string_lossy().to_string())],
                 |validation| {
                     let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
-                    self.all_sources.insert(app.source.clone());
+                    if !app.package_source {
+                        self.all_sources.insert(app.source.clone());
+                    }
 
                     for environment_name in app.application.environments.keys() {
                         if let Ok(environment_name) = environment_name.parse::<EnvironmentName>() {
@@ -7240,6 +7244,103 @@ mod test {
         assert_eq!(resolved.properties.files[0].source, template_source);
         assert_eq!(resolved.properties.files[1].source, component_source);
         assert_eq!(resolved.properties.files[2].source, root);
+
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+        let sources = component
+            .files()
+            .iter()
+            .map(|file| file.source.as_url().to_file_path().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sources,
+            [
+                template_source.parent().unwrap().join("template.txt"),
+                component_source.parent().unwrap().join("component.txt"),
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_files_retain_each_layer_source_and_merge_order() {
+        for mode in ["append", "prepend", "replace"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("golem.yaml");
+            let template = dir.path().join("templates/golem.yaml");
+            let agent_template = dir.path().join("agent-template/golem.yaml");
+            let component = dir.path().join("components/golem.yaml");
+            let agent_source = dir.path().join("agents/golem.yaml");
+            for path in [&template, &agent_template, &component, &agent_source] {
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+            }
+            fs::write(
+                &root,
+                "app: provenance\nenvironments:\n  local:\n    server: local\n",
+            )
+            .unwrap();
+            fs::write(&template, "componentTemplates:\n  base:\n    files:\n    - sourcePath: shared.txt\n      targetPath: /template.txt\n").unwrap();
+            fs::write(&agent_template, "componentTemplates:\n  agent-base:\n    files:\n    - sourcePath: shared.txt\n      targetPath: /agent-template.txt\n").unwrap();
+            fs::write(&component, "components:\n  app:main:\n    templates: base\n    dir: build\n    componentWasm: main.wasm\n    files:\n    - sourcePath: shared.txt\n      targetPath: /component.txt\n").unwrap();
+            fs::write(&agent_source, format!(
+                "agents:\n  Reader:\n    templates: agent-base\n    files:\n    - sourcePath: shared.txt\n      targetPath: /agent.txt\n    presets:\n      app-env:local:\n        filesMergeMode: prepend\n        files:\n        - sourcePath: environment.txt\n          targetPath: /environment.txt\n      debug:\n        filesMergeMode: {mode}\n        files:\n        - sourcePath: debug.txt\n          targetPath: /debug.txt\n"
+            )).unwrap();
+            let declarations = [
+                (&template, "shared.txt", "template bytes"),
+                (&component, "shared.txt", "component bytes"),
+                (&agent_template, "shared.txt", "agent template bytes"),
+                (&agent_source, "shared.txt", "agent bytes"),
+                (&agent_source, "environment.txt", "environment bytes"),
+                (&agent_source, "debug.txt", "debug bytes"),
+            ];
+            for (source, file, bytes) in declarations {
+                fs::write(source.parent().unwrap().join(file), bytes).unwrap();
+            }
+            let raw_apps = [&root, &template, &agent_template, &component, &agent_source]
+                .into_iter()
+                .map(|source| app_raw::ApplicationWithSource::from_yaml_file(source).unwrap())
+                .collect::<Vec<_>>();
+            let preload = Application::preload_from_raw_apps(&raw_apps)
+                .into_product()
+                .0
+                .unwrap();
+            let (app, _, errors) = Application::from_raw_apps(
+                dir.path().into(),
+                preload.application_name,
+                preload.environments,
+                preload.local_server,
+                selector("local", &["debug"]),
+                raw_apps,
+            )
+            .into_product();
+            assert!(errors.is_empty(), "{errors:?}");
+            let app = app.unwrap();
+            let name = parse_component_name("app:main");
+            assert_eq!(
+                app.component(&name).component_dir(),
+                component.parent().unwrap().join("build")
+            );
+            with_resolved_agent(&app, "app:main", "Reader", |agent| {
+                let expected = match mode {
+                    "append" => vec![4, 0, 1, 2, 3, 5],
+                    "prepend" => vec![5, 4, 0, 1, 2, 3],
+                    "replace" => vec![5],
+                    _ => unreachable!(),
+                };
+                assert_eq!(agent.files().len(), expected.len());
+                for (file, index) in agent.files().iter().zip(expected) {
+                    let (source, path, bytes) = declarations[index];
+                    assert_eq!(&file.source, source);
+                    assert_eq!(file.file.source_path, path);
+                    assert_eq!(
+                        fs::read_to_string(
+                            file.source.parent().unwrap().join(&file.file.source_path)
+                        )
+                        .unwrap(),
+                        bytes
+                    );
+                }
+            });
+        }
     }
 
     #[test]
@@ -11130,6 +11231,84 @@ bridge:
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
         (app.unwrap(), tmp_dir)
+    }
+
+    fn assert_preload_rejects_duplicate_sources(declaration: &str, entity: &str) {
+        for included_name in ["a.yaml", "z.yaml"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("golem.yaml");
+            let included = dir.path().join(included_name);
+            fs::write(
+                &root,
+                "app: primary\nenvironments:\n  local:\n    server: local\n",
+            )
+            .unwrap();
+            fs::write(&included, declaration).unwrap();
+            let sources = BTreeSet::from([root.clone(), included.clone()]);
+            let raw_apps = sources
+                .iter()
+                .map(|source| app_raw::ApplicationWithSource::from_yaml_file(source).unwrap())
+                .collect::<Vec<_>>();
+            let (preload, warnings, errors) =
+                Application::preload_from_raw_apps(&raw_apps).into_product();
+            assert!(preload.is_none(), "Duplicate {entity} was accepted");
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            for expected in [
+                entity,
+                "multiple sources",
+                root.to_str().unwrap(),
+                included.to_str().unwrap(),
+            ] {
+                assert!(errors[0].contains(expected), "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn preload_rejects_duplicate_app_sources_in_either_filename_order() {
+        assert_preload_rejects_duplicate_sources("app: shadow\n", "app");
+    }
+
+    #[test]
+    fn preload_rejects_duplicate_environment_sources_in_either_filename_order() {
+        assert_preload_rejects_duplicate_sources(
+            "environments:\n  local:\n    server: cloud\n",
+            "Environment",
+        );
+    }
+
+    #[test]
+    fn preload_merges_distinct_environment_sources_in_either_filename_order() {
+        for included_name in ["a.yaml", "z.yaml"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("golem.yaml");
+            let included = dir.path().join(included_name);
+            fs::write(
+                &root,
+                "app: primary\nenvironments:\n  local:\n    server: local\n",
+            )
+            .unwrap();
+            fs::write(&included, "environments:\n  remote:\n    server: cloud\n").unwrap();
+            let raw_apps = BTreeSet::from([root, included])
+                .iter()
+                .map(|source| app_raw::ApplicationWithSource::from_yaml_file(source).unwrap())
+                .collect::<Vec<_>>();
+            let (preload, warnings, errors) =
+                Application::preload_from_raw_apps(&raw_apps).into_product();
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert!(errors.is_empty(), "{errors:?}");
+            let preload = preload.unwrap();
+            assert_eq!(preload.application_name.value.0, "primary");
+            assert_eq!(
+                preload
+                    .environments
+                    .keys()
+                    .map(|name| name.0.as_str())
+                    .collect::<Vec<_>>(),
+                ["local", "remote"]
+            );
+        }
     }
 
     #[test]

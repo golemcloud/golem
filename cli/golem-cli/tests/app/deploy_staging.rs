@@ -407,6 +407,11 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
         ctx.cwd_path_join("tool/src/counter_agent.rs"),
         include_str!("../../../../test-components/size-analysis/fixtures/tool/src/lib.rs"),
     )?;
+    for component in ["tool", "owner"] {
+        let path = ctx.cwd_path_join(format!("{component}/Cargo.toml"));
+        let manifest = fs::read_to_string(&path)?;
+        fs::write_str(path, format!("{manifest}\n[workspace]\n"))?;
+    }
     assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
     assert!(ctx.cli(["package", "pack"]).await.success_or_dump());
     let package =

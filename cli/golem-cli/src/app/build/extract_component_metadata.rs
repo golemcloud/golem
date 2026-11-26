@@ -26,28 +26,18 @@ pub async fn extract_and_store_component_metadata(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
 ) -> anyhow::Result<ExtractedComponentMetadata> {
-    if let Some(metadata) = ctx
-        .extracted_metadata
-        .lock()
-        .unwrap()
-        .get(component_name)
-        .cloned()
-    {
+    if let Some(metadata) = ctx.extracted_component_metadata(component_name) {
         return Ok(metadata);
     }
     if let Some(installed) = ctx
         .application_context()
-        .installed_components
-        .get(component_name)
+        .installed_component(component_name)
     {
         let metadata = ctx
             .component_metadata()
             .add_cached_component_metadata(component_name, installed.metadata.clone())
             .await?;
-        ctx.extracted_metadata
-            .lock()
-            .unwrap()
-            .insert(component_name.clone(), metadata.clone());
+        ctx.store_extracted_component_metadata(component_name.clone(), metadata.clone());
         return Ok(metadata);
     }
     let component = ctx.application().component(component_name);
@@ -102,10 +92,7 @@ pub async fn extract_and_store_component_metadata(
                 .await
         }
     }?;
-    ctx.extracted_metadata
-        .lock()
-        .unwrap()
-        .insert(component_name.clone(), metadata.clone());
+    ctx.store_extracted_component_metadata(component_name.clone(), metadata.clone());
     Ok(metadata)
 }
 

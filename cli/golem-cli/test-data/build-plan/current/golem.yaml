@@ -1,0 +1,12 @@
+manifestVersion: 2.0.0
+app: host-build-plan
+environments:
+  local:
+    server: local
+components:
+  app:main:
+    componentWasm: component.wasm
+    build:
+      - command: node build.mjs
+        sources: [seed.wasm, build.mjs, package.json, package-lock.json]
+        targets: [component.wasm]

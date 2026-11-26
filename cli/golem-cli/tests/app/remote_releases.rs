@@ -34,7 +34,7 @@ use golem_common::model::environment_tool_grant::{
 };
 use golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantDeletion;
 use golem_common::model::json::NormalizedJsonValue;
-use golem_common::model::tool::ToolName;
+use golem_common::model::tool::{RemoteToolDeployment, ToolName};
 use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::schema::SchemaGraph;
@@ -205,11 +205,12 @@ fn wasm_files_under(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 #[test]
-#[timeout("2m")]
+#[timeout("8m")]
 async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
+    ctx.enable_native_conformance_tool();
     ctx.start_server().await;
 
     let base_url = Url::parse(&format!("http://localhost:{}", ctx.router_port()))?;
@@ -257,6 +258,14 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
         .get_environment_deployment_plan(&publisher_environment.id.0)
         .await?;
     let mut publisher_hash_input = publisher_plan.to_diffable();
+    for ambient in &publisher_plan.ambient_tools {
+        publisher_hash_input.remote_tools.insert(
+            ambient.name.to_string(),
+            ambient
+                .to_diffable(std::iter::empty(), &BTreeMap::new(), &BTreeMap::new())
+                .into(),
+        );
+    }
     publisher_hash_input
         .published_tools
         .insert(tool_name.to_string());
@@ -275,7 +284,20 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
                 publish_tools: vec![tool_name.clone()],
-                remote_tools: Vec::new(),
+                remote_tools: publisher_plan
+                    .ambient_tools
+                    .iter()
+                    .map(|ambient| RemoteToolDeployment {
+                        name: ambient.name.clone(),
+                        release: ToolReleaseReference::ById(ToolReleaseById {
+                            release_id: ambient.release_id,
+                        }),
+                        provision: ambient.provision.clone(),
+                        environment_binding: Some(ambient.environment_binding.clone()),
+                        component_bindings: BTreeMap::new(),
+                        agent_bindings: BTreeMap::new(),
+                    })
+                    .collect(),
                 mcp_imports: Vec::new(),
                 publish_tool_middlewares: vec![ToolMiddlewareName::try_from("audit").unwrap()],
                 remote_tool_middlewares: Vec::new(),
@@ -340,6 +362,38 @@ bridge:
     );
     fs::write_str(ctx.cwd_path_join("golem.yaml"), &consumer_manifest)?;
 
+    let checked_build = ctx.cli([cmd::BUILD, flag::STEP, "check"]).await;
+    assert!(checked_build.success_or_dump());
+    for expected in [
+        "preparation Tool",
+        "ToolRelease",
+        "MiddlewareRelease",
+        "RemoteRead",
+        "ConditionalGrantUpsert",
+        "preparation bridge tool selectors",
+    ] {
+        assert!(
+            checked_build.stdout_contains(expected) || checked_build.stderr_contains(expected),
+            "{expected}"
+        );
+    }
+    assert!(
+        consumer
+            .client
+            .list_environment_tool_grants(&consumer_environment.id.0)
+            .await?
+            .values
+            .is_empty()
+    );
+    assert!(
+        consumer
+            .client
+            .list_environment_tool_middleware_grants(&consumer_environment.id.0)
+            .await?
+            .values
+            .is_empty()
+    );
+
     let staged_deployment = ctx.cli([cmd::DEPLOY, "--stage"]).await;
     assert!(!staged_deployment.success());
     assert!(
@@ -382,18 +436,87 @@ bridge:
         "planning must not create the automatic grant"
     );
 
+    let mut oversized: serde_json::Value = serde_yaml::from_str(&consumer_manifest)?;
+    for index in 0..=golem_cli::app::build::plan::BuildPlanLimits::default().edges {
+        oversized["environments"][consumer_environment.name.0.as_str()]["tools"]
+            [format!("unused-{index}")] = serde_json::json!({"middleware": ["audit"]});
+    }
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        serde_yaml::to_string(&oversized)?,
+    )?;
+    let refused = ctx
+        .cli([flag::YES, cmd::BUILD, flag::STEP, "gen-bridge"])
+        .await;
+    assert!(!refused.success());
+    assert!(
+        refused.stdout_contains("Build plan edge limit exceeded")
+            || refused.stderr_contains("Build plan edge limit exceeded")
+    );
+    assert!(
+        consumer
+            .client
+            .list_environment_tool_grants(&consumer_environment.id.0)
+            .await?
+            .values
+            .is_empty()
+            && consumer
+                .client
+                .list_environment_tool_middleware_grants(&consumer_environment.id.0)
+                .await?
+                .values
+                .is_empty(),
+        "oversized preparation must fail before either kind of grant write"
+    );
+
+    for invalid in [
+        consumer_manifest.replace(
+            "tools: [search]",
+            "tools: [search, missing-environment-tool]",
+        ),
+        consumer_manifest.replace(
+            "name: audit\n        version: \"1.2.0\"",
+            "name: audit\n        version: \"99.0.0\"",
+        ),
+    ] {
+        fs::write_str(ctx.cwd_path_join("golem.yaml"), invalid)?;
+        let refused = ctx
+            .cli([flag::YES, cmd::BUILD, flag::STEP, "gen-bridge"])
+            .await;
+        assert!(!refused.success());
+        assert!(refused.stdout_contains("preparation Tool"));
+        assert!(
+            consumer
+                .client
+                .list_environment_tool_grants(&consumer_environment.id.0)
+                .await?
+                .values
+                .is_empty(),
+            "invalid preparation must fail before tool grant writes"
+        );
+        assert!(
+            consumer
+                .client
+                .list_environment_tool_middleware_grants(&consumer_environment.id.0)
+                .await?
+                .values
+                .is_empty(),
+            "invalid preparation must fail before middleware grant writes"
+        );
+    }
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), &consumer_manifest)?;
     let granted_build = ctx
         .cli([flag::YES, cmd::BUILD, flag::STEP, "gen-bridge"])
         .await;
     assert!(granted_build.success_or_dump());
     assert!(
-        granted_build.stdout_contains("environment tool grants required by the build")
-            || granted_build.stderr_contains("environment tool grants required by the build")
+        granted_build.stdout_contains("environment tool grants required by the checked build")
+            || granted_build
+                .stderr_contains("environment tool grants required by the checked build")
     );
     assert!(
-        granted_build.stdout_contains("remote tool bridge access through the selected environment")
-            || granted_build
-                .stderr_contains("remote tool bridge access through the selected environment")
+        granted_build
+            .stdout_contains_ordered(["preparation Tool", "Applying environment tool grant setup"])
     );
     assert!(
         granted_build.stdout_contains("Committed environment tool grant setup")
@@ -453,6 +576,144 @@ bridge:
             "remote-release bridge cache identity must include {expected}: {marker_input}"
         );
     }
+
+    let seeds = tempfile::tempdir()?;
+    let fixture = workspace_path().join("cli/golem-cli/test-data/build-plan/middleware-bootstrap");
+    std::fs::create_dir(seeds.path().join("src"))?;
+    std::fs::copy(fixture.join("src/lib.rs"), seeds.path().join("src/lib.rs"))?;
+    fs::write_str(
+        seeds.path().join("Cargo.toml"),
+        fs::read_to_string(fixture.join("Cargo.toml"))?.replace(
+            "__GOLEM_RUST_PATH__",
+            workspace_path()
+                .join("sdks/rust/golem-rust")
+                .to_str()
+                .unwrap(),
+        ),
+    )?;
+    for (name, feature) in [("owner", "provider"), ("late", "x")] {
+        let output = std::process::Command::new("cargo")
+            .current_dir(seeds.path())
+            .args(["build", "--target", "wasm32-wasip2", "--features", feature])
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_BUILD_JOBS", "2")
+            .env("CARGO_TARGET_DIR", seeds.path().join("target"))
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::create_dir(ctx.cwd_path_join(name))?;
+        std::fs::copy(
+            seeds.path().join("Cargo.toml"),
+            ctx.cwd_path_join(format!("{name}/Cargo.toml")),
+        )?;
+        std::fs::create_dir(ctx.cwd_path_join(format!("{name}/src")))?;
+        std::fs::copy(
+            seeds.path().join("src/lib.rs"),
+            ctx.cwd_path_join(format!("{name}/src/lib.rs")),
+        )?;
+        std::fs::copy(
+            seeds
+                .path()
+                .join("target/wasm32-wasip2/debug/middleware_bootstrap.wasm"),
+            ctx.cwd_path_join(format!("{name}/seed.wasm")),
+        )?;
+    }
+    let listings = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let trace = ctx.cwd_path_join("trace");
+    let handler = axum::routing::post({
+        let listings = listings.clone();
+        move |axum::Json(body): axum::Json<serde_json::Value>| {
+            let listings = listings.clone();
+            let trace = trace.clone();
+            async move {
+                assert_eq!(body["method"], "tools/list");
+                listings
+                    .lock()
+                    .unwrap()
+                    .push(std::fs::read_to_string(trace).unwrap_or_default());
+                axum::Json(
+                    serde_json::json!({"jsonrpc":"2.0", "id":body["id"], "result":{"tools":[{"name":"lookup", "inputSchema":{"type":"object","properties":{},"additionalProperties":false}}]}}),
+                )
+            }
+        }
+    });
+    let mut upstream = tokio::task::JoinSet::new();
+    upstream.spawn(async move {
+        axum::serve(listener, axum::Router::new().fallback(handler))
+            .await
+            .unwrap();
+    });
+    let mut late_manifest: serde_json::Value = serde_yaml::from_str(&consumer_manifest)?;
+    late_manifest["componentTemplates"] = serde_json::json!({"seed": {"guestLanguage": "rust"}});
+    late_manifest["mcp"] = serde_json::json!({"imports": {consumer_environment.name.0.as_str(): [{"url": format!("http://127.0.0.1:{port}/mcp"), "prefix": "acme"}]}});
+    late_manifest["tools"]["middleware"]["layer-x"] = serde_json::json!({"component": "app:late"});
+    late_manifest["components"] = serde_json::json!({
+        "app:owner": {"dir": "owner", "templates": "seed", "componentWasm": "component.wasm", "dependencies": {"tools": ["search"]}, "tools": {"search": {"middleware": ["layer-x"]}}, "build": [{"command": "node ../build.cjs owner"}]},
+        "app:late": {"dir": "late", "templates": "seed", "componentWasm": "component.wasm", "dependencies": {"tools": ["native-conformance", "acme-lookup"]}, "build": [{"command": "node ../build.cjs late"}]}
+    });
+    fs::write_str(
+        ctx.cwd_path_join("build.cjs"),
+        r#"const fs = require('node:fs');
+const name = process.argv[2];
+if (name === 'late') for (const tool of ['native-conformance', 'acme-lookup']) {
+  if (!fs.existsSync(`../golem-temp/bridge-sdk/rust/internal/${tool}-tool-guest-client/Cargo.toml`)) throw new Error(`missing ${tool} bridge`);
+}
+fs.appendFileSync('../trace', `${name}\n`);
+fs.copyFileSync('seed.wasm', 'component.wasm');
+"#,
+    )?;
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        serde_yaml::to_string(&late_manifest)?,
+    )?;
+    let inventory = ctx
+        .cli([cmd::BUILD, "app:owner", flag::STEP, "check"])
+        .await;
+    assert!(inventory.success_or_dump());
+    assert!(inventory.stdout_contains("no executable build plan was constructed"));
+    assert!(listings.lock().unwrap().is_empty());
+    assert!(!ctx.cwd_path_join("trace").exists());
+    let late_build = ctx
+        .cli([
+            flag::YES,
+            cmd::BUILD,
+            "app:owner",
+            flag::STEP,
+            "build",
+            flag::STEP,
+            "gen-bridge",
+        ])
+        .await;
+    assert!(late_build.success_or_dump());
+    assert!(
+        late_build.stdout_contains("EnvironmentTools")
+            && late_build.stdout_contains("ResolveMcpImports")
+            && late_build.stdout_contains("acme-lookup")
+            && late_build.stdout_contains_ordered([
+                "preparation EnvironmentTools",
+                "MCP import metadata for generated tool clients",
+            ])
+    );
+    assert_eq!(
+        fs::read_to_string(ctx.cwd_path_join("trace"))?,
+        "owner\nlate\n"
+    );
+    assert_eq!(listings.lock().unwrap().as_slice(), &["owner\n"]);
+    let bridge_only = ctx
+        .cli([flag::YES, cmd::BUILD, "app:owner", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(bridge_only.success_or_dump());
+    assert_eq!(
+        fs::read_to_string(ctx.cwd_path_join("trace"))?,
+        "owner\nlate\n"
+    );
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), &consumer_manifest)?;
+    upstream.abort_all();
 
     consumer
         .client

@@ -29,11 +29,12 @@ use crate::app::build::check::requirements::{
     ToolRequirement, ToolRequirementCheck, ToolRequirementSeverity, VersionRange,
     tool_requirements_for_language,
 };
-use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
+use crate::app::build::go_toolchain::{GoToolchain, inspect_go_toolchain};
 use crate::app::context::{BuildContext, validated_to_anyhow};
 use crate::app::edit::golem_yaml;
 use crate::fs;
 use crate::log::LogColorize;
+use crate::model::app::ApplicationConfig;
 use crate::model::language::GuestLanguage;
 use crate::process::which;
 use crate::sdk_overrides::sdk_overrides;
@@ -116,8 +117,13 @@ impl DependencyFixPlan {
     }
 }
 
-pub async fn check_build_tool_requirements(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    let selected_languages = selected_component_languages(ctx);
+pub async fn check_build_tool_requirements<'a>(
+    ctx: &BuildContext<'_>,
+    components: impl Iterator<Item = &'a golem_common::model::component::ComponentName>,
+) -> anyhow::Result<()> {
+    let selected_languages = components
+        .filter_map(|name| ctx.application().component(name).guest_language())
+        .collect::<BTreeSet<_>>();
 
     if selected_languages.is_empty() {
         return Ok(());
@@ -134,7 +140,7 @@ pub async fn check_build_tool_requirements(ctx: &BuildContext<'_>) -> anyhow::Re
     let mut validation = ValidationBuilder::new();
 
     for requirement in requirements.into_values() {
-        let result = check_tool_requirement(ctx, app_root_dir, requirement).await;
+        let result = check_tool_requirement(app_root_dir, requirement, ctx.application_config());
         validation.with_context(vec![("tool", requirement.name.to_string())], |validation| {
             if let Err(error) = result {
                 match requirement.severity {
@@ -212,6 +218,12 @@ fn plan_manifest_schema_reference_fix_steps(
     ctx.application()
         .all_sources()
         .iter()
+        // New common manifests already use the current schema and can exist
+        // only in memory until the checked load plan is applied.
+        .filter(|path| {
+            path.exists()
+                || !path.starts_with(crate::model::app::Application::on_demand_common_dir())
+        })
         .map(|path| {
             let current = fs::read_to_string(path)?;
             let new = golem_yaml::update_existing_schema_references(
@@ -240,10 +252,10 @@ fn selected_component_languages(ctx: &BuildContext<'_>) -> BTreeSet<GuestLanguag
         .collect()
 }
 
-async fn check_tool_requirement(
-    ctx: &BuildContext<'_>,
+fn check_tool_requirement(
     project_dir: &Path,
     requirement: ToolRequirement,
+    config: &ApplicationConfig,
 ) -> anyhow::Result<()> {
     match requirement.check {
         ToolRequirementCheck::CommandVersion { command, args } => {
@@ -253,17 +265,15 @@ async fn check_tool_requirement(
             check_rust_target(project_dir, requirement, target)
         }
         ToolRequirementCheck::GolemGoToolchain => {
-            let toolchain = ensure_go_toolchain(ctx.application_config())
-                .await
-                .map_err(|err| {
-                    anyhow!(
-                        "{} is not available: {}\nHint: {}",
-                        requirement.name.log_color_error_highlight(),
-                        err,
-                        requirement.install_hint
-                    )
-                })?;
-            check_go_toolchain_version(project_dir, requirement, &toolchain)
+            let toolchain = inspect_go_toolchain(config).map_err(|err| {
+                anyhow!(
+                    "{} is not available: {}\nHint: {}",
+                    requirement.name.log_color_error_highlight(),
+                    err,
+                    requirement.install_hint
+                )
+            })?;
+            check_go_toolchain_version(project_dir, requirement, toolchain.as_ref())
         }
     }
 }
@@ -271,27 +281,33 @@ async fn check_tool_requirement(
 fn check_go_toolchain_version(
     project_dir: &Path,
     requirement: ToolRequirement,
-    toolchain: &GoToolchain,
+    toolchain: Option<&GoToolchain>,
 ) -> anyhow::Result<()> {
-    let output = Command::new(&toolchain.go)
-        .current_dir(project_dir)
-        .args(["version"])
-        .output()
-        .map_err(|err| {
-            anyhow!(
-                "{} failed to run ({}): {}\nHint: {}",
-                requirement.name.log_color_error_highlight(),
-                toolchain.go.display(),
-                err,
-                requirement.install_hint
-            )
-        })?;
+    let output_text = match toolchain {
+        Some(toolchain) => {
+            let output = Command::new(&toolchain.go)
+                .current_dir(project_dir)
+                .args(["version"])
+                .output()
+                .map_err(|err| {
+                    anyhow!(
+                        "{} failed to run ({}): {}\nHint: {}",
+                        requirement.name.log_color_error_highlight(),
+                        toolchain.go.display(),
+                        err,
+                        requirement.install_hint
+                    )
+                })?;
+            String::from_utf8_lossy(&output.stdout).to_string()
+        }
+        // Inspection validated that the pinned archive can be installed at execution.
+        None => crate::versions::go_toolchain::TAG.to_string(),
+    };
 
     let Some(range) = requirement.version_range else {
         return Ok(());
     };
 
-    let output_text = String::from_utf8_lossy(&output.stdout).to_string();
     let version = extract_version_or_quoted_major(output_text.as_str()).ok_or_else(|| {
         anyhow!(
             "{} version could not be detected from output\nHint: {}",

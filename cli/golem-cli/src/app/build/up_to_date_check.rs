@@ -37,54 +37,68 @@ where
         return false;
     }
 
-    fn max_modified(path: &Path) -> Option<SystemTime> {
-        let mut max_modified: Option<SystemTime> = None;
-        let mut update_max_modified = |modified: SystemTime| {
-            if max_modified.is_none_or(|max_mod| max_mod.cmp(&modified) == Ordering::Less) {
-                max_modified = Some(modified)
+    fn modified(path: &Path, oldest: bool) -> Option<SystemTime> {
+        let mut result: Option<SystemTime> = None;
+        let mut update = |modified: SystemTime| {
+            if result.is_none_or(|current| {
+                if oldest {
+                    modified < current
+                } else {
+                    modified > current
+                }
+            }) {
+                result = Some(modified)
             }
         };
 
         if let Ok(metadata) = fs::metadata(path) {
             if metadata.is_dir() {
-                WalkDir::new(path)
-                    .into_iter()
-                    .filter_map(|entry| entry.ok().and_then(|entry| entry.metadata().ok()))
-                    .filter(|metadata| !metadata.is_dir())
-                    .filter_map(|metadata| metadata.modified().ok())
-                    .for_each(update_max_modified)
+                for entry in WalkDir::new(path) {
+                    let metadata = entry.ok()?.metadata().ok()?;
+                    if !metadata.is_dir() {
+                        update(metadata.modified().ok()?);
+                    }
+                }
             } else if let Ok(modified) = metadata.modified() {
-                update_max_modified(modified)
+                update(modified)
             }
         }
 
         debug!(
             path = %path.display(),
-            max_modified = max_modified.and_then(|d| Timestamp::try_from(d).ok()).map(|d| d.to_string()),
-            "max modified"
+            modified = result.and_then(|d| Timestamp::try_from(d).ok()).map(|d| d.to_string()),
+            "modification boundary"
         );
 
-        max_modified
+        result
     }
 
-    fn max_modified_short_circuit_on_missing<I: IntoIterator<Item = TP>, TP: AsRef<Path>>(
+    fn aggregate_modified<I: IntoIterator<Item = TP>, TP: AsRef<Path>>(
         paths: I,
+        oldest: bool,
     ) -> Option<SystemTime> {
         // Using Result and collect for short-circuit on any missing mod time
         paths
             .into_iter()
-            .map(|path| max_modified(path.as_ref()).ok_or(()))
+            .map(|path| modified(path.as_ref(), oldest).ok_or(()))
             .collect::<Result<Vec<_>, _>>()
-            .and_then(|mod_times| mod_times.into_iter().max().ok_or(()))
+            .and_then(|mod_times| {
+                if oldest {
+                    mod_times.into_iter().min()
+                } else {
+                    mod_times.into_iter().max()
+                }
+                .ok_or(())
+            })
             .ok()
     }
 
     let targets = targets();
     debug!(targets=?targets, "collected targets");
 
-    let max_target_modified = max_modified_short_circuit_on_missing(targets);
+    let oldest_target_modified = aggregate_modified(targets, true);
 
-    let max_target_modified = match max_target_modified {
+    let oldest_target_modified = match oldest_target_modified {
         Some(modified) => modified,
         None => {
             debug!("missing targets, not up-to-date");
@@ -95,11 +109,11 @@ where
     let sources = sources();
     debug!(source=?sources, "collected sources");
 
-    let max_source_modified = max_modified_short_circuit_on_missing(sources);
+    let max_source_modified = aggregate_modified(sources, false);
 
     match max_source_modified {
         Some(max_source_modified) => {
-            let up_to_date = max_source_modified.cmp(&max_target_modified) == Ordering::Less;
+            let up_to_date = max_source_modified.cmp(&oldest_target_modified) == Ordering::Less;
             debug!(up_to_date, "up to date result based on timestamps");
             up_to_date
         }
@@ -141,6 +155,16 @@ where
     ) -> anyhow::Result<Self> {
         self.task_result_marker = Some(TaskResultMarker::new(&self.marker_dir, source)?);
         Ok(self)
+    }
+
+    pub fn with_output_inventory(mut self, directory: PathBuf) -> Self {
+        self.task_result_marker = Some(
+            self.task_result_marker
+                .take()
+                .expect("An output inventory requires a task marker")
+                .track_outputs(directory),
+        );
+        self
     }
 
     pub fn with_skip_check(self, skip_check: bool) -> Self {
@@ -201,7 +225,7 @@ where
             Ok(())
         } else {
             match self.task_result_marker {
-                Some(marker) => marker.result(run()),
+                Some(marker) => marker.run(run),
                 None => run(),
             }
         }
@@ -222,7 +246,34 @@ where
             Ok(())
         } else {
             match self.task_result_marker {
-                Some(marker) => marker.result(run().await),
+                Some(marker) => marker.run_async(run).await,
+                None => run().await,
+            }
+        }
+    }
+
+    pub async fn run_async_or_skip_with_final_source<Run, Skip, FinalSource>(
+        self,
+        run: Run,
+        skip: Skip,
+        final_source: FinalSource,
+    ) -> anyhow::Result<()>
+    where
+        Run: AsyncFnOnce() -> anyhow::Result<()>,
+        Skip: FnOnce(),
+        FinalSource: FnOnce() -> anyhow::Result<TaskResultMarker>,
+    {
+        if Self::is_up_to_date(
+            self.task_result_marker.as_ref(),
+            self.skip_check,
+            self.sources,
+            self.targets,
+        ) {
+            skip();
+            Ok(())
+        } else {
+            match self.task_result_marker {
+                Some(marker) => marker.run_async_with_final_source(run, final_source).await,
                 None => run().await,
             }
         }
@@ -247,7 +298,7 @@ where
             Ok(None)
         } else {
             match self.task_result_marker {
-                Some(marker) => Ok(Some(marker.result(run().await)?)),
+                Some(marker) => Ok(Some(marker.run_async(run).await?)),
                 None => Ok(Some(run().await?)),
             }
         }
@@ -259,8 +310,13 @@ where
         sources: FS,
         targets: FT,
     ) -> bool {
-        task_result_marker.is_none_or(|marker| marker.is_up_to_date())
-            && is_up_to_date(skip_check, sources, targets)
+        if !task_result_marker.is_none_or(|marker| marker.is_up_to_date()) {
+            return false;
+        }
+        match task_result_marker.and_then(TaskResultMarker::tracked_outputs) {
+            Some(outputs) => is_up_to_date(skip_check, sources, || outputs),
+            None => is_up_to_date(skip_check, sources, targets),
+        }
     }
 }
 
@@ -292,6 +348,48 @@ mod tests {
     use crate::model::app::extracted_component_metadata_path;
     use golem_common::model::component::ComponentName;
     use test_r::test;
+
+    #[test]
+    fn every_required_target_must_be_newer_than_the_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let outputs = dir.path().join("outputs");
+        std::fs::create_dir(&outputs).unwrap();
+        let first = outputs.join("first");
+        let second = outputs.join("second");
+        let write_at = |path: &Path, seconds| {
+            std::fs::write(path, b"content").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+                .unwrap();
+        };
+        write_at(&source, 20);
+        write_at(&first, 10);
+        write_at(&second, 30);
+        for directory_target in [false, true] {
+            let targets = || {
+                if directory_target {
+                    vec![&outputs]
+                } else {
+                    vec![&first, &second]
+                }
+            };
+            assert!(!is_up_to_date(false, || [&source], targets));
+        }
+        for time in [20, 21] {
+            write_at(&first, time);
+            assert_eq!(
+                is_up_to_date(false, || [&source], || [&first, &second]),
+                time > 20
+            );
+            assert_eq!(is_up_to_date(false, || [&source], || [&outputs]), time > 20);
+        }
+        std::fs::remove_file(&first).unwrap();
+        assert!(!is_up_to_date(false, || [&source], || [&first, &second]));
+    }
 
     #[test]
     fn component_metadata_version_switch_invalidates_every_cached_output_path() {

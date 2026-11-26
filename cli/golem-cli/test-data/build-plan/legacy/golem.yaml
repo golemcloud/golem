@@ -1,0 +1,13 @@
+manifestVersion: 1.6.0
+app: host-build-plan
+environments:
+  local:
+    server: local
+components:
+  app:main:
+    componentWasm: component.wasm
+    outputWasm: staged.wasm
+    build:
+      - command: node build.mjs
+        sources: [seed.wasm, build.mjs, package.json, package-lock.json]
+        targets: [component.wasm, staged.wasm]

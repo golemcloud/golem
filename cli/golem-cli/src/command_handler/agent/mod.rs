@@ -539,6 +539,7 @@ impl AgentCommandHandler {
             }
         };
 
+        self.ctx.finish_application_operation();
         let component_metadata: ComponentMetadata = component.metadata.clone().into();
         let Some(agent_type) = component_metadata
             .agent_types()
@@ -849,6 +850,7 @@ impl AgentCommandHandler {
 
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let agent_id = self.agent_id_of(&agent_id_match).await?;
+        self.ctx.finish_application_operation();
 
         log_action(
             "Connecting",
@@ -889,6 +891,7 @@ impl AgentCommandHandler {
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
+        self.ctx.finish_application_operation();
 
         // The REPL writes the accepted invocation ID to stdin once the call returns.
         use tokio::io::AsyncBufReadExt;

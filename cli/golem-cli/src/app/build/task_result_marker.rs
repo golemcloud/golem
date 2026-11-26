@@ -27,7 +27,9 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub enum TaskResultMarkerHashSourceKind {
     // The string will be hashed
@@ -75,12 +77,53 @@ pub struct TaskResult {
     pub cli_version: String,
     pub hash_hex: String,
     pub success: bool,
+    outputs: BTreeMap<PathBuf, OutputMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct OutputMetadata {
+    size: Option<u64>,
+    modified: Option<SystemTime>,
+}
+
+fn output_inventory(root: &Path) -> anyhow::Result<BTreeMap<PathBuf, OutputMetadata>> {
+    anyhow::ensure!(
+        std::fs::symlink_metadata(root)?.is_dir(),
+        "Invalid task output directory"
+    );
+    let mut outputs = BTreeMap::new();
+    for entry in walkdir::WalkDir::new(root).min_depth(1).follow_links(false) {
+        let entry = entry?;
+        anyhow::ensure!(
+            outputs.len() < 16_384,
+            "Task output inventory limit exceeded"
+        );
+        let metadata = entry.path().symlink_metadata()?;
+        anyhow::ensure!(
+            metadata.is_file() || metadata.is_dir(),
+            "Task output is not a regular file or directory: {}",
+            entry.path().display()
+        );
+        outputs.insert(
+            entry.path().strip_prefix(root)?.to_path_buf(),
+            OutputMetadata {
+                size: metadata.is_file().then_some(metadata.len()),
+                modified: if metadata.is_file() {
+                    Some(metadata.modified()?)
+                } else {
+                    None
+                },
+            },
+        );
+    }
+    Ok(outputs)
 }
 
 #[derive(Serialize)]
 pub struct ResolvedExternalCommandMarkerHash<'a> {
     pub build_dir: &'a Path,
     pub command: &'a app_raw::ExternalCommand,
+    pub npm_dependencies: Option<(String, Option<String>)>,
 }
 
 #[derive(Serialize)]
@@ -157,11 +200,15 @@ impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(Some(serde_json::to_string(&(
-            self.build_dir,
-            &self.command.command,
-            &self.command.targets,
-        ))?))
+        let targets = self
+            .command
+            .targets
+            .iter()
+            .map(|target| {
+                fs::absolute_lexical_path_from_base_dir(Path::new(target), self.build_dir)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok(Some(serde_json::to_string(&targets)?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -181,7 +228,12 @@ impl TaskResultMarkerHashSource for GenerateQuickJSCrateCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(
+            &fs::absolute_lexical_path_from_base_dir(
+                Path::new(&self.command.generate_quickjs_crate),
+                self.build_dir,
+            ),
+        )?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -201,7 +253,12 @@ impl TaskResultMarkerHashSource for GenerateQuickJSDTSCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(
+            &fs::absolute_lexical_path_from_base_dir(
+                Path::new(&self.command.generate_quickjs_dts),
+                self.build_dir,
+            ),
+        )?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -221,7 +278,9 @@ impl TaskResultMarkerHashSource for InjectToPrebuiltQuickJsCommandMarkerHash<'_>
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(
+            &fs::absolute_lexical_path_from_base_dir(Path::new(&self.command.into), self.build_dir),
+        )?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -241,7 +300,9 @@ impl TaskResultMarkerHashSource for PreinitializeJsCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(
+            &fs::absolute_lexical_path_from_base_dir(Path::new(&self.command.into), self.build_dir),
+        )?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -449,9 +510,11 @@ pub struct TaskResultMarker {
     marker_file_path: PathBuf,
     hash_hex: String,
     previous_result: Option<TaskResult>,
+    output_directory: Option<PathBuf>,
 }
 
 impl TaskResultMarker {
+    /// Reads freshness without invalidating an existing marker.
     pub fn new<T: TaskResultMarkerHashSource>(dir: &Path, task: T) -> anyhow::Result<Self> {
         let (hash_input, hash_hex) = match task.source()? {
             HashFromString(hash_input) => {
@@ -469,23 +532,34 @@ impl TaskResultMarker {
             }
         };
 
-        let (marker_file_path, marker_file_exists, previous_result) =
+        let (marker_file_path, _marker_file_exists, previous_result) =
             Self::load_previous_result(dir, &id_hash_hex)?;
 
-        let task_result_marker = Self {
+        Ok(Self {
             kind: T::kind(),
             id,
             hash_input,
             marker_file_path,
             hash_hex,
             previous_result,
-        };
+            output_directory: None,
+        })
+    }
 
-        if marker_file_exists && !task_result_marker.is_up_to_date() {
-            fs::remove(&task_result_marker.marker_file_path)?;
-        }
+    pub fn track_outputs(mut self, directory: PathBuf) -> Self {
+        self.output_directory = Some(directory);
+        self
+    }
 
-        Ok(task_result_marker)
+    pub fn tracked_outputs(&self) -> Option<Vec<PathBuf>> {
+        self.output_directory.as_ref().map(|root| {
+            self.previous_result
+                .iter()
+                .flat_map(|result| &result.outputs)
+                .filter(|(_, metadata)| metadata.size.is_some())
+                .map(|(path, _)| root.join(path))
+                .collect()
+        })
     }
 
     pub fn get_hash<T: TaskResultMarkerHashSource>(
@@ -547,24 +621,88 @@ impl TaskResultMarker {
     pub fn is_up_to_date(&self) -> bool {
         match &self.previous_result {
             Some(previous_result) => {
-                previous_result.hash_hex == self.hash_hex && previous_result.success
+                previous_result.hash_hex == self.hash_hex
+                    && previous_result.success
+                    && self.output_directory.as_ref().is_none_or(|root| {
+                        !previous_result.outputs.is_empty()
+                            && output_inventory(root)
+                                .is_ok_and(|current| current == previous_result.outputs)
+                    })
             }
             None => false,
         }
     }
 
-    pub fn success(self) -> anyhow::Result<()> {
+    fn success(self) -> anyhow::Result<()> {
         self.save_marker_file(true)
     }
 
-    pub fn failure(self) -> anyhow::Result<()> {
+    fn failure(self) -> anyhow::Result<()> {
         self.save_marker_file(false)
     }
 
+    fn invalidate(&self) -> anyhow::Result<()> {
+        match std::fs::remove_file(&self.marker_file_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "Failed to invalidate task marker {}",
+                    self.marker_file_path.display()
+                )
+            }),
+        }
+    }
+
+    pub fn run<T>(self, run: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
+        self.invalidate()?;
+        self.result(run())
+    }
+
+    pub async fn run_async<T>(
+        self,
+        run: impl AsyncFnOnce() -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        self.invalidate()?;
+        self.result(run().await)
+    }
+
+    /// For tasks that intentionally rewrite their own inputs, record the resulting
+    /// source identity only after successful execution. The task itself is unchanged.
+    pub async fn run_async_with_final_source<T>(
+        self,
+        run: impl AsyncFnOnce() -> anyhow::Result<T>,
+        final_source: impl FnOnce() -> anyhow::Result<Self>,
+    ) -> anyhow::Result<T> {
+        self.invalidate()?;
+        let result = run().await?;
+        let mut final_marker = final_source()?;
+        anyhow::ensure!(
+            self.kind == final_marker.kind
+                && self.id == final_marker.id
+                && self.marker_file_path == final_marker.marker_file_path,
+            "The final source must identify the same task"
+        );
+        final_marker.output_directory = self.output_directory;
+        final_marker.result(Ok(result))
+    }
+
     fn save_marker_file(self, success: bool) -> anyhow::Result<()> {
-        fs::write_str(
-            &self.marker_file_path,
-            &serde_json::to_string_pretty(&TaskResult {
+        let mut outputs = BTreeMap::new();
+        if success && let Some(root) = &self.output_directory {
+            outputs = output_inventory(root)?;
+            anyhow::ensure!(
+                !outputs.is_empty(),
+                "The task produced no files in {}",
+                root.display()
+            );
+        }
+        fs::create_dir_all(fs::parent_or_err(&self.marker_file_path)?)?;
+        let mut staged =
+            tempfile::NamedTempFile::new_in(fs::parent_or_err(&self.marker_file_path)?)?;
+        use std::io::Write;
+        staged.write_all(
+            serde_json::to_string_pretty(&TaskResult {
                 // kind/id/hash_input are debug-only, but cheap to write: they are already
                 // held in memory, small in practice, and written once per task off the build
                 // hot path. We keep them to aid debugging of stale/incremental rebuilds.
@@ -574,11 +712,15 @@ impl TaskResultMarker {
                 cli_version: crate::version().to_string(),
                 hash_hex: self.hash_hex,
                 success,
-            })?,
-        )
+                outputs,
+            })?
+            .as_bytes(),
+        )?;
+        staged.persist(&self.marker_file_path)?;
+        Ok(())
     }
 
-    pub fn result<T>(self, result: anyhow::Result<T>) -> anyhow::Result<T> {
+    fn result<T>(self, result: anyhow::Result<T>) -> anyhow::Result<T> {
         match result {
             Ok(result) => {
                 self.success()?;
@@ -607,6 +749,147 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn output_inventory_tracks_extracted_files_without_source_timestamp_ordering() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("unpacked");
+        let file = root.join("nested/asset");
+        let marker = || {
+            TaskResultMarker::new(
+                directory.path(),
+                ExtractComponentMetadataMarkerHash {
+                    component_name: &ComponentName("app:package".into()),
+                },
+            )
+            .unwrap()
+            .track_outputs(root.clone())
+        };
+        let write = |bytes: &[u8], seconds| {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, bytes).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+                .unwrap();
+        };
+        marker()
+            .run(|| {
+                write(b"original", 1);
+                Ok(())
+            })
+            .unwrap();
+        assert!(marker().is_up_to_date());
+        write(b"modified", 2);
+        assert!(!marker().is_up_to_date());
+        marker()
+            .run(|| {
+                write(b"original", 1);
+                Ok(())
+            })
+            .unwrap();
+        assert!(marker().is_up_to_date());
+        std::fs::write(root.join("unexpected"), b"extra").unwrap();
+        assert!(!marker().is_up_to_date());
+        std::fs::remove_file(root.join("unexpected")).unwrap();
+        assert!(marker().is_up_to_date());
+        std::fs::remove_file(&file).unwrap();
+        assert!(!marker().is_up_to_date());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(directory.path(), &file).unwrap();
+            assert!(!marker().is_up_to_date());
+        }
+    }
+
+    #[test]
+    async fn interrupted_rerun_does_not_reuse_previous_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let component = ComponentName("app:producer".into());
+        let marker = || {
+            TaskResultMarker::new(
+                directory.path(),
+                ExtractComponentMetadataMarkerHash {
+                    component_name: &component,
+                },
+            )
+            .unwrap()
+        };
+        marker().run(|| Ok(())).unwrap();
+        assert!(marker().is_up_to_date());
+        let mut rerun = Box::pin(marker().run_async(async || {
+            assert!(!marker().is_up_to_date());
+            std::future::pending::<anyhow::Result<()>>().await
+        }));
+        assert!(
+            std::future::Future::poll(
+                rerun.as_mut(),
+                &mut std::task::Context::from_waker(std::task::Waker::noop()),
+            )
+            .is_pending()
+        );
+        drop(rerun);
+        assert!(!marker().is_up_to_date());
+        assert!(
+            marker()
+                .run(|| -> anyhow::Result<()> { anyhow::bail!("failed output write") })
+                .is_err()
+        );
+        assert!(!marker().is_up_to_date());
+        marker().run(|| Ok(())).unwrap();
+        assert!(marker().is_up_to_date());
+    }
+
+    #[test]
+    async fn final_source_records_only_successful_input_rewrites() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = |hash| {
+            TaskResultMarker::new(
+                directory.path(),
+                NpmInstallDepsMarkerHash {
+                    package_json_hash: hash,
+                    package_lock_hash: None,
+                },
+            )
+            .unwrap()
+        };
+        marker("before")
+            .run_async_with_final_source(async || Ok(()), || Ok(marker("after")))
+            .await
+            .unwrap();
+        assert!(marker("after").is_up_to_date());
+        assert!(!marker("before").is_up_to_date());
+        let failed = marker("after")
+            .run_async_with_final_source(
+                async || Ok(()),
+                || anyhow::bail!("cannot read rewritten inputs"),
+            )
+            .await;
+        assert!(failed.is_err());
+        assert!(!marker("after").is_up_to_date());
+        let different_task = marker("after")
+            .run_async_with_final_source(
+                async || Ok(()),
+                || {
+                    TaskResultMarker::new(
+                        directory.path(),
+                        ExtractComponentMetadataMarkerHash {
+                            component_name: &ComponentName("app:other".into()),
+                        },
+                    )
+                },
+            )
+            .await;
+        assert!(
+            different_task
+                .unwrap_err()
+                .to_string()
+                .contains("same task")
+        );
+        assert!(!marker("after").is_up_to_date());
+    }
+
+    #[test]
     fn external_build_marker_tracks_shared_output_across_configuration_switches() {
         let directory = tempfile::tempdir().unwrap();
         let command = |mapping: &str| -> app_raw::ExternalCommand {
@@ -625,6 +908,7 @@ mod tests {
                 ResolvedExternalCommandMarkerHash {
                     build_dir: Path::new("component"),
                     command,
+                    npm_dependencies: None,
                 },
             )
             .unwrap()
@@ -664,7 +948,8 @@ mod tests {
 
         let invalidated = marker();
         assert!(!invalidated.is_up_to_date());
-        invalidated.success().unwrap();
+        assert!(path.exists());
+        invalidated.run(|| Ok(())).unwrap();
         assert!(marker().is_up_to_date());
     }
 

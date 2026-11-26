@@ -13,19 +13,20 @@
 // limitations under the License.
 
 use crate::app::build::command::execute_build_command;
+use crate::app::build::plan::{BuildOperation, BuildStage};
 use crate::app::context::BuildContext;
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
-use golem_common::model::component::ComponentName;
 
-pub async fn build_components(
-    ctx: &BuildContext<'_>,
-    component_name: &ComponentName,
-) -> anyhow::Result<()> {
-    let build_commands = ctx
-        .application()
-        .component(component_name)
-        .build_commands()
-        .clone();
+pub async fn build_components(ctx: &BuildContext<'_>, stage: &BuildStage) -> anyhow::Result<()> {
+    let component_name = &stage.component;
+    let build_commands = stage
+        .actions
+        .iter()
+        .filter_map(|action| match &action.operation {
+            BuildOperation::Command(command) => Some(command),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
 
     if build_commands.is_empty() {
         log_warn_action(
@@ -42,8 +43,22 @@ pub async fn build_components(
         );
         let _indent = LogIndent::new();
 
-        for build_step in build_commands {
-            execute_build_command(ctx, component_name, &build_step).await?;
+        let mut preparations = Vec::new();
+        let mut command_index = 0;
+        for action in &stage.actions {
+            match &action.operation {
+                BuildOperation::Dependencies(preparation) => preparations.push(preparation.clone()),
+                BuildOperation::Command(command) => {
+                    if command_index >= ctx.execution().executed_commands(component_name) {
+                        execute_build_command(ctx, component_name, command, &preparations).await?;
+                        ctx.execution()
+                            .record_executed_command(component_name.clone(), command_index + 1);
+                    }
+                    command_index += 1;
+                    preparations.clear();
+                }
+                _ => {}
+            }
         }
     }
 

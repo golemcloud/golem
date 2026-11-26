@@ -25,6 +25,7 @@ test_r::enable!();
 mod app;
 mod benchmark_analysis;
 mod bridge_gen;
+mod build_plan;
 #[cfg(unix)]
 mod git_remote;
 mod package;

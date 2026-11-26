@@ -12,7 +12,9 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+mod preparation;
 mod remote;
+pub(crate) use preparation::{PackagePreparation, PreparedPackages};
 
 const LOCK_NAME: &str = "golem.lock";
 const MAX_LOCK_BYTES: u64 = 512 * 1024;
@@ -53,6 +55,19 @@ impl crate::model::text_format::TextOutput for PackageDigest {
         }
     }
 }
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PackageInstallResult {
+    pub name: String,
+    pub version: String,
+    pub digest: String,
+}
+
+impl crate::model::cli_output::StructuredOutput for PackageInstallResult {
+    const KIND: &'static str = "package.install";
+}
+
+impl crate::model::text_format::TextOutput for PackageInstallResult {}
 
 fn stage_write(path: &Path, bytes: &[u8]) -> anyhow::Result<tempfile::NamedTempFile> {
     let directory = path
@@ -136,7 +151,10 @@ fn read_lock(root: &Path) -> anyhow::Result<(Lock, Option<Vec<u8>>)> {
     })
 }
 
-pub(crate) async fn install(flags: &GolemCliGlobalFlags, source: &str) -> anyhow::Result<()> {
+pub(crate) async fn install(
+    flags: &GolemCliGlobalFlags,
+    source: &str,
+) -> anyhow::Result<PackageInstallResult> {
     ensure!(
         !flags.disable_app_manifest_discovery,
         "Installing a package requires an application manifest"
@@ -166,7 +184,6 @@ pub(crate) async fn install(flags: &GolemCliGlobalFlags, source: &str) -> anyhow
         digest: package.digest().into(),
     };
 
-    let _output = crate::log::LogOutput::new(crate::log::Output::Stderr);
     crate::log::log_action(
         "Installing",
         format!(
@@ -208,7 +225,12 @@ pub(crate) async fn install(flags: &GolemCliGlobalFlags, source: &str) -> anyhow
         &root.join(LOCK_NAME),
         lock_bytes.as_bytes(),
         previous_lock.as_deref(),
-    )
+    )?;
+    Ok(PackageInstallResult {
+        name: identity.name.clone(),
+        version: identity.version.clone(),
+        digest: package.digest().into(),
+    })
 }
 
 fn save_install(
@@ -236,90 +258,45 @@ fn save_install(
 }
 
 pub(crate) struct LocalEffects<'a> {
-    pub app_root: &'a Path,
-    pub cache_root: PathBuf,
+    app_root: &'a Path,
+    cache_root: PathBuf,
+    populate_cache: bool,
+    cache_lock: Option<(String, File)>,
+    cancellation: tokio_util::sync::CancellationToken,
 }
 
-pub(crate) struct UnpackRoot {
-    _lease: File,
-    dir: tempfile::TempDir,
-}
-
-impl UnpackRoot {
-    pub(crate) fn new(app_root: &Path) -> anyhow::Result<Self> {
-        let temp = app_root.join(crate::model::app::TEMP_DIR);
-        let parent = temp.join("package-unpack");
-        for path in [&temp, &parent] {
-            match fs::create_dir(path) {
-                Ok(()) => (),
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::AlreadyExists
-                        && fs::symlink_metadata(path)?.is_dir() => {}
-                Err(error) => return Err(error.into()),
-            }
+impl<'a> LocalEffects<'a> {
+    pub(crate) fn new(app_root: &'a Path, cache_root: PathBuf) -> Self {
+        Self {
+            app_root,
+            cache_root,
+            populate_cache: false,
+            cache_lock: None,
+            cancellation: tokio_util::sync::CancellationToken::new(),
         }
-
-        // Serialize directory creation with the sweep, but not expansion or build.
-        // The OS releases each root's lease if its process exits without cleanup.
-        let registry = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(parent.join("registry.lock"))?;
-        registry.lock()?;
-        for entry in fs::read_dir(&parent)? {
-            let entry = entry?;
-            if !entry.file_name().as_encoded_bytes().starts_with(b"root-")
-                || !entry.file_type()?.is_dir()
-            {
-                continue;
-            }
-            let path = entry.path();
-            match File::options()
-                .read(true)
-                .write(true)
-                .open(path.join("lease"))
-            {
-                Ok(lease) => match lease.try_lock() {
-                    Ok(()) => (),
-                    Err(std::fs::TryLockError::WouldBlock) => continue,
-                    Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
-                },
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error.into()),
-            }
-            match fs::remove_dir_all(path) {
-                Ok(()) => (),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error.into()),
-            }
-        }
-        let dir = tempfile::Builder::new()
-            .prefix("root-")
-            .tempdir_in(parent)?;
-        let lease = File::options()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(dir.path().join("lease"))?;
-        lease.lock()?;
-        Ok(Self { _lease: lease, dir })
     }
 
-    pub(crate) fn path(&self) -> &Path {
-        self.dir.path()
+    pub(crate) fn with_cache_population(
+        mut self,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Self {
+        self.populate_cache = true;
+        self.cancellation = cancellation.clone();
+        self
     }
-}
 
-impl LocalEffects<'_> {
     fn cache_path(&self, digest: &str) -> PathBuf {
         self.cache_root.join(&digest["sha256:".len()..])
+    }
+
+    fn verified_cached(&self, digest: &str, limit: u64) -> Option<Vec<u8>> {
+        let bytes = read_regular(&self.cache_path(digest), limit).ok()?;
+        (golem_package::read(bytes.as_slice()).ok()?.digest() == digest).then_some(bytes)
     }
 }
 
 #[async_trait::async_trait]
-impl PackageEffects for LocalEffects<'_> {
+impl PackageReader for LocalEffects<'_> {
     fn authorize(&self, _name: &str, pin: &FilePin) -> anyhow::Result<()> {
         match PackageSource::parse(&pin.source) {
             PackageSource::File(_) => Ok(()),
@@ -331,16 +308,52 @@ impl PackageEffects for LocalEffects<'_> {
     }
 
     async fn cached(&mut self, digest: &str, limit: u64) -> anyhow::Result<Option<Vec<u8>>> {
-        Ok(read_regular(&self.cache_path(digest), limit).ok())
+        // Hold at most one digest lock, through fetch, verification and atomic publication.
+        if self
+            .cache_lock
+            .as_ref()
+            .is_some_and(|(held, _)| held != digest)
+        {
+            self.cache_lock = None;
+        }
+        let cached = self.verified_cached(digest, limit);
+        if cached.is_some() || !self.populate_cache {
+            self.cache_lock = None;
+            return Ok(cached);
+        }
+        if self.cache_lock.is_none() {
+            self.cache_lock = Some((
+                digest.to_owned(),
+                crate::fs::lock_file(
+                    &self.cache_path(digest).with_extension("lock"),
+                    &self.cancellation,
+                )
+                .await?,
+            ));
+        }
+        let cached = self.verified_cached(digest, limit);
+        if cached.is_some() {
+            self.cache_lock = None;
+        }
+        Ok(cached)
     }
 
     async fn fetch(&mut self, pin: &FilePin, limit: u64) -> anyhow::Result<Vec<u8>> {
         fetch_source(self.app_root, &pin.source, Some(&pin.digest), limit).await
     }
+}
 
+#[async_trait::async_trait]
+impl PackageEffects for LocalEffects<'_> {
     async fn cache(&mut self, digest: &str, bytes: &[u8]) -> anyhow::Result<()> {
+        ensure!(
+            self.populate_cache,
+            "Read-only package inspection cannot populate the cache"
+        );
         fs::create_dir_all(&self.cache_root)?;
-        write_package(&self.cache_path(digest), bytes)
+        write_package(&self.cache_path(digest), bytes)?;
+        self.cache_lock = None;
+        Ok(())
     }
 
     async fn create_dir(&mut self, root: &Path, relative: &Path) -> anyhow::Result<()> {
@@ -412,20 +425,101 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn new_unpack_root_cleans_abandoned_roots_but_keeps_live_roots() {
-        let app = tempfile::tempdir().unwrap();
-        let live = UnpackRoot::new(app.path()).unwrap();
-        fs::write(live.path().join("in-use"), b"live").unwrap();
-        let abandoned = UnpackRoot::new(app.path()).unwrap();
-        let UnpackRoot { _lease, dir } = abandoned;
-        let abandoned_path = dir.keep();
-        drop(_lease);
-        fs::write(abandoned_path.join("incomplete"), b"abandoned").unwrap();
+    #[test_r::timeout("5s")]
+    async fn cache_population_rechecks_after_wait_and_warm_reads_do_not_lock() {
+        use sha2::{Digest, Sha256};
 
-        let fresh = UnpackRoot::new(app.path()).unwrap();
-        assert!(!abandoned_path.exists());
-        assert!(live.path().join("in-use").exists());
-        assert_ne!(fresh.path(), live.path());
+        let app = tempfile::tempdir().unwrap();
+        let cache = app.path().join("cache");
+        let wasm = wat::parse_str("(component)").unwrap();
+        let wasm_digest = format!("sha256:{:x}", Sha256::digest(&wasm));
+        let spec = PackageConfig {
+            application: "publisher".into(),
+            package: PackageIdentity {
+                name: "sample".into(),
+                version: "1.0.0".into(),
+                calls: Default::default(),
+            },
+            components: std::collections::BTreeMap::from([(
+                golem_common::model::component::ComponentName("pkg:sample".into()),
+                serde_json::from_value(serde_json::json!({
+                    "wasm": wasm_digest,
+                    "metadata": {"agentTypes": [], "tools": [], "toolMiddlewares": []},
+                    "configSchema": {},
+                    "provision": {"config": null, "fileDefaults": [], "env": {}, "initialCard": null, "plugins": [], "files": null},
+                    "agents": {}, "tools": {}, "toolMiddlewares": {}
+                }))
+                .unwrap(),
+            )]),
+        };
+        let (digest, bytes) = pack(
+            &spec,
+            &std::collections::BTreeMap::from([(wasm_digest, wasm)]),
+        )
+        .unwrap();
+        let source = app.path().join("sample.tar");
+        fs::write(&source, &bytes).unwrap();
+        let pins = Pins::from([(
+            "sample".into(),
+            FilePin {
+                source: "sample.tar".into(),
+                version: "1.0.0".into(),
+                digest: digest.clone(),
+            },
+        )]);
+        let inspection = inspect(
+            &pins,
+            &pins,
+            &mut LocalEffects::new(app.path(), cache.clone()),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !cache.exists(),
+            "Inspection must not allocate the cache or its locks"
+        );
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let destination = cache.join(digest.strip_prefix("sha256:").unwrap());
+        let held = crate::fs::lock_file(&destination.with_extension("lock"), &cancellation)
+            .await
+            .unwrap();
+        let root = app.path().join("outputs");
+        fs::create_dir(&root).unwrap();
+        let mut effects =
+            LocalEffects::new(app.path(), cache.clone()).with_cache_population(&cancellation);
+        let waiting = materialize(&inspection, &root, &mut effects);
+        tokio::pin!(waiting);
+        tokio::select! {
+            biased;
+            result = &mut waiting => panic!("Cold population must wait: {result:?}"),
+            _ = tokio::task::yield_now() => (),
+        }
+        write_package(&destination, &bytes).unwrap();
+        fs::remove_file(&source).unwrap();
+        drop(held);
+        waiting.await.unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+
+        let held = crate::fs::lock_file(&destination.with_extension("lock"), &cancellation)
+            .await
+            .unwrap();
+        let mut warm =
+            LocalEffects::new(app.path(), cache.clone()).with_cache_population(&cancellation);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            materialize(&inspection, &app.path().join("warm"), &mut warm),
+        )
+        .await
+        .expect("Warm population must not wait for the digest lock")
+        .unwrap();
+        drop(held);
+        fs::write(&source, &bytes).unwrap();
+        fs::write(&destination, b"partial archive").unwrap();
+        let mut repair = LocalEffects::new(app.path(), cache).with_cache_population(&cancellation);
+        materialize(&inspection, &app.path().join("repair"), &mut repair)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
     }
 
     #[test]

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::ApplicationContext;
+use crate::app::context::{ApplicationContext, ApplicationLoadPlan};
 use crate::app::template::AppTemplateRepo;
 use crate::client::{GolemClients, new_raw_reqwest_client, wait_for_server_startup};
 use crate::command::GolemCliGlobalFlags;
@@ -109,6 +109,9 @@ pub struct Context {
     // Lazy initialized
     golem_clients: tokio::sync::OnceCell<GolemClients>,
     selected_context_logging: std::sync::OnceLock<()>,
+    application_load_plan: tokio::sync::Mutex<Option<ApplicationLoadPlan>>,
+    application_operation: std::sync::Mutex<Option<std::fs::File>>,
+    application_operation_path: Option<PathBuf>,
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
@@ -158,9 +161,14 @@ impl Drop for CancellationCleanup {
 
 impl Context {
     pub async fn new(
-        global_flags: GolemCliGlobalFlags,
+        mut global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
+        allow_manifest_upgrades: bool,
+        defer_application_writes: bool,
     ) -> anyhow::Result<Self> {
+        if let Some(path) = &mut global_flags.app_manifest_path {
+            *path = crate::fs::absolute_lexical_path(path)?;
+        }
         if matches!(
             global_flags.environment,
             Some(EnvironmentReference::Environment { .. })
@@ -203,11 +211,29 @@ impl Context {
         let app_source_mode =
             ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags);
 
-        if log_output_for_help.is_none() {
+        let cancellation = Cancellation::default();
+        let application_operation_path = if log_output_for_help.is_none() {
+            application_operation_path(&app_source_mode, &crate::fs::current_dir_lexical()?)
+        } else {
+            None
+        };
+        let mut application_operation = if allow_manifest_upgrades && log_output_for_help.is_none()
+        {
             ApplicationContext::plan_and_apply_manifest_upgrades_before_load(
                 app_source_mode.clone(),
                 global_flags.yes,
-            )?;
+                cancellation.token(),
+            )
+            .await?
+        } else {
+            None
+        };
+
+        if application_operation.is_none()
+            && !defer_application_writes
+            && let Some(path) = &application_operation_path
+        {
+            application_operation = Some(crate::fs::lock_file(path, cancellation.token()).await?);
         }
 
         let manifest_discovery = app_source_mode.clone();
@@ -215,6 +241,7 @@ impl Context {
             app_source_mode,
             &crate::fs::current_dir_lexical()?,
             global_flags.dev_mode,
+            defer_application_writes && log_output_for_help.is_none(),
         )?;
 
         if preloaded_app.loaded_with_warnings
@@ -437,6 +464,9 @@ impl Context {
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
             selected_context_logging: std::sync::OnceLock::new(),
+            application_load_plan: tokio::sync::Mutex::new(Some(preloaded_app.load_plan)),
+            application_operation: std::sync::Mutex::new(application_operation),
+            application_operation_path,
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 SHOULD_COLORIZE.should_colorize(),
@@ -445,7 +475,7 @@ impl Context {
             manifest_discovery,
             manifest_search_dir,
             caches: Caches::new(),
-            cancellation: Cancellation::default(),
+            cancellation,
         })
     }
 
@@ -460,12 +490,16 @@ impl Context {
     /// confirms, so neither `--yes` nor the manifest's `cli.autoConfirm` confirms a command. The
     /// questions about the manifest itself keep the answer that the server got at start.
     /// `cancellation` is the call's: the client cancels it.
-    pub fn for_tool_call(
+    pub async fn for_tool_call(
         &self,
         confirmed: bool,
         environment: ResolvedEnvironmentIdentity,
         cancellation: Cancellation,
     ) -> anyhow::Result<Self> {
+        let application_operation = match &self.application_operation_path {
+            Some(path) => Some(crate::fs::lock_file(path, cancellation.token()).await?),
+            None => None,
+        };
         let mut profile = self.profile.clone();
         // The built-in profiles are always in the config; a custom one can be gone.
         let Some(stored) = Config::get_profile(&self.config_dir, &profile.name)? else {
@@ -480,6 +514,7 @@ impl Context {
                     self.manifest_discovery.clone(),
                     search_dir,
                     self.dev_mode,
+                    false,
                 )?
                 .source_mode
             }
@@ -517,6 +552,9 @@ impl Context {
             file_download_client: self.file_download_client.clone(),
             golem_clients: tokio::sync::OnceCell::new(),
             selected_context_logging: std::sync::OnceLock::new(),
+            application_load_plan: tokio::sync::Mutex::new(None),
+            application_operation: std::sync::Mutex::new(application_operation),
+            application_operation_path: self.application_operation_path.clone(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 self.yes,
                 self.should_colorize,
@@ -529,6 +567,89 @@ impl Context {
 
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
+    }
+
+    pub(crate) fn finish_application_operation(&self) {
+        self.application_operation.lock().unwrap().take();
+    }
+
+    pub(crate) async fn acquire_application_operation(&self) -> anyhow::Result<bool> {
+        if self.application_operation.lock().unwrap().is_some() {
+            return Ok(false);
+        }
+        let Some(path) = &self.application_operation_path else {
+            return Ok(false);
+        };
+        let operation = crate::fs::lock_file(path, self.cancellation.token()).await?;
+        *self.application_operation.lock().unwrap() = Some(operation);
+        Ok(true)
+    }
+
+    /// A new REPL preparation section reloads inputs after reacquiring the application lock.
+    pub(crate) async fn start_application_operation(
+        &self,
+    ) -> anyhow::Result<Option<std::fs::File>> {
+        let Some(path) = &self.application_operation_path else {
+            return Ok(None);
+        };
+        let operation = crate::fs::lock_file(path, self.cancellation.token()).await?;
+        self.reload_application(false).await?;
+        Ok(Some(operation))
+    }
+
+    pub async fn has_pending_application_changes(&self) -> bool {
+        self.application_load_plan
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|plan| !plan.is_empty())
+    }
+
+    pub async fn apply_application_load_plan(&self) -> anyhow::Result<()> {
+        let mut pending = self.application_load_plan.lock().await;
+        if let Some(plan) = pending.as_ref() {
+            plan.apply(self.yes)?;
+            *pending = None;
+        }
+        Ok(())
+    }
+
+    pub async fn reload_application(&self, defer_writes: bool) -> anyhow::Result<()> {
+        let Some(config) = &self.app_context_config else {
+            return Ok(());
+        };
+        let mut state = self.app_context_state.write().await;
+        let selected = state.some_or_err()?.selected_component_names().clone();
+        let preloaded = ApplicationContext::preload_application(
+            ApplicationContextConfig::app_source_mode_from_flags(
+                config.disable_app_manifest_discovery,
+                config.app_manifest_path.as_deref(),
+            ),
+            state.some_or_err()?.application().app_root_dir(),
+            config.dev_mode,
+            defer_writes,
+        )?;
+        if defer_writes {
+            *self.application_load_plan.lock().await = Some(preloaded.load_plan);
+        }
+        let preload = preloaded.application_preload.ok_or_else(|| {
+            anyhow!("Application manifest disappeared during project preparation")
+        })?;
+        let reloaded_config = ApplicationContextConfig {
+            application_name: preload.application_name,
+            environments: preload.environments,
+            local_server: preload.local_server,
+            ..config.clone()
+        };
+        state.app_source_mode = Some(preloaded.source_mode);
+        state.app_context = None;
+        state.init(&Some(reloaded_config), &self.config_dir).await?;
+        state.some_or_err_mut()?.select_components(
+            &crate::model::app::ApplicationComponentSelectMode::Explicit(
+                selected.into_iter().collect(),
+            ),
+        )?;
+        Ok(())
     }
 
     pub async fn repl_history_file(&self, language: ReplLanguage) -> anyhow::Result<PathBuf> {
@@ -811,6 +932,18 @@ impl Context {
         }
     }
 
+    pub(crate) async fn initialize_for_clean(&self) {
+        let mut state = self.app_context_state.write().await;
+        state.app_context = None;
+        state.omit_package_inspection = true;
+    }
+
+    pub(crate) async fn finish_clean(&self) {
+        let mut state = self.app_context_state.write().await;
+        state.app_context = None;
+        state.omit_package_inspection = false;
+    }
+
     pub async fn app_context_lock(
         &self,
     ) -> tokio::sync::RwLockReadGuard<'_, ApplicationContextState> {
@@ -1003,9 +1136,7 @@ impl ResolvedServerConfig {
 
 #[derive(Clone)]
 struct ApplicationContextConfig {
-    #[allow(unused)]
     app_manifest_path: Option<PathBuf>,
-    #[allow(unused)]
     disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
@@ -1064,12 +1195,27 @@ impl ApplicationContextConfig {
     }
 }
 
+fn application_operation_path(source: &ApplicationSourceMode, cwd: &Path) -> Option<PathBuf> {
+    let manifest = match source {
+        ApplicationSourceMode::Automatic => crate::app::context::find_main_source_from(cwd)?,
+        ApplicationSourceMode::ByRootManifest(path) => {
+            crate::fs::absolute_lexical_path_from_base_dir(path, cwd)
+        }
+        ApplicationSourceMode::Preloaded(loaded) => loaded.root_manifest.clone(),
+        ApplicationSourceMode::None => return None,
+    };
+    Some(crate::model::app::Application::operation_lock_path(
+        manifest.parent()?,
+    ))
+}
+
 #[derive()]
 pub struct ApplicationContextState {
     yes: bool,
     should_colorize: bool,
     app_source_mode: Option<ApplicationSourceMode>,
     pub silent_init: bool,
+    omit_package_inspection: bool,
 
     app_context: Option<Result<Option<ApplicationContext>, Arc<anyhow::Error>>>,
 }
@@ -1081,6 +1227,7 @@ impl ApplicationContextState {
             should_colorize,
             app_source_mode: Some(source_mode),
             silent_init: false,
+            omit_package_inspection: false,
             app_context: None,
         }
     }
@@ -1115,8 +1262,9 @@ impl ApplicationContextState {
         self.app_context = Some(
             ApplicationContext::new(
                 self.app_source_mode
-                    .take()
-                    .expect("ApplicationContextState.app_source_mode is not set"),
+                    .as_ref()
+                    .expect("ApplicationContextState.app_source_mode is not set")
+                    .clone(),
                 app_config,
                 config.application_name.clone(),
                 config.environments.clone(),
@@ -1124,6 +1272,7 @@ impl ApplicationContextState {
                 config.component_presets.clone(),
                 config.builtin_local_url.clone(),
                 config_dir,
+                !self.omit_package_inspection,
             )
             .await
             .map_err(Arc::new),

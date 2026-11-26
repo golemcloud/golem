@@ -137,6 +137,7 @@ impl TypeScriptRepl {
     }
 
     async fn generate_repl_package(&self, args: &BridgeReplArgs) -> anyhow::Result<()> {
+        let _operation = self.ctx.start_application_operation().await?;
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -150,7 +151,8 @@ impl TypeScriptRepl {
         )?)?;
 
         let build_config = BuildConfig::new();
-        let build_ctx = BuildContext::new(app_ctx, &build_config);
+        let execution = crate::app::build::BuildExecution::default();
+        let build_ctx = BuildContext::new(app_ctx, &build_config, &execution);
 
         new_task_up_to_date_check(&build_ctx)
             .with_task_result_marker(GenerateBridgeReplMarkerHash {

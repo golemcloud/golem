@@ -33,24 +33,26 @@ use tokio::io::AsyncReadExt;
 
 impl ComponentCommandHandler {
     pub(crate) async fn pack_application(&self) -> anyhow::Result<(PackageDigest, Vec<u8>)> {
-        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        self.pack_loaded_application(app_ctx.some_or_err_mut()?)
-            .await
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        self.pack_loaded_application(app_ctx).await
     }
 
     async fn pack_loaded_application(
         &self,
         app_ctx: &ApplicationContext,
     ) -> anyhow::Result<(PackageDigest, Vec<u8>)> {
+        let publisher = app_ctx
+            .publisher_package()
+            .cloned()
+            .context("Declare package: { name, version } in the root golem.yaml before packing")?;
         let app = app_ctx.application();
         let mut config = PackageConfig {
             application: app.application_name().to_string(),
-            package: app_ctx.publisher_package.clone().context(
-                "Declare package: { name, version } in the root golem.yaml before packing",
-            )?,
+            package: publisher,
             components: BTreeMap::new(),
         };
-        for calls in app_ctx.installed_package_calls.values() {
+        for calls in app_ctx.installed_package_calls().values() {
             config.package.calls.extend(calls.iter().cloned());
         }
         let mut stage = PackageStage {
@@ -500,7 +502,7 @@ mod tests {
             "package",
             "pack",
         ])?;
-        let ctx = crate::context::Context::new(command.global_flags, None).await?;
+        let ctx = crate::context::Context::new(command.global_flags, None, true, false).await?;
         let handler = ComponentCommandHandler::new(Arc::new(ctx));
         let manifest_path = root.join("golem.yaml");
         let manifest = indoc::indoc! {"
@@ -536,18 +538,17 @@ mod tests {
             )
             .into_product();
             assert!(errors.is_empty(), "{errors:?}");
-            let mut app = ApplicationContext::for_test(app.unwrap());
-            app.publisher_package = Some(package::PackageIdentity {
+            let publisher = package::PackageIdentity {
                 name: "publisher".into(),
                 version: "1.0.0".into(),
                 calls: BTreeSet::from([AgentTypeName("SupportCall".into())]),
-            });
-            app.installed_package_calls.insert(
+            };
+            let calls = BTreeMap::from([(
                 "fixture".into(),
                 BTreeSet::from([AgentTypeName("Escalation".into())]),
-            );
+            )]);
             // Installed fixtures provide extracted metadata without a guest build.
-            app.installed_components.insert(
+            let components = BTreeMap::from([(
                 "publisher:main".try_into().map_err(anyhow::Error::msg)?,
                 package::InstalledComponent {
                     wasm_path: wasm_path.clone(),
@@ -562,8 +563,9 @@ mod tests {
                         layer_digest: "unused".into(),
                     },
                 },
-            );
-            Ok(app)
+            )]);
+            Ok(ApplicationContext::for_test(app.unwrap())
+                .with_test_packages(publisher, calls, components))
         };
 
         let (without_exports, baseline) = handler.pack_loaded_application(&load("")?).await?;
