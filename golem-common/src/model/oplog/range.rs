@@ -109,17 +109,6 @@ impl Display for OplogCursorRefused {
     }
 }
 
-impl OplogCursorRefused {
-    /// The next index of the cursor.
-    pub fn next(&self) -> OplogIndex {
-        match self {
-            Self::OutsideRange { next, .. }
-            | Self::SearchScan { next, .. }
-            | Self::ScanOutsideRange { next, .. } => *next,
-        }
-    }
-}
-
 impl std::error::Error for OplogCursorRefused {}
 
 /// Where a search of a range continues from a cursor.
