@@ -212,7 +212,9 @@ rather than replaced by a recorded result.
   error types hold no stream, and that settles with `wasi:cli/exit`, is a process exit: the sidecar finishes the
   stdout and stderr writers the body still holds (a dropped writer keeps the terminal its
   disposal selected) and returns the exit code as that result
-  (`tool/sidecar.rs::process_exit_status`). There is no outer `call-tool` durable
+  (`tool/sidecar.rs::process_exit_status`). The runner disposes the exited Store as it disposes
+  a trapped body, so a durable call still pending at the exit gets `Cancelled` before the body
+  terminal. There is no outer `call-tool` durable
   call around the entity invocation.
 - Completed replay (`InvocationExecutionMode::ReplayingCompleted`) re-executes the body's guest
   export with its durable host calls replayed from the owner oplog, validates the claim, then

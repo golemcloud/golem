@@ -36,6 +36,7 @@ use wasmtime::component::Instance;
 pub(crate) struct EntityBodyFinalization {
     begun: Arc<std::sync::atomic::AtomicBool>,
     guest_returned: Arc<std::sync::atomic::AtomicBool>,
+    process_exited: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl EntityBodyFinalization {
@@ -51,6 +52,19 @@ impl EntityBodyFinalization {
 
     pub(crate) fn guest_returned(&self) -> bool {
         self.guest_returned
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Marks a body whose `wasi:cli/exit` became its returned process exit status. Its Store
+    /// trapped, so the runner disposes it as it disposes a trapped body.
+    pub(crate) fn begin_process_exit(&self) {
+        self.process_exited
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.begin();
+    }
+
+    pub(crate) fn process_exited(&self) -> bool {
+        self.process_exited
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
@@ -406,10 +420,16 @@ where
                             .invoke_scoped_registered_retained(scope, registration, self.body)
                             .await;
                         body_finalization.begin();
+                        // An exit whose status became the body's result disposes the trapped
+                        // Store as a trapped body does; a later failure keeps its own disposal.
+                        let process_exited = body_finalization.process_exited()
+                            && matches!(&result, Ok(EntityBodyOutcome::Completed(_)));
                         if body_finalization.guest_returned()
+                            || process_exited
                             || matches!(&result, Ok(EntityBodyOutcome::Cancelled))
                             || matches!(&result, Ok(EntityBodyOutcome::Completed(response)) if is_trapped_tool_response(response)) {
-                            let trapped = matches!(&result, Ok(EntityBodyOutcome::Cancelled))
+                            let trapped = process_exited
+                                || matches!(&result, Ok(EntityBodyOutcome::Cancelled))
                                 || matches!(&result, Ok(EntityBodyOutcome::Completed(response)) if is_trapped_tool_response(response));
                             let mut retained = RetainedDisposedContext {
                                 context: if trapped { retained.into_cleanup_context() } else { retained.into_returned_context() },

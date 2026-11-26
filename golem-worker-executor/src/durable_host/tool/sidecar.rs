@@ -745,7 +745,14 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         && !operation.has_pending_live_admission_rejection().await
     {
         result = match finish_process_exit(&mut store, status, writers, &output_contract).await {
-            Ok(response) => Ok(Ok(response)),
+            Ok(response) => {
+                store
+                    .data()
+                    .durable_ctx()
+                    .entity_body_finalization
+                    .begin_process_exit();
+                Ok(Ok(response))
+            }
             Err(error) => Err(GuestCallSettlementError::Trap(error)),
         };
     }

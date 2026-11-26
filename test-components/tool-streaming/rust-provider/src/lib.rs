@@ -914,7 +914,8 @@ pub enum ProcessExitError {
 #[tool_definition(version = "1.0.0", requires_filesystem = true)]
 pub trait ProcessExit {
     /// Write STDOUT and STDERR, then end the body with `exit(CODE)`. With `close`, finish and
-    /// drop both writers and open a directory before the exit.
+    /// drop both writers and open a directory before the exit. With `pending`, leave a started
+    /// 60-second sleep pending in a spawned task at the exit.
     #[arg(cwd = "option", default = "/", env = "PWD")]
     #[arg(args = "tail", separator = "--", verbatim = true)]
     #[arg(stderr, channel = "stderr")]
@@ -938,12 +939,14 @@ impl ProcessExit for ProcessExitImpl {
         mut stdout: OutputStream,
         mut stderr: OutputStream,
     ) -> Result<golem_rust::tool::ProcessExitStatus, ProcessExitError> {
-        let (code, out, err, close) = match args.as_slice() {
-            [code, out, err] => (code, out, err, false),
-            [code, out, err, close] if close == "close" => (code, out, err, true),
+        let (code, out, err, mode) = match args.as_slice() {
+            [code, out, err] => (code, out, err, ""),
+            [code, out, err, mode] if mode == "close" || mode == "pending" => {
+                (code, out, err, mode.as_str())
+            }
             _ => {
                 return Err(ProcessExitError::Usage {
-                    reason: "usage: process-exit CODE STDOUT STDERR [close]".to_string(),
+                    reason: "usage: process-exit CODE STDOUT STDERR [close|pending]".to_string(),
                 });
             }
         };
@@ -960,7 +963,11 @@ impl ProcessExit for ProcessExitImpl {
             .write(err.as_bytes().to_vec())
             .await
             .expect("write stderr");
-        if close {
+        if mode == "pending" {
+            start_pending_return_tail(sleep_ms(60_000)).await;
+            sleep_ms(100).await;
+        }
+        if mode == "close" {
             stdout.finish().await.expect("finish stdout");
             stderr.finish().await.expect("finish stderr");
             let entries = std::fs::read_dir("/").expect("open directory");

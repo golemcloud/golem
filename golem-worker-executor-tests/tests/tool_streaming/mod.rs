@@ -8387,7 +8387,8 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
 
 // `exit(CODE)` in a tool body that returns `ProcessExitStatus` ends that call as a process exit
 // does: CODE is its status, its stdout and stderr are complete, and the owner stays healthy. This
-// holds also when the body finished and dropped its writers before the exit.
+// holds also when the body finished and dropped its writers before the exit. A durable call still
+// pending at the exit is cancelled before the body's terminal, as for a trapped body.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -8502,10 +8503,70 @@ async fn tool_body_exit_becomes_its_process_exit_status(
     assert_eq!(closed.exit_code, 3, "{closed:?}");
     assert_eq!(closed.stdout, b"out-c");
     assert_eq!(closed.stderr, b"err-c");
+    let pending = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["6", "out-p", "err-p", "pending"],
+    )
+    .await?;
+    assert_eq!(pending.exit_code, 6, "{pending:?}");
+    assert_eq!(pending.stdout, b"out-p");
+    assert_eq!(pending.stderr, b"err-p");
 
     let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let terminals = tool_terminals(&before);
-    assert_eq!(terminals.len(), 3, "{before:#?}");
+    assert_eq!(terminals.len(), 4, "{before:#?}");
+    let wait = before
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "clocks::monotonic-clock::wait-for"
+                    && params
+                        .request
+                        .as_ref()
+                        .is_some_and(|request| format!("{request:?}").contains("60000000000")) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the pending sleep has a Start");
+    let wait_terminals_of = |oplog: &[PublicOplogEntryWithIndex]| {
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Cancelled(params) if params.start_index == wait => {
+                    Some((entry.oplog_index, "Cancelled"))
+                }
+                PublicOplogEntry::End(params) if params.start_index == wait => {
+                    Some((entry.oplog_index, "End"))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let wait_terminals = wait_terminals_of(&before);
+    let body_end = before
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params)
+                if params.response.as_ref().is_some_and(|response| {
+                    SerializableToolOperationTerminal::from_value(response.value()).is_ok()
+                }) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the pending exit has a terminal");
+    assert!(
+        matches!(wait_terminals.as_slice(), [(index, "Cancelled")] if *index < body_end),
+        "the pending sleep must be cancelled before the body terminal at {body_end}: {wait_terminals:?}\n{before:#?}"
+    );
     for terminal in &terminals {
         assert_eq!(
             terminal.body_execution,
@@ -8534,11 +8595,16 @@ async fn tool_body_exit_becomes_its_process_exit_status(
     let replayed = tool_terminals(&after);
     assert_eq!(
         replayed.len(),
-        4,
+        5,
         "replay must not append duplicate terminals"
     );
-    assert_eq!(&replayed[..3], terminals.as_slice());
+    assert_eq!(&replayed[..4], terminals.as_slice());
     assert_eq!(errors(&after), 0, "{after:#?}");
+    assert_eq!(
+        wait_terminals_of(&after),
+        wait_terminals,
+        "replay must not add terminals for the pending sleep"
+    );
 
     Ok(())
 }
