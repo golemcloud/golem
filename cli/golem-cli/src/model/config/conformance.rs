@@ -320,7 +320,10 @@ async fn static_config_reference_exports_corpus_metadata() -> anyhow::Result<()>
 #[test]
 async fn effect_static_config_exports_corpus_metadata() -> anyhow::Result<()> {
     check_reference_metadata(
-        "../test-components/golem_it_permissions_effect.wasm",
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-components/golem_it_permissions_effect.wasm"
+        ),
         "EffectStaticDefaultsAgent",
     )
     .await
