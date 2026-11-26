@@ -4323,7 +4323,7 @@ Detailed mechanics, including scheduling and memory admission: `reference/tools.
 | Durable Golem agent (RPC) | Exactly-once logical invocation and result | Target's durable queue + shared key |
 | Ephemeral Golem agent (RPC) | At-most-once per accepted invocation; no resumption after target loss | Fail-stop target, deterministic target ID (`AgentId::ephemeral_invocation`) |
 | Oplog-processor plugin | Exactly-once delivery of each oplog batch | `services/oplog/plugin.rs`: deterministic batch key (`oplog_processor_idempotency_key`: source agent, grant id, first/last index → UUIDv5) and per-plugin `confirmed_up_to`/`sending_up_to` checkpoints persisted in `AgentStatusRecord.oplog_processor_checkpoints` |
-| External HTTP/TCP/DB/etc. | Exactly-once only if the peer honours an idempotency key; otherwise retries in the ambiguous crash window are visible | Golem attaches an `idempotency-key` header to outgoing HTTP from `derive_idempotency_key(start_index)` (`http/policy.rs`, unless the guest set one) and offers `golem:api/host.generate-idempotency-key`; the peer must deduplicate |
+| External HTTP/TCP/DB/etc. | Exactly-once only if the peer honours an idempotency key; otherwise retries in the ambiguous crash window are visible | Outgoing HTTP reserves an `IdempotencyKeyPosition` before asynchronous admission, then calls its `derive(start_index)` through `p3/http/send/headers.rs` and `http/policy.rs`, unless the guest set a key. Retries reuse the prepared header. Golem also offers `golem:api/host.generate-idempotency-key`; the peer must deduplicate. |
 
 Four exactly-once contracts coexist and must not be conflated: RPC exactly-once (one logical
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item

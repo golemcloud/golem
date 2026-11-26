@@ -3846,9 +3846,9 @@ async fn outgoing_http_contains_idempotency_key(
     assert_eq!(result.into_typed::<String>()?, expected_response);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 
-    // Restart the executor to force a full oplog replay and repeat the invocation with the same
-    // idempotency key: the replayed invocation must observe the same injected key (recorded in
-    // the durable request), without re-sending the HTTP request.
+    // After restart, the same invocation key returns the recorded result, which contains the
+    // key echoed by the target, without another HTTP request. The fresh invocation below
+    // exercises reconstruction.
     drop(executor);
     let executor = start(deps, &context).await?;
 

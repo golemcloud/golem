@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::http::policy::InjectedHttpHeaders;
 use golem_service_base::headers::TraceContextHeaders;
 
 /// Reconstructs the outgoing URI from the recorded request head.
@@ -62,7 +63,7 @@ pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers<Ctx: Worker
     start_index: OplogIndex,
     guest_headers: &HashMap<String, Vec<Vec<u8>>>,
     key_position: &crate::durable_host::IdempotencyKeyPosition,
-) -> Result<Vec<(String, String)>, WorkerExecutorError> {
+) -> Result<InjectedHttpHeaders, WorkerExecutorError> {
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         let trace_headers = if ctx.state.forward_trace_context_headers {
@@ -83,7 +84,7 @@ pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers<Ctx: Worker
         let plan = golem_managed_http_headers(
             trace_headers,
             ctx.state.set_outgoing_http_idempotency_key,
-            guest_headers.contains_key("idempotency-key"),
+            guest_headers,
             start_index,
         );
         Ok(plan.resolve(|index| key_position.derive(index)))
@@ -100,7 +101,7 @@ pub(in crate::durable_host::p3::http) fn apply_headers_to_request_resource<
 >(
     store: &Accessor<U, DurableP3<Ctx>>,
     req: &Resource<Request>,
-    headers: &[(String, String)],
+    headers: &[(Box<str>, Box<str>)],
 ) -> Result<(), WorkerExecutorError> {
     if headers.is_empty() {
         return Ok(());
