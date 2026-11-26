@@ -100,6 +100,12 @@ pub trait GolemHostApi {
     fn await_promise(&self, promise_id: PromiseId) -> Vec<u8>;
     /// Makes `count` local durable calls, which commit nothing explicitly, then awaits the promise.
     fn local_calls_then_await_promise(&self, count: u64, promise_id: PromiseId) -> Vec<u8>;
+    /// Completes a short sleep, makes `count` local durable calls, then awaits the promise.
+    fn sleep_then_local_calls_then_await_promise(
+        &self,
+        count: u64,
+        promise_id: PromiseId,
+    ) -> Vec<u8>;
     fn create_and_await_promise(&self) -> Vec<u8>;
     fn fail_with_custom_max_retries(&self, max_retries: u64);
     fn trap_after_recorded_effect(&self, authority: String, via_host: bool) -> String;
@@ -371,6 +377,18 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     fn local_calls_then_await_promise(&self, count: u64, promise_id: PromiseId) -> Vec<u8> {
+        for _ in 0..count {
+            let _ = wasi::clocks::wall_clock::now();
+        }
+        golem_rust::blocking_await_promise(&promise_id)
+    }
+
+    fn sleep_then_local_calls_then_await_promise(
+        &self,
+        count: u64,
+        promise_id: PromiseId,
+    ) -> Vec<u8> {
+        std::thread::sleep(std::time::Duration::from_secs(2));
         for _ in 0..count {
             let _ = wasi::clocks::wall_clock::now();
         }
