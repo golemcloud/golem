@@ -19,8 +19,9 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use std::collections::VecDeque;
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use wasmtime_wasi_http::{Error, HttpConnectionPool, PooledConnection, RequestOptions, WasiBody};
+use wasmtime_wasi_http::{Error, HttpConnectionPool, RequestOptions, WasiBody};
 
 #[cfg(test)]
 mod tests;
@@ -28,15 +29,13 @@ mod tests;
 /// An owned I/O result, separate from the response body.
 pub type TransportIo = Box<dyn Future<Output = Result<(), Error>> + Send>;
 
-/// The response, its I/O future, and the connection that can be invalidated.
-pub type TransportResult = Result<
-    (
-        http::Response<WasiBody>,
-        TransportIo,
-        Option<PooledConnection>,
-    ),
-    Error,
->;
+/// Explicitly prevents connection reuse where reuse is available.
+/// Dropping this operation does not invalidate the response.
+pub type TransportInvalidation = Box<dyn Fn() + Send + Sync>;
+
+/// The response, its I/O future, and its explicit invalidation operation.
+pub type TransportResult =
+    Result<(http::Response<WasiBody>, TransportIo, TransportInvalidation), Error>;
 
 /// Sends an owned request and preserves separate send, response-body, and I/O errors.
 ///
@@ -73,16 +72,21 @@ impl HttpTransport for WasiHttpTransport {
     ) -> TransportResult {
         let pool = &self.pool;
         match pool {
-            Some(pool) => pool
-                .send_request(request, options)
-                .await
-                .map(|(response, io, connection)| (response, io, Some(connection))),
+            Some(pool) => {
+                pool.send_request(request, options)
+                    .await
+                    .map(|(response, io, connection)| {
+                        let invalidate: TransportInvalidation =
+                            Box::new(move || connection.poison());
+                        (response, io, invalidate)
+                    })
+            }
             None => match wasmtime_wasi_http::default_send_request(request, options).await {
                 Ok((response, io)) => Ok((
                     response.map(http_body_util::BodyExt::boxed_unsync),
                     Box::new(io)
                         as Box<dyn Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send>,
-                    None,
+                    Box::new(|| {}) as TransportInvalidation,
                 )),
                 Err(error) => Err(error),
             },
@@ -230,10 +234,12 @@ struct MemoryState {
 
 /// A finite send script with immutable request snapshots and no network connection.
 ///
-/// Script exhaustion returns `InternalError` without polling the request body. No pooled
-/// connection is returned. The response body and the scripted I/O future remain independent.
+/// Script exhaustion returns `InternalError` without polling the request body.
+/// Invalidation records explicit calls without a pool. The response body and the scripted
+/// I/O future remain independent.
 pub struct InMemoryHttpTransport {
     state: Mutex<MemoryState>,
+    invalidations: Arc<AtomicUsize>,
 }
 
 impl InMemoryHttpTransport {
@@ -243,7 +249,13 @@ impl InMemoryHttpTransport {
                 exchanges: exchanges.into_iter().collect(),
                 requests: Vec::new(),
             }),
+            invalidations: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// The number of explicit response invalidation calls.
+    pub fn invalidation_count(&self) -> usize {
+        self.invalidations.load(Ordering::SeqCst)
     }
 
     /// Take the requests in send order, with the body state at the time of this call.
@@ -307,7 +319,11 @@ impl HttpTransport for InMemoryHttpTransport {
                         Ok(())
                     }) as TransportIo,
                 };
-                Ok((response, io, None))
+                let invalidations = self.invalidations.clone();
+                let invalidate: TransportInvalidation = Box::new(move || {
+                    invalidations.fetch_add(1, Ordering::SeqCst);
+                });
+                Ok((response, io, invalidate))
             }
         }
     }

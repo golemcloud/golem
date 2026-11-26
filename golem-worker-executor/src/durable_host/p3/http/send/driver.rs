@@ -16,7 +16,7 @@ use super::*;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurableExecutionState, InFunctionRetryState, SemanticTrapRetryOverride,
 };
-use crate::durable_host::http::transport::HttpTransport;
+use crate::durable_host::http::transport::{HttpTransport, TransportInvalidation};
 use crate::services::oplog::OplogError;
 use async_trait::async_trait;
 use futures::future::{Either, select};
@@ -28,7 +28,7 @@ use std::time::Duration;
 pub(super) struct PhysicalResponse {
     pub(super) response: http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
     pub(super) io: Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
-    pub(super) connection: Option<PooledConnection>,
+    pub(super) invalidate: TransportInvalidation,
 }
 
 pub(super) struct SendFailure {
@@ -156,11 +156,11 @@ async fn dispatch<Ctx: WorkerCtx>(
     }
     let (method, uri) = target;
     match attempt {
-        Ok((response, io, connection)) => {
+        Ok((response, io, invalidate)) => {
             let response = PhysicalResponse {
                 response,
                 io,
-                connection,
+                invalidate,
             };
             let properties = RetryContext::http_with_response(
                 method,
@@ -187,7 +187,7 @@ async fn dispatch<Ctx: WorkerCtx>(
                 .await
             {
                 AsyncRetryDecision::RetryAfterDelay(delay) => {
-                    poison_p3_pooled_connection(&response.connection);
+                    (response.invalidate)();
                     drop(response);
                     physical.body.abandon_active_live_view();
                     SendEvent::Drain {

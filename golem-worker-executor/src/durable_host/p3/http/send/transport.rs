@@ -13,18 +13,10 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::http::transport::HttpTransport;
+use crate::durable_host::http::transport::{HttpTransport, TransportInvalidation};
 
 #[cfg(test)]
 mod tests;
-
-pub(in crate::durable_host::p3::http) fn poison_p3_pooled_connection(
-    connection: &Option<PooledConnection>,
-) {
-    if let Some(connection) = connection {
-        connection.poison();
-    }
-}
 
 impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
     pub(super) async fn attempt(
@@ -34,7 +26,7 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
         (
             http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
             Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
-            Option<PooledConnection>,
+            TransportInvalidation,
         ),
         ErrorCode,
     > {
@@ -51,7 +43,7 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
             .map_err(|err| ErrorCode::InternalError(Some(err.to_string())))?;
         *request.headers_mut() = self.headers.clone();
 
-        let (response, io, connection) = transport
+        let (response, io, invalidate) = transport
             .send(request, self.options)
             .await
             .map_err(|error| self.hooks.clone().transport_error_to_p3(&error))?;
@@ -66,7 +58,7 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
                 .await
                 .map_err(|error| io_hooks.transport_error_to_p3(&error))
         });
-        Ok((response, io, connection))
+        Ok((response, io, invalidate))
     }
 }
 

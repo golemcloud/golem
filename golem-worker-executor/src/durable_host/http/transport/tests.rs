@@ -53,13 +53,15 @@ async fn memory_response_does_not_wait_for_upload_and_captures_are_snapshots() {
         Ok(Frame::data(Bytes::from_static(b"late upload")))
     }))
     .boxed_unsync();
-    let (response, io, connection) = transport
+    let (response, io, invalidate) = transport
         .send(http::Request::new(upload), None)
         .await
         .unwrap();
-    assert!(connection.is_none());
+    assert_eq!(transport.invalidation_count(), 0);
     let captures = transport.take_requests();
     assert_eq!(captures.len(), 1);
+    invalidate();
+    assert_eq!(transport.invalidation_count(), 1);
     assert!(matches!(
         captures[0].request.body().as_ref(),
         CapturedRequestBody::Unpolled
@@ -172,11 +174,11 @@ async fn memory_scripted_io_error_does_not_replace_the_response() {
         Box::new(async { Err(Error::ConnectionWriteTimeout) }),
     )]);
     let uri = http::Uri::from_static("http://example.com/charges?logical=61");
-    let (response, io, connection) = transport
+    let (response, io, _invalidate) = transport
         .send(request(&uri, full(b"charge-body-731")), options())
         .await
         .unwrap();
-    assert!(connection.is_none());
+    assert_eq!(transport.invalidation_count(), 0);
     assert_eq!(response.status(), 202);
     assert_eq!(
         response.into_body().collect().await.unwrap().to_bytes(),
@@ -391,12 +393,11 @@ async fn preserves_head_body_options_and_response(adapter: Adapter) {
     })
     .await;
     let uri = fixture.uri.clone();
-    let (response, io, connection) = fixture
+    let (response, io, _invalidate) = fixture
         .transport
         .send(request(&uri, full(b"charge-body-731")), options())
         .await
         .unwrap();
-    assert_eq!(connection.is_some(), matches!(adapter, Adapter::Pooled));
     assert_eq!(response.status(), 201);
     assert_eq!(response.headers()["x-receipt"], "receipt-937");
     let io = tokio::spawn(Box::into_pin(io));
@@ -444,32 +445,34 @@ async fn rejected_status_then_success_preserves_requests(adapter: Adapter) {
     )
     .await;
     let uri = fixture.uri.clone();
-    let (response, io, connection) = fixture
+    let (response, io, invalidate) = fixture
         .transport
         .send(request(&uri, full(b"charge-body-731")), options())
         .await
         .unwrap();
     assert_eq!(response.status(), 503);
-    assert_eq!(connection.is_some(), matches!(adapter, Adapter::Pooled));
-    if let Some(connection) = &connection {
-        connection.poison();
+    invalidate();
+    if let Observations::Memory(transport) = &fixture.observations {
+        assert_eq!(transport.invalidation_count(), 1);
     }
     drop(response);
     drop(io);
-    drop(connection);
-    let (response, io, connection) = fixture
+    drop(invalidate);
+    let (response, io, _invalidate) = fixture
         .transport
         .send(request(&uri, full(b"charge-body-731")), options())
         .await
         .unwrap();
     assert_eq!(response.status(), 201);
-    assert_eq!(connection.is_some(), matches!(adapter, Adapter::Pooled));
     let io = tokio::spawn(Box::into_pin(io));
     assert_eq!(
         response.into_body().collect().await.unwrap().to_bytes(),
         "receipt-body-937"
     );
     io.await.unwrap().unwrap();
+    if let Observations::Memory(transport) = &fixture.observations {
+        assert_eq!(transport.invalidation_count(), 1);
+    }
     let captures = observations(fixture).await;
     assert_eq!(captures.len(), 2);
     captures
@@ -510,13 +513,12 @@ async fn consumed_upload_send_error_then_success(adapter: Adapter) {
         panic!("the peer closed before sending response headers");
     };
     assert!(matches!(p3_error(&error), ErrorCode::HttpProtocolError));
-    let (response, io, connection) = fixture
+    let (response, io, _invalidate) = fixture
         .transport
         .send(request(&uri, full(b"charge-body-731")), options())
         .await
         .unwrap();
     assert_eq!(response.status(), 201);
-    assert_eq!(connection.is_some(), matches!(adapter, Adapter::Pooled));
     let io = tokio::spawn(Box::into_pin(io));
     assert_eq!(
         response.into_body().collect().await.unwrap().to_bytes(),
@@ -584,7 +586,7 @@ async fn response_body_error_keeps_the_response(adapter: Adapter) {
     )
     .await;
     let uri = fixture.uri.clone();
-    let (response, io, connection) = fixture
+    let (response, io, _invalidate) = fixture
         .transport
         .send(
             request(&uri, full(b"charge-body-731")),
@@ -595,7 +597,6 @@ async fn response_body_error_keeps_the_response(adapter: Adapter) {
         )
         .await
         .unwrap();
-    assert_eq!(connection.is_some(), matches!(adapter, Adapter::Pooled));
     assert_eq!(response.status(), 202);
     assert_eq!(response.headers()["x-receipt"], "receipt-937");
     let io = tokio::spawn(Box::into_pin(io));
@@ -640,12 +641,11 @@ async fn early_response_keeps_late_transmission_error(adapter: Adapter) {
         Err::<Frame<Bytes>, _>(Error::HttpRequestBodySize(Some(73)))
     }))
     .boxed_unsync();
-    let (response, io, connection) = fixture
+    let (response, io, _invalidate) = fixture
         .transport
         .send(request(&fixture.uri, upload), options())
         .await
         .unwrap();
-    assert_eq!(connection.is_some(), matches!(adapter, Adapter::Pooled));
     assert_eq!(response.status(), 202);
     let mut io = Box::into_pin(io);
     assert!(io.as_mut().now_or_never().is_none());

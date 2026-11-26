@@ -65,7 +65,6 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::AsContextMut;
 use wasmtime::component::{Accessor, Resource, TerminalConsumption};
-use wasmtime_wasi_http::PooledConnection;
 use wasmtime_wasi_http::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::client;
 use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response};
@@ -847,7 +846,7 @@ where
                     .err()
             };
             if let Some(error) = trap {
-                poison_p3_pooled_connection(&response.connection);
+                (response.invalidate)();
                 return Err(HttpError::trap(wasmtime::Error::from_anyhow(
                     handle.trap(error),
                 )));
@@ -873,7 +872,7 @@ where
                 .is_some()
             {
                 let status = response.response.status().as_u16();
-                poison_p3_pooled_connection(&response.connection);
+                (response.invalidate)();
                 let properties = http_retry_properties(
                     store,
                     &retry_method,
