@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! A stored read that fails on a shared call path gives no outcome. These tests damage an oplog
-//! entry in the storage and drive the production call path that reads it: a guest read of the
-//! oplog of another agent, and the start of an agent with a pending keyed invocation. The read
-//! error reaches the caller, and no oplog gets an entry because of it.
+//! A stored read that fails on a shared call path gives no recorded outcome of the agent that
+//! owns the stored value. These tests damage an oplog entry in the storage and drive the
+//! production call path that reads it. A guest read of the oplog of another agent fails only the
+//! call that made the read: the reader records the error as the result of that call and does not
+//! recover. The start of an agent with a pending keyed invocation fails with the read error, and
+//! its oplog gets no entry because of it.
 
 use crate::Tracing;
 
@@ -33,7 +35,7 @@ use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, sqlite_storage_config, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
@@ -213,70 +215,25 @@ fn host_calls(
         .collect()
 }
 
-/// The public entries of `oplog` after `after` that record an outcome or report a failure.
-fn public_outcomes(
-    oplog: &[PublicOplogEntryWithIndex],
-    after: OplogIndex,
-) -> Vec<&PublicOplogEntryWithIndex> {
-    oplog
-        .iter()
-        .filter(|entry| entry.oplog_index > after)
-        .filter(|entry| {
-            matches!(
-                entry.entry,
-                PublicOplogEntry::Error(_)
-                    | PublicOplogEntry::AgentInvocationFinished(_)
-                    | PublicOplogEntry::AgentInvocationFailed(_)
-                    | PublicOplogEntry::CancelPendingInvocation(_)
-            )
-        })
-        .collect()
-}
-
-/// Waits until `reader` has started a call of `function_name` after `end` and its instance was
-/// loaded again, which shows that the failed read made it recover.
-async fn wait_for_a_retried_call(
-    executor: &TestWorkerExecutor,
-    reader: &OwnedAgentId,
-    function_name: &str,
-    end: OplogIndex,
-) -> anyhow::Result<()> {
-    let polls = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
-        Duration::from_millis(100),
-    ));
-    let mut retried = polls
-        .then(|_| async move {
-            let oplog = executor.get_oplog(reader, OplogIndex::INITIAL).await?;
-            anyhow::Ok(
-                !host_calls(&oplog, function_name, end).is_empty()
-                    && executor.instance_load_count(&reader.agent_id) >= 2,
-            )
-        })
-        .try_filter(|retried| futures::future::ready(*retried))
-        .boxed();
-    tokio::time::timeout(Duration::from_secs(60), retried.try_next())
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "{reader} did not start and retry its read of the unreadable oplog: loads {}",
-                executor.instance_load_count(&reader.agent_id)
-            )
-        })??;
-    Ok(())
-}
-
 const GET_OPLOG_NEXT: &str = "golem::api::get-oplog::get-next";
 const SEARCH_OPLOG_NEXT: &str = "golem::api::search-oplog::get-next";
 
-/// Agent A reads the oplog of agent B with `get-oplog` and `search-oplog`, and an entry of B does
-/// not decode. The read is a failure of B, so for A it is a read that failed for a time: A
-/// recovers and reads again, and its oplog records no terminal of the call, no invocation result
-/// and no error. B's stored oplog stays as it is. When B reads again, the same calls of A complete
-/// at their own `Start`, and the invocations of A give the result of the read.
+/// The text of `value` as it shows inside the debug form of a guest error string.
+fn as_debug_text(value: &str) -> String {
+    let quoted = format!("{value:?}");
+    quoted[1..quoted.len() - 1].to_string()
+}
+
+/// Agent A reads the oplog of agent B with `get-oplog` and `search-oplog`, and entry 2 of B has a
+/// version byte that no reader knows. The read error is the error of the call that made the read:
+/// the call returns an error that names B, the entry and the version byte, and A records it as it
+/// records any failed call. A does not recover and does not read again: A loads its instance one
+/// time, its oplog holds one `Start` of the call with its `End` and no error, and A answers a
+/// further call. B's stored oplog stays as it is.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
-async fn a_guest_read_of_an_unreadable_foreign_oplog_records_no_outcome(
+async fn a_guest_read_of_an_unreadable_foreign_oplog_is_the_error_of_the_call(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -350,123 +307,120 @@ async fn a_guest_read_of_an_unreadable_foreign_oplog_records_no_outcome(
     executor.release().await?;
 
     let target_rows = StoredOplogRows::open(deps, &context, &target_id).await?;
-    let healthy_rows = target_rows.rows().await?;
-    let original = target_rows.make_unreadable(2).await?;
+    target_rows.make_unreadable(2).await?;
     let corrupt_rows = target_rows.rows().await?;
 
     let executor = start_with_overrides(deps, &context, overrides()).await?;
-    let get_key = IdempotencyKey::fresh();
-    let search_key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &getter,
-            &get_key,
-            "read_oplog_result",
-            data_value!(target_id.agent_id),
-        )
-        .await?;
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &searcher,
-            &search_key,
-            "search_oplog_result",
-            data_value!(target_id.agent_id, "get"),
-        )
-        .await?;
-
-    let readers = [
-        (&getter_id, GET_OPLOG_NEXT, getter_end),
-        (&searcher_id, SEARCH_OPLOG_NEXT, searcher_end),
-    ];
-    // Each reader starts its call, fails the read and recovers at least once.
-    futures::stream::iter(readers)
-        .map(Ok)
-        .try_for_each(|(reader, function_name, end)| {
-            wait_for_a_retried_call(&executor, reader, function_name, end)
-        })
-        .await?;
-
-    futures::stream::iter(readers)
-        .map(Ok)
-        .try_for_each(|(reader, function_name, end)| {
-            let executor = &executor;
-            async move {
-                let oplog = executor.get_oplog(reader, OplogIndex::INITIAL).await?;
-                let calls = host_calls(&oplog, function_name, end);
-                assert_eq!(
-                    calls.iter().filter(|(_, terminated)| *terminated).count(),
-                    0,
-                    "a failed foreign read must leave its call without a terminal: {calls:?}"
-                );
-                assert!(
-                    public_outcomes(&oplog, end).is_empty(),
-                    "a failed foreign read must record no result or error in {reader}: {:?}",
-                    public_outcomes(&oplog, end)
-                );
-                anyhow::Ok(())
-            }
-        })
-        .await?;
-    assert_eq!(target_rows.rows().await?, corrupt_rows);
-
-    target_rows.replace(2, &original).await?;
+    let assert_names_the_entry = |error: &str| {
+        let target_text = as_debug_text(&format!("The oplog of {} failed", target_id.agent_id));
+        assert!(
+            error.contains(&target_text)
+                && error.contains(&format!(
+                    "oplog entry 2: unknown serialization version: {UNKNOWN_VERSION}"
+                )),
+            "the call error must name {target_text}, entry 2 and version {UNKNOWN_VERSION}: {error}"
+        );
+    };
+    // A reader that recovers and reads again never completes the invocation.
     let (got, searched) = tokio::time::timeout(Duration::from_secs(60), async {
         futures::try_join!(
-            executor.invoke_and_await_agent_with_key(
+            executor.invoke_and_await_agent(
                 &component,
                 &getter,
-                &get_key,
                 "read_oplog_result",
                 data_value!(target_id.agent_id),
             ),
-            executor.invoke_and_await_agent_with_key(
+            executor.invoke_and_await_agent(
                 &component,
                 &searcher,
-                &search_key,
                 "search_oplog_result",
                 data_value!(target_id.agent_id, "get"),
             ),
         )
     })
     .await
-    .map_err(|_| anyhow::anyhow!("the readers did not complete after the oplog read again"))??;
-    assert_eq!(got.into_typed::<Result<(), String>>()?, Ok(()));
-    assert!(
-        searched
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "the readers did not complete their calls: loads {} and {}",
+            executor.instance_load_count(&getter_id.agent_id),
+            executor.instance_load_count(&searcher_id.agent_id)
+        )
+    })??;
+    assert_names_the_entry(
+        &got.into_typed::<Result<(), String>>()?
+            .expect_err("a read of an unreadable oplog must fail the call"),
+    );
+    assert_names_the_entry(
+        &searched
             .into_typed::<Result<Option<Vec<u64>>, String>>()?
-            .is_ok()
+            .expect_err("a search of an unreadable oplog must fail the call"),
     );
 
-    futures::stream::iter(readers)
+    // Each reader answers a further call.
+    futures::stream::iter([&getter, &searcher])
         .map(Ok)
-        .try_for_each(|(reader, function_name, end)| {
+        .try_for_each(|reader| {
             let executor = &executor;
+            let component = &component;
             async move {
-                let oplog = executor.get_oplog(reader, OplogIndex::INITIAL).await?;
-                let calls = host_calls(&oplog, function_name, end);
-                assert_eq!(
-                    calls.len(),
-                    1,
-                    "the reconstruction must complete the call at its own Start: {calls:?}"
-                );
                 assert!(
-                    calls[0].1,
-                    "the read call must end once it reads: {calls:?}"
-                );
-                assert!(
-                    !oplog
-                        .iter()
-                        .filter(|entry| entry.oplog_index > end)
-                        .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
-                    "{reader} must have no error entry from the failed read"
+                    executor
+                        .invoke_and_await_agent(
+                            component,
+                            reader,
+                            "get_self_metadata_result",
+                            data_value!(),
+                        )
+                        .await?
+                        .into_typed::<Result<String, String>>()?
+                        .is_ok()
                 );
                 anyhow::Ok(())
             }
         })
         .await?;
-    assert_eq!(target_rows.rows().await?, healthy_rows);
+
+    let readers = [
+        (&getter_id, GET_OPLOG_NEXT, getter_end),
+        (&searcher_id, SEARCH_OPLOG_NEXT, searcher_end),
+    ];
+    futures::stream::iter(readers)
+        .map(Ok)
+        .try_for_each(|(reader, function_name, end)| {
+            let executor = &executor;
+            async move {
+                assert_eq!(
+                    executor.instance_load_count(&reader.agent_id),
+                    1,
+                    "{reader} must not recover because of the failed read"
+                );
+                let oplog = executor.get_oplog(reader, OplogIndex::INITIAL).await?;
+                let calls = host_calls(&oplog, function_name, end);
+                assert_eq!(
+                    calls.len(),
+                    1,
+                    "the failed read must be one call, not read again: {calls:?}"
+                );
+                assert!(calls[0].1, "the failed read call must end: {calls:?}");
+                let failures = oplog
+                    .iter()
+                    .filter(|entry| entry.oplog_index > end)
+                    .filter(|entry| {
+                        matches!(
+                            entry.entry,
+                            PublicOplogEntry::Error(_) | PublicOplogEntry::AgentInvocationFailed(_)
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert!(
+                    failures.is_empty(),
+                    "{reader} must record the failed read as a call result, not as a failure: {failures:?}"
+                );
+                anyhow::Ok(())
+            }
+        })
+        .await?;
+    assert_eq!(target_rows.rows().await?, corrupt_rows);
     Ok(())
 }
 
