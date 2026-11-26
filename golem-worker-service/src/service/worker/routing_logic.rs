@@ -209,19 +209,18 @@ where
 
             let uri = pod.uri(clients.uses_tls());
             let result = if replayable {
-                clients.call(description, uri, f).await
+                clients.call(description, uri, f).await.map_err(|err| {
+                    CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(err, *pod)
+                })
             } else {
                 clients
                     .call_without_retry(description, uri, f)
                     .await
-                    .map_err(not_replayed)
+                    .map_err(|err| {
+                        CallWorkerExecutorErrorWithContext::failed_without_replay(err, *pod)
+                    })
             };
-            Ok((
-                Some(result.map_err(|err| {
-                    CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(err, *pod)
-                })?),
-                Some(*pod),
-            ))
+            Ok((Some(result?), Some(*pod)))
         }
     }
 }
@@ -267,19 +266,18 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
 
                 let uri = pod.uri(clients.uses_tls());
                 let result = if self.replayable {
-                    clients.call(description, uri, f).await
+                    clients.call(description, uri, f).await.map_err(|status| {
+                        CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(status, *pod)
+                    })
                 } else {
                     clients
                         .call_without_retry(description, uri, f)
                         .await
-                        .map_err(not_replayed)
+                        .map_err(|status| {
+                            CallWorkerExecutorErrorWithContext::failed_without_replay(status, *pod)
+                        })
                 };
-                Ok((
-                    Some(result.map_err(|status| {
-                        CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(status, *pod)
-                    })?),
-                    Some(*pod),
-                ))
+                Ok((Some(result?), Some(*pod)))
             }
         }
     }
@@ -500,13 +498,15 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                             }
                         },
                     },
-                    Err(CallWorkerExecutorErrorWithContext { error, pod }) => {
+                    Err(CallWorkerExecutorErrorWithContext {
+                        error,
+                        pod,
+                        stale_pod,
+                    }) => {
                         if retried && error.is_retriable() {
                             retry.retry(self, &error, &pod).await
                         } else {
-                            if !retried
-                                && !matches!(error, CallWorkerExecutorError::MessageTooLarge(_))
-                            {
+                            if !retried && stale_pod {
                                 retry.invalidate_routing_table(self).await;
                             }
                             retry.non_retryable_error(error_map(error), &pod)
@@ -554,6 +554,10 @@ impl SafeDisplay for CallWorkerExecutorError {
 pub struct CallWorkerExecutorErrorWithContext {
     error: CallWorkerExecutorError,
     pod: Option<Pod>,
+    /// Whether a call that is not replayed failed at `pod` with a status that the routing retries
+    /// for other calls, before [`not_replayed`] changed its code: the routing table can hold a pod
+    /// that no longer serves the call.
+    stale_pod: bool,
 }
 
 impl CallWorkerExecutorErrorWithContext {
@@ -561,6 +565,18 @@ impl CallWorkerExecutorErrorWithContext {
         CallWorkerExecutorErrorWithContext {
             error: CallWorkerExecutorError::FailedToGetRoutingTable(error),
             pod: None,
+            stale_pod: false,
+        }
+    }
+
+    /// The failure of a call that is not replayed, with the status of [`not_replayed`].
+    fn failed_without_replay(status: Status, pod: Pod) -> Self {
+        let stale_pod = Self::failed_to_connect_to_pod(status.clone(), pod)
+            .error
+            .is_retriable();
+        CallWorkerExecutorErrorWithContext {
+            stale_pod,
+            ..Self::failed_to_connect_to_pod(not_replayed(status), pod)
         }
     }
 
@@ -573,6 +589,7 @@ impl CallWorkerExecutorErrorWithContext {
         CallWorkerExecutorErrorWithContext {
             error,
             pod: Some(pod),
+            stale_pod: false,
         }
     }
 }
@@ -667,8 +684,8 @@ impl<'a> RetryState<'a> {
     }
 
     /// Lets the next routing table read get a new routing table instead of the cached one. The
-    /// cached routing table does not expire, so every call that found it stale invalidates it,
-    /// whether the call retries or not.
+    /// cached routing table does not expire, so a call that found it stale invalidates it, whether
+    /// the call retries or not.
     async fn invalidate_routing_table<T: HasRoutingTableService>(&self, context: &T) -> bool {
         context
             .routing_table_service()

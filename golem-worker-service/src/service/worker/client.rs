@@ -4181,8 +4181,8 @@ mod rejection_mapping_tests {
     /// Rejects every invocation as `NotFound`, after first rejecting `routing_misses` of them as
     /// having reached an executor that does not own the agent's shard. With `accept` it accepts
     /// instead of rejecting as `NotFound`, and keeps the session open until its request stream ends.
-    /// Every `get_workers_metadata` call counts in `calls` and fails as a lost connection would,
-    /// or with `list_agents` finds no agents.
+    /// Every `get_workers_metadata` call counts in `calls`, and fails with `listing_failure` or
+    /// finds no agents.
     #[derive(Clone, Default)]
     struct RejectingExecutor {
         routing_misses: Arc<AtomicUsize>,
@@ -4208,7 +4208,7 @@ mod rejection_mapping_tests {
         /// With this set, `get_oplog_entry` counts the call in `calls`, waits for one permit of
         /// the semaphore, and returns a `Log` entry at the requested index.
         oplog_entry_release: Option<Arc<tokio::sync::Semaphore>>,
-        list_agents: bool,
+        listing_failure: Option<tonic::Code>,
     }
 
     macro_rules! unimplemented_unary {
@@ -4352,8 +4352,8 @@ mod rejection_mapping_tests {
             request: Request<GetWorkersMetadataRequest>,
         ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if !self.list_agents {
-                return Err(Status::unavailable("connection reset"));
+            if let Some(code) = self.listing_failure {
+                return Err(Status::new(code, "connection reset"));
             }
             let page_scan = request
                 .into_inner()
@@ -4682,7 +4682,10 @@ mod rejection_mapping_tests {
     /// and keeps the cause of the failure.
     #[test]
     async fn a_page_call_that_failed_after_it_was_sent_is_not_sent_again() {
-        let executor = RejectingExecutor::default();
+        let executor = RejectingExecutor {
+            listing_failure: Some(tonic::Code::Unavailable),
+            ..RejectingExecutor::default()
+        };
         let calls = executor.calls.clone();
         let (client, _) = client_against(executor, 32 * 1024 * 1024).await;
         let error = find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
@@ -4708,13 +4711,13 @@ mod rejection_mapping_tests {
     /// one and reaches the executor that the shard manager returns now.
     #[test]
     async fn the_page_call_after_a_stale_routing_table_reads_a_new_one() {
-        let listing_executor = RejectingExecutor {
-            list_agents: true,
-            ..RejectingExecutor::default()
-        };
+        let listing_executor = RejectingExecutor::default();
         let listing_calls = listing_executor.calls.clone();
         let listing_table = serve(listing_executor, 32 * 1024 * 1024).await;
-        let failing_executor = RejectingExecutor::default();
+        let failing_executor = RejectingExecutor {
+            listing_failure: Some(tonic::Code::Unavailable),
+            ..RejectingExecutor::default()
+        };
         let failing_calls = failing_executor.calls.clone();
         let failing_table = serve(failing_executor, 32 * 1024 * 1024).await;
 
@@ -4743,6 +4746,33 @@ mod rejection_mapping_tests {
         }
         assert_eq!(failing_calls.load(Ordering::SeqCst), 1);
         assert_eq!(listing_calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// A page call that failed at its executor with a status that the routing does not retry
+    /// keeps the cached routing table: its executor is still in the routing table.
+    #[test]
+    async fn a_page_call_that_failed_for_another_reason_keeps_the_routing_table() {
+        let executor = RejectingExecutor {
+            listing_failure: Some(tonic::Code::InvalidArgument),
+            ..RejectingExecutor::default()
+        };
+        let calls = executor.calls.clone();
+        let shard_manager = StaticShardManager::new(serve(executor, 32 * 1024 * 1024).await);
+        let client = client_routed_by(shard_manager.clone());
+        for _ in 0..2 {
+            let error = find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
+                .await
+                .expect_err("the executor fails every listing call");
+            let WorkerServiceError::InternalCallError(
+                super::CallWorkerExecutorError::FailedToConnectToPod(status),
+            ) = &error
+            else {
+                panic!("unexpected error: {error:?}");
+            };
+            assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(shard_manager.1.load(Ordering::SeqCst), 1);
     }
 
     /// A worker service client whose only executor is `executor`, and an agent to invoke through
