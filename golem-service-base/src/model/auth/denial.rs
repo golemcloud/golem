@@ -99,20 +99,28 @@ pub trait DenialRenderer {
     fn sign_in_required(&self, scheme: Option<&SecuritySchemeId>) -> Self::Response;
 
     /// Renders `denial`. `designated` holds the IDs that the request names, at most one per
-    /// kind; `LooksUnknown` takes the one of its kind. Without it, the answer still has the
-    /// status and code of an unknown ID, so even a caller's mistake reveals no target.
+    /// kind; `LooksUnknown` takes the one of its kind. Without it, a debug build stops on an
+    /// assertion, and a release build still answers with the status and code of an unknown ID,
+    /// so even a caller's mistake reveals no target.
     fn render(&self, denial: &Denial, designated: &[UnknownId]) -> Self::Response {
         match denial {
-            Denial::LooksUnknown { kind } => match designated.iter().find(|id| id.kind == *kind) {
-                Some(id) => self.unknown(id),
-                None => {
+            Denial::LooksUnknown { kind } => {
+                let id = designated.iter().find(|id| id.kind == *kind);
+                if id.is_none() {
                     tracing::error!(
                         ?kind,
                         "A denial looks like an unknown ID, but the request names no ID of its kind"
                     );
-                    self.unknown(&UnknownId::new(*kind, ""))
                 }
-            },
+                debug_assert!(
+                    id.is_some(),
+                    "A denial looks like an unknown ID, but the request names no ID of its kind"
+                );
+                match id {
+                    Some(id) => self.unknown(id),
+                    None => self.unknown(&UnknownId::new(*kind, "")),
+                }
+            }
             Denial::Forbidden { missing_grant } => self.forbidden(missing_grant.as_ref()),
             Denial::SignInRequired { scheme } => self.sign_in_required(scheme.as_ref()),
         }
@@ -221,17 +229,23 @@ mod tests {
         );
     }
 
+    /// A wiring mistake stops tests and debug builds. A release build still answers with the
+    /// status and code of an unknown ID, so even this mistake reveals no target.
     #[test]
-    fn looks_unknown_without_its_id_still_looks_unknown() {
-        assert_eq!(
+    fn looks_unknown_without_its_id_stops_a_debug_build() {
+        let rendered = std::panic::catch_unwind(|| {
             Trace.render(
                 &Denial::LooksUnknown {
-                    kind: DesignatedKind::Webhook
+                    kind: DesignatedKind::Webhook,
                 },
-                &[UnknownId::new(DesignatedKind::Agent, "a1")]
-            ),
-            "unknown Webhook "
-        );
+                &[UnknownId::new(DesignatedKind::Agent, "a1")],
+            )
+        });
+        if cfg!(debug_assertions) {
+            assert!(rendered.is_err(), "a debug build must stop: {rendered:?}");
+        } else {
+            assert_eq!(rendered.unwrap(), "unknown Webhook ");
+        }
     }
 
     #[test]
@@ -309,9 +323,10 @@ mod tests {
             },
         ] {
             assert_eq!(error.to_safe_string(), FORBIDDEN_MESSAGE, "{error:?}");
+            assert_eq!(error.to_string(), FORBIDDEN_MESSAGE, "{error:?}");
             assert!(
-                error.to_string().contains("owner@example.com"),
-                "logs keep the full target: {error}"
+                format!("{error:?}").contains("owner@example.com"),
+                "the debug form keeps the target for logs: {error:?}"
             );
         }
     }

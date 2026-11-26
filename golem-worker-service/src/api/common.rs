@@ -442,9 +442,14 @@ impl From<WorkerExecutorError> for ApiEndpointError {
 }
 
 impl From<AuthorizationError> for ApiEndpointError {
-    /// The safe text names no permission target, whose text holds the owner's account.
+    /// A denied permission is the renderer's `403`, so the two cannot drift apart. The other
+    /// variants keep their own texts, which name an action and no account.
     fn from(value: AuthorizationError) -> Self {
-        Self::forbidden(api::error_code::AUTH_FORBIDDEN, value)
+        match value {
+            AuthorizationError::PermissionNotAllowed(_)
+            | AuthorizationError::PermissionEvaluationFailed { .. } => RestDenials.forbidden(None),
+            other => Self::forbidden(api::error_code::AUTH_FORBIDDEN, other),
+        }
     }
 }
 
@@ -1020,6 +1025,27 @@ mod tests {
                 serde_json::json!({"code": id.code(), "error": id.message()}),
                 "{kind:?}"
             );
+        }
+    }
+
+    #[test]
+    async fn a_denied_permission_gets_the_bytes_of_the_renderers_403() {
+        use golem_common::model::card::CardAlgebraError;
+
+        let rendered = wire(RestDenials.forbidden(None)).await;
+        assert_eq!(rendered.0, poem::http::StatusCode::FORBIDDEN);
+        assert_eq!(
+            json(&rendered.2),
+            serde_json::json!({"code": api::error_code::AUTH_FORBIDDEN, "error": FORBIDDEN_MESSAGE})
+        );
+        for error in [
+            AuthorizationError::PermissionNotAllowed(target_of_another_account()),
+            AuthorizationError::PermissionEvaluationFailed {
+                target: target_of_another_account(),
+                error: CardAlgebraError::InvalidOwnerPath("owner@example.com/app".to_string()),
+            },
+        ] {
+            assert_eq!(wire(error.into()).await, rendered);
         }
     }
 

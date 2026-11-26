@@ -205,7 +205,7 @@ async fn go_ambient_native_client_executes_through_golem() {
         ])
         .await;
     assert!(denied.success_or_dump());
-    assert!(denied.stdout_contains("permission target Tool"));
-    assert!(denied.stdout_contains("is not allowed"));
+    assert!(denied.stdout_contains("Access denied"));
+    assert!(!denied.stdout_contains("permission target"));
     assert!(!denied.stdout_contains("agent_authorized"));
 }

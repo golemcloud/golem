@@ -350,9 +350,16 @@ impl From<anyhow::Error> for ApiError {
 }
 
 impl From<AuthorizationError> for ApiError {
-    /// The safe text names no permission target, whose text holds the owner's account.
+    /// A denied permission is the renderer's `403`, so the two cannot drift apart. The other
+    /// variants keep their own texts, which name an action and no account.
     fn from(value: AuthorizationError) -> Self {
-        Self::forbidden(api::error_code::AUTH_FORBIDDEN, value.to_safe_string())
+        match value {
+            AuthorizationError::PermissionNotAllowed(_)
+            | AuthorizationError::PermissionEvaluationFailed { .. } => {
+                RegistryDenials.forbidden(None)
+            }
+            other => Self::forbidden(api::error_code::AUTH_FORBIDDEN, other.to_safe_string()),
+        }
     }
 }
 
@@ -2493,6 +2500,34 @@ mod tests {
                 }
                 other => panic!("expected 403, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn a_denied_permission_gets_the_bytes_of_the_registry_renderers_403() {
+        use golem_common::model::card::CardAlgebraError;
+        use golem_service_base::model::auth::denial::{DenialRenderer, FORBIDDEN_MESSAGE};
+
+        fn body(error: ApiError) -> serde_json::Value {
+            match error {
+                ApiError::Forbidden(body) => serde_json::to_value(&body.0).unwrap(),
+                other => panic!("expected 403, got {other:?}"),
+            }
+        }
+
+        let rendered = body(RegistryDenials.forbidden(None));
+        assert_eq!(
+            rendered,
+            serde_json::json!({"code": api::error_code::AUTH_FORBIDDEN, "error": FORBIDDEN_MESSAGE})
+        );
+        for error in [
+            AuthorizationError::PermissionNotAllowed(target_of_another_account()),
+            AuthorizationError::PermissionEvaluationFailed {
+                target: target_of_another_account(),
+                error: CardAlgebraError::InvalidOwnerPath("owner@example.com/app".to_string()),
+            },
+        ] {
+            assert_eq!(body(ApiError::from(error)), rendered);
         }
     }
 

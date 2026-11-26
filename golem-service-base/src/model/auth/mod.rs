@@ -184,9 +184,13 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
 pub enum AuthorizationError {
     #[error("The system-only action {0} is not allowed")]
     SystemOnlyActionNotAllowed(String),
-    #[error("The permission target {0:?} is not allowed")]
+    /// The message names no permission target: a 1.6 target holds the account and the names of
+    /// the owner (5.3 Rule 21). `Debug` keeps the target, and the check logs it.
+    #[error("{}", denial::FORBIDDEN_MESSAGE)]
     PermissionNotAllowed(Box<PermissionTarget>),
-    #[error("Failed to evaluate permission target {target:?}: {error}")]
+    /// The message names neither the target nor the evaluation error, whose text can hold an
+    /// account. `Debug` keeps both, and the check logs them.
+    #[error("{}", denial::FORBIDDEN_MESSAGE)]
     PermissionEvaluationFailed {
         target: Box<PermissionTarget>,
         error: CardAlgebraError,
@@ -195,18 +199,10 @@ pub enum AuthorizationError {
     AuthContextHasNoCards(String),
 }
 
-/// A response shows no permission target: a 1.6 target holds the account and the names of the
-/// owner (5.3 Rule 21). `Display` keeps the target for logs.
+/// No message names a permission target (5.3 Rule 21), so the safe text is the message.
 impl SafeDisplay for AuthorizationError {
     fn to_safe_string(&self) -> String {
-        match self {
-            Self::PermissionNotAllowed(_) | Self::PermissionEvaluationFailed { .. } => {
-                denial::FORBIDDEN_MESSAGE.to_string()
-            }
-            Self::SystemOnlyActionNotAllowed(_) | Self::AuthContextHasNoCards(_) => {
-                self.to_string()
-            }
-        }
+        self.to_string()
     }
 }
 
@@ -451,6 +447,11 @@ fn authorize_effective_surface_permission(
     target: &PermissionTarget,
 ) -> Result<(), AuthorizationError> {
     if effective_surface.authorize(target).map_err(|error| {
+        tracing::warn!(
+            permission = ?target,
+            error = ?error,
+            "Failed to evaluate a permission"
+        );
         AuthorizationError::PermissionEvaluationFailed {
             target: Box::new(target.clone()),
             error,
@@ -458,6 +459,7 @@ fn authorize_effective_surface_permission(
     })? {
         Ok(())
     } else {
+        tracing::debug!(permission = ?target, "Permission denied");
         Err(AuthorizationError::PermissionNotAllowed(Box::new(
             target.clone(),
         )))

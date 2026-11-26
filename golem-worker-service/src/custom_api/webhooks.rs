@@ -25,6 +25,16 @@ use golem_service_base::model::auth::AuthCtx;
 use http::StatusCode;
 use std::sync::Arc;
 
+/// A webhook callback's answer with no headers and no body, such as the `404` of an unknown or
+/// forged webhook ID.
+pub fn empty_response(status: StatusCode) -> RouteExecutionResult {
+    RouteExecutionResult {
+        status,
+        headers: http::HeaderMap::new(),
+        body: ResponseBody::NoBody,
+    }
+}
+
 pub struct WebhookCallbackHandler {
     worker_service: Arc<WorkerService>,
     hmac_key: Vec<u8>,
@@ -61,11 +71,7 @@ impl WebhookCallbackHandler {
         let environment_id = resolved_route.route.environment_id;
         if !webhook_id.verify_checksum(environment_id, &self.hmac_key) {
             tracing::warn!("Received webhook callback with incorrect checksum");
-            return Ok(RouteExecutionResult {
-                status: StatusCode::NOT_FOUND,
-                headers: http::HeaderMap::new(),
-                body: ResponseBody::NoBody,
-            });
+            return Ok(empty_response(StatusCode::NOT_FOUND));
         }
 
         let promise_id = webhook_id.into_promise_id();

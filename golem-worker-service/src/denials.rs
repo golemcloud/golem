@@ -35,7 +35,8 @@ use poem_openapi::payload::Json;
 /// The text of an answer that asks the caller to sign in.
 const SIGN_IN_REQUIRED_MESSAGE: &str = "Sign-in required";
 
-/// HTTP routes of deployed agents, as their error path answers.
+/// HTTP routes of deployed agents, as their error path answers. Webhook callbacks answer
+/// through [`WebhookDenials`].
 pub struct HttpRouteDenials;
 
 impl DenialRenderer for HttpRouteDenials {
@@ -78,6 +79,26 @@ impl DenialRenderer for StreamReadDenials {
 
     fn sign_in_required(&self, _scheme: Option<&SecuritySchemeId>) -> RouteExecutionResult {
         crate::custom_api::durable_streams::response(http::StatusCode::UNAUTHORIZED)
+    }
+}
+
+/// Webhook callbacks, which answer an unknown or forged webhook ID with an empty `404`.
+pub struct WebhookDenials;
+
+impl DenialRenderer for WebhookDenials {
+    type Response = RouteExecutionResult;
+
+    fn unknown(&self, _id: &UnknownId) -> RouteExecutionResult {
+        crate::custom_api::webhooks::empty_response(http::StatusCode::NOT_FOUND)
+    }
+
+    /// The callback's answers have no body, so the answer names no grant.
+    fn forbidden(&self, _missing_grant: Option<&GrantText>) -> RouteExecutionResult {
+        crate::custom_api::webhooks::empty_response(http::StatusCode::FORBIDDEN)
+    }
+
+    fn sign_in_required(&self, _scheme: Option<&SecuritySchemeId>) -> RouteExecutionResult {
+        crate::custom_api::webhooks::empty_response(http::StatusCode::UNAUTHORIZED)
     }
 }
 
@@ -205,6 +226,13 @@ mod tests {
         UnknownId::new(kind, "id-7")
     }
 
+    /// The status, the headers and whether the body is empty: every byte of a route answer
+    /// without a body.
+    fn route_result(result: RouteExecutionResult) -> (http::StatusCode, http::HeaderMap, bool) {
+        let no_body = matches!(result.body, crate::custom_api::model::ResponseBody::NoBody);
+        (result.status, result.headers, no_body)
+    }
+
     /// A 1.6 denial as the worker service sees it today.
     fn denied_permission() -> WorkerServiceError {
         WorkerServiceError::AuthError(AuthServiceError::Unauthorized(
@@ -240,6 +268,18 @@ mod tests {
     async fn every_designated_kind_answers_an_http_route_with_its_own_not_found() {
         for kind in ALL_KINDS {
             let id = unknown_of(kind);
+            if kind == DesignatedKind::Webhook {
+                // A webhook callback answers through its own renderer.
+                assert_eq!(
+                    route_result(
+                        WebhookDenials.render(&looks_unknown(kind), std::slice::from_ref(&id))
+                    ),
+                    route_result(crate::custom_api::webhooks::empty_response(
+                        http::StatusCode::NOT_FOUND
+                    )),
+                );
+                continue;
+            }
             let (status, body) =
                 wire(HttpRouteDenials.render(&looks_unknown(kind), std::slice::from_ref(&id)))
                     .await;
@@ -284,6 +324,38 @@ mod tests {
                 "{kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_webhook_denial_answers_as_a_callback_with_an_unknown_webhook_id() {
+        let real = route_result(crate::custom_api::webhooks::empty_response(
+            http::StatusCode::NOT_FOUND,
+        ));
+        assert_eq!(
+            real,
+            (http::StatusCode::NOT_FOUND, http::HeaderMap::new(), true)
+        );
+        assert_eq!(
+            route_result(WebhookDenials.render(
+                &looks_unknown(DesignatedKind::Webhook),
+                &[unknown_of(DesignatedKind::Webhook)],
+            )),
+            real
+        );
+    }
+
+    #[test]
+    fn a_webhook_forbidden_answer_names_nothing() {
+        let rendered = route_result(WebhookDenials.render(
+            &Denial::Forbidden {
+                missing_grant: Some(GrantText("webhook(W) : send".to_string())),
+            },
+            &[],
+        ));
+        assert_eq!(
+            rendered,
+            (http::StatusCode::FORBIDDEN, http::HeaderMap::new(), true)
+        );
     }
 
     #[test]
