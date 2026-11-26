@@ -137,6 +137,7 @@ pub struct TestEnvironmentStateService {
     agent_secret_revision_calls: AtomicUsize,
     accessible_tools_calls: AtomicUsize,
     accessible_tool_calls: AtomicUsize,
+    agent_secret_revision_lookups: RwLock<Vec<(AgentSecretRevisionSelector, AgentSecretReadMode)>>,
     tool_activation_lookups: RwLock<Vec<(EnvironmentId, ComponentId, ComponentRevision)>>,
     tool_deployment_calls: AtomicUsize,
     tool_deployment_lookups: RwLock<Vec<(EnvironmentId, ComponentId, ComponentRevision)>>,
@@ -174,6 +175,12 @@ impl TestEnvironmentStateService {
 
     pub fn agent_secret_revision_calls(&self) -> usize {
         self.agent_secret_revision_calls.load(Ordering::SeqCst)
+    }
+
+    pub fn agent_secret_revision_lookups(
+        &self,
+    ) -> Vec<(AgentSecretRevisionSelector, AgentSecretReadMode)> {
+        self.agent_secret_revision_lookups.read().unwrap().clone()
     }
 
     pub fn set_tool_deployment(
@@ -369,10 +376,14 @@ impl EnvironmentStateService for TestEnvironmentStateService {
         agent_secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
         selector: AgentSecretRevisionSelector,
-        _mode: AgentSecretReadMode,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
         self.agent_secret_revision_calls
             .fetch_add(1, Ordering::SeqCst);
+        self.agent_secret_revision_lookups
+            .write()
+            .unwrap()
+            .push((selector, mode));
         Ok(self
             .agent_secrets
             .read()

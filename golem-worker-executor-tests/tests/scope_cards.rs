@@ -21,7 +21,8 @@ use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::{AgentConfigEntryDto, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretReadMode, AgentSecretRevision, AgentSecretRevisionSelector,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::card::{
     Card, CardId, CardManagedBy, CardManagedByRuntimeDerived, PolymorphicCard,
@@ -8604,6 +8605,13 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
         "stable secret authorization must not refresh card authority"
     );
     assert_eq!(environment_state_service.agent_secret_revision_calls(), 1);
+    assert_eq!(
+        environment_state_service.agent_secret_revision_lookups(),
+        vec![(
+            AgentSecretRevisionSelector::Fixed(AgentSecretRevision::INITIAL),
+            AgentSecretReadMode::Live,
+        )],
+    );
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let constructor_snapshot = oplog
         .iter()
@@ -8638,6 +8646,16 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
         environment_state_service.agent_secret_revision_calls(),
         3,
         "replay must re-materialize the pinned secret without reauthorizing the reveal"
+    );
+    let pinned = AgentSecretRevisionSelector::Fixed(AgentSecretRevision::INITIAL);
+    assert_eq!(
+        environment_state_service.agent_secret_revision_lookups(),
+        vec![
+            (pinned, AgentSecretReadMode::Live),
+            (pinned, AgentSecretReadMode::Historical),
+            (pinned, AgentSecretReadMode::Live),
+        ],
+        "the persisted success uses Historical; each new reveal uses Live",
     );
     Ok(())
 }
