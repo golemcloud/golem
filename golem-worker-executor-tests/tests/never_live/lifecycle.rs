@@ -352,10 +352,11 @@ async fn admissions(
 
 /// E3c and the stop handoff, when the admission commits first: an automatic update requested
 /// while a never-live generation has prepared its instance for the previous update and has not
-/// taken its stop. The generation is released only after the second `PendingUpdate` is in the
-/// oplog, so its stop sees the pending update. The fork ends with two outcomes and no pending
-/// update. The other order, where the stop completes before the admission, is the second update
-/// of each fork in the lifecycle matrix.
+/// taken its stop. The generation is released only after the second request returned, so its
+/// admission and its activation both precede the stop, and only the stop can apply the second
+/// update. The fork ends with two outcomes and no pending update. The other order, where the
+/// stop completes before the admission, is the second update of each fork in the lifecycle
+/// matrix.
 #[test]
 #[timeout("4m")]
 async fn an_update_admitted_before_a_never_live_generation_stops_is_applied(
@@ -375,21 +376,13 @@ async fn an_update_admitted_before_a_never_live_generation_stops_is_applied(
         .auto_update_worker(&fork, component.revision, false)
         .await?;
     tokio::time::timeout(Duration::from_secs(60), prepared).await??;
-    let second = {
-        let executor = executor.clone();
-        let fork = fork.clone();
-        let revision = component.revision;
-        tokio::spawn(async move { executor.auto_update_worker(&fork, revision, false).await })
-    };
-    tokio::time::timeout(Duration::from_secs(60), async {
-        while admissions(&executor, &fork, forked).await?.len() < 2 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        anyhow::Ok(())
-    })
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.auto_update_worker(&fork, component.revision, false),
+    )
     .await??;
+    assert_eq!(admissions(&executor, &fork, forked).await?.len(), 2);
     let _ = release.send(());
-    tokio::time::timeout(Duration::from_secs(60), second).await???;
 
     let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
     assert_eq!(outcomes.len(), 2, "{outcomes:?}");
