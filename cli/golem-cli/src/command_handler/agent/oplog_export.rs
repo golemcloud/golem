@@ -406,4 +406,21 @@ mod tests {
             "The oplog of the agent starts after the requested index. Export again from a later index"
         );
     }
+
+    #[test]
+    fn read_failed_gives_a_stale_cursor_its_own_error() {
+        let error = ServiceError {
+            service_name: "Worker",
+            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                status_code: 400,
+                errors: vec!["Stale oplog cursor of MARKER-7".to_string()],
+                code: Some(error_code::STALE_CURSOR.to_string()),
+                additional_fields: Default::default(),
+            }),
+        };
+        assert!(matches!(
+            read_failed(anyhow::Error::from(error)).downcast_ref::<OplogExportError>(),
+            Some(OplogExportError::StaleCursor)
+        ));
+    }
 }
