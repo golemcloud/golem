@@ -38,7 +38,9 @@ use golem_common::model::Timestamp;
 use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, ReadOnlyConfig};
 use golem_common::model::caller::{Caller, Principal, UserPrincipal};
 use golem_common::model::caller::{Claims, Pair};
-use golem_common::model::{AgentFingerprint, AgentId, InvocationRequestKey, OwnedAgentId};
+use golem_common::model::{
+    AgentFingerprint, AgentId, IdempotencyScope, InvocationRequestKey, OwnedAgentId,
+};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::{
@@ -91,7 +93,12 @@ impl CallAgentHandler {
         } else {
             request.idempotency_key()?
         };
-        let request_key = InvocationRequestKey::external(None, supplied_key.as_ref());
+        // The caller of the route's verified session is the scope of the idempotency key, so the
+        // retry of a signed-in caller reaches the invocation of its first attempt. An anonymous
+        // caller has no scope, so its key is forwarded but does not deduplicate.
+        let caller = caller_from_request(request)?;
+        let request_key =
+            InvocationRequestKey::external(IdempotencyScope::of(&caller), supplied_key.as_ref());
         let (target, component, freshness_disposition) = self
             .worker_service
             .bound_invocation_target(
@@ -147,7 +154,6 @@ impl CallAgentHandler {
             tracing: Some(request.invocation_context().into()),
         });
 
-        let caller = caller_from_request(request)?;
         debug!(kind = %caller.original.kind(), "Using caller for invocation");
         let proto_caller: golem_api_grpc::proto::golem::component::Caller = caller.clone().into();
 
@@ -1047,6 +1053,109 @@ mod tests {
         }
         let calls = harness.contexts.lock().unwrap();
         assert_ne!(calls[1].request_key, calls[2].request_key);
+    }
+
+    #[test]
+    async fn a_call_route_scopes_the_idempotency_key_by_its_session_caller() {
+        use crate::mcp::InvocationHarness;
+        use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, InvocationId};
+        use golem_common::schema::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
+        use golem_service_base::custom_api::{CompiledSchema, RouteBehaviour};
+
+        let harness = InvocationHarness::new(
+            AgentInvocationOutput {
+                result: AgentInvocationResult::AgentInitialization,
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: Some(AgentId::from_parts(7, 19)),
+                idempotency_key: Some(InvocationId(Uuid::from_u128(91))),
+                oplog_index: None,
+                agent_fingerprint: None,
+                background_failure: None,
+            },
+            AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            vec![AgentMethodSchema {
+                name: "run".into(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+        );
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let mut compiled = test_route(1, "/", Some("POST"), "typed");
+        let RouteBehaviour::CallAgent(behaviour) = &mut compiled.behavior else {
+            unreachable!()
+        };
+        behaviour.component_id = harness.component_id;
+        behaviour.agent_type = harness.agent_type.type_name.clone();
+        behaviour.body = RequestBodySchema::JsonBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+            },
+        };
+        let resolver = test_resolver(vec![compiled]);
+
+        let issuer = "https://login.acme.example/";
+        let mut request_keys = Vec::new();
+        for (subject, key) in [
+            (Some("alice"), "k1"),
+            (Some("alice"), "k1"),
+            (Some("bob"), "k1"),
+            (Some("alice"), "k2"),
+            (None, "k1"),
+        ] {
+            let request = poem::Request::builder()
+                .method(Method::POST)
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .header("content-type", "application/json")
+                .header("Idempotency-Key", key)
+                .body("{}".to_string());
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+            else {
+                unreachable!()
+            };
+            let mut request = RichRequest::new(request);
+            if let Some(subject) = subject {
+                request.set_authenticated_session(oidc_session(issuer, subject));
+            }
+            handler
+                .handle_call_agent_behaviour(&mut request, &route, behaviour)
+                .await
+                .unwrap();
+            let calls = harness.contexts.lock().unwrap();
+            request_keys.push(calls.last().unwrap().request_key.clone());
+        }
+
+        // The key of a signed-in caller is scoped by the pair of the session's user.
+        let InvocationRequestKey::External { scope, key } = &request_keys[0] else {
+            panic!("expected a keyed request: {:?}", request_keys[0]);
+        };
+        assert_eq!(
+            scope,
+            &IdempotencyScope::Pair {
+                issuer: issuer.to_string(),
+                subject: "alice".to_string(),
+            }
+        );
+        assert_eq!(key.value, "k1");
+        // alice's retry with the same key reaches the invocation of her first attempt.
+        assert_eq!(request_keys[0], request_keys[1]);
+        // bob's key k1 is not alice's key k1, and alice's other key is another invocation.
+        assert_ne!(request_keys[0], request_keys[2]);
+        assert_ne!(request_keys[0], request_keys[3]);
+        // An anonymous caller has no scope, so its key does not deduplicate.
+        assert!(matches!(request_keys[4], InvocationRequestKey::Unkeyed(_)));
     }
 
     #[test]
