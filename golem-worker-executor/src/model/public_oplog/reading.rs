@@ -453,7 +453,21 @@ pub async fn search_public_oplog_remote(
             let resume = range
                 .resume_search(cursor)
                 .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-            (resume, oplog_cursor_revision(owned_agent_id, cursor, last)?)
+            if cursor.next_oplog_index > last.as_u64() {
+                return Err(WorkerExecutorError::StaleCursor {
+                    agent_id: owned_agent_id.agent_id,
+                    next_oplog_index: OplogIndex::from_u64(cursor.next_oplog_index),
+                    reason: StaleCursorReason::PastEnd {
+                        last_oplog_index: last,
+                    },
+                });
+            }
+            let revision = cursor.current_component_revision.try_into().map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(
+                    "the oplog cursor {cursor} has an invalid component revision: {e}"
+                ))
+            })?;
+            (resume, revision)
         }
     };
     let (range, scan_from) = match resume {
@@ -1024,7 +1038,20 @@ pub async fn oplog_page_start(
             let last_index = oplog_service
                 .get_last_index(owned_agent_id, agent_mode)
                 .await?;
-            let revision = oplog_cursor_revision(owned_agent_id, &cursor, last_index)?;
+            if cursor.next_oplog_index > last_index.as_u64() {
+                return Err(WorkerExecutorError::StaleCursor {
+                    agent_id: owned_agent_id.agent_id,
+                    next_oplog_index: OplogIndex::from_u64(cursor.next_oplog_index),
+                    reason: StaleCursorReason::PastEnd {
+                        last_oplog_index: last_index,
+                    },
+                });
+            }
+            let revision = cursor.current_component_revision.try_into().map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(
+                    "the oplog cursor {cursor} has an invalid component revision: {e}"
+                ))
+            })?;
             Ok((resumed, revision))
         }
         None => {
@@ -1038,27 +1065,4 @@ pub async fn oplog_page_start(
             Ok((range, revision))
         }
     }
-}
-
-/// The component revision that `cursor` carries, in an oplog whose last index is `last_index`. A
-/// cursor that points past the last entry is stale, as [`oplog_page_start`] tells.
-fn oplog_cursor_revision(
-    owned_agent_id: &OwnedAgentId,
-    cursor: &OplogCursor,
-    last_index: OplogIndex,
-) -> Result<ComponentRevision, WorkerExecutorError> {
-    if cursor.next_oplog_index > last_index.as_u64() {
-        return Err(WorkerExecutorError::StaleCursor {
-            agent_id: owned_agent_id.agent_id,
-            next_oplog_index: OplogIndex::from_u64(cursor.next_oplog_index),
-            reason: StaleCursorReason::PastEnd {
-                last_oplog_index: last_index,
-            },
-        });
-    }
-    cursor.current_component_revision.try_into().map_err(|e| {
-        WorkerExecutorError::invalid_request(format!(
-            "the oplog cursor {cursor} has an invalid component revision: {e}"
-        ))
-    })
 }
