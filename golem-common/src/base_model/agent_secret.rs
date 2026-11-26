@@ -200,7 +200,9 @@ impl FromStr for SecretDestination {
                     host,
                     Some(
                         port.parse::<u16>()
-                            .map_err(|_| SecretDestinationParseError)?,
+                            .ok()
+                            .filter(|port| *port != 0)
+                            .ok_or(SecretDestinationParseError)?,
                     ),
                 )
             }
@@ -419,6 +421,8 @@ mod destination {
             "https://user@x.com",
             "https://x.com:abc",
             "https://x.com:",
+            "https://x.com:0",
+            "https://x.com:000",
             "https://x.com:65536",
             "https://",
             "https:// x.com",
@@ -438,6 +442,8 @@ mod destination {
         for (input, canonical) in [
             ("HTTPS://API.X.COM.:443/", "https://api.x.com"),
             ("https://x.com:443", "https://x.com"),
+            ("https://x.com:1", "https://x.com:1"),
+            ("https://x.com:65535", "https://x.com:65535"),
             ("http://localhost:8080/", "http://localhost:8080"),
             ("ws://localhost:80", "ws://localhost"),
             ("wss://*.example.com:443", "wss://*.example.com"),
