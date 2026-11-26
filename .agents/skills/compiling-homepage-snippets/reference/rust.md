@@ -438,7 +438,13 @@ description in the descriptor.
   parameters, so the `refund` tool declares an auto-injected `ctx:
   InvocationContext` parameter (filled by Golem, not part of the tool
   input, not taken by `RefundClient` or `RefundUnderlying::refund`) and the
-  middleware reads `ctx.caller().original()`. TS `refuse` builds `new ToolInvokeError({ tag:
+  middleware reads `ctx.caller().original()`.
+  SDK gap: the typed middleware sees the caller only through that tool
+  parameter, so it cannot read the caller of a tool that declares none.
+  Fix idea (2.0): give typed middleware handlers the invocation context
+  even when the presented tool declares none. The snippet still compiles,
+  because the harness `refund` tool declares the parameter.
+  TS `refuse` builds `new ToolInvokeError({ tag:
   'constraint-violation' })`; Rust `refuse` returns
   `ToolInvokeError::ConstraintViolation`. TS `throw` is `return Err(..)`.
   TS `createPromise()`/`awaitPromise(p)` are `create_promise()` and

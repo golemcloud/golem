@@ -454,6 +454,11 @@ New in the 7 + 7 + 7 round:
   declares it (in both tools/middleware and tools/secrets, so the two stay
   identical), and the marked rate-limit line is
   `checkRateLimit(context.caller.original)`.
+  SDK gap: the typed middleware sees the caller only through that tool
+  parameter, so it cannot read the caller of a tool that declares none.
+  Fix idea (2.0): give typed middleware handlers the invocation context
+  even when the presented tool declares none. The snippet still compiles,
+  because the harness `refund` tool declares the parameter.
   The `@toolMiddleware` line is the counterpart of the marked TS
   `refund.middleware({` line.
 - artifacts/peruser: Scala agents have no `init`; the marked init

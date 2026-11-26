@@ -137,7 +137,7 @@ What each `harness.mbt` supplies:
 | `artifacts_routes` | `#derive.golem_schema pub(all) struct Row { week, total : Double }`, `query_sales(region)` |
 | `artifacts_files` | `SaleRow`, `query_sales(team, quarter)`, `draw_chart(rows) -> Bytes` |
 | `artifacts_login` | `Png` (`@schema.AllowedMimeTypes` for `image/png`; moved here from the display file to stay within 31 lines, shown in artifacts/files), `Chart { asked_by : @agents.PrincipalRef?, png : Bytes }`, `answer_with_chart(question) -> Bytes` |
-| `tools_middleware` | the Secrets `refund` tool (same name, version, positional `charge`, `amount`, `api_key : @secrets.SecretHandle[String]`, error `RefundError::Http`) with `customer_email` in `RefundResult` and a runtime-supplied `ctx : @tool.InvocationContext` parameter (hidden from the tool input and the client; it becomes the middleware handler's context, see "Caller in typed middleware"); `check_rate_limit(who : @agents.Principal) -> Result[Unit, @toolMiddleware.ToolInvokeError[E]]`, `ask_finance(approval, charge, amount)`, `approved(verdict : Bytes)`, `audit(charge, amount, refund_id)`. The middleware must be in the tool's package (`#derive.tool_middleware` resolves `presented=` same-package only) |
+| `tools_middleware` | the Secrets `refund` tool (same name, version, positional `charge`, `amount`, `api_key : @secrets.SecretHandle[String]`, error `RefundError::Http`) with `customer_email` in `RefundResult` and a runtime-supplied `ctx : @tool.InvocationContext` parameter (hidden from the tool input and the client; it becomes the middleware handler's context, see "SDK gap: caller in typed middleware"); `check_rate_limit(who : @agents.Principal) -> Result[Unit, @toolMiddleware.ToolInvokeError[E]]`, `ask_finance(approval, charge, amount)`, `approved(verdict : Bytes)`, `audit(charge, amount, refund_id)`. The middleware must be in the tool's package (`#derive.tool_middleware` resolves `presented=` same-package only) |
 | `artifacts_peruser` | `dashboard_for(user, request) -> String` (the model loop that builds the dashboard) |
 | `artifacts_routers` | the user's `#derive.agent struct AnalystAgent(chat)` with `export_csv(id) -> @schema.AgentStream[Array[Byte]]` (so the generator emits `AnalystAgentClient` in this component; the TS prelude declares it the same way, "defined elsewhere in the app"), `is_word` (the `[\w-]+` class), `header(name, value) -> @http.HttpHeader`, `empty()` (the TS prelude's `header`/`empty`) |
 | `artifacts_signin` | `Invoice`, `invoices_of(org, issuer, subject)`, `page_for(question, invoices)` |
@@ -447,7 +447,7 @@ declaring the tool parameter as `@config.Secret[String]`, fails):
   implement `IntoSchema`/`WireSchema`/`IntoWire` for `@config.Secret[T]`
   so lowering loads a fresh owned handle from the config key.
 
-## Caller in typed middleware (Middleware snippet)
+## SDK gap: caller in typed middleware (Middleware snippet)
 
 TS gives every typed middleware handler the caller in its context
 (`refund: async (args, { underlying, caller })`). MoonBit typed middleware
@@ -459,6 +459,14 @@ and drops it from the tool input and from the generated `RefundClient` and
 `RefundUnderlying::refund(charge, amount, api_key)`. The handler reads
 `ctx.caller().original`. (In 1.6 the same role was played by a hidden
 `principal : @tool.Principal` parameter.)
+
+The gap: a typed middleware handler sees the caller only through that
+hidden tool parameter, so a middleware that wraps a tool without one cannot
+read the caller. The snippet still compiles, because the harness `refund`
+tool declares the parameter.
+
+- Fix idea (2.0): give typed middleware handlers the invocation context even
+  when the presented tool declares none.
 
 ## Tools gap: `lexmatch` with captures is rejected by the code generator (found with the Routers snippet)
 
