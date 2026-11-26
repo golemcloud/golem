@@ -283,11 +283,7 @@ async fn sqlite() -> Arc<dyn GetBlobStorage + Send + Sync> {
 
 #[test_dep(scope = PerWorker, tagged_as = "cc")]
 fn compilation_cache() -> BlobStorageNamespace {
-    BlobStorageNamespace::CompilationCache {
-        environment_id: EnvironmentId(
-            Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
-        ),
-    }
+    BlobStorageNamespace::CompilationCache
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "co")]
@@ -3059,12 +3055,12 @@ async fn list_blobs_below_finds_nested_blobs_with_sizes(
     assert_eq!(listed_below_blob, Vec::new());
 }
 
-/// The namespace of the same kind in another environment.
+/// A different namespace, of the same kind when the namespace is environment-scoped.
 fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamespace {
     let environment_id = EnvironmentId(Uuid::new_v4());
     match namespace.clone() {
-        BlobStorageNamespace::CompilationCache { .. } => {
-            BlobStorageNamespace::CompilationCache { environment_id }
+        BlobStorageNamespace::CompilationCache => {
+            BlobStorageNamespace::CustomStorage { environment_id }
         }
         BlobStorageNamespace::InitialAgentFiles { .. } => {
             BlobStorageNamespace::InitialAgentFiles { environment_id }
@@ -3143,7 +3139,7 @@ fn namespaces_of_one_environment() -> Vec<BlobStorageNamespace> {
     let agent_id = snapshot_agent();
     let type_tag = agent_id.type_tag();
     let mut namespaces = vec![
-        BlobStorageNamespace::CompilationCache { environment_id },
+        BlobStorageNamespace::CompilationCache,
         BlobStorageNamespace::CustomStorage { environment_id },
         BlobStorageNamespace::InitialAgentFiles { environment_id },
         BlobStorageNamespace::ComponentUploads {

@@ -50,18 +50,22 @@ impl UploadWorker {
             component_and_revision,
             component,
             environment_id,
+            wasm_hash,
+            upload_finished,
         } = compiled_component;
 
         let upload_result = self
             .compiled_component_service
             .put(
                 environment_id,
+                wasm_hash,
                 component_and_revision.id,
                 component_and_revision.revision,
                 &component,
             )
             .await
             .map_err(|err| CompilationError::ComponentUploadFailed(err.to_string()));
+        let _ = upload_finished.send(());
 
         if let Err(ref err) = upload_result {
             tracing::warn!(

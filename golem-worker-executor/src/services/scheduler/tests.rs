@@ -1316,7 +1316,7 @@ async fn lease_renewal_refuses_expired_work_and_cancels_in_flight_archival() {
                 executions: executions.clone(),
                 // Cancellation must drop this future, not wait for completion.
                 complete_not_before: Some(
-                    jiff::Timestamp::now() + jiff::SignedDuration::from_hours((1) * 24),
+                    jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24),
                 ),
                 started: started.clone(),
             }),

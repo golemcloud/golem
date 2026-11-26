@@ -352,7 +352,7 @@ impl WakeupReport {
                         window,
                         detail: format!(
                             "the completion was definitively refused, and the waiter woke at {}",
-                            wakeup.woken_at.to_string()
+                            wakeup.woken_at
                         ),
                     });
                 } else {
@@ -399,7 +399,7 @@ impl WakeupReport {
                             detail: format!(
                                 "the completion was accepted at {} and the waiter's whole wakeup \
                                  log has no entry for it",
-                                round.submitted_at.to_string()
+                                round.submitted_at
                             ),
                         });
                     } else if unreadable.contains(round.agent) && stood_down > 0 {
@@ -416,7 +416,7 @@ impl WakeupReport {
                                 "the completion was accepted at {} and the waiter has answered \
                                  nothing since, which is what a worker parked on a resolved \
                                  promise looks like from outside",
-                                round.submitted_at.to_string()
+                                round.submitted_at
                             ),
                         });
                         if !report.waiters_wedged.iter().any(|w| w == round.agent) {

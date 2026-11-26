@@ -17,11 +17,12 @@ use crate::metrics::storage::{
     record_compilation_cache_bytes_written, record_compilation_cache_objects_written,
 };
 use crate::storage::blob::{
-    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, join_blob_key,
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult, join_blob_key,
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::wasmtime_config::wasmtime_artifact_fingerprint;
 use serde::{Deserialize, Serialize};
@@ -35,16 +36,20 @@ use wasmtime::component::Component;
 /// Service for storing compiled native binaries of WebAssembly components
 #[async_trait]
 pub trait CompiledComponentService: Send + Sync {
+    async fn exists(&self, wasm_hash: Hash, engine: &Engine) -> anyhow::Result<bool>;
     async fn get(
         &self,
-        environment_id: EnvironmentId,
+        wasm_hash: Hash,
         component_id: ComponentId,
         component_revision: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError>;
+
+    /// `wasm_hash` must be the verified hash of the Wasm bytes used to compile `component`.
     async fn put(
         &self,
         environment_id: EnvironmentId,
+        wasm_hash: Hash,
         component_id: ComponentId,
         component_revision: ComponentRevision,
         component: &Component,
@@ -112,13 +117,9 @@ impl DefaultCompiledComponentService {
         Self { blob_storage }
     }
 
-    fn key(
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-        artifact_fingerprint: &str,
-    ) -> PathBuf {
+    pub fn key(wasm_hash: Hash, artifact_fingerprint: &str) -> PathBuf {
         PathBuf::from(join_blob_key(
-            &format!("{component_id}/{component_revision}"),
+            &wasm_hash.to_string(),
             &format!("{artifact_fingerprint}.cwasm"),
         ))
     }
@@ -126,9 +127,21 @@ impl DefaultCompiledComponentService {
 
 #[async_trait]
 impl CompiledComponentService for DefaultCompiledComponentService {
+    async fn exists(&self, wasm_hash: Hash, engine: &Engine) -> anyhow::Result<bool> {
+        Ok(self
+            .blob_storage
+            .with("compiled_component", "exists")
+            .exists(
+                BlobStorageNamespace::CompilationCache,
+                &Self::key(wasm_hash, &wasmtime_artifact_fingerprint(engine)),
+            )
+            .await?
+            == ExistsResult::File)
+    }
+
     async fn get(
         &self,
-        environment_id: EnvironmentId,
+        wasm_hash: Hash,
         component_id: ComponentId,
         component_revision: ComponentRevision,
         engine: &Engine,
@@ -138,8 +151,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .blob_storage
             .with("compiled_component", "get")
             .get_raw(
-                BlobStorageNamespace::CompilationCache { environment_id },
-                &Self::key(component_id, component_revision, &artifact_fingerprint),
+                BlobStorageNamespace::CompilationCache,
+                &Self::key(wasm_hash, &artifact_fingerprint),
             )
             .await
         {
@@ -183,6 +196,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
     async fn put(
         &self,
         environment_id: EnvironmentId,
+        wasm_hash: Hash,
         component_id: ComponentId,
         component_revision: ComponentRevision,
         component: &Component,
@@ -196,8 +210,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .blob_storage
             .with("compiled_component", "put")
             .put_raw(
-                BlobStorageNamespace::CompilationCache { environment_id },
-                &Self::key(component_id, component_revision, &artifact_fingerprint),
+                BlobStorageNamespace::CompilationCache,
+                &Self::key(wasm_hash, &artifact_fingerprint),
                 &bytes,
             )
             .await
@@ -233,9 +247,13 @@ impl CompiledComponentServiceDisabled {
 
 #[async_trait]
 impl CompiledComponentService for CompiledComponentServiceDisabled {
+    async fn exists(&self, _: Hash, _: &Engine) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
     async fn get(
         &self,
-        _environment_id: EnvironmentId,
+        _wasm_hash: Hash,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
         _engine: &Engine,
@@ -246,6 +264,7 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
     async fn put(
         &self,
         _environment_id: EnvironmentId,
+        _wasm_hash: Hash,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
         _component: &Component,
@@ -269,16 +288,72 @@ mod tests {
     }
 
     #[test]
-    fn compiled_component_key_uses_contract_separator() {
-        let component_id = ComponentId::new();
-        let expected = format!("{component_id}/0/fingerprint.cwasm");
-        assert_eq!(
-            DefaultCompiledComponentService::key(
-                component_id,
-                ComponentRevision::INITIAL,
-                "fingerprint"
+    async fn compiled_artifact_is_shared_across_environments_but_not_across_wasm()
+    -> anyhow::Result<()> {
+        let service = DefaultCompiledComponentService::new(Arc::new(InMemoryBlobStorage::new()));
+        let engine = engine(OptLevel::Speed)?;
+        let original = b"(component)";
+        let changed = b"(component (core module (memory 1)))";
+        let original_hash = Hash::new(blake3::hash(original));
+        let changed_hash = Hash::new(blake3::hash(changed));
+        let first = EnvironmentId::new();
+        let first_component = ComponentId::new();
+        let second_component = ComponentId::new();
+        let initial = ComponentRevision::INITIAL;
+        let updated = ComponentRevision::new(1).unwrap();
+        let original_artifact = Component::new(&engine, original)?;
+        service
+            .put(
+                first,
+                original_hash,
+                first_component,
+                initial,
+                &original_artifact,
             )
-            .to_str(),
+            .await?;
+        assert!(
+            service
+                .get(original_hash, second_component, initial, &engine)
+                .await?
+                .is_some()
+        );
+        assert!(
+            service
+                .get(changed_hash, first_component, updated, &engine)
+                .await?
+                .is_none()
+        );
+        let changed_artifact = Component::new(&engine, changed)?;
+        service
+            .put(
+                first,
+                changed_hash,
+                first_component,
+                updated,
+                &changed_artifact,
+            )
+            .await?;
+        assert!(
+            service
+                .get(changed_hash, first_component, updated, &engine)
+                .await?
+                .is_some()
+        );
+        assert!(
+            service
+                .get(original_hash, second_component, initial, &engine)
+                .await?
+                .is_some()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_component_key_uses_contract_separator() {
+        let wasm_hash = Hash::empty();
+        let expected = format!("{wasm_hash}/fingerprint.cwasm");
+        assert_eq!(
+            DefaultCompiledComponentService::key(wasm_hash, "fingerprint").to_str(),
             Some(expected.as_str())
         );
     }
@@ -293,6 +368,7 @@ mod tests {
         let environment_id = EnvironmentId::new();
         let component_id = ComponentId::new();
         let component_revision = ComponentRevision::INITIAL;
+        let wasm_hash = Hash::new(blake3::hash(b"(component)"));
 
         assert_ne!(
             wasmtime_artifact_fingerprint(&unoptimized_engine),
@@ -303,6 +379,7 @@ mod tests {
         service
             .put(
                 environment_id,
+                wasm_hash,
                 component_id,
                 component_revision,
                 &unoptimized_component,
@@ -312,7 +389,7 @@ mod tests {
         assert!(
             service
                 .get(
-                    environment_id,
+                    wasm_hash,
                     component_id,
                     component_revision,
                     &optimized_engine,
@@ -325,6 +402,7 @@ mod tests {
         service
             .put(
                 environment_id,
+                wasm_hash,
                 component_id,
                 component_revision,
                 &optimized_component,
@@ -334,7 +412,7 @@ mod tests {
         for engine in [&unoptimized_engine, &optimized_engine] {
             assert!(
                 service
-                    .get(environment_id, component_id, component_revision, engine,)
+                    .get(wasm_hash, component_id, component_revision, engine,)
                     .await?
                     .is_some()
             );
