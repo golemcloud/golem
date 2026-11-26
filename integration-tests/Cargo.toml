@@ -50,6 +50,7 @@ uuid = { workspace = true, features = ["v4"] }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
+aws-sdk-s3 = { workspace = true }
 flate2 = { workspace = true }
 goldenfile = { workspace = true }
 h2 = { workspace = true }
@@ -67,6 +68,9 @@ urlencoding = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 backtrace-on-stack-overflow = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [lib]
 harness = false
@@ -116,8 +120,19 @@ name = "memory-billing"
 path = "tests/memory_billing.rs"
 harness = false
 
+[[test]]
+name = "volume-client"
+path = "tests/volume_client.rs"
+harness = false
+
 [[bin]]
 name = "benchmarks"
 path = "src/benchmarks/all.rs"
+harness = false
+test = false
+
+[[bin]]
+name = "benchmark-results"
+path = "src/benchmarks/results.rs"
 harness = false
 test = false

@@ -547,6 +547,7 @@ async fn in_function_retry_transitions_from_inline_to_trap_based(
 /// ConnectionTerminated errors), then serves a valid HTTP 200 response on subsequent
 /// connections.
 ///
+/// When key capture is enabled, the server reads failed requests before closing.
 /// On the success path the server reads the full HTTP request before responding.
 /// This avoids a race in hyper's HTTP/1 client dispatcher where a response that
 /// arrives before `send_request` registers the callback is rejected with
@@ -554,7 +555,10 @@ async fn in_function_retry_transitions_from_inline_to_trap_based(
 /// machines.
 ///
 /// Returns `(port, connection_counter)`.
-async fn start_failing_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
+async fn start_failing_http_server(
+    fail_count: usize,
+    idempotency_keys: Option<Arc<Mutex<Vec<Option<String>>>>>,
+) -> (u16, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -568,7 +572,7 @@ async fn start_failing_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>)
                     Err(_) => break,
                 };
                 let n = counter_clone.fetch_add(1, Ordering::SeqCst);
-                if n < fail_count {
+                if n < fail_count && idempotency_keys.is_none() {
                     // Immediately close the connection — produces ConnectionTerminated
                     drop(stream);
                 } else {
@@ -604,6 +608,25 @@ async fn start_failing_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>)
                                 break;
                             }
                         }
+                    }
+
+                    if let Some(keys) = &idempotency_keys {
+                        assert!(data.starts_with(b"POST "));
+                        let key = String::from_utf8_lossy(&data)
+                            .split("\r\n\r\n")
+                            .next()
+                            .unwrap()
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("idempotency-key")
+                                    .then(|| value.trim().to_string())
+                            });
+                        keys.lock().unwrap().push(key);
+                    }
+                    if n < fail_count {
+                        drop(stream);
+                        continue;
                     }
 
                     let body = "response is test-header test-body";
@@ -794,7 +817,9 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
 
     let executor = start_with_overrides(deps, &context, overrides).await?;
 
-    let (port, connection_counter) = start_failing_http_server(2).await;
+    let idempotency_keys = Arc::new(Mutex::new(Vec::new()));
+    let (port, connection_counter) =
+        start_failing_http_server(2, Some(idempotency_keys.clone())).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -823,6 +848,22 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
         total_connections, 3,
         "Expected 3 total connections (2 dropped + 1 successful)"
     );
+
+    {
+        let keys = idempotency_keys.lock().unwrap();
+        assert_eq!(keys.len(), 3);
+        let first = keys[0]
+            .as_ref()
+            .filter(|key| !key.is_empty())
+            .expect("initial HTTP request must have idempotency-key");
+        keys.iter().skip(1).for_each(|key| {
+            assert_eq!(
+                key.as_ref(),
+                Some(first),
+                "transient connection retry changed the wire key"
+            );
+        });
+    }
 
     // Verify oplog contains 2 in-function retry error entries
     let retry_count =
@@ -861,7 +902,7 @@ async fn http_zone1_waits_out_backoff_above_threshold(
 
     let executor = start_with_overrides(deps, &context, overrides).await?;
 
-    let (port, _connection_counter) = start_failing_http_server(1).await;
+    let (port, _connection_counter) = start_failing_http_server(1, None).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -937,7 +978,7 @@ async fn http_long_backoff_survives_restart_and_waits_only_until_its_deadline(
 
     let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
 
-    let (port, connection_counter) = start_failing_http_server(1).await;
+    let (port, connection_counter) = start_failing_http_server(1, None).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)

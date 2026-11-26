@@ -34,8 +34,8 @@ use uuid::Uuid;
 
 /// Authoritative kind of an execution owner.
 ///
-/// This is persisted at creation time. Owners other than component agents have the
-/// reserved type tag, which tells no kind apart, so only this value grants their authority.
+/// This is persisted at creation time. External-tool and oplog-processor owners share the
+/// reserved type tag, so only this value grants their authority.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
@@ -47,6 +47,7 @@ pub enum OwnerKind {
     ComponentAgent,
     EphemeralExternalTool,
     OplogProcessor,
+    StandaloneTool,
 }
 
 /// How an agent came to exist.
@@ -100,16 +101,16 @@ impl From<AgentOrigin> for i32 {
 }
 
 impl OwnerKind {
-    /// Component agents have their type's tag; the other owners have the reserved tag.
+    /// Component agents and standalone tools have their type's tag.
     pub fn validate_agent_id(self, agent_id: &AgentId) -> Result<(), String> {
         if !agent_id.is_issued() {
             return Err(format!("{agent_id} is not a version 8 agent ID"));
         }
         let reserved = agent_id.type_tag() == crate::base_model::RESERVED_TYPE_TAG;
         match self {
-            Self::ComponentAgent if reserved => {
-                Err("an agent ID with the reserved type tag belongs to no agent".to_string())
-            }
+            Self::ComponentAgent | Self::StandaloneTool if reserved => Err(format!(
+                "a {self:?} owner cannot have the reserved type tag"
+            )),
             Self::EphemeralExternalTool | Self::OplogProcessor if !reserved => Err(format!(
                 "a {self:?} owner must have the reserved type tag, got {agent_id}"
             )),
@@ -126,6 +127,7 @@ impl TryFrom<i32> for OwnerKind {
             0 => Ok(Self::ComponentAgent),
             1 => Ok(Self::EphemeralExternalTool),
             2 => Ok(Self::OplogProcessor),
+            3 => Ok(Self::StandaloneTool),
             _ => Err(format!("unknown owner kind: {value}")),
         }
     }
@@ -137,6 +139,7 @@ impl From<OwnerKind> for i32 {
             OwnerKind::ComponentAgent => 0,
             OwnerKind::EphemeralExternalTool => 1,
             OwnerKind::OplogProcessor => 2,
+            OwnerKind::StandaloneTool => 3,
         }
     }
 }

@@ -185,12 +185,10 @@ defineAgent({
         return {
           firstAgentId: firstResult.metadata.agentId,
           secondAgentId: secondResult.metadata.agentId,
-          identitiesDiffer:
-            firstResult.metadata.agentId !== secondResult.metadata.agentId,
+          identitiesDiffer: firstResult.metadata.agentId !== secondResult.metadata.agentId,
           invocationIdsMatchAgents:
             firstResult.metadata.invocationId.agentId === firstResult.metadata.agentId &&
-            secondResult.metadata.invocationId.agentId ===
-              secondResult.metadata.agentId &&
+            secondResult.metadata.invocationId.agentId === secondResult.metadata.agentId &&
             firstResult.metadata.invocationId.uuid !== secondResult.metadata.invocationId.uuid,
           values: [firstResult.value, secondResult.value],
         }

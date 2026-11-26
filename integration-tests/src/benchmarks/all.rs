@@ -21,10 +21,11 @@ use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder,
     BenchmarkResult, BenchmarkRunner, BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, ChaosAction, ChaosScenarioArg, DensityAction, DensityAgentModeArg,
-    DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
-    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
-    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunMetadata,
+    BenchmarkSuiteResult, BenchmarkSuiteResultCollection, ChaosAction, ChaosScenarioArg,
+    DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg, DensityPromiseTopologyArg,
+    DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
+    DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
+    DensitySnapshottingArg, MeasurementEnvironment, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -42,7 +43,7 @@ use integration_tests::benchmarks::{
     lookup_keyed_agent,
 };
 use integration_tests::chaos;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -53,6 +54,7 @@ type BenchmarkRunFn = Box<
         &'a TestMode,
         Level,
         &'a BenchmarkSuiteItem,
+        MeasurementEnvironment,
         bool,
         bool,
     ) -> Pin<Box<dyn Future<Output = BenchmarkResult> + 'a>>,
@@ -61,7 +63,7 @@ type BenchmarkRunFn = Box<
 type BenchmarkRegistry = BTreeMap<&'static str, BenchmarkRunFn>;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let file_limit_increase_result = rlimit::increase_nofile_limit(1000000);
     debug!(
         "File limit increase result: {:?}",
@@ -77,6 +79,66 @@ async fn main() {
 
     if let BenchmarkConfig::Suite {
         path,
+        merge_partials,
+        save_to_json,
+        source_commit_sha,
+        runner_id,
+        ..
+    } = &params.benchmark_config
+        && !merge_partials.is_empty()
+    {
+        let suite: BenchmarkSuite =
+            serde_yaml::from_str(&std::fs::read_to_string(path).expect("Failed to read suite"))
+                .expect("Failed to parse suite");
+        validate_benchmark_names(&benchmarks_by_name, &suite);
+        let partials = merge_partials
+            .iter()
+            .map(|path| {
+                let mut collection: BenchmarkSuiteResultCollection = serde_json::from_slice(
+                    &std::fs::read(path).expect("Failed to read partial result"),
+                )
+                .expect("Invalid partial result");
+                assert_eq!(
+                    collection.runs.len(),
+                    1,
+                    "expected one run per partial result"
+                );
+                collection.runs.remove(0)
+            })
+            .collect();
+        let merged =
+            BenchmarkSuiteResult::merge_partials(&suite, params.benchmark_config.mode(), partials)
+                .expect("Failed to merge partial results");
+        if let Some(commit) = source_commit_sha {
+            assert_eq!(
+                merged.source.as_ref().and_then(|s| s.commit_sha.as_ref()),
+                Some(commit),
+                "unexpected source commit"
+            );
+        }
+        if let Some(runner) = runner_id {
+            assert_eq!(
+                merged.runner.as_ref().map(|r| &r.id),
+                Some(runner),
+                "unexpected runner"
+            );
+        }
+        merged
+            .save_to_json(
+                save_to_json
+                    .as_ref()
+                    .expect("merge requires --save-to-json"),
+            )
+            .expect("Failed to save merged result");
+        println!("{}", merged.view());
+        if merged.failure_count() > 0 {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    if let BenchmarkConfig::Suite {
+        path,
         check_artifacts: true,
         ..
     } = &params.benchmark_config
@@ -88,7 +150,7 @@ async fn main() {
         check_suite_fixture_artifacts(params.benchmark_config.mode(), &suite)
             .expect("Missing benchmark suite component artifacts");
         println!("All benchmark suite component artifacts are present.");
-        return;
+        return Ok(());
     }
 
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
@@ -96,6 +158,7 @@ async fn main() {
     let failure_count = match &params.benchmark_config {
         BenchmarkConfig::Benchmark {
             name,
+            version,
             iterations,
             cluster_size,
             size,
@@ -104,9 +167,12 @@ async fn main() {
             ..
         } => {
             if let Some(f) = benchmarks_by_name.get(name.as_str()) {
+                let environment = MeasurementEnvironment::for_mode(params.benchmark_config.mode())?;
                 let item = BenchmarkSuiteItem {
                     name: name.clone(),
+                    version: *version,
                     iterations: *iterations,
+                    partition: None,
                     cluster_size: cluster_size.clone(),
                     size: size.clone(),
                     length: length.clone(),
@@ -123,6 +189,7 @@ async fn main() {
                     params.benchmark_config.mode(),
                     params.service_verbosity(),
                     &item,
+                    environment,
                     params.primary_only,
                     params.otlp,
                 )
@@ -149,6 +216,9 @@ async fn main() {
         }
         BenchmarkConfig::Suite {
             path,
+            partition,
+            run_id,
+            timestamp,
             save_to_json,
             add_to_json,
             runner_id,
@@ -165,6 +235,36 @@ async fn main() {
 
             validate_benchmark_names(&benchmarks_by_name, &suite);
 
+            let fingerprint = suite.fingerprint();
+            let suite = if let Some(partition) = partition {
+                suite
+                    .select_partition(*partition)
+                    .expect("Invalid suite partition")
+            } else {
+                suite
+            };
+
+            let mut environment = MeasurementEnvironment::for_mode(params.benchmark_config.mode())?;
+            if !matches!(params.benchmark_config.mode(), TestMode::Spawned { .. })
+                && let Some(runner_id) = runner_id
+            {
+                anyhow::ensure!(
+                    runner_id == &environment.runner_id,
+                    "--runner-id conflicts with remote measurement identity"
+                );
+            }
+            if let Some(runner_id) = runner_id {
+                environment.runner_id = runner_id.clone();
+            }
+            let source = BenchmarkSource {
+                repository: source_repository.clone(),
+                commit_sha: source_commit_sha.clone(),
+                source_ref: source_ref.clone(),
+            };
+            if partition.is_some() {
+                source.validate_publication()?;
+            }
+
             // Pre-flight warmup runs after all names are validated.
             cloud_preflight_warmup(
                 params.benchmark_config.mode(),
@@ -174,16 +274,18 @@ async fn main() {
             .await;
 
             let mut suite_result = BenchmarkSuiteResult::new(&suite.name);
+            suite_result.suite_fingerprint = Some(fingerprint);
+            suite_result.partitions = partition.iter().copied().collect();
+            suite_result.run_id = run_id.clone();
+            if let Some(timestamp) = timestamp {
+                suite_result.timestamp = *timestamp;
+            }
             suite_result.runner = runner_id.as_ref().map(|id| BenchmarkRunner {
                 id: id.clone(),
                 label: runner_label.clone(),
             });
             if source_repository.is_some() || source_commit_sha.is_some() || source_ref.is_some() {
-                suite_result.source = Some(BenchmarkSource {
-                    repository: source_repository.clone(),
-                    commit_sha: source_commit_sha.clone(),
-                    source_ref: source_ref.clone(),
-                });
+                suite_result.source = Some(source);
             }
             suite_result.artifacts = Some(
                 suite_artifacts(params.benchmark_config.mode(), &suite)
@@ -197,14 +299,12 @@ async fn main() {
                         params.benchmark_config.mode(),
                         params.service_verbosity(),
                         &benchmark,
+                        environment.clone(),
                         params.primary_only,
                         params.otlp,
                     )
                     .await;
                     result.drop_zero_counts(params.retain_selected_zero_counts);
-                    if !params.retain_details {
-                        result.drop_details();
-                    }
                     suite_result.add(result);
                 }
                 // no else: we already validated all names above
@@ -293,7 +393,7 @@ async fn main() {
                 save_to_json.clone(),
                 params.json,
             )
-            .await
+            .await?
         }
         BenchmarkConfig::Chaos {
             action,
@@ -338,247 +438,128 @@ async fn main() {
         );
         std::process::exit(1);
     }
+    Ok(())
 }
 
 fn benchmark_registry() -> BenchmarkRegistry {
     let mut benchmarks_by_name: BenchmarkRegistry = BTreeMap::new();
     benchmarks_by_name.insert(
         "cold-start-unknown-small",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::cold_start_unknown::ColdStartUnknownSmall,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::cold_start_unknown::ColdStartUnknownSmall>),
     );
     benchmarks_by_name.insert(
         "cold-start-unknown-medium",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::cold_start_unknown::ColdStartUnknownMedium,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::cold_start_unknown::ColdStartUnknownMedium>),
     );
     benchmarks_by_name.insert(
         "latency-small",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::latency::LatencySmall>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
+        Box::new(run_benchmark::<benchmarks::latency::LatencySmall>),
     );
     benchmarks_by_name.insert(
         "latency-medium",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::latency::LatencyMedium>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
+        Box::new(run_benchmark::<benchmarks::latency::LatencyMedium>),
     );
     benchmarks_by_name.insert(
         "mcp-latency",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::mcp_latency::McpLatency>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
+        Box::new(run_benchmark::<benchmarks::mcp_latency::McpLatency>),
     );
-    benchmarks_by_name.insert(
-        "sleep",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::sleep::Sleep>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
-    );
+    benchmarks_by_name.insert("sleep", Box::new(run_benchmark::<benchmarks::sleep::Sleep>));
     benchmarks_by_name.insert(
         "durability-overhead",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::durability_overhead::DurabilityOverhead,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::durability_overhead::DurabilityOverhead>),
     );
     benchmarks_by_name.insert(
         "idempotency-key-lookup",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::idempotency_key::IdempotencyKeyLookup,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::idempotency_key::IdempotencyKeyLookup>),
     );
     benchmarks_by_name.insert(
         "throughput-echo",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(
-                run_benchmark::<benchmarks::throughput::ThroughputEcho<false>>(
-                    mode,
-                    verbosity,
-                    item,
-                    primary_only,
-                    otlp,
-                ),
-            )
-        }),
+        Box::new(run_benchmark::<benchmarks::throughput::ThroughputEcho<false>>),
     );
     benchmarks_by_name.insert(
         "throughput-echo-aggregate",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(
-                run_benchmark::<benchmarks::throughput::ThroughputEcho<true>>(
-                    mode,
-                    verbosity,
-                    item,
-                    primary_only,
-                    otlp,
-                ),
-            )
-        }),
+        Box::new(run_benchmark::<benchmarks::throughput::ThroughputEcho<true>>),
     );
     benchmarks_by_name.insert(
         "throughput-large-input",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::throughput::ThroughputLargeInput<false>,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::throughput::ThroughputLargeInput<false>>),
     );
     benchmarks_by_name.insert(
         "throughput-large-input-aggregate",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::throughput::ThroughputLargeInput<true>,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::throughput::ThroughputLargeInput<true>>),
     );
     benchmarks_by_name.insert(
         "throughput-large-input-effect",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::throughput_effect::ThroughputLargeInputEffect,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::throughput_effect::ThroughputLargeInputEffect>),
     );
     benchmarks_by_name.insert(
         "throughput-cpu-intensive",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::throughput::ThroughputCpuIntensive<false>,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::throughput::ThroughputCpuIntensive<false>>),
     );
     benchmarks_by_name.insert(
         "throughput-cpu-intensive-aggregate",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::throughput::ThroughputCpuIntensive<true>,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::throughput::ThroughputCpuIntensive<true>>),
     );
     benchmarks_by_name.insert(
         "streaming-tool",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::streaming::Streaming<true>>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
+        Box::new(run_benchmark::<benchmarks::streaming::Streaming<true>>),
     );
     benchmarks_by_name.insert(
         "streaming-rpc",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::streaming::Streaming<false>>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
+        Box::new(run_benchmark::<benchmarks::streaming::Streaming<false>>),
     );
     benchmarks_by_name.insert(
         "streaming-rpc-history",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::streaming_history::StreamingRpcHistory,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::streaming_history::StreamingRpcHistory>),
     );
     benchmarks_by_name.insert(
         "streaming-rpc-cold-indexed",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::streaming_history::StreamingRpcColdIndexed,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::streaming_history::StreamingRpcColdIndexed>),
     );
     benchmarks_by_name.insert(
         "streaming-rpc-reconnect",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::streaming_recovery::StreamingRpcReconnect,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::streaming_recovery::StreamingRpcReconnect>),
     );
     benchmarks_by_name.insert(
         "streaming-rpc-recovery",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::streaming_recovery::StreamingRpcRecovery,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::streaming_recovery::StreamingRpcRecovery>),
     );
     benchmarks_by_name.insert(
         "streaming-rpc-recovery-siblings",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::streaming_recovery::StreamingRpcRecoverySiblings,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::streaming_recovery::StreamingRpcRecoverySiblings>),
     );
     benchmarks_by_name.insert(
         "streaming-rpc-recovery-nested",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::streaming_recovery::StreamingRpcRecoveryNested,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
+        Box::new(run_benchmark::<benchmarks::streaming_recovery::StreamingRpcRecoveryNested>),
     );
     benchmarks_by_name
 }
 
-async fn run_benchmark<B: Benchmark>(
-    mode: &TestMode,
+fn run_benchmark<'a, B: Benchmark>(
+    mode: &'a TestMode,
     verbosity: Level,
-    item: &BenchmarkSuiteItem,
+    item: &'a BenchmarkSuiteItem,
+    environment: MeasurementEnvironment,
     primary_only: bool,
     otlp: bool,
-) -> BenchmarkResult {
-    B::run_benchmark(mode, verbosity, item, primary_only, true, true, otlp).await
+) -> Pin<Box<dyn Future<Output = BenchmarkResult> + 'a>> {
+    Box::pin(B::run_benchmark(
+        mode,
+        verbosity,
+        item,
+        environment,
+        primary_only,
+        true,
+        true,
+        otlp,
+    ))
 }
 
 fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<BenchmarkArtifacts> {
     let component_directory = component_directory(mode);
 
-    let fixtures = suite_fixture_names(suite)
+    let fixtures = suite
+        .fixture_names()
         .into_iter()
         .map(|name| {
             let path = component_directory.join(format!("{name}.wasm"));
@@ -594,16 +575,7 @@ fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<Be
     } = mode
     {
         let build_root = Path::new(workspace_root).join(build_target);
-        for (name, executable) in [
-            (
-                "golem-component-compilation-service",
-                "golem-component-compilation-service",
-            ),
-            ("golem-worker-service", "golem-worker-service"),
-            ("golem-worker-executor", "worker-executor"),
-            ("golem-shard-manager", "golem-shard-manager"),
-            ("golem-registry-service", "golem-registry-service"),
-        ] {
+        for (name, executable) in BenchmarkArtifacts::SERVICE_EXECUTABLES {
             services.insert(name.to_string(), build_root.join(executable));
         }
     }
@@ -629,37 +601,9 @@ fn component_directory(mode: &TestMode) -> PathBuf {
     }
 }
 
-fn suite_fixture_names(suite: &BenchmarkSuite) -> BTreeSet<&'static str> {
-    let mut fixtures = BTreeSet::new();
-    for benchmark in &suite.benchmarks {
-        let names: &[&str] = match benchmark.name.as_str() {
-            "cold-start-unknown-medium" | "latency-medium" => &["benchmark_agent_ts"],
-            "throughput-large-input-effect" => &["benchmark_agent_effect"],
-            "throughput-echo"
-            | "throughput-echo-aggregate"
-            | "throughput-large-input"
-            | "throughput-large-input-aggregate"
-            | "throughput-cpu-intensive"
-            | "throughput-cpu-intensive-aggregate" => {
-                &["benchmark_agent_rust_release", "benchmark_agent_ts"]
-            }
-            "streaming-tool" => &[
-                "golem_it_tool_streaming_rust_caller_release",
-                "golem_it_tool_streaming_rust_provider_release",
-            ],
-            name if name == "streaming-rpc" || name.starts_with("streaming-rpc-") => {
-                &["golem_it_agent_rpc_rust_release"]
-            }
-            _ => &["benchmark_agent_rust_release"],
-        };
-        fixtures.extend(names);
-    }
-    fixtures
-}
-
 fn check_suite_fixture_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<()> {
     let component_directory = component_directory(mode);
-    for name in suite_fixture_names(suite) {
+    for name in suite.fixture_names() {
         let path = component_directory.join(format!("{name}.wasm"));
         let metadata = std::fs::metadata(&path)
             .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
@@ -671,6 +615,10 @@ fn check_suite_fixture_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> any
 }
 
 fn validate_benchmark_names(registry: &BenchmarkRegistry, suite: &BenchmarkSuite) {
+    if let Err(error) = suite.validate_entry_names() {
+        eprintln!("Invalid benchmark suite: {error}");
+        std::process::exit(1);
+    }
     // Validate every benchmark name up-front so a typo exits immediately
     // without running warmup or any prior benchmark.
     for benchmark in &suite.benchmarks {
@@ -975,10 +923,14 @@ async fn run_density(
     executor_namespace: String,
     save_to_json: Option<std::path::PathBuf>,
     json: bool,
-) -> u64 {
-    if !matches!(mode, TestMode::Cloud { .. }) {
-        panic!("density benchmarks require cloud mode");
-    }
+) -> anyhow::Result<u64> {
+    anyhow::ensure!(
+        matches!(mode, TestMode::Cloud { .. }),
+        "density benchmarks require cloud mode"
+    );
+    let environment = matches!(action, DensityAction::Cell)
+        .then(MeasurementEnvironment::remote_from_env)
+        .transpose()?;
 
     let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
 
@@ -992,6 +944,7 @@ async fn run_density(
             0
         }
         DensityAction::Cell => {
+            let environment = environment.expect("cell identity was validated before setup");
             let manifest =
                 PrepManifest::load(prep_manifest_path).expect("failed to load prep manifest");
 
@@ -1010,7 +963,11 @@ async fn run_density(
                         }),
                     };
                     integration_tests::benchmarks::density::agent::run_cell(
-                        &config, &manifest, &deps, &probe,
+                        &config,
+                        &manifest,
+                        &deps,
+                        &probe,
+                        environment,
                     )
                     .await
                     .expect("density agent cell failed")
@@ -1036,6 +993,7 @@ async fn run_density(
                         &manifest,
                         &deps,
                         &probe,
+                        environment,
                     )
                     .await
                     .expect("density schedule cell failed")
@@ -1056,6 +1014,7 @@ async fn run_density(
                         ramp.as_deref(),
                         &manifest,
                         &deps,
+                        environment,
                     )
                     .await
                     .expect("density promise cell failed")
@@ -1093,7 +1052,7 @@ async fn run_density(
     };
 
     deps.kill_all().await;
-    failure_count
+    Ok(failure_count)
 }
 
 // ── Chaos subcommand handling ─────────────────────────────────────────────────

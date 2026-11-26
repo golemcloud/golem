@@ -326,6 +326,7 @@ pub struct ApplicationContext {
     loaded_with_warnings: bool,
     config: ApplicationConfig,
     application: Application,
+    pub(crate) js_compilation_cache_dir: PathBuf,
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     pub(crate) publisher_package: Option<golem_package::PackageIdentity>,
     pub(crate) installed_components: BTreeMap<ComponentName, golem_package::InstalledComponent>,
@@ -343,6 +344,9 @@ impl ApplicationContext {
         Self {
             calling_working_dir: application.app_root_dir().to_path_buf(),
             selected_component_names: application.component_names().cloned().collect(),
+            js_compilation_cache_dir: application
+                .app_root_dir()
+                .join(".golem/js-compilation-cache"),
             application,
             loaded_with_warnings: false,
             config: ApplicationConfig {
@@ -551,6 +555,7 @@ impl ApplicationContext {
         ctx.installed_package_calls = expanded.calls;
         ctx.application.package_agent_defaults = package_agent_defaults;
         ctx._package_dir = package_dir;
+        ctx.js_compilation_cache_dir = config_dir.join("js-compilation-cache");
 
         if ctx.config.offline {
             log_action("Using", "offline mode");
@@ -594,6 +599,9 @@ impl ApplicationContext {
             ApplicationContext {
                 loaded_with_warnings: false,
                 config,
+                js_compilation_cache_dir: application
+                    .app_root_dir()
+                    .join(".golem/js-compilation-cache"),
                 application,
                 component_metadata,
                 publisher_package: None,
