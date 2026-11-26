@@ -1080,6 +1080,86 @@ async fn the_stream_session_suffix_fold_finds_the_resume_attempt_of_its_attempt(
     assert_eq!(resume_offset(AttemptId::fresh()).await, None);
 }
 
+/// A fork marker after the indexed coverage makes the fold of a stream session suffix read the
+/// index again. The fold fails while the index does not cover the marker, and goes on when the
+/// index covers it.
+#[test]
+#[test_r::timeout("30s")]
+async fn the_stream_session_suffix_fold_needs_the_fork_marker_in_the_index() {
+    use golem_common::model::regions::OplogRegion;
+
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1000,
+            1000,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let service = DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let owner = owned_agent("suffix-cut");
+    let key = test_invocation_id("suffix-cut".into());
+    let session = session_key(&owner, &key);
+    let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+    append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let region = OplogRegion {
+        start: OplogIndex::INITIAL.next(),
+        end: oplog.current_oplog_index().await,
+    };
+    let marker = DurableStreamOplogRecord::Session(
+        None,
+        Box::new(StreamSessionRecord::ForkCut(StreamForkCutRecord {
+            format_version: 1,
+            request_hash: vec![0; 32],
+            creation_fingerprint: session.callee_fingerprint,
+            export: None,
+            cut_index: OplogIndex::INITIAL,
+            revert: Some(region.clone()),
+            epoch_floor: 2,
+            selected_stream_id: None,
+            retained_through: None,
+        })),
+    )
+    .into_inline_entry();
+    oplog
+        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .await
+        .unwrap();
+    let marker = oplog.current_oplog_index().await;
+    let fold = || {
+        crate::worker::fold_stream_session_suffix(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            session.callee_fingerprint,
+            &session,
+            None,
+        )
+    };
+    assert!(
+        matches!(
+            fold().await,
+            Err(WorkerExecutorError::Runtime { details }) if details.contains("fork marker")
+        ),
+        "an uncommitted marker fails the fold"
+    );
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let (metadata, _) = fold().await.expect("the index covers the marker");
+    assert_eq!(metadata.covered_through(), marker);
+}
+
 async fn service() -> (DefaultWorkerService, Arc<InMemoryKeyValueStorage>) {
     let kv = Arc::new(InMemoryKeyValueStorage::new());
     let oplog = Arc::new(
