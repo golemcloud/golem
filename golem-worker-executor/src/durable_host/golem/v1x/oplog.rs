@@ -951,6 +951,34 @@ mod tests {
                 Some(idx(10))
             )
         );
+        assert_eq!(
+            search.continued(),
+            Some(ComponentRevision::try_from(2u64).unwrap())
+        );
+    }
+
+    /// A new `get-oplog` read has no revision to continue from, so its first chunk finds the
+    /// revision at its cursor. After a chunk, the read continues from the revision of that chunk.
+    #[test]
+    fn a_get_oplog_read_continues_from_a_revision_only_after_a_chunk() {
+        let mut entry = GetOplogEntry::new(
+            golem_common::model::OwnedAgentId::new(
+                golem_common::model::environment::EnvironmentId::new(),
+                &golem_common::model::AgentId::from_parts(7, 1),
+            ),
+            OplogIndex::INITIAL,
+            ComponentRevision::INITIAL,
+            10,
+        );
+        assert_eq!(entry.continued(), None);
+        entry.update(
+            OplogIndex::from_u64(4),
+            ComponentRevision::try_from(2u64).unwrap(),
+        );
+        assert_eq!(
+            entry.continued(),
+            Some(ComponentRevision::try_from(2u64).unwrap())
+        );
     }
 
     /// The enrichment of a failed update reads the recorded `Start` at the index of its
