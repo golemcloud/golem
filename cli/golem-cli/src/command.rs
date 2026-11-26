@@ -1854,9 +1854,12 @@ pub mod worker {
             /// size, 50), from the selected components in the order of their names. On a server
             /// whose indexed storage is Redis, `--max-count` is a target: Redis `SCAN` treats its
             /// count as a hint, so a page can have more agents. The output has the `cursor` of the
-            /// next page when there can be more agents; pass it back as `--scan-cursor`. A page
-            /// ends early when the server's scan budget ends a component's scan, so a page with a
-            /// cursor can have fewer agents, or none.
+            /// next page when there can be more agents; pass it back as `--scan-cursor`. One page
+            /// shares one scan budget of the server across its agent types: it makes at most the
+            /// server's configured number of page calls, each with a share of the keys of the
+            /// budget, within the server's scan time. So a page with a cursor can have fewer
+            /// agents, or none; follow the cursor. A page call is not retried: a page that failed
+            /// can be read again with the same cursor.
             ///
             /// Mutually exclusive with `--refresh`.
             #[arg(long, conflicts_with = "refresh")]

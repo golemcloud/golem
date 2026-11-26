@@ -14,8 +14,8 @@
 
 use super::WorkerResult;
 use super::{
-    ConnectWorkerStream, InvocationRequestStream, InvocationResponseStream, OplogRangeRead,
-    WorkerClient, WorkerServiceError,
+    ConnectWorkerStream, FoundAgents, InvocationRequestStream, InvocationResponseStream,
+    OplogRangeRead, WorkerClient, WorkerServiceError,
 };
 use crate::api::agents::{
     AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult, AgentKeyRequest,
@@ -43,6 +43,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CreateStreamSessionRequest, CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest,
     ExportStreamControlResult, ReadStreamSlotRequest, ReadStreamSlotSuccess,
 };
+use golem_common::SafeDisplay;
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
@@ -82,9 +83,10 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
-    PromiseId, ScanCursor,
+    PageScanRequest, PromiseId, ScanCursor,
 };
 use golem_common::schema::ExternalSchemaValue;
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
@@ -1255,6 +1257,10 @@ impl WorkerService {
     }
 
     /// Lists existing agents of a retained type, including removed declarations.
+    ///
+    /// With `page_scan`, the call is a call of a listing page. It fails with "not found" only
+    /// before the executor scans: a page takes a "not found" as a type with no agents that cost
+    /// nothing, so a "not found" after the scan becomes an internal error that fails the page.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_metadata(
         &self,
@@ -1265,26 +1271,64 @@ impl WorkerService {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
+        page_scan: Option<PageScanRequest>,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
+    ) -> WorkerResult<FoundAgents<AgentMetadataDto>> {
         let registered = self
             .retained_agent_types(environment_id, agent_type_name, &auth_ctx)
             .await?;
 
-        let (cursor, agents) = self
+        self.find_retained_metadata(
+            registered[0].0.type_id,
+            environment_id,
+            agent_type_name,
+            component_name,
+            filter,
+            cursor,
+            count,
+            precise,
+            page_scan,
+            auth_ctx,
+        )
+        .await
+        .map_err(|error| match page_scan {
+            Some(_) if error.is_not_found() => WorkerServiceError::Internal(format!(
+                "A listing page call failed after its scan: {}",
+                error.to_safe_string()
+            )),
+            _ => error,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn find_retained_metadata(
+        &self,
+        type_id: TypeId,
+        environment_id: EnvironmentId,
+        agent_type_name: &AgentTypeName,
+        component_name: Option<&str>,
+        filter: Option<AgentFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
+        page_scan: Option<PageScanRequest>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<FoundAgents<AgentMetadataDto>> {
+        let found = self
             .worker_client
             .find_metadata(
-                registered[0].0.type_id,
+                type_id,
                 filter,
                 cursor,
                 count,
                 precise,
+                page_scan,
                 environment_id,
                 auth_ctx.clone(),
             )
             .await?;
-        let mut metadata = Vec::with_capacity(agents.len());
-        for agent in agents {
+        let mut metadata = Vec::with_capacity(found.agents.len());
+        for agent in found.agents {
             let component = self
                 .component_service
                 .get_revision(agent.component_id, agent.metadata.component_revision)
@@ -1305,7 +1349,11 @@ impl WorkerService {
             }
             metadata.push(agent.metadata);
         }
-        Ok((cursor, metadata))
+        Ok(FoundAgents {
+            cursor: found.cursor,
+            agents: metadata,
+            page_scan: found.page_scan,
+        })
     }
 
     pub async fn resume(
@@ -4478,6 +4526,7 @@ mod tests {
     use crate::service::auth::{AuthService, AuthServiceError};
     use crate::service::component::{ComponentService, ComponentServiceError};
     use crate::service::limit::{LimitService, LimitServiceError};
+    use crate::service::worker::FoundAgents;
     use crate::service::worker::{
         ExistingAgent, RoutedTarget, WorkerClient, WorkerResult, WorkerServiceError, WorkerStream,
     };
@@ -4529,7 +4578,7 @@ mod tests {
     use golem_common::model::type_id::{TypeId, TypeIdKind};
     use golem_common::model::{
         AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey,
-        OwnedAgentId, ScanCursor, Timestamp,
+        OwnedAgentId, PageScanGrant, PageScanRequest, ScanCursor, Timestamp,
     };
     use golem_common::schema::agent::AgentConfigDeclarationSchema;
     use golem_common::schema::{
@@ -5040,6 +5089,7 @@ mod tests {
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
         listed_agents: Mutex<(Option<ScanCursor>, Vec<ExistingAgent>)>,
         file_read_missing: Mutex<bool>,
+        find_calls: std::sync::atomic::AtomicUsize,
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
         oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>, ClaimVisibility)>>,
@@ -5079,6 +5129,7 @@ mod tests {
                 metadata_component_revision: Mutex::new(None),
                 listed_agents: Mutex::new((None, Vec::new())),
                 file_read_missing: Mutex::new(false),
+                find_calls: std::sync::atomic::AtomicUsize::new(0),
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
@@ -5281,6 +5332,12 @@ mod tests {
             {
                 return Err(WorkerServiceError::AgentNotFound(*agent_id));
             }
+            let canonical_key = self.metadata_canonical_key.lock().unwrap().clone();
+            let origin = if canonical_key.is_some() {
+                golem_common::model::agent::AgentOrigin::Keyed
+            } else {
+                golem_common::model::agent::AgentOrigin::Created
+            };
             match *self.metadata_component_revision.lock().unwrap() {
                 Some(component_revision) => Ok(ExistingAgent {
                     component_id: self.component_id,
@@ -5316,12 +5373,8 @@ mod tests {
                         agent_type_name: agent_id
                             .type_id()
                             .and(self.metadata_agent_type_name.lock().unwrap().clone()),
-                        canonical_key: self.metadata_canonical_key.lock().unwrap().clone(),
-                        origin: if self.metadata_canonical_key.lock().unwrap().is_some() {
-                            golem_common::model::agent::AgentOrigin::Keyed
-                        } else {
-                            golem_common::model::agent::AgentOrigin::Created
-                        },
+                        canonical_key,
+                        origin,
                         constructor_parameters: None,
                     },
                 }),
@@ -5336,10 +5389,22 @@ mod tests {
             _: ScanCursor,
             _: u64,
             _: bool,
+            page_scan: Option<PageScanRequest>,
             _: EnvironmentId,
             _: AuthCtx,
-        ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
-            Ok(self.listed_agents.lock().unwrap().clone())
+        ) -> WorkerResult<FoundAgents<ExistingAgent>> {
+            self.find_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (cursor, agents) = self.listed_agents.lock().unwrap().clone();
+            Ok(FoundAgents {
+                cursor,
+                agents,
+                page_scan: page_scan.map(|request| PageScanGrant {
+                    calls: 10,
+                    keys: request.keys.min(10_000),
+                    millis: request.millis.min(5_000),
+                }),
+            })
         }
 
         async fn resume(
@@ -6431,7 +6496,7 @@ mod tests {
             .await
             .unwrap();
         *harness.worker_client.listed_agents.lock().unwrap() = (None, vec![existing]);
-        let (_, agents) = harness
+        let agents = harness
             .worker_service
             .find_metadata(
                 harness.environment_id,
@@ -6441,10 +6506,12 @@ mod tests {
                 ScanCursor::default(),
                 10,
                 false,
+                None,
                 AuthCtx::system(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .agents;
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].agent_id, reference.agent_id);
         let mut request = harness.invoke_request();
@@ -6526,7 +6593,11 @@ mod tests {
             (Some("previous-component"), vec![previous_id]),
             (Some("another-component"), vec![]),
         ] {
-            let (next, agents) = harness
+            let FoundAgents {
+                cursor: next,
+                agents,
+                ..
+            } = harness
                 .worker_service
                 .find_metadata(
                     harness.environment_id,
@@ -6536,6 +6607,7 @@ mod tests {
                     ScanCursor::default(),
                     10,
                     false,
+                    None,
                     AuthCtx::system(),
                 )
                 .await
@@ -6549,6 +6621,92 @@ mod tests {
                 expected
             );
         }
+    }
+
+    fn http_status(error: WorkerServiceError) -> poem::http::StatusCode {
+        use poem::IntoResponse;
+        crate::api::common::ApiEndpointError::from(error)
+            .into_response()
+            .status()
+    }
+
+    /// A page takes a "not found" as a type that it scanned nothing of, so a "not found" after
+    /// the executor scanned fails a page call instead.
+    #[test]
+    async fn a_page_call_fails_when_a_listed_agent_has_no_component() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let mut orphan = harness
+            .worker_client
+            .get_metadata(
+                &AgentId::from_parts(harness.type_id.get(), 1),
+                harness.environment_id,
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+        orphan.component_id = ComponentId::new();
+        *harness.worker_client.listed_agents.lock().unwrap() = (None, vec![orphan]);
+        let find = async |page_scan| {
+            harness
+                .worker_service
+                .find_metadata(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    None,
+                    None,
+                    ScanCursor::default(),
+                    10,
+                    false,
+                    page_scan,
+                    AuthCtx::system(),
+                )
+                .await
+                .expect_err("the listed agent has no component")
+        };
+
+        let error = find(Some(PageScanRequest::FIRST)).await;
+        assert!(
+            matches!(error, WorkerServiceError::Internal(_)),
+            "{error:?}"
+        );
+        assert_eq!(
+            http_status(error),
+            poem::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let error = find(None).await;
+        assert!(error.is_not_found(), "{error:?}");
+        assert_eq!(http_status(error), poem::http::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    async fn a_page_call_for_a_type_that_the_caller_may_not_view_scans_nothing() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let error = harness
+            .worker_service
+            .find_metadata(
+                harness.environment_id,
+                &harness.agent_type_name,
+                None,
+                None,
+                ScanCursor::default(),
+                10,
+                false,
+                Some(PageScanRequest::FIRST),
+                auth_ctx_with_permissions(vec![]),
+            )
+            .await
+            .expect_err("the caller may not view the type");
+        assert!(error.is_not_found(), "{error:?}");
+        assert_eq!(
+            harness
+                .worker_client
+                .find_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     #[test]

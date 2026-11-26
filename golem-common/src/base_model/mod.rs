@@ -713,6 +713,39 @@ impl ScanCursor {
     }
 }
 
+/// The key share and the time that a call of an agent listing page asks for. The executor scans
+/// at most the smaller of these and of its own page share and scan time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PageScanRequest {
+    pub keys: u64,
+    pub millis: u64,
+}
+
+impl PageScanRequest {
+    /// The request of the first call of a page, which takes the executor's own share and time.
+    pub const FIRST: Self = Self {
+        keys: u64::MAX,
+        millis: u64::MAX,
+    };
+}
+
+/// What the executor granted a call of an agent listing page: the most scanning calls of one
+/// page, the most keys that this call scans apart from its last storage batch, and the time that
+/// it may scan. It holds only configured values and the request clamped to them, never a
+/// measurement of the scan, so it says nothing about the agents that the scan examined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PageScanGrant {
+    pub calls: u64,
+    pub keys: u64,
+    pub millis: u64,
+}
+
 impl Display for ScanCursor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)

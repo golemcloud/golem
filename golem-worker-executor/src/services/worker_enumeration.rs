@@ -1,6 +1,7 @@
 use crate::services::active_agents::ActiveAgents;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
+use crate::services::golem_config::{Limits, ScanBudget};
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
 use crate::services::{
@@ -15,9 +16,12 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::type_id::TypeId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
+use golem_common::model::{PageScanGrant, PageScanRequest};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::Duration;
+use tokio::time::Instant;
 use tracing::{Instrument, info, warn};
 
 /// Derives the `modes` argument for `OplogService::scan_for_component` from the
@@ -172,7 +176,38 @@ pub trait WorkerEnumerationService: Send + Sync {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError>;
+        page_scan: Option<PageScanRequest>,
+    ) -> Result<AgentListing, WorkerExecutorError>;
+}
+
+/// One call of an agent listing: the cursor of the next call, the listed agents, and, for a call
+/// of a listing page, what the executor granted it.
+#[derive(Debug, Default)]
+pub struct AgentListing {
+    pub cursor: Option<ScanCursor>,
+    pub agents: Vec<AgentMetadata>,
+    pub page_scan: Option<PageScanGrant>,
+}
+
+/// The scan budget and the grant of a call of an agent listing page. The call scans at most the
+/// configured share of a page, `ceil(scan_budget.entries / agent_page_calls)` keys, and the
+/// configured scan time, each clamped to what the request asks for. The grant holds only these
+/// values and the configured number of page calls, so it does not depend on what the scan
+/// examines.
+pub fn page_scan_grant(limits: &Limits, request: PageScanRequest) -> (ScanBudget, PageScanGrant) {
+    let calls = limits.agent_page_calls.get();
+    let share = limits.scan_budget.entries.get().div_ceil(calls);
+    let configured_millis = u64::try_from(limits.scan_budget.time.as_millis()).unwrap_or(u64::MAX);
+    let grant = PageScanGrant {
+        calls,
+        keys: request.keys.min(share),
+        millis: request.millis.min(configured_millis),
+    };
+    let budget = ScanBudget {
+        entries: NonZeroU64::new(grant.keys).unwrap_or(NonZeroU64::MIN),
+        time: Duration::from_millis(grant.millis),
+    };
+    (budget, grant)
 }
 
 fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
@@ -343,8 +378,17 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
+        page_scan: Option<PageScanRequest>,
+    ) -> Result<AgentListing, WorkerExecutorError> {
         validate_agent_enumeration_count(count)?;
+        let limits = &self.golem_config.limits;
+        let (budget, page_scan) = match page_scan {
+            Some(request) => {
+                let (budget, grant) = page_scan_grant(limits, request);
+                (budget, Some(grant))
+            }
+            None => (limits.scan_budget, None),
+        };
 
         info!(
             environment_id = %environment_id,
@@ -358,7 +402,6 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
             precise = %precise,
             "Enumerating workers"
         );
-        let budget = self.golem_config.limits.scan_budget;
         let batch_size = self.golem_config.limits.agent_scan_batch_size.get();
         let started = Instant::now();
         let mut scanned = 0u64;
@@ -386,11 +429,18 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
             match next_cursor {
                 Some(next_cursor)
-                    if (workers.len() as u64) < count && !budget.is_spent(scanned, started) =>
+                    if (workers.len() as u64) < count
+                        && !budget.is_spent(scanned, started.elapsed()) =>
                 {
                     new_cursor = next_cursor;
                 }
-                next_cursor => return Ok((next_cursor, workers)),
+                next_cursor => {
+                    return Ok(AgentListing {
+                        cursor: next_cursor,
+                        agents: workers,
+                        page_scan,
+                    });
+                }
             }
         }
     }

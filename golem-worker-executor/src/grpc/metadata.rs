@@ -145,7 +145,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub(super) async fn get_workers_metadata_internal(
         &self,
         request: GetWorkersMetadataRequest,
-    ) -> Result<(Option<Cursor>, Vec<golem::worker::AgentMetadata>), WorkerExecutorError> {
+    ) -> Result<
+        (
+            Option<Cursor>,
+            Vec<golem::worker::AgentMetadata>,
+            Option<golem::workerexecutor::v1::PageScanGrant>,
+        ),
+        WorkerExecutorError,
+    > {
         let type_id = TypeId::try_from(request.type_id)
             .map_err(|_| WorkerExecutorError::invalid_request("Invalid type id"))?;
 
@@ -156,7 +163,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let filter = request.filter.map(validated_filter).transpose()?;
 
-        let (new_cursor, workers) = self
+        let listing = self
             .worker_enumeration_service()
             .get(
                 &environment_id,
@@ -165,13 +172,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request.cursor.map(ScanCursor::from).unwrap_or_default(),
                 request.count,
                 request.precise,
+                request.page_scan.map(Into::into),
             )
             .instrument(info_span!("enumerate_workers"))
             .await?;
 
         let mut result = Vec::new();
 
-        for worker_metadata in workers {
+        for worker_metadata in listing.agents {
             let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
                 self,
                 &worker_metadata.owned_agent_id(),
@@ -185,7 +193,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             result.push(metadata);
         }
 
-        Ok((new_cursor.map(Cursor::from), result))
+        Ok((
+            listing.cursor.map(Cursor::from),
+            result,
+            listing.page_scan.map(Into::into),
+        ))
     }
 
     /// `metadata` with the request of the expected call of each failed update's divergence,

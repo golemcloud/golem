@@ -20,7 +20,7 @@ use golem_common::model::poem::datetime::OpenApiTimestamp;
 use golem_common::model::tool::SerializableToolRpcError;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OwnedInvocationId,
-    ScanCursor,
+    PageScanRequest, ScanCursor,
 };
 use golem_common::recorded_http_api_request;
 use golem_common::schema::tool::Tool;
@@ -281,6 +281,7 @@ impl AgentsApi {
                 cursor.0.map(ScanCursor::from),
                 count.0,
                 precise.0,
+                None,
                 auth,
             )
             .await
@@ -351,6 +352,7 @@ impl AgentsApi {
                 params.cursor,
                 params.count,
                 params.precise,
+                params.page_scan,
                 auth,
             )
             .await
@@ -540,9 +542,10 @@ impl AgentsApi {
         cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
+        page_scan: Option<PageScanRequest>,
         auth: AuthCtx,
     ) -> Result<Json<WorkersMetadataResponse>> {
-        let (cursor, mut workers) = self
+        let found = self
             .worker_service
             .find_metadata(
                 environment_id,
@@ -552,13 +555,19 @@ impl AgentsApi {
                 cursor.unwrap_or_default(),
                 count.unwrap_or(50),
                 precise.unwrap_or(false),
+                page_scan,
                 auth,
             )
             .await?;
+        let mut workers = found.agents;
         for worker in &mut workers {
             worker.redact_host_managed_values_for_external();
         }
-        Ok(Json(WorkersMetadataResponse { workers, cursor }))
+        Ok(Json(WorkersMetadataResponse {
+            workers,
+            cursor: found.cursor,
+            page_scan: found.page_scan,
+        }))
     }
 }
 

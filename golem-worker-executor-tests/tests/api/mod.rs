@@ -4411,6 +4411,7 @@ async fn malformed_worker_enumeration_cursor_returns_domain_failure(
             }),
             count: 1,
             precise: false,
+            page_scan: None,
             auth_ctx: Some(executor.auth_ctx().into()),
         })
         .await?
@@ -4443,11 +4444,22 @@ impl WorkerEnumerationService for CountingWorkerEnumerationService {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<golem_common::model::AgentMetadata>), WorkerExecutorError>
-    {
+        page_scan: Option<golem_common::model::PageScanRequest>,
+    ) -> Result<
+        golem_worker_executor::services::worker_enumeration::AgentListing,
+        WorkerExecutorError,
+    > {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.inner
-            .get(environment_id, type_id, filter, cursor, count, precise)
+            .get(
+                environment_id,
+                type_id,
+                filter,
+                cursor,
+                count,
+                precise,
+                page_scan,
+            )
             .await
     }
 }

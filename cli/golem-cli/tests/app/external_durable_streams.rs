@@ -482,6 +482,9 @@ fn copy_two_component_fixtures(ctx: &TestContext) {
 #[timeout("10 minutes")]
 async fn agent_list_pages_cross_the_components_of_an_application() {
     let mut ctx = TestContext::new();
+    // `agent-sdk-rust` has more agent types than the default number of page calls of one page,
+    // so a page reaches the next component only with more page calls.
+    ctx.add_env_var("GOLEM__WORKER_EXECUTOR__LIMITS__AGENT_PAGE_CALLS", "100");
     copy_two_component_fixtures(&ctx);
     ctx.start_server().await;
     fs::write_str(

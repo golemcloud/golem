@@ -504,6 +504,7 @@ min_delay = "200ms"
 multiplier = 2.0
 
 [worker_executor.limits]
+agent_page_calls = 10
 agent_scan_batch_size = 100
 ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
@@ -1512,6 +1513,7 @@ type = "Disabled"
 # multiplier = 2.0
 #
 # [worker_executor.limits]
+# agent_page_calls = 10
 # agent_scan_batch_size = 100
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"

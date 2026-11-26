@@ -953,6 +953,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
                     cursor: Some(ScanCursor::new("not-a-valid-cursor".to_string())),
                     count: Some(1),
                     precise: Some(false),
+                    page_scan: None,
                 },
             )
             .await
@@ -985,6 +986,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
                         cursor: None,
                         count: Some(count),
                         precise: Some(false),
+                        page_scan: None,
                     },
                 )
                 .await

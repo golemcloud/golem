@@ -339,6 +339,26 @@ message GetWorkersMetadataRequest {
   bool precise = 5;
   golem.common.EnvironmentId environment_id = 6;
   golem.auth.AuthCtx auth_ctx = 7;
+  // Present on a call of a listing page. The executor scans at most the smaller of these and of
+  // its own page share and scan time.
+  optional PageScanRequest page_scan = 8;
+}
+
+// The key share and the time that a call of a listing page asks for.
+message PageScanRequest {
+  uint64 keys = 1;
+  uint64 millis = 2;
+}
+
+// What the executor granted a call of a listing page. It holds only configured values and the
+// request clamped to them, never a measurement of the scan.
+message PageScanGrant {
+  // The most scanning calls that one page makes.
+  uint64 calls = 1;
+  // The most keys that this call scans, apart from the last storage batch.
+  uint64 keys = 2;
+  // The time that this call may scan.
+  uint64 millis = 3;
 }
 
 message GetWorkersMetadataResponse {
@@ -351,6 +371,8 @@ message GetWorkersMetadataResponse {
 message GetWorkersMetadataSuccessResponse {
   repeated golem.worker.AgentMetadata workers = 1;
   optional golem.worker.Cursor cursor = 2;
+  // Present only when the request had `page_scan`.
+  optional PageScanGrant page_scan = 3;
 }
 
 message UpdateWorkerRequest {

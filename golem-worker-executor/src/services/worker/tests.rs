@@ -2315,6 +2315,8 @@ struct FakeOplogService {
     scan_batches: std::sync::Mutex<VecDeque<ScanPage>>,
     /// The key counts that `scan_for_component` was asked for, in order.
     scan_requests: std::sync::Mutex<Vec<u64>>,
+    /// How long each storage batch takes, on the Tokio clock.
+    scan_batch_delay: std::time::Duration,
 }
 
 #[async_trait]
@@ -2491,6 +2493,7 @@ impl OplogService for FakeOplogService {
         count: u64,
     ) -> Result<ScanPage, WorkerExecutorError> {
         self.scan_requests.lock().unwrap().push(count);
+        tokio::time::sleep(self.scan_batch_delay).await;
         Ok(self
             .scan_batches
             .lock()
@@ -2904,10 +2907,11 @@ async fn enumeration_keeps_the_mark_of_an_agent_whose_status_cannot_be_rebuilt()
                     ScanCursor::default(),
                     10,
                     precise,
+                    None,
                 )
                 .await
                 .unwrap()
-                .1
+                .agents
         }
     };
 
@@ -3299,17 +3303,46 @@ async fn list_agents_over_batches(
     batch_size: u64,
     batches: Vec<ScanPage>,
 ) -> (Option<ScanCursor>, Vec<u64>) {
+    let (cursor, requests, _) = list_page_over_batches(
+        budget,
+        10,
+        batch_size,
+        batches,
+        None,
+        std::time::Duration::ZERO,
+    )
+    .await;
+    (cursor, requests)
+}
+
+/// Lists the agents of a component as [`list_agents_over_batches`] does, with `agent_page_calls`
+/// page calls configured, as a call of a listing page when `page_scan` is set, and with each
+/// storage batch taking `batch_delay`. Also returns the grant of the call.
+async fn list_page_over_batches(
+    budget: ScanBudget,
+    agent_page_calls: u64,
+    batch_size: u64,
+    batches: Vec<ScanPage>,
+    page_scan: Option<golem_common::model::PageScanRequest>,
+    batch_delay: std::time::Duration,
+) -> (
+    Option<ScanCursor>,
+    Vec<u64>,
+    Option<golem_common::model::PageScanGrant>,
+) {
     use crate::services::worker_enumeration::{
         DefaultWorkerEnumerationService, WorkerEnumerationService,
     };
 
     let oplog_service = Arc::new(FakeOplogService {
         scan_batches: std::sync::Mutex::new(batches.into()),
+        scan_batch_delay: batch_delay,
         ..Default::default()
     });
     let mut config = GolemConfig::default();
     config.limits.scan_budget = budget;
     config.limits.agent_scan_batch_size = std::num::NonZeroU64::new(batch_size).unwrap();
+    config.limits.agent_page_calls = std::num::NonZeroU64::new(agent_page_calls).unwrap();
     let enumeration = DefaultWorkerEnumerationService::new(
         Arc::new(test_worker_service(
             Arc::new(InMemoryKeyValueStorage::new()),
@@ -3319,7 +3352,7 @@ async fn list_agents_over_batches(
         Arc::new(UnusedComponentService),
         Arc::new(config),
     );
-    let (cursor, agents) = enumeration
+    let listing = enumeration
         .get(
             &EnvironmentId::new(),
             golem_common::model::type_id::TypeId::try_from(7u32).unwrap(),
@@ -3327,12 +3360,13 @@ async fn list_agents_over_batches(
             ScanCursor::default(),
             i64::MAX as u64,
             false,
+            page_scan,
         )
         .await
         .unwrap();
-    assert!(agents.is_empty());
+    assert!(listing.agents.is_empty());
     let requests = oplog_service.scan_requests.lock().unwrap().clone();
-    (cursor, requests)
+    (listing.cursor, requests, listing.page_scan)
 }
 
 /// The batches list no agent: the multi-layer oplog service drops the keys of agents that a lower
@@ -3388,6 +3422,159 @@ async fn agent_listing_asks_for_batches_of_at_most_the_batch_size_and_stops_at_i
     .await;
     assert_eq!(requests, vec![40]);
     assert_eq!(cursor, Some(ScanCursor::new("1".to_string())));
+}
+
+#[test]
+fn a_page_call_is_granted_a_fixed_share_of_the_scan_budget_and_at_most_the_configured_time() {
+    use crate::services::worker_enumeration::page_scan_grant;
+    use golem_common::model::{PageScanGrant, PageScanRequest};
+
+    let limits = |entries: u64, calls: u64| {
+        let mut config = GolemConfig::default();
+        config.limits.scan_budget = keys_budget(entries, std::time::Duration::from_secs(5));
+        config.limits.agent_page_calls = std::num::NonZeroU64::new(calls).unwrap();
+        config.limits
+    };
+    let grant = |entries, calls, request| page_scan_grant(&limits(entries, calls), request).1;
+    let request = |keys, millis| PageScanRequest { keys, millis };
+
+    assert_eq!(
+        grant(100_000, 10, PageScanRequest::FIRST),
+        PageScanGrant {
+            calls: 10,
+            keys: 10_000,
+            millis: 5_000
+        }
+    );
+    // The share is rounded up, so a small budget never gives a share of 0.
+    assert_eq!(grant(7, 2, PageScanRequest::FIRST).keys, 4);
+    assert_eq!(grant(1, 10, PageScanRequest::FIRST).keys, 1);
+    // The request is clamped to the share and the time, never raised.
+    assert_eq!(
+        grant(100_000, 1, request(4_000, 50)),
+        PageScanGrant {
+            calls: 1,
+            keys: 4_000,
+            millis: 50
+        }
+    );
+    let (budget, _) = page_scan_grant(&limits(100_000, 10), request(4_000, 50));
+    assert_eq!(budget.entries.get(), 4_000);
+    assert_eq!(budget.time, std::time::Duration::from_millis(50));
+}
+
+/// A storage batch that lists no agent, examined 40 keys, and has more keys after it.
+fn full_batches(count: usize) -> Vec<ScanPage> {
+    (1..=count).map(|n| batch(&n.to_string(), 40)).collect()
+}
+
+fn paused_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+}
+
+/// A page call stops at its share of the key budget, which is below the configured budget, and
+/// at the time that it asked for. Each storage batch takes 1 ms on the paused Tokio clock.
+#[test]
+fn a_page_call_stops_at_its_key_share_and_at_its_requested_time() {
+    use golem_common::model::{PageScanGrant, PageScanRequest};
+
+    paused_runtime().block_on(async {
+        let budget = keys_budget(1_000, std::time::Duration::from_secs(1));
+        let millis = std::time::Duration::from_millis(1);
+
+        // The configured budget allows 1,000 keys; a share of a tenth of it allows 100.
+        let (cursor, requests, grant) = list_page_over_batches(
+            budget,
+            10,
+            40,
+            full_batches(30),
+            Some(PageScanRequest::FIRST),
+            millis,
+        )
+        .await;
+        assert_eq!(requests, vec![40, 40, 20]);
+        assert_eq!(cursor, Some(ScanCursor::new("3".to_string())));
+        assert_eq!(
+            grant,
+            Some(PageScanGrant {
+                calls: 10,
+                keys: 100,
+                millis: 1_000
+            })
+        );
+
+        // With 2 ms, the call stops after two batches, before its key share.
+        let (cursor, requests, _) = list_page_over_batches(
+            budget,
+            10,
+            40,
+            full_batches(30),
+            Some(PageScanRequest {
+                keys: u64::MAX,
+                millis: 2,
+            }),
+            millis,
+        )
+        .await;
+        assert_eq!(requests, vec![40, 40]);
+        assert_eq!(cursor, Some(ScanCursor::new("2".to_string())));
+
+        // A call that is not a page call keeps the whole configured budget and gets no grant.
+        let (_, requests, grant) =
+            list_page_over_batches(budget, 10, 40, full_batches(30), None, millis).await;
+        assert_eq!(requests.iter().sum::<u64>(), 1_000);
+        assert_eq!(grant, None);
+    });
+}
+
+/// The grant of a page call depends only on the request and the configuration, not on the keys
+/// that the scan examined, and a storage batch larger than the share (Redis `SCAN COUNT` is a
+/// hint) is kept whole.
+#[test]
+async fn a_page_call_grant_does_not_depend_on_what_the_scan_examined() {
+    use golem_common::model::PageScanRequest;
+
+    let budget = keys_budget(30, std::time::Duration::from_secs(600));
+    let request = Some(PageScanRequest {
+        keys: 1_000,
+        millis: 60_000,
+    });
+
+    let (few_cursor, _, few) = list_page_over_batches(
+        budget,
+        10,
+        100,
+        vec![ScanPage {
+            cursor: ScanCursor::default(),
+            agent_ids: vec![],
+            examined_keys: 1,
+        }],
+        request,
+        std::time::Duration::ZERO,
+    )
+    .await;
+    assert_eq!(few_cursor, None);
+
+    // The storage answers the request for 3 keys with 5. The call keeps the batch, stops after
+    // it, and leaves the next batch to the next call.
+    let (many_cursor, requests, many) = list_page_over_batches(
+        budget,
+        10,
+        100,
+        vec![batch("1", 5), batch("2", 1)],
+        request,
+        std::time::Duration::ZERO,
+    )
+    .await;
+    assert_eq!(requests, vec![3]);
+    assert_eq!(many_cursor, Some(ScanCursor::new("1".to_string())));
+
+    assert_eq!(few, many);
+    assert_eq!(few.map(|grant| grant.keys), Some(3));
 }
 
 fn keys_budget(entries: u64, time: std::time::Duration) -> ScanBudget {

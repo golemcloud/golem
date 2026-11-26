@@ -485,7 +485,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
         if page_full
             || current_index > last_index
             || results.len() >= count
-            || budget.is_spent(scanned, started)
+            || budget.is_spent(scanned, started.elapsed())
         {
             break;
         }

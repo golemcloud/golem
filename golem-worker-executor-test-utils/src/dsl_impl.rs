@@ -1363,6 +1363,7 @@ impl TestDsl for TestWorkerExecutor {
                 cursor: Some(cursor.into()),
                 count,
                 precise,
+                page_scan: None,
                 auth_ctx: Some(self.auth_ctx().into()),
             })
             .await?
@@ -1371,7 +1372,9 @@ impl TestDsl for TestWorkerExecutor {
         match response.result {
             None => Err(anyhow!("No response from get_workers_metadata")),
             Some(get_workers_metadata_response::Result::Success(
-                GetWorkersMetadataSuccessResponse { workers, cursor },
+                GetWorkersMetadataSuccessResponse {
+                    workers, cursor, ..
+                },
             )) => Ok((
                 cursor.map(|c| c.into()),
                 workers

@@ -741,6 +741,7 @@ async fn per_type_list_and_find_return_only_the_agents_of_the_type(
                         cursor: None,
                         count: Some(100),
                         precise: None,
+                        page_scan: None,
                     },
                 )
                 .await?;
