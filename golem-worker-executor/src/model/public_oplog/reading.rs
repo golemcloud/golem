@@ -618,7 +618,7 @@ pub async fn find_component_revision_at(
 
 /// Scans the oplog entries before `start` for the component revision in effect at `start`, and
 /// charges the entries that it reads to `scan`. Returns `None` when `scan` is spent before the
-/// scan reaches `start`. The scan checks the allowance before each batch.
+/// scan reaches `start`. The scan checks the allowance between batches.
 async fn scan_component_revision(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -626,24 +626,33 @@ async fn scan_component_revision(
     start: OplogIndex,
     scan: &mut RangeScan,
 ) -> Result<Option<ComponentRevision>, WorkerExecutorError> {
+    let mut initial_component_revision = ComponentRevision::INITIAL;
     let last_oplog_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await?;
-    let scanned = scan_component_revision_from(
-        oplog_service,
-        owned_agent_id,
-        agent_mode,
-        OplogIndex::INITIAL,
-        ComponentRevision::INITIAL,
-        start.min(last_oplog_index.next()),
-        0,
-        scan,
-    )
-    .await?;
-    Ok(match scanned {
-        RevisionScan::Found(revision) => Some(revision),
-        RevisionScan::Spent { .. } => None,
-    })
+    const BATCH_SIZE: u64 = 256;
+    let end = start.min(last_oplog_index.next());
+    let mut current = OplogIndex::INITIAL;
+    while current < end {
+        if scan.is_spent() {
+            return Ok(None);
+        }
+        let count = (end.as_u64() - current.as_u64())
+            .min(BATCH_SIZE)
+            .min(scan.remaining_entries());
+        let entries = oplog_service
+            .read_exact(owned_agent_id, agent_mode, current, count)
+            .await?;
+        for entry in entries.into_values() {
+            if let Some(revision) = entry.specifies_component_revision() {
+                initial_component_revision = revision;
+            }
+        }
+        scan.charge(count);
+        current = OplogIndex::from_u64(current.as_u64() + count);
+    }
+
+    Ok(Some(initial_component_revision))
 }
 
 /// Where a scan for the component revision stopped.
