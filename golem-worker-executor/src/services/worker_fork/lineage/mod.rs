@@ -111,6 +111,9 @@ impl StreamForkLineage {
         from: OplogIndex,
         horizon: OplogIndex,
     ) -> Result<bool, String> {
+        if from > horizon {
+            return Ok(false);
+        }
         let source = LineageSource::Service {
             service,
             owner,
