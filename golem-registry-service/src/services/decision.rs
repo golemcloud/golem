@@ -51,11 +51,10 @@ impl Decisions {
     ) -> Result<Grantors, AuthorizationError> {
         match operation {
             Ok(operation) => {
-                let caller = auth.entry_caller(self.golem_issuer.to_string());
+                let request = auth.entry_request(self.golem_issuer.to_string(), operation);
                 decide_with_todays_checks(
                     auth,
-                    caller,
-                    operation,
+                    request,
                     vec![vec![check]],
                     &self.audit,
                     Surface::Rest,
@@ -95,4 +94,261 @@ pub fn environment_target(
         application_id,
         environment_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{account_target, application_target, environment_target};
+    use crate::services::{
+        account, agent_secret, application, card, deployment, domain_registration, environment,
+        reports, token,
+    };
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+    use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::auth::TokenId;
+    use golem_common::model::authority::{
+        CatalogOperation, Operation, OperationShapeError, Resource,
+    };
+    use golem_common::model::card::owner::EnvironmentOwnerPattern;
+    use golem_common::model::card::{
+        AccountTokenResourcePattern, AccountTokenVerb, AccountVerb, ApplicationVerb, CardId,
+        CardVerb, EnvironmentAgentSecretVerb, EnvironmentDomainRegistrationVerb, EnvironmentVerb,
+        PermissionTarget, SystemVerb, check_belongs_to_part,
+    };
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::{
+        Environment, EnvironmentId, EnvironmentName, EnvironmentRevision,
+    };
+    use test_r::test;
+
+    fn test_environment() -> Environment {
+        Environment {
+            id: EnvironmentId::new(),
+            revision: EnvironmentRevision::INITIAL,
+            application_id: ApplicationId::new(),
+            application_name: ApplicationName::try_from("app").unwrap(),
+            name: EnvironmentName::try_from("dev").unwrap(),
+            diff_model_version: 0,
+            compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
+            version_check: false,
+            security_overrides: false,
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("owner@example.com"),
+            current_deployment: None,
+        }
+    }
+
+    /// Each operation that a call site of the registry decides, with the check that the call site
+    /// passes for it today. A call site that decides a new operation adds its pair here.
+    fn call_site_pairs() -> Vec<(
+        &'static str,
+        Result<Operation, OperationShapeError>,
+        PermissionTarget,
+    )> {
+        let environment = test_environment();
+        let email = environment.owner_account_email.clone();
+        let account = account_target(environment.owner_account_id);
+        let application =
+            application_target(environment.owner_account_id, environment.application_id);
+        let environment_of = || {
+            environment_target(
+                environment.owner_account_id,
+                environment.application_id,
+                environment.id,
+            )
+        };
+        let owner = EnvironmentOwnerPattern::Environment {
+            account: email.clone(),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        };
+        let token_id = TokenId::new();
+        let card_id = CardId::new();
+        let single = Operation::single;
+
+        let mut pairs = vec![
+            (
+                "update an account",
+                single(
+                    CatalogOperation::UpdateAccount,
+                    Resource::None,
+                    account.clone(),
+                ),
+                account::account_permission_target(&email, AccountVerb::Update),
+            ),
+            (
+                "create an account",
+                single(
+                    CatalogOperation::CreateAccount,
+                    Resource::None,
+                    account.clone(),
+                ),
+                account::system_permission_target(SystemVerb::CreateAccount),
+            ),
+            (
+                "create an application",
+                single(
+                    CatalogOperation::CreateApplication,
+                    Resource::None,
+                    account.clone(),
+                ),
+                application::application_permission_target(
+                    &email,
+                    &environment.application_name,
+                    ApplicationVerb::Create,
+                ),
+            ),
+            (
+                "create an environment",
+                single(
+                    CatalogOperation::CreateEnvironment,
+                    Resource::None,
+                    application,
+                ),
+                environment::environment_permission_target(
+                    &email,
+                    &environment.application_name,
+                    &environment.name,
+                    EnvironmentVerb::Create,
+                ),
+            ),
+            (
+                "deploy an environment",
+                single(
+                    CatalogOperation::DeployEnvironment,
+                    Resource::None,
+                    environment_of(),
+                ),
+                deployment::environment_check(&environment, EnvironmentVerb::Deploy),
+            ),
+            (
+                "register a host",
+                single(
+                    CatalogOperation::RegisterHost,
+                    Resource::Name("api.example.com".to_string()),
+                    environment_of(),
+                ),
+                domain_registration::domain_registration_check(
+                    owner.clone(),
+                    Some(&Domain("api.example.com".to_string())),
+                    EnvironmentDomainRegistrationVerb::Create,
+                ),
+            ),
+            (
+                "view an API token, list the API tokens",
+                single(
+                    CatalogOperation::ViewApiToken,
+                    Resource::ApiToken(token_id),
+                    account.clone(),
+                ),
+                token::account_token_permission_target(
+                    &email,
+                    AccountTokenVerb::View,
+                    AccountTokenResourcePattern::Token(token_id),
+                ),
+            ),
+            (
+                "create an API token",
+                single(
+                    CatalogOperation::CreateApiTokens,
+                    Resource::None,
+                    account.clone(),
+                ),
+                token::account_token_permission_target(
+                    &email,
+                    AccountTokenVerb::Create,
+                    AccountTokenResourcePattern::Any,
+                ),
+            ),
+            (
+                "revoke an API token",
+                single(
+                    CatalogOperation::RevokeApiToken,
+                    Resource::ApiToken(token_id),
+                    account.clone(),
+                ),
+                token::account_token_permission_target(
+                    &email,
+                    AccountTokenVerb::Delete,
+                    AccountTokenResourcePattern::Token(token_id),
+                ),
+            ),
+            (
+                "get a card",
+                single(
+                    CatalogOperation::InspectCard,
+                    Resource::Card(card_id),
+                    account.clone(),
+                ),
+                card::card_check(&email, CardVerb::Inspect),
+            ),
+            (
+                "revoke a card",
+                single(
+                    CatalogOperation::RevokeCard,
+                    Resource::Card(card_id),
+                    account.clone(),
+                ),
+                card::card_check(&email, CardVerb::Revoke),
+            ),
+            (
+                "view the account summaries report",
+                single(
+                    CatalogOperation::ViewAccountSummariesReport,
+                    Resource::None,
+                    account.clone(),
+                ),
+                reports::system_permission_target(SystemVerb::ViewAccountSummariesReport),
+            ),
+            (
+                "view the account counts report",
+                single(
+                    CatalogOperation::ViewAccountCountsReport,
+                    Resource::None,
+                    account,
+                ),
+                reports::system_permission_target(SystemVerb::ViewAccountCountsReport),
+            ),
+        ];
+
+        // The secret call sites pass these verbs; each one decides the operation of its verb.
+        let key = CanonicalAgentSecretPath(vec!["db".to_string(), "password".to_string()]);
+        for (site, verb) in [
+            ("create a secret", EnvironmentAgentSecretVerb::Create),
+            ("update a secret", EnvironmentAgentSecretVerb::Update),
+            ("delete a secret", EnvironmentAgentSecretVerb::Delete),
+            (
+                "get a secret, list the secrets",
+                EnvironmentAgentSecretVerb::View,
+            ),
+        ] {
+            pairs.push((
+                site,
+                single(
+                    agent_secret::secret_operation(verb),
+                    Resource::Path(key.0.join("/")),
+                    environment_of(),
+                ),
+                agent_secret::agent_secret_check(owner.clone(), &key, verb),
+            ));
+        }
+        pairs
+    }
+
+    /// A check that is not a check of its part would deny every caller of its call site.
+    #[test]
+    fn every_call_site_check_belongs_to_its_part() {
+        for (site, operation, check) in call_site_pairs() {
+            let operation = operation.unwrap_or_else(|error| panic!("{site}: {error}"));
+            for part in operation.parts() {
+                assert!(
+                    check_belongs_to_part(part.verb, &check),
+                    "{site}: {check:?} is not a check of {:?}",
+                    part.verb
+                );
+            }
+        }
+    }
 }

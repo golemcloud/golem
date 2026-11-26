@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::subsumption_tests as subsumption;
 use super::*;
 use crate::base_model::authority::{
     self as v2, AgentTarget, CatalogOperation, Decision, Denial, DesignatedKind, GrantorCard,
@@ -20,7 +21,7 @@ use crate::base_model::authority::{
 use crate::base_model::tool::ToolName;
 use crate::base_model::{AgentFingerprint, AgentId};
 use crate::model::agent::AgentTypeName;
-use crate::model::card::owner::AgentOwnerPattern;
+use crate::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use crate::model::card::recipient::RecipientPattern;
 use crate::model::environment::EnvironmentId;
 use chrono::Utc;
@@ -111,8 +112,9 @@ fn is_allowed(decision: &Decision) -> bool {
     matches!(decision, Decision::Allow(_))
 }
 
-/// One 1.6 subsumption case: the grants of a surface, the operation that the check belongs
-/// to, and today's 1.6 check.
+/// One 1.6 case that the subsumption tests do not hold as a table: the grants of a surface, the
+/// operation that the check belongs to, and today's 1.6 check. These cases add upper bounds,
+/// negative grants and oplog ranges to the shared tables below.
 struct Case {
     name: &'static str,
     lower: &'static [&'static str],
@@ -232,6 +234,165 @@ fn generate_compatibility_equals_effective_surface_tests(r: &mut DynamicTestRegi
                 assert_eq!(is_allowed(&decision), today, "{decision:?}");
             }
         );
+    }
+}
+
+/// Today's answer and the decision's answer for one check of `operation` on `surface`.
+fn answers(
+    surface: &EffectiveSurface,
+    operation: &Operation,
+    check: PermissionTarget,
+) -> (bool, bool) {
+    let today = surface.authorize(&check).unwrap();
+    let decision = decide_with_checks(surface, operation, &[vec![check]]);
+    (today, is_allowed(&decision))
+}
+
+fn surface_of(grant: PermissionPattern, holder: &RecipientPattern) -> EffectiveSurface {
+    EffectiveSurface::from_grants(&[grant], &[], &[], &[], holder).unwrap()
+}
+
+/// The owner cases of the subsumption tests, as a `view` grant and a `view` check: today's check
+/// allows exactly where the owner of the grant covers the owner of the request, and so does the
+/// decision.
+#[test_gen]
+fn generate_decision_over_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
+    for (granted, requested, covers) in subsumption::owner_subsumption_cases() {
+        add_test!(
+            r,
+            format!(
+                "decision_over_owner_subsumption_{}_{}",
+                subsumption::test_name(granted),
+                subsumption::test_name(requested)
+            ),
+            TestProperties::unit_test(),
+            move || {
+                let grant = PermissionPattern::Agent(ClassPermissionPattern {
+                    verb: Some(AgentVerb::View),
+                    owner: subsumption::owner(granted),
+                    recipient: RecipientPattern::parse("*").unwrap(),
+                    resource: AgentResourcePattern::Any,
+                });
+                let check = PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: subsumption::owner(requested),
+                    verb: Some(AgentVerb::View),
+                    resource: AgentResourcePattern::Any,
+                });
+                let view = single(CatalogOperation::ViewAgent, Resource::None);
+                let (today, decided) = answers(&surface_of(grant, &holder()), &view, check);
+                assert_eq!(today, covers);
+                assert_eq!(decided, today);
+            }
+        );
+    }
+}
+
+/// The recipient matching cases of the subsumption tests: an `invoke` grant reaches its holder
+/// exactly where its recipient covers the holder, today and in the decision.
+#[test_gen]
+fn generate_decision_over_recipient_matching_tests(r: &mut DynamicTestRegistration) {
+    for (recipient, matches) in subsumption::recipient_matching_cases() {
+        add_test!(
+            r,
+            format!(
+                "decision_over_recipient_matching_{}",
+                subsumption::test_name(recipient)
+            ),
+            TestProperties::unit_test(),
+            move || {
+                let grant = PermissionPattern::Agent(ClassPermissionPattern {
+                    verb: Some(AgentVerb::Invoke),
+                    owner: AgentOwnerPattern::parse(&format!("{OWNER}/*")).unwrap(),
+                    recipient: subsumption::parse_recipient(recipient),
+                    resource: AgentResourcePattern::Any,
+                });
+                let holder = subsumption::parse_recipient(subsumption::RECIPIENT_HOLDER);
+                let (today, decided) = answers(
+                    &surface_of(grant, &holder),
+                    &invoke_increment(),
+                    check("agent", "invoke", "increment"),
+                );
+                assert_eq!(today, matches);
+                assert_eq!(decided, today);
+            }
+        );
+    }
+}
+
+/// The path glob cases of the subsumption tests: a file read is allowed exactly where the path
+/// of the grant covers the path of the request, today and in the decision.
+#[test_gen]
+fn generate_decision_over_glob_resource_tests(r: &mut DynamicTestRegistration) {
+    for (index, (name, ..)) in subsumption::glob_resource_cases().into_iter().enumerate() {
+        add_test!(
+            r,
+            format!("decision_over_glob_resource_{name}"),
+            TestProperties::unit_test(),
+            move || {
+                let (_, granted, requested, covers) =
+                    subsumption::glob_resource_cases().swap_remove(index);
+                let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
+                let grant = subsumption::fs(owner, "acme/*/*/*/*", granted);
+                let holder = subsumption::parse_recipient(subsumption::RECIPIENT_HOLDER);
+                let (today, decided) = answers(
+                    &surface_of(grant, &holder),
+                    &read_file(),
+                    subsumption::fs_target(owner, requested),
+                );
+                assert_eq!(today, covers);
+                assert_eq!(decided, today);
+            }
+        );
+    }
+}
+
+/// The type wildcard cases of the subsumption tests: a grant on `Cart(*)` covers every kind of
+/// `Cart` agent and no other agent, today and in the decision. No REST agent operation checks
+/// the `env` and `config` classes, so they have no decision here.
+#[test]
+fn a_type_wildcard_grant_decides_as_today_for_every_agent_of_the_type() {
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/Caller").unwrap();
+    let untyped = AgentOwnerLeafPattern::agent(AgentId::from_parts(7, 1), None);
+    for (class, verb, resource) in subsumption::AGENT_OWNED_CLASSES {
+        let operation = match class {
+            "agent" => single(
+                CatalogOperation::InvokeAgent,
+                Resource::Method(resource.to_string()),
+            ),
+            "filesystem" => single(
+                CatalogOperation::ReadFile,
+                Resource::Path(resource.to_string()),
+            ),
+            "oplog" => read_oplog(),
+            _ => continue,
+        };
+        let grant = |owner: &str| {
+            parse_permission(&format!(
+                "{class}(acme/shop/prod/cart/{owner}) @ * : {verb} : {resource}"
+            ))
+            .unwrap()
+        };
+        let request = |leaf: &AgentOwnerLeafPattern| {
+            subsumption::with_agent_leaf(
+                grant("00000007-0000-8000-8000-000000000001").to_target(),
+                leaf,
+            )
+        };
+        let surface = surface_of(grant("Cart(*)"), &holder);
+        let agents = subsumption::agents_of_type("Cart", 7)
+            .into_iter()
+            .map(|(kind, agent)| (kind, agent, true))
+            .chain(
+                subsumption::agents_of_type("CartX", 8)
+                    .into_iter()
+                    .map(|(kind, agent)| (kind, agent, false)),
+            )
+            .chain([("untyped", untyped.clone(), false)]);
+        for (kind, agent, covers) in agents {
+            let (today, decided) = answers(&surface, &operation, request(&agent));
+            assert_eq!(today, covers, "{class}: {kind}");
+            assert_eq!(decided, today, "{class}: {kind}");
+        }
     }
 }
 

@@ -16,6 +16,7 @@ use super::audit::{AuditContext, DecisionAudit};
 use super::surface::Surface;
 use super::{AuthCtx, AuthorizationError, Authorizer};
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::authority::{
     AuthorizationRequest, Decision, Grantors, Operation, Scope, Target,
@@ -145,8 +146,8 @@ impl Authorizer for CompatibilityAuthorizer {
     }
 }
 
-/// Decides `operation` for `caller` from the card checks that the call site makes today, one list
-/// for each part. A denial is the error that today's checks give, so the response stays the same.
+/// Decides `request` from the card checks that the call site makes today, one list for each part.
+/// A denial is the error that today's checks give, so the response stays the same.
 /// `AuthCtx::System` skips the decision, as today. Every call site that has moved to `decide` in
 /// the worker service and the registry decides through this function.
 ///
@@ -154,8 +155,7 @@ impl Authorizer for CompatibilityAuthorizer {
 /// cannot be written fails with [`AuthorizationError::AuditUnavailable`] and must not run.
 pub async fn decide_with_todays_checks(
     auth: &AuthCtx,
-    caller: Caller,
-    operation: Operation,
+    request: AuthorizationRequest,
     checks: Vec<Vec<PermissionTarget>>,
     audit: &DecisionAudit,
     surface: Surface,
@@ -163,7 +163,6 @@ pub async fn decide_with_todays_checks(
     if auth.is_system() {
         return Ok(Grantors::default());
     }
-    let request = AuthorizationRequest::new(caller, operation);
     let authorizer = Arc::new(CompatibilityAuthorizer::new(auth.clone(), checks));
     let context = AuditContext::for_request(auth, surface);
     match audit
@@ -179,12 +178,36 @@ pub async fn decide_with_todays_checks(
 
 impl AuthCtx {
     /// The caller of a request that an account token authenticated: the access account in both
-    /// roles.
+    /// roles. The request passes this caller on.
     pub fn entry_caller(&self, issuer: impl Into<String>) -> Caller {
-        Caller::entry(Principal::Account(AccountPrincipal {
-            issuer: issuer.into(),
-            account_id: self.account_id(),
-            authentication: AccountAuthentication::ApiToken,
-        }))
+        Caller::entry(Principal::Account(account_principal(
+            issuer,
+            self.account_id(),
+        )))
+    }
+
+    /// The decision request of `operation` for a request that an account token authenticated:
+    /// the acting account asks, on the authority of the access account. Under admin impersonation
+    /// the admin asks and the target account's cards decide; otherwise both are the same account.
+    pub fn entry_request(
+        &self,
+        issuer: impl Into<String>,
+        operation: Operation,
+    ) -> AuthorizationRequest {
+        let issuer = issuer.into();
+        let acting = account_principal(issuer.clone(), self.actor_account_id());
+        AuthorizationRequest::new(Caller::entry(Principal::Account(acting)), operation)
+            .on_authority_of(Principal::Account(account_principal(
+                issuer,
+                self.account_id(),
+            )))
+    }
+}
+
+fn account_principal(issuer: impl Into<String>, account_id: AccountId) -> AccountPrincipal {
+    AccountPrincipal {
+        issuer: issuer.into(),
+        account_id,
+        authentication: AccountAuthentication::ApiToken,
     }
 }

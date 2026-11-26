@@ -25,7 +25,9 @@ use std::net::IpAddr;
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase", tag = "kind", content = "value")]
 pub enum Resource {
-    /// The grant's resource is empty, as in `agent(<agent-id>) : exec :`.
+    /// No resource: the grant's resource is empty, as in `agent(<agent-id>) : exec :`, or it does
+    /// not select what the part admits, as in `create-agent`, where it selects the `invoke`
+    /// methods of the creation card.
     None,
     /// Every resource of the verb, as the tool-wide `invoke : *` that a static `File` read needs.
     All,
@@ -55,6 +57,9 @@ pub enum Resource {
     Pair(Pair),
     /// An account API token.
     ApiToken(TokenId),
+    /// Any one agent method: the part needs `invoke` on at least one method of the agent, as a
+    /// methodless upsert does. Only `upsert-agent` takes it, so `invoke-agent` stays exact.
+    AnyOneMethod,
 }
 
 /// The kind of a [`Resource`], without its value.
@@ -72,6 +77,7 @@ pub enum ResourceKind {
     Card,
     Pair,
     ApiToken,
+    AnyOneMethod,
 }
 
 impl Resource {
@@ -89,6 +95,7 @@ impl Resource {
             Resource::Card(_) => ResourceKind::Card,
             Resource::Pair(_) => ResourceKind::Pair,
             Resource::ApiToken(_) => ResourceKind::ApiToken,
+            Resource::AnyOneMethod => ResourceKind::AnyOneMethod,
         }
     }
 }

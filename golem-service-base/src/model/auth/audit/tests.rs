@@ -451,7 +451,10 @@ fn invocations_and_host_calls_are_recorded_only_when_denied() {
     for operation in [
         CatalogOperation::CreateAgent,
         CatalogOperation::InvokeAgent,
+        CatalogOperation::UpsertAgent,
         CatalogOperation::HostedExec,
+        CatalogOperation::SendToolInput,
+        CatalogOperation::SendHostedExecInput,
         CatalogOperation::ReadInvocation,
         CatalogOperation::ReadToolFiles,
         CatalogOperation::FilesystemRead,
@@ -462,6 +465,10 @@ fn invocations_and_host_calls_are_recorded_only_when_denied() {
     }
     for operation in [
         CatalogOperation::ViewAgent,
+        CatalogOperation::InspectAgentConfig,
+        CatalogOperation::InspectAgentEnvVars,
+        CatalogOperation::InspectToolConfig,
+        CatalogOperation::InspectToolEnvVars,
         CatalogOperation::ReadAgentOplog,
         CatalogOperation::InterruptAgent,
         CatalogOperation::ReadFile,
@@ -474,13 +481,13 @@ fn invocations_and_host_calls_are_recorded_only_when_denied() {
     ] {
         assert!(audited_when_allowed(operation), "{operation}");
     }
-    // 19 invocation operations and 23 host-function operations; every other operation is a
+    // 22 invocation operations and 23 host-function operations; every other operation is a
     // management read or control.
     let not_audited = CatalogOperation::ALL
         .iter()
         .filter(|operation| !audited_when_allowed(**operation))
         .count();
-    assert!(not_audited == 42);
+    assert!(not_audited == 45);
 }
 
 #[test]

@@ -615,7 +615,7 @@ fn authorize_card_permission(
 }
 
 /// Today's account-wide card check of `verb`.
-fn card_check(account_email: &AccountEmail, verb: CardVerb) -> PermissionTarget {
+pub(crate) fn card_check(account_email: &AccountEmail, verb: CardVerb) -> PermissionTarget {
     PermissionTarget::Card(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {

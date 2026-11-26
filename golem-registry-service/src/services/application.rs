@@ -354,7 +354,7 @@ fn authorize_application_permission(
     ))
 }
 
-fn application_permission_target(
+pub(crate) fn application_permission_target(
     account_email: &AccountEmail,
     application_name: &ApplicationName,
     verb: ApplicationVerb,

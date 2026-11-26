@@ -227,6 +227,56 @@ fn the_entry_caller_is_the_account_in_both_roles() {
 }
 
 #[test]
+async fn under_impersonation_the_admin_is_the_caller_and_the_target_account_decides() {
+    let admin = AccountId(Uuid::from_u128(9));
+    let surface = EffectiveSurface::from_grants(
+        &[parse_permission("agent(acme/shop/prod/cart/*) @ acme : invoke : increment").unwrap()],
+        &[],
+        &[],
+        &[],
+        &RecipientPattern::parse("acme").unwrap(),
+    )
+    .unwrap();
+    let auth = AuthCtx::admin_impersonation(
+        admin,
+        AccountId(Uuid::from_u128(1)),
+        golem_common::model::account::AccountEmail::new("acme@example.com".to_string()),
+        std::collections::BTreeSet::new(),
+        golem_common::model::plan::PlanId(Uuid::from_u128(3)),
+        surface,
+    );
+
+    let operation = invoke(1).operation;
+    let request = auth.entry_request("golem", operation.clone());
+    assert_eq!(
+        request.caller,
+        Caller::entry(Principal::Account(AccountPrincipal {
+            issuer: "golem".to_string(),
+            account_id: admin,
+            authentication: AccountAuthentication::ApiToken,
+        }))
+    );
+    assert!(request.principal.same_record(&caller().immediate));
+    // The caller that the request passes on to the agent stays the target account.
+    assert_eq!(auth.entry_caller("golem"), caller());
+    let authorizer = CompatibilityAuthorizer::new(
+        auth,
+        vec![vec![check(1, AgentVerb::Invoke, method("increment"))]],
+    );
+    assert!(matches!(
+        authorizer.decide(&request).await,
+        Decision::Allow(_)
+    ));
+}
+
+#[test]
+fn without_impersonation_the_account_asks_on_its_own_authority() {
+    let request = user(&[]).entry_request("golem", invoke(1).operation);
+    assert_eq!(request.caller, caller());
+    assert!(request.principal.same_record(&caller().immediate));
+}
+
+#[test]
 async fn todays_error_is_the_error_of_the_first_refused_check() {
     let auth = user(&["agent(acme/shop/prod/cart/*) @ acme : invoke : increment"]);
     let refused = check(1, AgentVerb::Invoke, method("decrement"));
@@ -326,8 +376,7 @@ async fn the_decide_step_records_an_allowed_management_read_with_its_surface_and
 
     decide_with_todays_checks(
         &token_user(&[VIEWER], token),
-        caller(),
-        view_agent(),
+        AuthorizationRequest::new(caller(), view_agent()),
         view_checks(),
         &decision_audit(sink.clone(), 5),
         surface::Surface::Mcp,
@@ -346,8 +395,7 @@ async fn the_decide_step_records_an_allowed_management_read_with_its_surface_and
 async fn the_decide_step_refuses_an_allowed_management_read_whose_record_cannot_be_written() {
     let error = decide_with_todays_checks(
         &user(&[VIEWER]),
-        caller(),
-        view_agent(),
+        AuthorizationRequest::new(caller(), view_agent()),
         view_checks(),
         &decision_audit(std::sync::Arc::new(FailingSink), 7),
         surface::Surface::Rest,
@@ -372,8 +420,7 @@ async fn the_decide_step_keeps_todays_error_for_a_denial_whose_record_cannot_be_
 
     let error = decide_with_todays_checks(
         &auth,
-        caller(),
-        view_agent(),
+        AuthorizationRequest::new(caller(), view_agent()),
         vec![vec![refused.clone()]],
         &decision_audit(std::sync::Arc::new(FailingSink), 5),
         surface::Surface::Rest,
@@ -393,8 +440,7 @@ async fn the_system_context_writes_no_record() {
 
     decide_with_todays_checks(
         &AuthCtx::System,
-        caller(),
-        view_agent(),
+        AuthorizationRequest::new(caller(), view_agent()),
         vec![vec![]],
         &decision_audit(sink.clone(), 5),
         surface::Surface::Rest,

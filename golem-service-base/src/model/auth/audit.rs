@@ -50,7 +50,7 @@ use golem_common::model::auth::TokenId;
 use golem_common::model::authority::{
     AuthorizationRequest, CardTokenId, CatalogOperation, Decision, Denial, DesignatedKind,
     Destination, GrantorCard, InvocationOwner, InvocationTarget, Operation, OperationPart, Owner,
-    Resource, Scope, Target, TargetKind,
+    PromiseOwner, Resource, Scope, Target, TargetKind,
 };
 use golem_common::model::caller::{AccountAuthentication, Caller, Principal, TokenProvenance};
 use golem_common::model::card::CardId;
@@ -272,10 +272,11 @@ pub fn audited_when_allowed(operation: CatalogOperation) -> bool {
     use CatalogOperation::*;
     match operation {
         // Invocations.
-        CreateAgent | InvokeAgent | InvokeTool | HostedExec | RetryAgentInvocation
-        | RetryToolInvocation | ReadInvocation | CancelInvocation | SendInvocationInput
-        | ListInvocations | ReadTask | CancelTask | SendTaskInput | ReadStream | AppendStream
-        | SendToPromise | SendToWebhook | ReadArtifact | ReadToolFiles => false,
+        CreateAgent | InvokeAgent | UpsertAgent | InvokeTool | HostedExec
+        | RetryAgentInvocation | RetryToolInvocation | ReadInvocation | CancelInvocation
+        | SendInvocationInput | SendToolInput | SendHostedExecInput | ListInvocations
+        | ReadTask | CancelTask | SendTaskInput | ReadStream | AppendStream | SendToPromise
+        | SendToWebhook | ReadArtifact | ReadToolFiles => false,
         // Host calls.
         FilesystemRead
         | FilesystemWrite
@@ -302,6 +303,10 @@ pub fn audited_when_allowed(operation: CatalogOperation) -> bool {
         | RdbmsUnanalyzed => false,
         // Management reads and controls.
         ViewAgent
+        | InspectAgentConfig
+        | InspectAgentEnvVars
+        | InspectToolConfig
+        | InspectToolEnvVars
         | ReadAgentOplog
         | ReadToolInvocationOplog
         | ListAgents
@@ -674,6 +679,8 @@ pub enum AuditResource {
     ApiToken {
         token_id: TokenId,
     },
+    /// Any one method of the agent, as a methodless upsert asks for.
+    AnyOneMethod,
 }
 
 impl From<&Resource> for AuditResource {
@@ -717,6 +724,7 @@ impl From<&Resource> for AuditResource {
             Resource::ApiToken(token_id) => AuditResource::ApiToken {
                 token_id: *token_id,
             },
+            Resource::AnyOneMethod => AuditResource::AnyOneMethod,
         }
     }
 }
@@ -802,8 +810,11 @@ impl From<&Target> for AuditTarget {
                     .owned_by(AuditTarget::of_invocation(&stream.owner))
             }
             Target::Promise(promise) => {
-                AuditTarget::new(TargetKind::Promise, promise.promise_id.to_string())
-                    .owned_by(AuditTarget::from(&Target::Agent(promise.owner.clone())))
+                let owner = match &promise.owner {
+                    PromiseOwner::Agent(agent) => AuditTarget::from(&Target::Agent(agent.clone())),
+                    PromiseOwner::Invocation(invocation) => AuditTarget::of_invocation(invocation),
+                };
+                AuditTarget::new(TargetKind::Promise, promise.id.0.clone()).owned_by(owner)
             }
             Target::Task(entity)
             | Target::Webhook(entity)
