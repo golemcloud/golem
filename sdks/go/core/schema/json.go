@@ -26,6 +26,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/core/values"
@@ -938,17 +939,23 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		return nil, typeErr(path, `{"ok": ...} or {"err": ...}`, value)
 
 	case UnionType:
-		// The tag is not carried in the JSON, so branches are tried in
-		// declaration order and the first whose body and discriminator fit
-		// wins. A failed attempt
-		// leaves nothing behind, since building returns a value rather than
-		// appending to a pool.
+		var selected *UnionBranch
 		for _, branch := range b.Branches {
-			if built, err := p.build(branch.Body, value, child(path, branch.Tag)); err == nil && p.ref.discriminates(branch, built) {
-				return UnionValue{Tag: branch.Tag, Body: built}, nil
+			if matchesJSONDiscriminator(branch.Discriminator, value) {
+				if selected != nil {
+					return nil, fmt.Errorf("%s: value matches multiple declared union branches", pathOrRoot(path))
+				}
+				selected = &branch
 			}
 		}
-		return nil, fmt.Errorf("%s: value matches no declared union branch", pathOrRoot(path))
+		if selected == nil {
+			return nil, fmt.Errorf("%s: value matches no declared union branch", pathOrRoot(path))
+		}
+		built, err := p.build(selected.Body, value, child(path, selected.Tag))
+		if err != nil {
+			return nil, err
+		}
+		return UnionValue{Tag: selected.Tag, Body: built}, nil
 
 	case SecretType, QuotaTokenType, PermissionCardType:
 		return nil, fmt.Errorf("%s: host-managed capabilities cannot be built from JSON", pathOrRoot(path))
@@ -956,6 +963,37 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		return nil, fmt.Errorf("%s: streams and futures cannot be built from JSON", pathOrRoot(path))
 	}
 	return nil, fmt.Errorf("%s: unsupported schema type %T", pathOrRoot(path), body)
+}
+
+func matchesJSONDiscriminator(rule DiscriminatorRule, value any) bool {
+	text, hasText := value.(string)
+	switch d := rule.(type) {
+	case PrefixRule:
+		return hasText && strings.HasPrefix(text, d.Value)
+	case SuffixRule:
+		return hasText && strings.HasSuffix(text, d.Value)
+	case ContainsRule:
+		return hasText && strings.Contains(text, d.Value)
+	case RegexRule:
+		re, err := regexp.Compile(d.Pattern)
+		return hasText && err == nil && re.MatchString(text)
+	case FieldEqualsRule:
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		field, present := obj[d.FieldName]
+		if d.Literal == nil {
+			return present
+		}
+		text, ok := field.(string)
+		return ok && text == *d.Literal
+	case FieldAbsentRule:
+		obj, ok := value.(map[string]any)
+		_, present := obj[d.FieldName]
+		return ok && !present
+	}
+	return false
 }
 
 func (p *packer) buildItems(elem SchemaType, value any, path string) ([]SchemaValue, error) {

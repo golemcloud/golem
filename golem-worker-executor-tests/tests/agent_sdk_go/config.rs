@@ -17,7 +17,7 @@
 
 use crate::Tracing;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentTypeName};
-use golem_common::model::component::AgentTypeProvisionConfigUpdate;
+use golem_common::model::component::{AgentTypeProvisionConfigUpdate, ConfigBindingDto};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -172,9 +172,10 @@ async fn go_static_config_defaults_survive_reconstruction(
         (
             "new-revision",
             0,
-            Some(vec![AgentConfigEntryDto {
+            Some(vec![ConfigBindingDto {
                 path: vec!["settings".into()],
                 value: serde_json::json!({"label": "new-revision", "count": 0}).into(),
+                origins: None,
             }]),
         ),
         ("new-revision", 0, None),
