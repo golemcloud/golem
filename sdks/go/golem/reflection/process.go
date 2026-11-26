@@ -193,8 +193,11 @@ func callFailure(cmd Command, err error, stderr io.Writer) uint8 {
 		}
 		message = "tool error: " + ce.ErrorName
 		if payload, err := ce.Payload().JSON(); err == nil {
-			if data, err := json.Marshal(payload); err == nil {
-				message += ": " + string(data)
+			var data bytes.Buffer
+			enc := json.NewEncoder(&data)
+			enc.SetEscapeHTML(false)
+			if err := enc.Encode(payload); err == nil {
+				message += ": " + strings.TrimSuffix(data.String(), "\n")
 			}
 		}
 	}

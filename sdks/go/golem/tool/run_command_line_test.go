@@ -174,7 +174,7 @@ func TestRunCommandLineProjectsACallAsAProcess(t *testing.T) {
 		{name: "declared stdout wins over the result", args: []string{"write"},
 			call: tool.ScriptedCall{Stdout: []byte("streamed"), Result: result("ignored")}, code: 0, stdout: "streamed", called: true},
 		{name: "declared error status", args: []string{"fail"},
-			call: tool.ScriptedCall{Err: customError("locked", "busy")}, code: 4, stderr: "tool error: locked: \"busy\"\n", called: true},
+			call: tool.ScriptedCall{Err: customError("locked", "<busy> & held")}, code: 4, stderr: "tool error: locked: \"<busy> & held\"\n", called: true},
 		{name: "undeclared error status", args: []string{"fail"},
 			call: tool.ScriptedCall{Err: customError("other", "x")}, code: 1, stderr: "tool error: other: \"x\"\n", called: true},
 		{name: "denied", args: []string{"name"},
