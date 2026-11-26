@@ -18,7 +18,6 @@ pub use super::parsed_function_name::{
 use crate::SafeDisplay;
 use crate::base_model::component::InitialAgentFile;
 pub use crate::base_model::component_metadata::*;
-use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::AnalysisFailure;
 use crate::component_introspection::metadata::Producers as IntrospectionProducers;
 use crate::model::agent::{AgentTypeName, OwnerKind};
@@ -158,8 +157,8 @@ impl ComponentMetadata {
                 .values_mut()
                 .map(|provision| &mut provision.config),
         ) {
-            for entry in &mut config.entries {
-                let OwnerConfigSource::Captured(value) = &mut entry.source;
+            for entry in config {
+                let ConfigBindingSource::Static(value) = &mut entry.value_source;
                 *value = crate::schema::redact_host_managed_typed_value(value.clone());
             }
         }
@@ -321,9 +320,9 @@ impl ComponentMetadata {
             .map(|config| &config.env)
     }
 
-    pub fn agent_type_config(&self, name: &AgentTypeName) -> Option<Vec<TypedAgentConfigEntry>> {
+    pub fn agent_type_config(&self, name: &AgentTypeName) -> Option<ConfigBindings> {
         self.agent_type_provision_config(name)
-            .map(|config| config.config.captures())
+            .map(|config| config.config.clone())
     }
 
     pub fn agent_type_files(&self, name: &AgentTypeName) -> Option<&[InitialAgentFile]> {

@@ -177,10 +177,6 @@ name = "component_introspection_metadata"
 harness = false
 
 [[test]]
-name = "config_conformance"
-harness = false
-
-[[test]]
 name = "poem_telemetry"
 harness = false
 

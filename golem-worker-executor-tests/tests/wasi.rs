@@ -6616,17 +6616,20 @@ async fn wasi_config_component_update(
                 golem_common::model::agent::AgentTypeName("WasiConfig".to_string()),
                 golem_common::model::component::AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        golem_common::model::component::ConfigBindingDto {
                             path: vec!["k1".to_string()],
                             value: serde_json::Value::String("v2".to_string()).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        golem_common::model::component::ConfigBindingDto {
                             path: vec!["k3".to_string()],
                             value: serde_json::Value::String("v4".to_string()).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        golem_common::model::component::ConfigBindingDto {
                             path: vec!["k4".to_string()],
                             value: serde_json::Value::String("v4".to_string()).into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()

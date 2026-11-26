@@ -26090,7 +26090,9 @@ components:
           additionalProperties:
             type: string
         config:
-          $ref: '#/components/schemas/OwnerConfig'
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBinding'
         plugins:
           type: array
           items:
@@ -26120,7 +26122,7 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
+            $ref: '#/components/schemas/ConfigBindingDto'
         pluginInstallations:
           default: []
           type: array
@@ -26149,7 +26151,7 @@ components:
         config:
           type: array
           items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
+            $ref: '#/components/schemas/ConfigBindingDto'
         pluginUpdates:
           default: []
           type: array
@@ -26633,7 +26635,9 @@ components:
           additionalProperties:
             type: string
         config:
-          $ref: '#/components/schemas/OwnerConfig'
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBinding'
         plugins:
           type: array
           items:
@@ -26663,7 +26667,7 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
+            $ref: '#/components/schemas/ConfigBindingDto'
         pluginInstallations:
           default: []
           type: array
@@ -26736,6 +26740,81 @@ components:
           type: boolean
       required:
       - currentRevision
+    ConfigBinding:
+      title: ConfigBinding
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        valueSource:
+          $ref: '#/components/schemas/ConfigBindingSource'
+        origins:
+          description: Audit information, not an input to value resolution, authorization or deployment hashing.
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBindingOrigin'
+      required:
+      - path
+      - valueSource
+    ConfigBindingDto:
+      title: ConfigBindingDto
+      description: Provisioning input; the owner schema determines the stored value's type.
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+        origins:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBindingOrigin'
+      required:
+      - path
+      - value
+    ConfigBindingOrigin:
+      title: ConfigBindingOrigin
+      type: object
+      properties:
+        valuePath:
+          description: Relative to the binding's value; an empty path addresses the whole value.
+          type: array
+          items:
+            type: string
+        location:
+          $ref: '#/components/schemas/ConfigOriginLocation'
+        sourcePath:
+          description: Position in the supplying document or component metadata.
+          type: array
+          items:
+            type: string
+        layer:
+          description: Display label only; consumers must not parse it to recover layer semantics.
+          type: string
+      required:
+      - valuePath
+      - location
+      - sourcePath
+      - layer
+    ConfigBindingSource:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - static
+          value:
+            $ref: '#/components/schemas/TypedSchemaValue'
+        required:
+        - kind
+        - value
     ConfigKeyScope:
       type: object
       oneOf:
@@ -26763,23 +26842,28 @@ components:
         required:
         - kind
         - keys
-    ConfigSourceMetadata:
-      title: ConfigSourceMetadata
+    ConfigOriginLocation:
       type: object
-      properties:
-        source:
-          description: Portable source label, not a local absolute path or initializer contents.
-          type: string
-        path:
-          type: array
-          items:
+      oneOf:
+      - type: object
+        properties:
+          kind:
             type: string
-        layer:
-          type: string
-      required:
-      - source
-      - path
-      - layer
+            enum:
+            - manifest
+          file:
+            type: string
+        required:
+        - kind
+        - file
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - componentMetadata
+        required:
+        - kind
     CorsOptions:
       title: CorsOptions
       type: object
@@ -29184,54 +29268,6 @@ components:
             $ref: '#/components/schemas/SchemaType'
         required:
         - tag
-        - value
-    OwnerConfig:
-      title: OwnerConfig
-      description: |-
-        Revisioned operational config. Source metadata is optional audit information;
-        consumers must not use it to resolve or authorize a value.
-      type: object
-      properties:
-        entries:
-          type: array
-          items:
-            $ref: '#/components/schemas/OwnerConfigEntry'
-        sourceMeta:
-          description: |-
-            JSON Pointer keys address fields and nested members without conflating
-            record member names, dotted declaration paths, or list indices.
-          default: {}
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/ConfigSourceMetadata'
-      required:
-      - entries
-    OwnerConfigEntry:
-      title: OwnerConfigEntry
-      type: object
-      properties:
-        path:
-          type: array
-          items:
-            type: string
-        source:
-          $ref: '#/components/schemas/OwnerConfigSource'
-      required:
-      - path
-      - source
-    OwnerConfigSource:
-      type: object
-      oneOf:
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - captured
-          value:
-            $ref: '#/components/schemas/TypedSchemaValue'
-        required:
-        - kind
         - value
     Page_AccountSummaryReport:
       title: Page_AccountSummaryReport

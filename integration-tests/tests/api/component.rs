@@ -27,9 +27,10 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, ComponentCreation, ComponentName, ComponentUpdate,
-    PluginInstallation, PluginInstallationAction, PluginInstallationUpdate, PluginPriority,
-    PluginUninstallation,
+    ConfigBindingDto, PluginInstallation, PluginInstallationAction, PluginInstallationUpdate,
+    PluginPriority, PluginUninstallation,
 };
+use golem_common::model::component_metadata::ConfigBindingSource;
 use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
@@ -423,10 +424,13 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.captures())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![(
             vec!["var1".to_string()],
@@ -443,13 +447,15 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 AgentTypeName("CounterAgent".to_string()),
                 AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["var1".to_string()],
                             value: serde_json::Value::String("value11".to_string()).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["var2".to_string()],
                             value: serde_json::Value::String("value2".to_string()).into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()
@@ -464,10 +470,13 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.captures())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![
             (
@@ -687,10 +696,13 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.captures())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![(
             vec!["var1".to_string()],
@@ -1900,13 +1912,15 @@ async fn add_new_agent_config_entry_during_update(
             AgentTypeName("ConfigAgent".to_string()),
             AgentTypeProvisionConfigUpdate {
                 config: Some(vec![
-                    AgentConfigEntryDto {
+                    ConfigBindingDto {
                         path: vec!["foo".to_string()],
                         value: json!(2).into(),
+                        origins: None,
                     },
-                    AgentConfigEntryDto {
+                    ConfigBindingDto {
                         path: vec!["bar".to_string()],
                         value: json!("value").into(),
+                        origins: None,
                     },
                 ]),
                 ..Default::default()
@@ -1949,13 +1963,15 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
                 AgentTypeName("ConfigAgent".to_string()),
                 AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["foo".to_string()],
                             value: json!(2).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["bar".to_string()],
                             value: json!(1).into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()

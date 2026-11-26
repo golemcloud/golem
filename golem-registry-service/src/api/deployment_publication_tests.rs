@@ -417,14 +417,15 @@ async fn a_deploy_blocked_by_a_strict_following_grant_names_the_grant() {
 
 #[test]
 #[timeout("120s")]
-async fn component_config_defaults_are_recaptured_only_when_config_is_supplied() {
-    use golem_common::model::agent::{
-        AgentConfigEntryDto, AgentConfigSource, TypedAgentConfigEntry,
-    };
+async fn component_config_defaults_are_resolved_only_when_config_is_supplied() {
+    use golem_common::model::agent::{AgentConfigSource, TypedAgentConfigEntry};
     use golem_common::model::component::{
         ComponentId, ComponentProvisionConfigCreation, ComponentRevision, ComponentUpdate,
+        ConfigBindingDto,
     };
-    use golem_common::model::component_metadata::ComponentProvisionConfig;
+    use golem_common::model::component_metadata::{
+        ComponentProvisionConfig, ConfigBindingOrigin, ConfigOriginLocation,
+    };
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::schema::agent::{
         AgentConfigDeclarationSchema, ComponentConfigSchema, typed_schema_value_with_projected_defs,
@@ -479,22 +480,22 @@ async fn component_config_defaults_are_recaptured_only_when_config_is_supplied()
         schema: SchemaGraph::empty(),
         declarations: vec![declaration("timeout", "10")],
     };
-    let initial_config = vec![TypedAgentConfigEntry {
-        path: vec!["timeout".into()],
-        value: typed_schema_value_with_projected_defs(
-            &schema.schema,
-            SchemaType::u32(),
-            SchemaValue::U32(10),
-        ),
-    }];
+    let initial_config = vec![
+        golem_common::model::component_metadata::ConfigBinding::from(TypedAgentConfigEntry {
+            path: vec!["timeout".into()],
+            value: typed_schema_value_with_projected_defs(
+                &schema.schema,
+                SchemaType::u32(),
+                SchemaValue::U32(10),
+            ),
+        }),
+    ];
     let metadata =
         ComponentMetadata::from_parts(KnownExports::default(), vec![], vec![], BTreeMap::new())
             .with_component_config(
                 schema,
                 ComponentProvisionConfig {
-                    config: golem_common::model::component_metadata::OwnerConfig::from_captures(
-                        initial_config.clone(),
-                    ),
+                    config: initial_config.clone(),
                     ..Default::default()
                 },
             );
@@ -550,15 +551,11 @@ async fn component_config_defaults_are_recaptured_only_when_config_is_supplied()
         .await
         .unwrap();
     assert_eq!(
-        retained
-            .metadata
-            .component_provision_config()
-            .config
-            .captures(),
+        retained.metadata.component_provision_config().config,
         initial_config
     );
 
-    // A type-compatible JSON number must not silently retype a retained u32 capture.
+    // A type-compatible JSON number must not silently retype a retained u32 value.
     let mut incompatible = schema.clone();
     incompatible.declarations[0].value_type = SchemaType::u64();
     assert!(
@@ -575,13 +572,27 @@ async fn component_config_defaults_are_recaptured_only_when_config_is_supplied()
             .is_err()
     );
 
+    let origins = vec![ConfigBindingOrigin {
+        value_path: vec![],
+        location: ConfigOriginLocation::Manifest {
+            file: "config/golem.yaml".into(),
+        },
+        source_path: vec![
+            "components".into(),
+            "app:config".into(),
+            "config".into(),
+            "timeout".into(),
+        ],
+        layer: "component".into(),
+    }];
     let mut revision = retained.revision;
     for (config, expected_timeout) in [
         (vec![], 20),
         (
-            vec![AgentConfigEntryDto {
+            vec![ConfigBindingDto {
                 path: vec!["timeout".into()],
                 value: NormalizedJsonValue::new(json!(15)),
+                origins: Some(origins.clone()),
             }],
             15,
         ),
@@ -604,21 +615,36 @@ async fn component_config_defaults_are_recaptured_only_when_config_is_supplied()
             )
             .await
             .unwrap();
-        let captured = staged
+        let stored = staged
             .metadata
             .component_provision_config()
             .config
-            .captures()
             .iter()
-            .map(|entry| (entry.path.join("."), entry.value.value().clone()))
+            .map(|entry| {
+                let golem_common::model::component_metadata::ConfigBindingSource::Static(value) =
+                    &entry.value_source;
+                (entry.path.join("."), value.value().clone())
+            })
             .collect::<BTreeMap<_, _>>();
         assert_eq!(
-            captured,
+            stored,
             BTreeMap::from([
                 ("timeout".into(), SchemaValue::U32(expected_timeout)),
                 ("attempts".into(), SchemaValue::U32(3)),
             ])
         );
+        let persisted = services
+            .component_service
+            .get_component_revision(component_id, staged.revision, &auth)
+            .await
+            .unwrap();
+        for binding in &persisted.metadata.component_provision_config().config {
+            if binding.path == ["timeout"] && expected_timeout == 15 {
+                assert_eq!(binding.origins, origins);
+            } else {
+                assert!(binding.origins.is_empty());
+            }
+        }
         revision = staged.revision;
     }
     let original = services
@@ -627,11 +653,7 @@ async fn component_config_defaults_are_recaptured_only_when_config_is_supplied()
         .await
         .unwrap();
     assert_eq!(
-        original
-            .metadata
-            .component_provision_config()
-            .config
-            .captures(),
+        original.metadata.component_provision_config().config,
         initial_config
     );
 }

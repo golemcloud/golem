@@ -268,7 +268,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
         serde_json::json!([])
     );
 
-    let invalid = ctx.cli(["component", "manifest-trace", "--resolved"]).await;
+    let invalid = ctx.cli(["component", "manifest-trace", "--build"]).await;
     assert!(!invalid.success());
     assert!(invalid.stderr_contains("Incomplete"));
 
@@ -283,7 +283,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
         .cli([
             "component",
             "manifest-trace",
-            "--resolved",
+            "--build",
             "--show-secrets",
             "-F",
             "json",
@@ -306,19 +306,53 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
         true
     );
 
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    fs::write_str(
+        &manifest,
+        fs::read_to_string(&manifest).unwrap().replace(
+            "    componentWasm: main.wasm",
+            "    componentWasm: main.wasm\n  app:second:\n    componentWasm: main.wasm",
+        ),
+    )
+    .unwrap();
+    let mut incomplete = agents[0].clone();
+    incomplete.type_name = AgentTypeName("Incomplete".into());
+    incomplete.config[0].default_value = None;
+    seed_extracted_metadata(
+        &ctx,
+        "app:second",
+        &wasm,
+        &serde_json::to_string(&vec![incomplete]).unwrap(),
+    );
+    seed_extraction_marker(&ctx, "app:second");
+    let partial = ctx
+        .cli([
+            "component",
+            "manifest-trace",
+            "--build",
+            "--show-secrets",
+            "-F",
+            "json",
+        ])
+        .await;
+    assert!(!partial.success());
+    assert!(partial.stderr_contains("Incomplete"));
+    let partial_documents: Vec<JsonValue> = partial.stdout_json();
+    assert_eq!(partial_documents, documents);
+
     std::fs::remove_file(wasm).unwrap();
     let inputs = ctx.cli(["component", "manifest-trace"]).await;
     assert!(inputs.success_or_dump());
-    let missing = ctx.cli(["component", "manifest-trace", "--resolved"]).await;
+    let missing = ctx.cli(["component", "manifest-trace", "--build"]).await;
     assert!(!missing.success());
-    assert!(missing.stderr_contains("require built component Wasm"));
+    assert!(missing.stderr_contains("main.wasm"));
 }
 
 #[test]
 #[test_r::tag(deploy)]
 #[test_r::tag(deploy_runtime)]
 #[timeout("10 minutes")]
-async fn static_config_catalog_changes_capture_on_deploy_and_agent_update(_tracing: &Tracing) {
+async fn static_config_catalog_changes_apply_on_deploy_and_agent_update(_tracing: &Tracing) {
     use golem_cli::model::invoke_result_view::InvokeResultView;
     use golem_common::schema::FromSchema;
 
@@ -342,11 +376,11 @@ async fn static_config_catalog_changes_capture_on_deploy_and_agent_update(_traci
     let mut ctx = TestContext::new();
     ctx.add_env_var("CARGO_BUILD_JOBS", "2");
     assert!(
-        ctx.cli(["new", "static-capture", "--template", "rust", "--yes"])
+        ctx.cli(["new", "static-config", "--template", "rust", "--yes"])
             .await
             .success_or_dump()
     );
-    ctx.cd("static-capture");
+    ctx.cd("static-config");
     let lib = walkdir::WalkDir::new(ctx.cwd_path())
         .into_iter()
         .filter_map(Result::ok)
@@ -404,8 +438,9 @@ async fn static_config_catalog_changes_capture_on_deploy_and_agent_update(_traci
     assert!(
         ctx.cli([
             "agent",
-            "new",
+            "create",
             overridden,
+            "--keyed",
             "--config",
             r#"label="creation""#
         ])
@@ -419,21 +454,29 @@ async fn static_config_catalog_changes_capture_on_deploy_and_agent_update(_traci
         manifest_with_catalog.replace("label: first", "label: second"),
     )
     .unwrap();
-    let plan = ctx.cli(["deploy", "--plan", "--format", "json"]).await;
+    let plan = ctx
+        .cli(["deploy", "--plan", "--show-secrets", "--format", "json"])
+        .await;
     assert!(plan.success_or_dump());
     let documents: Vec<JsonValue> = plan.stdout_json();
-    let captures = documents
+    let deployment_diff = &documents
         .iter()
         .find(|document| document["$type"] == "deploy.plan")
-        .unwrap()["staticConfig"]
-        .as_array()
+        .unwrap()["deploymentDiff"];
+    let components = deployment_diff["components"].as_object().unwrap();
+    assert_eq!(components.len(), 1);
+    let agent_changes = components.values().next().unwrap()["agentTypeProvisionConfigChanges"]
+        .as_object()
         .unwrap();
+    assert_eq!(agent_changes.len(), 1);
+    assert_eq!(
+        agent_changes["StaticConfigAgent"]["configChanges"],
+        serde_json::json!({"label": "second"})
+    );
     assert!(
-        captures
+        documents
             .iter()
-            .any(|field| field["agentType"] == "StaticConfigAgent"
-                && field["path"] == serde_json::json!(["label"])
-                && field["fill"] == "second")
+            .all(|document| document.get("staticConfig").is_none())
     );
     assert!(ctx.cli(["deploy", "--yes"]).await.success_or_dump());
     assert_eq!(

@@ -50,6 +50,32 @@ pub fn parse_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
     Ok(AgentSecretPath(parse_agent_config_path(input)?))
 }
 
+fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
+    let chars = input.char_indices();
+    let mut in_quotes = false;
+    let mut escape = false;
+
+    for (i, c) in chars {
+        if escape {
+            escape = false;
+            continue;
+        }
+
+        match c {
+            '\\' => escape = true,
+            '"' => in_quotes = !in_quotes,
+            '=' if !in_quotes => {
+                let key = &input[..i];
+                let value = &input[i + 1..];
+                return Ok((key, value));
+            }
+            _ => {}
+        }
+    }
+
+    Err(anyhow!("expected unescaped '=' separating key and value"))
+}
+
 pub(crate) fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
     let mut normalized = String::new();
     let mut chars = input.chars();
@@ -82,32 +108,6 @@ pub(crate) fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>
         .collect::<Vec<_>>()
         .join(".");
     split_config_path(&normalized)
-}
-
-fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
-    let chars = input.char_indices();
-    let mut in_quotes = false;
-    let mut escape = false;
-
-    for (i, c) in chars {
-        if escape {
-            escape = false;
-            continue;
-        }
-
-        match c {
-            '\\' => escape = true,
-            '"' => in_quotes = !in_quotes,
-            '=' if !in_quotes => {
-                let key = &input[..i];
-                let value = &input[i + 1..];
-                return Ok((key, value));
-            }
-            _ => {}
-        }
-    }
-
-    Err(anyhow!("expected unescaped '=' separating key and value"))
 }
 
 pub fn parse_cursor(cursor: &str) -> anyhow::Result<AgentListCursor> {

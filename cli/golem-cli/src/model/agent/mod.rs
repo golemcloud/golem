@@ -314,12 +314,21 @@ impl AgentMetadataView {
     pub fn with_defaults(mut self, defaults: Option<AgentTypeProvisionConfig>) -> Self {
         if let Some(defaults) = defaults {
             self.default_env = defaults.env.into_iter().collect();
-            self.default_config = defaults
-                .config
-                .captures()
-                .into_iter()
-                .map(Into::into)
-                .collect();
+            self.default_config =
+                defaults
+                    .config
+                    .into_iter()
+                    .map(|binding| {
+                        let golem_common::model::component_metadata::ConfigBindingSource::Static(
+                            value,
+                        ) = binding.value_source;
+                        golem_common::model::agent::TypedAgentConfigEntry {
+                            path: binding.path,
+                            value,
+                        }
+                        .into()
+                    })
+                    .collect();
         }
         self
     }

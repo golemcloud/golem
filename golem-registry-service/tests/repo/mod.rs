@@ -74,7 +74,6 @@ pub mod notifier_reconnect;
 pub mod plan_storage;
 pub mod postgres;
 pub mod resource_usage_reload;
-pub mod shared_config;
 pub mod sqlite;
 
 inherit_test_dep!(Tracing);

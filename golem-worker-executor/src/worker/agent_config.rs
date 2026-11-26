@@ -15,6 +15,7 @@
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{AgentConfigSource, ParsedAgentKey};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+use golem_common::model::component_metadata::{ConfigBindingSource, ConfigBindings};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, typed_schema_value_with_projected_defs,
 };
@@ -238,8 +239,8 @@ pub fn parse_worker_creation_agent_config(
     Ok(initial_agent_config)
 }
 
-/// Overlays worker-creation entries on the selected revision's provisioned captures.
-/// Code defaults have already been captured during staging, not during reconstruction.
+/// Overlays worker-creation entries on the selected revision's static bindings.
+/// Code defaults have already been resolved during staging, not during reconstruction.
 ///
 /// The result is the schema-native [`TypedSchemaValue`] carried by
 /// [`TypedAgentConfigEntry`] keyed by config path; it is what the executor's
@@ -247,12 +248,23 @@ pub fn parse_worker_creation_agent_config(
 /// parsing) consumes.
 pub fn effective_agent_config(
     config: Vec<TypedAgentConfigEntry>,
-    default_agent_config: Vec<TypedAgentConfigEntry>,
+    default_agent_config: ConfigBindings,
     declarations: &[AgentConfigDeclarationSchema],
 ) -> HashMap<Vec<String>, TypedSchemaValue> {
     let mut result = HashMap::new();
 
-    for entry in default_agent_config.into_iter().chain(config) {
+    for binding in default_agent_config {
+        if declarations.iter().any(|declaration| {
+            declaration.source == AgentConfigSource::Local && declaration.path == binding.path
+        }) {
+            match binding.value_source {
+                ConfigBindingSource::Static(value) => {
+                    result.insert(binding.path, value);
+                }
+            }
+        }
+    }
+    for entry in config {
         if declarations.iter().any(|declaration| {
             declaration.source == AgentConfigSource::Local && declaration.path == entry.path
         }) {
@@ -287,7 +299,7 @@ pub fn validate_agent_config(
                     config_value.root_type(),
                 ) {
                     return Err(WorkerExecutorError::invalid_request(format!(
-                        "Incompatible captured schema for config {}",
+                        "Incompatible static schema for config {}",
                         entry.path.join(".")
                     )));
                 }
@@ -342,7 +354,7 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn provisioned_captures_survive_metadata_default_changes_and_creation_overrides() {
+    fn provisioned_values_survive_metadata_default_changes_and_creation_overrides() {
         use golem_common::schema::{SchemaTypeDef, TypeId};
 
         let id = TypeId::new("Label");
@@ -387,8 +399,8 @@ mod tests {
             ),
         };
         let creation = vec![entry("creation", "creation-wins")];
-        let provisioned = vec![
-            entry("code", "captured-code-default"),
+        let provisioned: ConfigBindings = vec![
+            entry("code", "stored-code-default"),
             entry("deployment", "deployment-wins"),
             entry("creation", "deployment-loses"),
             TypedAgentConfigEntry {
@@ -399,21 +411,25 @@ mod tests {
                     SchemaValue::Option { inner: None },
                 ),
             },
-        ];
-        let captured = effective_agent_config(creation.clone(), provisioned.clone(), &declarations);
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+        let effective =
+            effective_agent_config(creation.clone(), provisioned.clone(), &declarations);
         for (name, label) in [
-            ("code", "captured-code-default"),
+            ("code", "stored-code-default"),
             ("deployment", "deployment-wins"),
             ("creation", "creation-wins"),
         ] {
             let expected = entry(name, label);
-            assert_eq!(captured[&expected.path], expected.value);
+            assert_eq!(effective[&expected.path], expected.value);
         }
         assert_eq!(
-            captured[&vec!["settings".into(), "cleared".into()]].value(),
+            effective[&vec!["settings".into(), "cleared".into()]].value(),
             &SchemaValue::Option { inner: None },
         );
-        assert!(!captured.contains_key(&vec!["settings".into(), "omitted".into()]));
+        assert!(!effective.contains_key(&vec!["settings".into(), "omitted".into()]));
         assert!(effective_agent_config(vec![], vec![], &declarations).is_empty());
         let mut changed_defaults = declarations.clone();
         for declaration in &mut changed_defaults {
@@ -423,7 +439,7 @@ mod tests {
         }
         let rebuilt =
             effective_agent_config(creation.clone(), provisioned.clone(), &changed_defaults);
-        assert_eq!(rebuilt, captured);
+        assert_eq!(rebuilt, effective);
 
         let mut updated = declarations.clone();
         updated.retain(|declaration| declaration.path.last().unwrap() != "creation");
@@ -449,7 +465,7 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: declarations,
         };
-        validate_agent_config(&captured, &agent).unwrap();
+        validate_agent_config(&effective, &agent).unwrap();
         agent
             .config
             .iter_mut()
@@ -457,7 +473,7 @@ mod tests {
             .unwrap()
             .value_type = SchemaType::option(SchemaType::u32());
         assert!(
-            validate_agent_config(&captured, &agent).is_err(),
+            validate_agent_config(&effective, &agent).is_err(),
             "an absent optional payload must not hide an incompatible retype"
         );
     }

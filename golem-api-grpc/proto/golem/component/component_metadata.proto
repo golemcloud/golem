@@ -7,7 +7,7 @@ import "golem/component/agent_files.proto";
 import "golem/component/plugin.proto";
 import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
-import "golem/component/owner_config.proto";
+import "golem/component/config_binding.proto";
 import "golem/common/empty.proto";
 import "golem/schema/agent.proto";
 import "golem/tool/tool.proto";
@@ -38,7 +38,7 @@ message ComponentMetadata {
 
 message ComponentProvisionConfig {
   map<string, string> env = 1;
-  OwnerConfig config = 2;
+  repeated ConfigBinding config = 2;
   repeated PluginInstallation plugins = 3;
   repeated InitialAgentFile files = 4;
   bytes initial_permissions = 5;

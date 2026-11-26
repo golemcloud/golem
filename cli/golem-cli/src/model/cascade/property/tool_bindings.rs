@@ -15,9 +15,9 @@
 use crate::model::app_raw::{
     ManifestConfigKeyScope, ManifestSecretKeyScope, ToolBinding, ToolMiddlewareInstallation,
 };
+use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::Property;
 use crate::model::cascade::property::map::MapMergeMode;
-use golem_common::cascade::layer::Layer;
-use golem_common::cascade::property::Property;
 use golem_common::model::tool::ToolFilesystemAccess;
 use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
 use indexmap::IndexMap;
@@ -263,9 +263,9 @@ impl<L: Layer> Property<L> for ToolBindingsProperty<L> {
 mod tests {
     use super::ToolBindingsProperty;
     use crate::model::app_raw::ToolBinding;
+    use crate::model::cascade::property::Property;
     use crate::model::cascade::property::map::MapMergeMode;
     use crate::model::cascade::property::test_support::TestLayer;
-    use golem_common::cascade::property::Property;
     use golem_common::model::tool::ToolFilesystemAccess;
     use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
     use indexmap::IndexMap;

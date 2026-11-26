@@ -1652,12 +1652,8 @@ pub mod component {
         ManifestTrace {
             #[command(flatten)]
             component_name: OptionalComponentNames,
-            /// Also resolve static config using the local built component's schemas and code defaults.
-            /// Requires built component Wasm; does not inspect deployed state.
-            #[arg(long)]
-            resolved: bool,
-            /// Build the selected components first, so that the trace includes the agent types of
-            /// every component. Up-to-date components are not rebuilt.
+            /// Build the selected components and resolve static config using their schemas and
+            /// code defaults. Up-to-date components are not rebuilt. Does not inspect deployed state.
             #[clap(long, default_value = "false")]
             build: bool,
         },

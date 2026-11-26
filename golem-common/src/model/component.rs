@@ -33,16 +33,16 @@ impl ComponentDto {
                             env: config.env.clone(),
                             config: config
                                 .config
-                                .captures()
                                 .iter()
                                 .map(|e| {
+                                    let crate::model::component_metadata::ConfigBindingSource::Static(value) = &e.value_source;
                                     Ok((
                                         e.path.join("."),
                                         NormalizedJsonValue::new(
                                             golem_schema::schema::render::to_json_value(
-                                                e.value.graph(),
-                                                e.value.root_type(),
-                                                e.value.value(),
+                                                value.graph(),
+                                                value.root_type(),
+                                                value.value(),
                                             )
                                             .map_err(|reason| {
                                                 diff::DiffError::TypedConfigJsonConversion {
@@ -188,16 +188,17 @@ impl ComponentDto {
                 config: metadata
                     .component_provision_config()
                     .config
-                    .captures()
                     .iter()
                     .map(|entry| {
+                        let crate::model::component_metadata::ConfigBindingSource::Static(value) =
+                            &entry.value_source;
                         (
                             entry.path.join("."),
                             crate::model::json::NormalizedJsonValue::new(
                                 golem_schema::schema::render::to_json_value(
-                                    entry.value.graph(),
-                                    entry.value.root_type(),
-                                    entry.value.value(),
+                                    value.graph(),
+                                    value.root_type(),
+                                    value.value(),
                                 )
                                 .unwrap_or_default(),
                             ),
@@ -368,11 +369,29 @@ mod tests {
             wasm_hash,
             package_metadata: None,
         };
+        dto.metadata.component_provision_config.config =
+            vec![crate::model::component_metadata::ConfigBinding {
+                path: vec!["enabled".into()],
+                value_source: crate::model::component_metadata::ConfigBindingSource::Static(
+                    crate::schema::TypedSchemaValue::new(
+                        SchemaGraph::anonymous(crate::schema::SchemaType::bool()),
+                        crate::schema::SchemaValue::Bool(true),
+                    ),
+                ),
+                origins: vec![],
+            }];
         let expected = diff::Component {
             wasm_hash,
             package_metadata: None,
             agent_types: BTreeMap::new(),
-            component_config: diff::ComponentConfig::default().into(),
+            component_config: diff::ComponentConfig {
+                config: BTreeMap::from([(
+                    "enabled".into(),
+                    NormalizedJsonValue::new(serde_json::json!(true)),
+                )]),
+                ..Default::default()
+            }
+            .into(),
             agent_type_provision_configs: BTreeMap::new(),
             tool_deployment_configs: BTreeMap::from([(
                 tool_name.as_str().to_string(),
@@ -396,19 +415,31 @@ mod tests {
             expected.hash().unwrap()
         );
 
-        dto.metadata
-            .component_provision_config
-            .config
-            .source_meta
-            .insert(
-                "/limits/maximum".into(),
-                crate::model::component_metadata::ConfigSourceMetadata {
-                    source: "golem.yaml".into(),
-                    path: vec!["config".into(), "limits".into(), "maximum".into()],
+        // Origins do not contribute to deployment identity.
+        for binding in &mut dto.metadata.component_provision_config.config {
+            binding
+                .origins
+                .push(crate::model::component_metadata::ConfigBindingOrigin {
+                    value_path: vec![],
+                    location: crate::model::component_metadata::ConfigOriginLocation::Manifest {
+                        file: "golem.yaml".into(),
+                    },
+                    source_path: vec!["config".into()],
                     layer: "prod".into(),
-                },
-            );
+                });
+        }
         assert_eq!(
+            dto.to_diffable().unwrap().hash().unwrap(),
+            expected.hash().unwrap()
+        );
+        dto.metadata.component_provision_config.config[0].value_source =
+            crate::model::component_metadata::ConfigBindingSource::Static(
+                crate::schema::TypedSchemaValue::new(
+                    SchemaGraph::anonymous(crate::schema::SchemaType::bool()),
+                    crate::schema::SchemaValue::Bool(false),
+                ),
+            );
+        assert_ne!(
             dto.to_diffable().unwrap().hash().unwrap(),
             expected.hash().unwrap()
         );

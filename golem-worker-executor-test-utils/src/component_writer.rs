@@ -14,7 +14,7 @@
 
 use anyhow::{Context, anyhow};
 use golem_common::base_model::component_metadata::{
-    AgentTypeProvisionConfig, ComponentProvisionConfig, KnownExports, OwnerConfig,
+    AgentTypeProvisionConfig, ComponentProvisionConfig, ConfigBinding, KnownExports,
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountEmail;
@@ -652,15 +652,15 @@ fn with_default_agent_provision_configs(
                     layer: "code".into(),
                 },
             )?;
-            let mut captures = Vec::new();
-            schema.capture_missing_defaults(&mut captures);
+            let mut config = Vec::new();
+            schema.apply_missing_defaults(&mut config);
             entry.insert(AgentTypeProvisionConfig {
                 initial_permissions: default_test_agent_initial_permissions_for_account(
                     AccountEmail::new("test@golem"),
                 )
                 .to_polymorphic_card(),
                 env: BTreeMap::new(),
-                config: OwnerConfig::from_captures(captures),
+                config: config.into_iter().map(ConfigBinding::from).collect(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             });

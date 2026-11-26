@@ -515,7 +515,7 @@
       },
       "catalog": {},
       "layers": [],
-      "expected": { "kind": "captured-absence" }
+      "expected": { "kind": "shared-absence" }
     },
     {
       "id": "source/later-catalog-does-not-attach",
@@ -526,7 +526,7 @@
       },
       "catalog": { "live": { "$kind": "shared", "$init": "later" } },
       "layers": [],
-      "expected": { "kind": "captured-absence" }
+      "expected": { "kind": "shared-absence" }
     },
     {
       "id": "source/bound-null-is-live",
