@@ -162,11 +162,9 @@ pub struct DurationResult {
     pub p95: Duration,
     #[serde_as(as = "DurationMilliSecondsWithFrac")]
     pub p99: Duration,
-    #[serde_as(as = "Vec<DurationMilliSecondsWithFrac>")]
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(skip)]
     pub all: Vec<Duration>,
-    #[serde_as(as = "Vec<Vec<DurationMilliSecondsWithFrac>>")]
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(skip)]
     pub per_iteration: Vec<Vec<Duration>>,
     #[serde(skip)]
     locked: bool,
@@ -256,9 +254,9 @@ pub struct CountResult {
     pub avg: u64,
     pub min: u64,
     pub max: u64,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(skip)]
     pub all: Vec<u64>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(skip)]
     pub per_iteration: Vec<Vec<u64>>,
     #[serde(skip)]
     locked: bool,
@@ -739,6 +737,31 @@ pub struct BenchmarkSource {
     pub source_ref: Option<String>,
 }
 
+impl BenchmarkSource {
+    pub fn validate_publication(&self) -> anyhow::Result<()> {
+        use anyhow::ensure;
+        ensure!(
+            self.repository
+                .as_ref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            "publication requires a source repository"
+        );
+        ensure!(
+            self.commit_sha.as_ref().is_some_and(
+                |value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            ),
+            "publication requires a full source commit SHA"
+        );
+        ensure!(
+            self.source_ref
+                .as_ref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            "publication requires a non-empty source ref"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkArtifact {
     pub path: String,
@@ -837,7 +860,7 @@ pub struct BenchmarkSuiteResult {
 }
 
 /// Bump when the measurement lifecycle or common workload contract changes.
-pub const HARNESS_VERSION: u32 = 1;
+pub const HARNESS_VERSION: u32 = 2;
 
 fn deserialize_schema_version<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
     let version = u32::deserialize(deserializer)?;
@@ -857,26 +880,32 @@ pub struct MeasurementEnvironment {
 
 impl MeasurementEnvironment {
     /// Explicit provenance for a remote deployment; never substitute the load generator's CPU.
-    pub fn remote_from_env() -> Self {
+    pub fn remote_from_env() -> anyhow::Result<Self> {
+        use anyhow::Context;
         let raw = std::env::var("GOLEM_BENCH_MEASUREMENT_ENVIRONMENT")
-            .expect("remote benchmarks require GOLEM_BENCH_MEASUREMENT_ENVIRONMENT JSON with runner_id, hardware_fingerprint, storage_profile and sockets_enabled");
-        let environment: Self =
-            serde_json::from_str(&raw).expect("invalid GOLEM_BENCH_MEASUREMENT_ENVIRONMENT");
-        assert!(
-            !environment.runner_id.is_empty()
-                && !environment.hardware_fingerprint.is_empty()
-                && !environment.storage_profile.is_empty(),
-            "remote measurement identity fields must not be empty"
-        );
-        environment
+            .context("remote benchmarks require GOLEM_BENCH_MEASUREMENT_ENVIRONMENT JSON with runner_id, hardware_fingerprint, storage_profile and sockets_enabled from the measured deployment")?;
+        Self::parse_remote(&raw)
     }
 
-    pub fn for_mode(mode: &crate::config::benchmark::TestMode) -> Self {
+    pub fn parse_remote(raw: &str) -> anyhow::Result<Self> {
+        use anyhow::{Context, ensure};
+        let environment: Self = serde_json::from_str(raw)
+            .context("invalid GOLEM_BENCH_MEASUREMENT_ENVIRONMENT JSON")?;
+        ensure!(
+            !environment.runner_id.trim().is_empty()
+                && !environment.hardware_fingerprint.trim().is_empty()
+                && !environment.storage_profile.trim().is_empty(),
+            "remote measurement identity fields must not be empty"
+        );
+        Ok(environment)
+    }
+
+    pub fn for_mode(mode: &crate::config::benchmark::TestMode) -> anyhow::Result<Self> {
         if !matches!(mode, crate::config::benchmark::TestMode::Spawned { .. }) {
             return Self::remote_from_env();
         }
         let sys = System::new_all();
-        Self {
+        Ok(Self {
             runner_id: format!("local-{}", std::env::consts::ARCH),
             hardware_fingerprint: Self::hardware_fingerprint(
                 std::env::consts::ARCH,
@@ -889,7 +918,7 @@ impl MeasurementEnvironment {
             storage_profile: "postgres-kv-indexed-scheduler+filesystem-blob+sqlite-shard"
                 .to_string(),
             sockets_enabled: benchmark_sockets_enabled(),
-        }
+        })
     }
 
     pub fn series_key(&self, harness_version: u32, entry_version: u32) -> String {
@@ -1029,13 +1058,7 @@ impl BenchmarkSuiteResult {
     }
 
     pub fn add(&mut self, result: BenchmarkResult) {
-        let mut result = result;
-        if let Some(runner) = &self.runner {
-            result.measurement_environment.runner_id = runner.id.clone();
-            result.series_key = result
-                .measurement_environment
-                .series_key(self.harness_version, result.entry_version);
-        } else {
+        if self.runner.is_none() {
             self.runner = Some(BenchmarkRunner {
                 id: result.measurement_environment.runner_id.clone(),
                 label: None,
@@ -1051,6 +1074,7 @@ impl BenchmarkSuiteResult {
         partials: Vec<Self>,
     ) -> anyhow::Result<Self> {
         use anyhow::{bail, ensure};
+        suite.validate_entry_names()?;
         let mut expected = BTreeMap::new();
         let mut expected_partitions = BTreeSet::new();
         for item in &suite.benchmarks {
@@ -1078,14 +1102,11 @@ impl BenchmarkSuiteResult {
         let first = partials
             .first()
             .ok_or_else(|| anyhow::anyhow!("no partial results"))?;
-        ensure!(
-            first
-                .source
-                .as_ref()
-                .and_then(|s| s.commit_sha.as_deref())
-                .is_some_and(|s| !s.is_empty()),
-            "partial results require a source commit"
-        );
+        first
+            .source
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("partial results require source provenance"))?
+            .validate_publication()?;
         ensure!(
             first.run_id.as_ref().is_some_and(|id| !id.is_empty()),
             "partial results require a common run ID"
@@ -1268,7 +1289,12 @@ impl BenchmarkSuiteResult {
         let template = &first.results[0];
         let mut merged = first.clone();
         let mut result = BenchmarkRunResult::new(template.results[0].run_config.clone());
+        let mut executions = BTreeSet::new();
         for input in &inputs {
+            ensure!(
+                executions.insert((&input.run_id, input.timestamp)),
+                "duplicate execution identity in iteration inputs"
+            );
             ensure!(
                 input.schema_version == 2
                     && input.harness_version == first.harness_version
@@ -1286,6 +1312,7 @@ impl BenchmarkSuiteResult {
             ensure!(
                 entry.name == template.name
                     && entry.entry_version == template.entry_version
+                    && entry.ceiling == template.ceiling
                     && entry.series_key == template.series_key
                     && entry.measurement_environment == template.measurement_environment
                     && entry.runs == template.runs
@@ -1305,31 +1332,31 @@ impl BenchmarkSuiteResult {
                 "iteration configuration or evidence mismatch"
             );
             for item in &run.iteration_results {
-                let mut item = item.clone();
-                item.index = result.iteration_results.len();
-                result.iteration_results.push(item);
-            }
-            for (key, values) in &run.duration_results {
-                ensure!(
-                    !values.all.is_empty() && !values.per_iteration.is_empty(),
-                    "retain duration details before merging"
-                );
-                for samples in &values.per_iteration {
+                for (key, values) in &item.duration_samples {
+                    let samples = values
+                        .iter()
+                        .map(|millis| {
+                            ensure!(
+                                millis.is_finite() && *millis >= 0.0,
+                                "invalid duration sample"
+                            );
+                            // The maximum valid duration rounds up at the f64 millisecond boundary.
+                            if *millis == Duration::MAX.as_secs_f64() * 1000.0 {
+                                return Ok(Duration::MAX);
+                            }
+                            Duration::try_from_secs_f64(*millis / 1000.0)
+                                .map_err(anyhow::Error::from)
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
                     if !samples.is_empty() {
                         result
                             .duration_results
                             .entry(key.clone())
                             .or_default()
-                            .add_iteration(samples);
+                            .add_iteration(&samples);
                     }
                 }
-            }
-            for (key, values) in &run.count_results {
-                ensure!(
-                    !values.all.is_empty() && !values.per_iteration.is_empty(),
-                    "retain count details before merging"
-                );
-                for samples in &values.per_iteration {
+                for (key, samples) in &item.count_samples {
                     if !samples.is_empty() {
                         result
                             .count_results
@@ -1338,6 +1365,9 @@ impl BenchmarkSuiteResult {
                             .add_iteration(samples);
                     }
                 }
+                let mut item = item.clone();
+                item.index = result.iteration_results.len();
+                result.iteration_results.push(item);
             }
             for (key, failure) in &run.failures {
                 ensure!(
@@ -1841,7 +1871,7 @@ mod tests {
         recorder.count(&ResultKey::secondary("diagnostic-zero"), 0);
         recorder.duration(&ResultKey::primary("first-item"), Duration::from_millis(3));
         recorder.duration(&ResultKey::primary("first-item"), Duration::from_millis(17));
-        result.add(recorder);
+        result.add_iteration(0, recorder);
         let mut compact = result.clone();
         compact.drop_zero_counts(false);
         assert!(
@@ -1855,16 +1885,27 @@ mod tests {
         let parsed: BenchmarkRunResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.count_results.len(), 2);
         assert_eq!(
-            parsed.count_results[&ResultKey::primary("seeded-sessions")].all,
+            parsed.iteration_results[0].count_samples[&ResultKey::primary("seeded-sessions")],
             vec![0]
         );
         assert_eq!(
-            parsed.count_results[&ResultKey::primary("items")].all,
+            parsed.iteration_results[0].count_samples[&ResultKey::primary("items")],
             vec![7]
         );
         assert_eq!(
-            parsed.duration_results[&ResultKey::primary("first-item")].all,
-            vec![Duration::from_millis(3), Duration::from_millis(17)]
+            parsed.iteration_results[0].duration_samples[&ResultKey::primary("first-item")],
+            vec![3.0, 17.0]
+        );
+        let wire: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for field in ["duration_results", "count_results"] {
+            for aggregate in wire[field].as_object().unwrap().values() {
+                assert!(aggregate.get("all").is_none());
+                assert!(aggregate.get("perIteration").is_none());
+            }
+        }
+        assert_eq!(
+            parsed.duration_results[&ResultKey::primary("first-item")].avg,
+            Duration::from_millis(10)
         );
     }
 
@@ -2030,6 +2071,54 @@ mod tests {
     }
 
     #[test]
+    fn remote_identity_requires_complete_explicit_provenance() {
+        let environment = measurement_environment();
+        let value = serde_json::to_value(&environment).unwrap();
+        assert_eq!(
+            MeasurementEnvironment::parse_remote(&value.to_string()).unwrap(),
+            environment
+        );
+        for field in [
+            "runner_id",
+            "hardware_fingerprint",
+            "storage_profile",
+            "sockets_enabled",
+        ] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(MeasurementEnvironment::parse_remote(&missing.to_string()).is_err());
+            if field != "sockets_enabled" {
+                missing[field] = serde_json::json!(" ");
+                assert!(MeasurementEnvironment::parse_remote(&missing.to_string()).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn suite_add_does_not_rewrite_entry_identity() {
+        let mut suite = suite_result();
+        suite.runner = Some(BenchmarkRunner {
+            id: "different-runner".into(),
+            label: None,
+        });
+        let environment = measurement_environment();
+        let entry = BenchmarkResult {
+            name: "case".into(),
+            description: "test".into(),
+            entry_version: 3,
+            iterations: 1,
+            series_key: environment.series_key(HARNESS_VERSION, 3),
+            measurement_environment: environment,
+            ceiling: None,
+            runs: vec![],
+            results: vec![],
+            run_id: None,
+        };
+        suite.add(entry.clone());
+        assert_eq!(suite.results[0], entry);
+    }
+
+    #[test]
     fn hardware_memory_classes_preserve_series_across_runner_memory_variation() {
         const GIB: u64 = 1024 * 1024 * 1024;
         let cpus = vec![("vendor".into(), "brand".into())];
@@ -2077,6 +2166,10 @@ mod tests {
     #[test]
     fn series_identity_uses_only_the_six_contract_inputs() {
         let environment = measurement_environment();
+        assert_eq!(
+            environment.series_key(HARNESS_VERSION, 3),
+            "9905faa1e871f7cab96a278f371b15b238f7e77b80c04664fb35c371db3e4a24"
+        );
         let key = environment.series_key(1, 3);
         assert_eq!(key, environment.series_key(1, 3));
         assert_ne!(key, environment.series_key(2, 3));
@@ -2165,8 +2258,8 @@ mod tests {
         template.suite_fingerprint = Some(suite.fingerprint());
         template.source = Some(BenchmarkSource {
             repository: Some("golemcloud/golem".into()),
-            commit_sha: Some("commit-a".into()),
-            source_ref: None,
+            commit_sha: Some("a".repeat(40)),
+            source_ref: Some("refs/heads/main".into()),
         });
         template.artifacts = Some(BenchmarkArtifacts {
             runner: BenchmarkArtifact {
@@ -2278,9 +2371,23 @@ mod tests {
         merged.save_to_json(&output).unwrap();
         let saved: BenchmarkSuiteResultCollection =
             serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
-        assert_eq!(saved.runs, vec![merged]);
+        assert_eq!(
+            serde_json::to_value(saved.runs).unwrap(),
+            serde_json::to_value(vec![merged]).unwrap()
+        );
 
-        for mutation in 0..16 {
+        let mut duplicate_suite = suite.clone();
+        let mut duplicate = suite.benchmarks[0].clone();
+        duplicate.size = vec![29];
+        duplicate_suite.benchmarks.push(duplicate);
+        assert!(
+            BenchmarkSuiteResult::merge_partials(&duplicate_suite, mode, partials.clone()).is_err()
+        );
+        duplicate_suite.benchmarks.pop();
+        duplicate_suite.benchmarks[1].name = "startup-no-cache".into();
+        assert!(duplicate_suite.validate_entry_names().is_err());
+
+        for mutation in 0..18 {
             let mut wrong = partials.clone();
             match mutation {
                 0 => wrong[1].source.as_mut().unwrap().commit_sha = Some("commit-b".into()),
@@ -2330,7 +2437,17 @@ mod tests {
                         .fixtures
                         .remove("golem_it_agent_rpc_rust_release");
                 }
-                _ => wrong[1].artifacts = None,
+                15 => wrong[1].artifacts = None,
+                16 => {
+                    for partial in &mut wrong {
+                        partial.source.as_mut().unwrap().commit_sha = Some("short".into());
+                    }
+                }
+                _ => {
+                    for partial in &mut wrong {
+                        partial.source.as_mut().unwrap().source_ref = None;
+                    }
+                }
             }
             assert!(
                 BenchmarkSuiteResult::merge_partials(&suite, mode, wrong).is_err(),
