@@ -63,7 +63,6 @@ rmcp = { workspace = true, features = ["client", "transport-streamable-http-clie
 sha2 = { workspace = true }
 sqlx = { workspace = true }
 test-r = { workspace = true }
-tokio = { workspace = true, features = ["test-util"] }
 url = { workspace = true }
 assert2 = { workspace = true }
 convert_case = { workspace = true }
@@ -105,7 +104,7 @@ harness = false
 
 [[test]]
 name = "sharding"
-path = "tests/sharding.rs"
+path = "tests/sharding/mod.rs"
 harness = false
 
 [[test]]

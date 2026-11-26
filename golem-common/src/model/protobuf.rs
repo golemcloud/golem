@@ -21,8 +21,8 @@ use crate::model::{
     AgentFingerprint, AgentIdFilter, AgentKeyFilter, AgentModeFilter, AgentNotFilter,
     AgentRevisionFilter, AgentStatus, AgentStatusFilter, FilterComparator, IdempotencyKey,
     IdempotencyScope, InvocationId, InvocationRequestKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, ShardLeaseRevision,
-    StringFilterComparator, Timestamp,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator,
+    Timestamp,
 };
 use applying::Apply;
 use golem_api_grpc::proto::golem;
@@ -32,7 +32,6 @@ use golem_api_grpc::proto::golem::shardmanager::{
 };
 use golem_api_grpc::proto::golem::worker::Cursor;
 use jiff::{SignedDuration, Timestamp as JiffTimestamp};
-use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroUsize;
 use std::ops::Add;
@@ -162,57 +161,6 @@ pub fn executor_count_from_proto(count: u32, field: &str) -> Result<NonZeroUsize
     let count =
         usize::try_from(count).map_err(|_| format!("{field} {count} does not fit a usize"))?;
     NonZeroUsize::new(count).ok_or_else(|| format!("{field} must not be 0"))
-}
-
-#[derive(Debug)]
-pub struct DecodedShardAssignment {
-    pub number_of_shards: usize,
-    pub shard_epochs: HashMap<ShardId, ShardEpoch>,
-    pub revision: ShardLeaseRevision,
-    pub executor_count: NonZeroUsize,
-}
-
-#[derive(Debug)]
-pub struct DecodedShardRevocation {
-    pub shard_ids: HashSet<ShardId>,
-    pub revision: ShardLeaseRevision,
-    pub executor_count: NonZeroUsize,
-}
-
-pub fn shard_assignment_from_proto(
-    request: golem::workerexecutor::v1::AssignShardsRequest,
-) -> Result<DecodedShardAssignment, String> {
-    let shard_epochs = shard_epochs_from_proto(request.shard_epochs)?;
-    let number_of_shards = usize::try_from(request.number_of_shards)
-        .map_err(|_| "Invalid number of shards".to_string())?;
-    if number_of_shards == 0 {
-        return Err("AssignShardsRequest.number_of_shards must not be 0".to_string());
-    }
-    let executor_count =
-        executor_count_from_proto(request.executor_count, "AssignShardsRequest.executor_count")?;
-    let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
-        .map_err(|error| format!("AssignShardsRequest.{error}"))?;
-    Ok(DecodedShardAssignment {
-        number_of_shards,
-        shard_epochs,
-        revision,
-        executor_count,
-    })
-}
-
-pub fn shard_revocation_from_proto(
-    request: golem::workerexecutor::v1::RevokeShardsRequest,
-) -> Result<DecodedShardRevocation, String> {
-    let executor_count =
-        executor_count_from_proto(request.executor_count, "RevokeShardsRequest.executor_count")?;
-    let shard_ids = request.shard_ids.into_iter().map(ShardId::from).collect();
-    let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
-        .map_err(|error| format!("RevokeShardsRequest.{error}"))?;
-    Ok(DecodedShardRevocation {
-        shard_ids,
-        revision,
-        executor_count,
-    })
 }
 
 /// Decodes a lease TTL off the wire into an expiry on the receiver's own
@@ -1096,197 +1044,12 @@ impl From<crate::model::type_id::TypeIdKind>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::sharding::{
-        ShardAssignmentEvent, ShardAssignmentState, transition_shard_assignment,
-    };
-    use crate::model::{ShardEpoch, ShardId, ShardLeaseRevision};
+    use crate::model::{ShardAssignment, ShardEpoch, ShardId, ShardLeaseRevision};
     use std::collections::HashMap;
-    use std::num::NonZeroUsize;
     use std::time::Instant;
     use test_r::test;
 
     test_r::enable!();
-
-    #[test]
-    fn executor_counts_preserve_positive_values_and_reject_zero_and_overflow() {
-        [
-            "AssignShardsRequest.executor_count",
-            "RevokeShardsRequest.executor_count",
-            "RegisterSuccess.executor_count",
-            "ShardLease.executor_count",
-        ]
-        .into_iter()
-        .for_each(|field| {
-            assert_eq!(
-                executor_count_to_proto(0, field),
-                Err(format!("{field} must not be 0"))
-            );
-            assert_eq!(
-                executor_count_from_proto(0, field),
-                Err(format!("{field} must not be 0"))
-            );
-            [1, 3, u32::MAX].into_iter().for_each(|count| {
-                let native = usize::try_from(count).unwrap();
-                assert_eq!(executor_count_to_proto(native, field), Ok(count));
-                assert_eq!(
-                    executor_count_from_proto(count, field).unwrap().get(),
-                    native
-                );
-            });
-            #[cfg(target_pointer_width = "64")]
-            [4_294_967_296usize, 4_294_967_299]
-                .into_iter()
-                .for_each(|count| {
-                    assert_eq!(
-                        executor_count_to_proto(count, field),
-                        Err(format!("{field} {count} does not fit a u32"))
-                    );
-                });
-        });
-    }
-
-    #[test]
-    fn shard_delivery_decoders_preserve_fields_and_accepted_extreme_inputs() {
-        let incarnation = uuid::Uuid::from_u128(0x5eed);
-        let request = golem::workerexecutor::v1::AssignShardsRequest {
-            number_of_shards: 17,
-            shard_epochs: shard_epochs_to_proto([
-                (ShardId::new(-1), ShardEpoch(0)),
-                (ShardId::new(i64::MAX), ShardEpoch(7)),
-                (ShardId::new(i64::MAX), ShardEpoch(u64::MAX)),
-            ]),
-            executor_count: u32::MAX,
-            revision: u64::MAX,
-            incarnation_id: incarnation.simple().to_string(),
-        };
-        let decoded = shard_assignment_from_proto(request.clone()).unwrap();
-        assert_eq!(decoded.number_of_shards, 17);
-        assert_eq!(
-            decoded.executor_count.get(),
-            usize::try_from(u32::MAX).unwrap()
-        );
-        assert_eq!(
-            decoded.revision,
-            ShardLeaseRevision {
-                incarnation,
-                number: u64::MAX
-            }
-        );
-        assert_eq!(
-            decoded.shard_epochs,
-            HashMap::from([
-                (ShardId::new(-1), ShardEpoch(0)),
-                (ShardId::new(i64::MAX), ShardEpoch(u64::MAX)),
-            ])
-        );
-        let empty = shard_assignment_from_proto(golem::workerexecutor::v1::AssignShardsRequest {
-            shard_epochs: vec![],
-            revision: 0,
-            executor_count: 3,
-            ..request
-        })
-        .unwrap();
-        assert!(empty.shard_epochs.is_empty());
-        assert_eq!(empty.revision.number, 0);
-        assert_eq!(empty.executor_count.get(), 3);
-
-        let request = golem::workerexecutor::v1::RevokeShardsRequest {
-            shard_ids: vec![
-                ShardId::new(-1).into(),
-                ShardId::new(-1).into(),
-                ShardId::new(i64::MAX).into(),
-            ],
-            executor_count: 5,
-            revision: 9,
-            incarnation_id: incarnation.to_string(),
-        };
-        let decoded = shard_revocation_from_proto(request.clone()).unwrap();
-        assert_eq!(
-            decoded.shard_ids,
-            std::collections::HashSet::from([ShardId::new(-1), ShardId::new(i64::MAX)])
-        );
-        assert_eq!(decoded.executor_count.get(), 5);
-        assert_eq!(
-            decoded.revision,
-            ShardLeaseRevision {
-                incarnation,
-                number: 9
-            }
-        );
-        let empty = shard_revocation_from_proto(golem::workerexecutor::v1::RevokeShardsRequest {
-            shard_ids: vec![],
-            revision: 0,
-            executor_count: 2,
-            ..request
-        })
-        .unwrap();
-        assert!(empty.shard_ids.is_empty());
-        assert_eq!(empty.revision.number, 0);
-        assert_eq!(empty.executor_count.get(), 2);
-    }
-
-    #[test]
-    fn shard_delivery_decoders_keep_wire_validation_precedence() {
-        let mut request = golem::workerexecutor::v1::AssignShardsRequest {
-            number_of_shards: 0,
-            shard_epochs: vec![golem::shardmanager::ShardEpochEntry {
-                shard_id: None,
-                epoch: 3,
-            }],
-            executor_count: 0,
-            revision: 1,
-            incarnation_id: String::new(),
-        };
-        assert_eq!(
-            shard_assignment_from_proto(request.clone()).unwrap_err(),
-            "ShardEpochEntry.shard_id missing"
-        );
-        request.shard_epochs.clear();
-        assert_eq!(
-            shard_assignment_from_proto(request.clone()).unwrap_err(),
-            "AssignShardsRequest.number_of_shards must not be 0"
-        );
-        request.number_of_shards = 8;
-        assert_eq!(
-            shard_assignment_from_proto(request.clone()).unwrap_err(),
-            "AssignShardsRequest.executor_count must not be 0"
-        );
-        request.executor_count = 2;
-        let missing = shard_assignment_from_proto(request.clone()).unwrap_err();
-        assert!(
-            missing.starts_with("AssignShardsRequest.incarnation_id"),
-            "{missing}"
-        );
-        request.incarnation_id = "invalid".to_string();
-        let invalid = shard_assignment_from_proto(request).unwrap_err();
-        assert!(
-            invalid.starts_with("AssignShardsRequest.incarnation_id"),
-            "{invalid}"
-        );
-
-        let mut request = golem::workerexecutor::v1::RevokeShardsRequest {
-            shard_ids: vec![],
-            executor_count: 0,
-            revision: 1,
-            incarnation_id: String::new(),
-        };
-        assert_eq!(
-            shard_revocation_from_proto(request.clone()).unwrap_err(),
-            "RevokeShardsRequest.executor_count must not be 0"
-        );
-        request.executor_count = 3;
-        let missing = shard_revocation_from_proto(request.clone()).unwrap_err();
-        assert!(
-            missing.starts_with("RevokeShardsRequest.incarnation_id"),
-            "{missing}"
-        );
-        request.incarnation_id = "invalid".to_string();
-        let invalid = shard_revocation_from_proto(request).unwrap_err();
-        assert!(
-            invalid.starts_with("RevokeShardsRequest.incarnation_id"),
-            "{invalid}"
-        );
-    }
 
     #[test]
     fn invocation_request_key_protobuf_preserves_provenance_and_retry_identity() {
@@ -1424,30 +1187,18 @@ mod tests {
             shard_epochs_from_proto(on_the_wire).expect("a well-formed push decodes");
         assert_eq!(received, pushed);
 
+        let mut assignment = ShardAssignment::default();
         let manager = uuid::Uuid::new_v4();
-        let (state, _) = transition_shard_assignment(
-            ShardAssignmentState::default(),
-            ShardAssignmentEvent::InstallUnexpiring {
-                number_of_shards: 1024,
-                shard_epochs: &HashMap::new(),
+        assignment.set_shards(
+            1024,
+            &received,
+            ShardLeaseRevision {
+                incarnation: manager,
+                number: 1,
             },
+            NonZeroUsize::MIN,
         );
-        let (assignment, outcome) = transition_shard_assignment(
-            state,
-            ShardAssignmentEvent::Assign {
-                number_of_shards: 1024,
-                shard_epochs: &received,
-                revision: ShardLeaseRevision {
-                    incarnation: manager,
-                    number: 1,
-                },
-                executor_count: NonZeroUsize::new(3).unwrap(),
-            },
-        );
-        assert!(outcome.is_some());
-        let assignment = assignment.as_ref().unwrap();
 
-        assert_eq!(assignment.executor_count, 3);
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));
         assert_eq!(assignment.epoch_of(&ShardId::new(7)), Some(ShardEpoch(42)));
         assert_eq!(

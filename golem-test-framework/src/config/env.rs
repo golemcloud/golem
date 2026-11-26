@@ -234,7 +234,7 @@ impl EnvBasedTestDependenciesConfig {
         self.golem_repo_root.join("test-components")
     }
 
-    pub fn service_binaries_dir(&self) -> PathBuf {
+    fn service_binaries_dir(&self) -> PathBuf {
         resolve_cargo_target_dir(&self.golem_repo_root).join(&self.bin_profile)
     }
 }
@@ -312,17 +312,22 @@ fn resolve_cargo_target_dir_uncached(repo_root: &Path) -> PathBuf {
 
 /// Finds the executable of a Golem service for a test that spawns its own copy of the service.
 ///
-/// The service is looked up first in the cargo profile directory of the running test binary, so a
-/// `--release` run or a redirected target directory finds the binaries built with the test. When
-/// that directory has no such binary, as in CI where prebuilt binaries are placed in the debug
-/// directory, it falls back to the directory the shared test dependencies start services from.
+/// An explicit `GOLEM_TEST_BIN_PROFILE` selects the same directory as the shared dependencies.
+/// Otherwise, prefer the running test binary's profile, then the shared services directory.
 pub fn service_executable(golem_repo_root: &Path, name: &str) -> PathBuf {
-    let test_profile_dir = std::env::current_exe()
-        .ok()
+    let config = EnvBasedTestDependenciesConfig {
+        golem_repo_root: golem_repo_root.to_path_buf(),
+        ..Default::default()
+    }
+    .with_env_overrides();
+    let test_profile_dir = std::env::var_os("GOLEM_TEST_BIN_PROFILE")
+        .is_none()
+        .then(|| std::env::current_exe().ok())
+        .flatten()
         .and_then(|exe| Some(exe.parent()?.parent()?.to_path_buf()));
     locate_service_executable(
         test_profile_dir.as_deref(),
-        &resolve_cargo_target_dir(golem_repo_root).join("debug"),
+        &config.service_binaries_dir(),
         name,
     )
 }

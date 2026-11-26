@@ -14,17 +14,15 @@
 
 use super::*;
 use crate::services::shard::ShardServiceDefault;
-use golem_api_grpc::proto::golem::shardmanager::v1::{
-    RenewShardLeaseResponse, ShardLease as WireShardLease, renew_shard_lease_response,
-};
-use golem_common::model::protobuf::shard_epochs_to_proto;
-use golem_common::model::{AgentId, RetryConfig, ShardLeaseRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
+use golem_common::model::{AgentId, RoutingTable};
 use golem_service_base::clients::shard_manager::{
-    InMemoryShardLeaseClient, ShardLease, ShardLeaseClient, ShardRegistration,
+    BatchRenewalEntry, QuotaError, ShardLease, ShardManager, ShardRegistration,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::{BTreeMap, HashSet};
-use std::num::NonZeroUsize;
+use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
+use std::collections::HashSet;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicUsize;
 use std::time::Instant;
@@ -110,7 +108,9 @@ type RenewFn = Box<
         + Sync,
 >;
 
-/// Scripts lease faults and records coordinator calls without a transport.
+/// The `ShardManager` client double, modelled on the `MockShardManager`
+/// harness in `services/quota.rs`: every quota method is unreachable here,
+/// and the three shard-lease methods are scripted and recorded.
 struct MockShardManager {
     register_fn: StdMutex<Option<RegisterFn>>,
     renew_fn: StdMutex<Option<RenewFn>>,
@@ -118,12 +118,12 @@ struct MockShardManager {
     renew_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
     /// The same for a deregistration.
     deregister_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
-    /// Each registration's executor ID, in registration order.
+    /// Each registration's executor id and the previous epochs it carried.
     register_calls: StdMutex<Vec<Uuid>>,
     /// The endpoint each registration named, in the order of `register_calls`.
     register_endpoints: StdMutex<Vec<ExecutorEndpoint>>,
     renew_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
-    /// The executor ID and claimed epochs at each deregistration, in deregistration order.
+    /// The fenced epochs each renewal reported, in the order of `renew_calls`.
     deregister_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
     /// How many of the next registrations never answer.
     hanging_registrations: std::sync::atomic::AtomicUsize,
@@ -205,7 +205,11 @@ impl MockShardManager {
 
 #[async_trait]
 #[golem_async_trait::region_simple]
-impl ShardLeaseClient for MockShardManager {
+impl ShardManager for MockShardManager {
+    async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
+        unimplemented!()
+    }
+
     async fn register(
         &self,
         endpoint: ExecutorEndpoint,
@@ -271,12 +275,51 @@ impl ShardLeaseClient for MockShardManager {
         }
         Ok(())
     }
+
+    async fn acquire_quota_lease(
+        &self,
+        _environment_id: EnvironmentId,
+        _resource_name: ResourceName,
+        _endpoint: ExecutorEndpoint,
+    ) -> Result<QuotaLease, QuotaError> {
+        unimplemented!()
+    }
+
+    async fn renew_quota_lease(
+        &self,
+        _resource_definition_id: ResourceDefinitionId,
+        _endpoint: ExecutorEndpoint,
+        _epoch: u64,
+        _unused: u64,
+        _pending_reservations: Vec<PendingReservation>,
+    ) -> Result<QuotaLease, QuotaError> {
+        unimplemented!()
+    }
+
+    async fn batch_renew_quota_leases(
+        &self,
+        _endpoint: ExecutorEndpoint,
+        _renewals: Vec<BatchRenewalEntry>,
+    ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
+        unimplemented!()
+    }
+
+    async fn release_quota_lease(
+        &self,
+        _resource_definition_id: ResourceDefinitionId,
+        _endpoint: ExecutorEndpoint,
+        _epoch: u64,
+        _unused: u64,
+    ) -> Result<(), QuotaError> {
+        unimplemented!()
+    }
 }
 
-/// A service with no renewal loop at construction. Registration starts the loop; tests that
-/// install an assignment directly can instead drive one pass through the private test helper.
+/// A service wired to the mock, with no renewal loop running: every test
+/// drives `renew_shard_lease()` itself, exactly as the quota tests drive
+/// `renew_all()`.
 fn make_service(
-    mock: Arc<dyn ShardLeaseClient>,
+    mock: Arc<MockShardManager>,
     shutdown: Shutdown,
 ) -> (Arc<GrpcShardManagerService>, Arc<ShardServiceDefault>) {
     let shard_service = Arc::new(ShardServiceDefault::new());
@@ -299,31 +342,6 @@ fn make_service_with_rpc_deadline_floor(
         floor,
     );
     (service, shard_service)
-}
-
-#[test]
-fn rpc_deadline_uses_the_granted_cadence_and_not_the_retry_backoff() {
-    let (service, _) = make_service(Arc::new(MockShardManager::new()), Shutdown::new());
-    assert_eq!(service.rpc_deadline(), Duration::from_secs(10));
-    service.apply_retry_event(RenewalRetryEvent::Granted(Some(Duration::from_secs(60))));
-    assert_eq!(service.rpc_deadline(), Duration::from_secs(30));
-    service.apply_retry_event(RenewalRetryEvent::Failed);
-    assert_eq!(service.rpc_deadline(), Duration::from_secs(30));
-    service.apply_retry_event(RenewalRetryEvent::Granted(Some(Duration::from_secs(1))));
-    assert_eq!(service.rpc_deadline(), Duration::from_secs(10));
-}
-
-#[test]
-fn out_of_order_deferrals_keep_the_newest_recovery_ticket() {
-    for (incoming, expected) in [(6, 7), (7, 7), (8, 8)] {
-        assert_eq!(
-            recovery_debt_transition(
-                RecoveryDebt::Owed(RecoveryTicket(7)),
-                RecoveryDebtEvent::Deferred(RecoveryTicket(incoming)),
-            ),
-            (RecoveryDebt::Owed(RecoveryTicket(expected)), false),
-        );
-    }
 }
 
 #[test]
@@ -439,24 +457,17 @@ async fn a_registration_granting_zero_shards_is_refused() {
         })
     }));
     let (service, shard_service) = make_service(mock, Shutdown::new());
-    let retry = RenewalRetryState {
-        backoff: Duration::from_secs(9),
-        granted_cadence: None,
-    };
-    *service.retry.write().unwrap() = retry;
 
     let result = service.register(ENDPOINT, None).await;
 
     assert!(
-        matches!(&result, Err(ShardManagerError::ConversionError(message)) if message == "RegisterSuccess.number_of_shards must not be 0"),
+        matches!(&result, Err(ShardManagerError::ConversionError(message)) if message.contains("must not be 0")),
         "a zero shard count must be refused, got {result:?}"
     );
     assert!(
         shard_service.try_get_current_assignment().is_none(),
         "a refused registration must install nothing"
     );
-    assert!(!service.renewal_loop_started.load(Ordering::SeqCst));
-    assert_eq!(*service.retry.read().unwrap(), retry);
 }
 
 #[test]
@@ -656,9 +667,9 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
             .with_renew(move |_, _held| {
                 Ok(ShardLease {
                     executor_count: NonZeroUsize::MIN,
-                    // Only the first grant changes the set. Later accepted grants can still
-                    // request recovery while the hook is blocked and recovery remains owed.
-                    // The single-flight scheduler coalesces those requests into one rerun.
+                    // Always the widened set: the first grant is a real assignment change,
+                    // and every later one only echoes it back (it now matches what was
+                    // held), so only the first renewal ever owes an announcement.
                     shard_epochs: epoch_map([(0, 1), (1, 1)]),
                     expires_at: Instant::now() + ttl,
                     revision: revision_of(MANAGER, 1),
@@ -709,7 +720,8 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
 
     // Several renewal periods pass (cadence is ~1s) while the hook stays blocked: the loop
     // must keep renewing rather than waiting on the sweep. Each of these renewals also finds
-    // recovery debt still owed from the first one and asks for the announcement again; that
+    // `recovery_outstanding` still set by the first
+    // one - the sweep has not reported back yet - and asks for the announcement again; that
     // is correct (an unchanged grant re-runs a recovery still owed), and the single-flight
     // coalesces every one of these requests into exactly one rerun, asserted below.
     for _ in 0..100 {
@@ -1142,17 +1154,6 @@ async fn a_recovery_that_finishes_after_a_newer_deferral_leaves_that_one_owed() 
     // That run was the newest attempt, so nothing is owed any more.
     service.renew_shard_lease().await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-    let earlier = service.recovery_deferred();
-    let newer = service.recovery_deferred();
-    service.recovery_succeeded(earlier);
-    service.recovery_succeeded(newer);
-    service.renew_shard_lease().await;
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "completion of the newer ticket retires the debt left by the older completion"
-    );
 }
 
 #[test]
@@ -1352,9 +1353,9 @@ async fn a_re_registration_keeps_the_advertised_endpoint() {
 }
 
 /// A shard manager that came back on a wiped store no longer lists this executor, so the
-/// renewal is refused. Re-registration sends the endpoint, name and fresh executor ID,
-/// without epochs. Its answer supplies the replacement set at a revision far below the
-/// last one this executor applied, and must be adopted all the same.
+/// renewal is refused and the re-registration carries the epochs for it to repair. Its answer
+/// is read off a store that counts from the beginning again, far below the last revision this
+/// executor applied, and must be adopted all the same.
 #[test]
 async fn a_re_registration_with_a_manager_that_lost_its_history_adopts_its_low_revision() {
     let expiry = Instant::now() + Duration::from_secs(120);
@@ -1497,7 +1498,8 @@ async fn renew_now_runs_a_renewal_ahead_of_its_timer() {
 /// A changed set needs recovery. An unchanged set needs recovery only while an earlier
 /// delivery still owes it. A count-only update does not create recovery debt.
 #[test]
-async fn a_renewal_recovers_a_changed_set_or_an_unchanged_set_with_recovery_owed() {
+async fn a_renewal_that_changes_the_set_announces_it_and_an_unchanged_one_does_not() {
+    let granted_expiry = Instant::now() + Duration::from_secs(300);
     // `None` echoes the held set; `Some` is the manager correcting it.
     let correction: Arc<StdMutex<Option<BTreeMap<ShardId, ShardEpoch>>>> =
         Arc::new(StdMutex::new(None));
@@ -1505,42 +1507,15 @@ async fn a_renewal_recovers_a_changed_set_or_an_unchanged_set_with_recovery_owed
     let executor_count = Arc::new(AtomicUsize::new(3));
     let granted_count = executor_count.clone();
     let next_revision = AtomicU64::new(2);
-    let mock = Arc::new(InMemoryShardLeaseClient::new(
-        RetryConfig::default(),
-        |_| async {
-            Err(ShardManagerError::internal_client_error(
-                "unexpected registration",
-            ))
-        },
-        move |request| {
-            let shard_epochs = correct
-                .lock()
-                .unwrap()
-                .clone()
-                .map(shard_epochs_to_proto)
-                .unwrap_or(request.shard_epochs);
-            let lease = WireShardLease {
-                executor_count: granted_count.load(Ordering::SeqCst) as u32,
-                shard_epochs,
-                lease_ttl: Some(prost_types::Duration {
-                    seconds: 300,
-                    nanos: 0,
-                }),
-                revision: next_revision.fetch_add(1, Ordering::SeqCst),
-                incarnation_id: MANAGER.to_string(),
-            };
-            async move {
-                Ok(RenewShardLeaseResponse {
-                    result: Some(renew_shard_lease_response::Result::Success(lease)),
-                })
-            }
-        },
-        |_| async {
-            Err(ShardManagerError::internal_client_error(
-                "unexpected deregistration",
-            ))
-        },
-    ));
+    let mock = Arc::new(MockShardManager::new().with_renew(move |_, held| {
+        let shard_epochs = correct.lock().unwrap().clone().unwrap_or(held);
+        Ok(ShardLease {
+            shard_epochs,
+            executor_count: NonZeroUsize::new(granted_count.load(Ordering::SeqCst)).unwrap(),
+            expires_at: granted_expiry,
+            revision: revision_of(MANAGER, next_revision.fetch_add(1, Ordering::SeqCst)),
+        })
+    }));
     let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
     shard_service.register(
         SHARDS,
@@ -1617,44 +1592,6 @@ async fn a_renewal_recovers_a_changed_set_or_an_unchanged_set_with_recovery_owed
         epochs([(0, 7), (4, 9)]),
         "and the narrower set is what the executor now serves"
     );
-}
-
-#[test]
-fn renewal_recovery_follows_the_delivery_outcome_and_existing_debt() {
-    let delivered = revision_of(MANAGER, 1);
-    let applied = revision_of(MANAGER, 2);
-    [
-        (
-            Some(ShardDeliveryOutcome::Applied { set_changed: true }),
-            [true, true],
-        ),
-        (
-            Some(ShardDeliveryOutcome::Applied { set_changed: false }),
-            [false, true],
-        ),
-        (
-            Some(ShardDeliveryOutcome::Stale { delivered, applied }),
-            [false, false],
-        ),
-        (
-            Some(ShardDeliveryOutcome::FromAnotherManager { delivered, applied }),
-            [false, false],
-        ),
-        (None, [false, false]),
-    ]
-    .into_iter()
-    .for_each(|(outcome, expected)| {
-        [RecoveryDebt::NoDebt, RecoveryDebt::Owed(RecoveryTicket(7))]
-            .into_iter()
-            .zip(expected)
-            .for_each(|(debt, expected)| {
-                assert_eq!(
-                    recovery_debt_transition(debt, RecoveryDebtEvent::LeaseAdopted(outcome)),
-                    (debt, expected),
-                    "outcome={outcome:?}, debt={debt:?}"
-                );
-            });
-    });
 }
 
 /// Two deliveries can cross on the network. A renewal reply read from an

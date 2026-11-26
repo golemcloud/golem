@@ -12,15 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod in_memory;
-
-pub use in_memory::{
-    InMemoryWorkerExecutorConditions, InMemoryWorkerExecutorHealth, InMemoryWorkerExecutorService,
-};
-
-#[cfg(test)]
-mod contract_tests;
-
 use super::error::{HealthCheckError, ShardManagerError};
 use super::model::{
     ExecutorAddrs, ExecutorId, ShardAssignmentPush, ShardLeaseRevision, Unassignments,
@@ -33,9 +24,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::Pod;
 use golem_common::model::ShardId;
-use golem_common::model::protobuf::{
-    executor_count_to_proto, shard_assignment_from_proto, shard_revocation_from_proto,
-};
+use golem_common::model::protobuf::executor_count_to_proto;
 use golem_common::retries::with_retriable_errors;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
@@ -54,9 +43,9 @@ use tracing::{info, warn};
 
 #[async_trait]
 pub trait WorkerExecutorService: Send + Sync {
-    /// Replaces the complete shard set and executor count at an accepted revision. Older
-    /// revisions and pushes from another manager leave the assignment unchanged and succeed.
-    /// A zero shard count or executor count returns a worker execution error before mutation.
+    /// Tells an executor the complete set of shards it holds. This is a full replace: the executor
+    /// drops every shard the payload does not name, which is what makes this one call enough for
+    /// the initial delivery, a rebalance and a repair alike.
     async fn assign_shards(
         &self,
         pod: &Pod,
@@ -65,13 +54,9 @@ pub trait WorkerExecutorService: Send + Sync {
 
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError>;
 
-    /// Removes the named shards and adopts the executor count at an accepted revision.
-    /// The revision identifies the stored move away from this executor. Older revisions and
-    /// pushes from another manager leave the assignment unchanged and succeed. A zero
-    /// executor count returns a worker execution error before mutation. Cleanup attempts to
-    /// retire agents outside the current assignment. A later assignment can prevent selection.
-    /// Success does not guarantee that all agents from the removed shards have retired.
-    /// The epoch fence continues to control writes.
+    /// Takes shards away from an executor. A delta, unlike `assign_shards`, and gated on
+    /// `revision` like one: it is only ever sent for shards the store has already moved away, at
+    /// the revision that move was stored under. `execute_rebalance` revokes before it assigns.
     async fn revoke_shards(
         &self,
         pod: &Pod,
@@ -181,10 +166,6 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         pod: &Pod,
         assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
-        let request = assignment
-            .to_proto(super::model::incarnation_id())
-            .map_err(invalid_delivery)?;
-        shard_assignment_from_proto(request.clone()).map_err(invalid_delivery)?;
         info!(
             assigned_shards =
                 shard_assignments_to_string(pod, None, assignment.shard_epochs.keys()),
@@ -197,8 +178,8 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             "assign_shards",
             Some(format!("{pod}")),
             &self.config.retries,
-            &(pod, request),
-            |(pod, request)| Box::pin(self.assign_shards_internal(pod, request)),
+            &(pod, assignment),
+            |(pod, assignment)| Box::pin(self.assign_shards_internal(pod, assignment)),
         )
         .await
     }
@@ -209,9 +190,10 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         // The deadline covers the check RPC as well as the connect: an executor that accepts
         // connections but never answers would otherwise hold this call open forever.
         let checked = timeout(self.config.health_check_timeout, async {
-            let conn = endpoint.connect().await.map_err(|error| {
-                HealthCheckError::GrpcError(tonic::Status::unavailable(error.to_string()))
-            })?;
+            let conn = endpoint
+                .connect()
+                .await
+                .map_err(HealthCheckError::GrpcTransportError)?;
             let request = HealthCheckRequest {
                 service: "".to_string(),
             };
@@ -239,14 +221,6 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         revision: ShardLeaseRevision,
         executor_count: usize,
     ) -> Result<(), ShardManagerError> {
-        let request = revoke_request(
-            shard_ids,
-            revision,
-            executor_count,
-            super::model::incarnation_id(),
-        )
-        .map_err(invalid_delivery)?;
-        shard_revocation_from_proto(request.clone()).map_err(invalid_delivery)?;
         info!(
             revoked_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
             revision = revision.0,
@@ -258,8 +232,10 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             "revoke_shards",
             Some(format!("{pod}")),
             &self.config.retries,
-            &(pod, request),
-            |(pod, request)| Box::pin(self.revoke_shards_internal(pod, request)),
+            &(pod, shard_ids, revision, executor_count),
+            |(pod, shard_ids, revision, executor_count)| {
+                Box::pin(self.revoke_shards_internal(pod, shard_ids, *revision, *executor_count))
+            },
         )
         .await
     }
@@ -284,8 +260,10 @@ impl WorkerExecutorServiceDefault {
     async fn assign_shards_internal(
         &self,
         pod: &Pod,
-        assign_shards_request: &golem::workerexecutor::v1::AssignShardsRequest,
+        assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
+        let assign_shards_request = assignment.to_proto().map_err(invalid_delivery)?;
+
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,
             self.client.call(
@@ -322,8 +300,25 @@ impl WorkerExecutorServiceDefault {
     async fn revoke_shards_internal(
         &self,
         pod: &Pod,
-        revoke_shards_request: &golem::workerexecutor::v1::RevokeShardsRequest,
+        shard_ids: &BTreeSet<ShardId>,
+        revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<(), ShardManagerError> {
+        let revoke_shards_request = golem::workerexecutor::v1::RevokeShardsRequest {
+            shard_ids: shard_ids
+                .clone()
+                .into_iter()
+                .map(|shard_id| shard_id.into())
+                .collect(),
+            revision: revision.0,
+            incarnation_id: super::model::incarnation_id(),
+            executor_count: executor_count_to_proto(
+                executor_count,
+                "RevokeShardsRequest.executor_count",
+            )
+            .map_err(invalid_delivery)?,
+        };
+
         let revoke_shards_response = timeout(
             self.config.revoke_shards_timeout,
             self.client.call(
@@ -356,22 +351,6 @@ impl WorkerExecutorServiceDefault {
             }
         }
     }
-}
-
-fn revoke_request(
-    shard_ids: &BTreeSet<ShardId>,
-    revision: ShardLeaseRevision,
-    executor_count: usize,
-    incarnation_id: String,
-) -> Result<golem::workerexecutor::v1::RevokeShardsRequest, String> {
-    let executor_count =
-        executor_count_to_proto(executor_count, "RevokeShardsRequest.executor_count")?;
-    Ok(golem::workerexecutor::v1::RevokeShardsRequest {
-        shard_ids: shard_ids.iter().copied().map(Into::into).collect(),
-        revision: revision.0,
-        incarnation_id,
-        executor_count,
-    })
 }
 
 fn invalid_delivery(error: String) -> ShardManagerError {

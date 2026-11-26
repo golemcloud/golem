@@ -17,19 +17,23 @@ use crate::grpc::client::GrpcClientConfig;
 use crate::model::quota_lease::{PendingReservation, QuotaLease};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager::v1::{
-    AcquireQuotaLeaseRequest, BatchRenewQuotaLeasesRequest,
-    ExecutorEndpoint as GrpcExecutorEndpoint, GetRoutingTableRequest, ReleaseQuotaLeaseRequest,
-    RenewQuotaLeaseRequest, acquire_quota_lease_response, get_routing_table_response,
-    release_quota_lease_response, renew_quota_lease_response, renew_quota_lease_result,
+    AcquireQuotaLeaseRequest, BatchRenewQuotaLeasesRequest, DeregisterRequest,
+    ExecutorEndpoint as GrpcExecutorEndpoint, GetRoutingTableRequest, RegisterRequest,
+    ReleaseQuotaLeaseRequest, RenewQuotaLeaseRequest, RenewShardLeaseRequest,
+    acquire_quota_lease_response, deregister_response, get_routing_table_response,
+    register_response, release_quota_lease_response, renew_quota_lease_response,
+    renew_quota_lease_result, renew_shard_lease_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::protobuf::{
     executor_count_from_proto, ip_addr_to_proto, lease_expiry_from_ttl, shard_epochs_from_proto,
+    shard_epochs_to_proto,
 };
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId, ShardLeaseRevision};
 use golem_common::retriable_error::IsRetriableError;
+use golem_common::retries::with_retries;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -41,14 +45,18 @@ use std::num::NonZeroUsize;
 use std::time::Instant;
 use uuid::Uuid;
 
-mod shard_leases;
-pub use shard_leases::InMemoryShardLeaseClient;
-
-/// Registers, renews and releases executor shard leases.
+/// Client for the shard manager service.
+///
+/// Mirrors `golem-api-grpc/proto/golem/shardmanager/v1/shard_manager_service.proto`.
 #[async_trait]
-pub trait ShardLeaseClient: Send + Sync {
-    /// Registers the executor at the endpoint. Repeats request and decoder errors under the
-    /// configured registration retry schedule. A zero shard count passes decoding.
+pub trait ShardManager: Send + Sync {
+    /// Fetches the current routing table (shard-to-pod mapping).
+    async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError>;
+
+    /// Registers this executor pod with the shard manager, identified by the
+    /// UUID it generated at startup. Idempotent: the same `executor_id` at the
+    /// same address refreshes the existing shard lease rather than creating a
+    /// second one.
     async fn register(
         &self,
         endpoint: ExecutorEndpoint,
@@ -56,27 +64,26 @@ pub trait ShardLeaseClient: Send + Sync {
         executor_id: Uuid,
     ) -> Result<ShardRegistration, ShardManagerError>;
 
-    /// Reports the held epochs and returns the granted set, count, revision and expiry.
-    /// Makes one routed request, without retrying a failed routed outcome.
+    /// Extends this executor's shard lease. `shard_epochs` is the set the
+    /// executor believes it holds; it is not a condition of the renewal. A
+    /// claim that does not match the manager's view is renewed all the same,
+    /// and the returned lease carries the manager's set, which the caller
+    /// adopts exactly as it would an `AssignShards` push.
     async fn renew_shard_lease(
         &self,
         executor_id: Uuid,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError>;
 
-    /// Releases the executor's lease. Makes one routed request and preserves its error.
+    /// Releases the shard lease on a graceful shutdown. Lenient by contract: a
+    /// stale entry, or an unknown executor, never fails a shutdown. One attempt,
+    /// like `renew_shard_lease`: it runs inside the grace the executor's `main`
+    /// waits, and a retry could not fit in it.
     async fn deregister(
         &self,
         executor_id: Uuid,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<(), ShardLeaseError>;
-}
-
-/// Fetches routing state and manages quota leases as well as shard leases.
-#[async_trait]
-pub trait ShardManager: ShardLeaseClient {
-    /// Fetches the current routing table (shard-to-pod mapping).
-    async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError>;
 
     /// Declares interest in a quota and requests an initial lease.
     async fn acquire_quota_lease(
@@ -208,24 +215,6 @@ fn shard_lease_from_wire(
     })
 }
 
-fn registration_from_wire(
-    success: golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess,
-    sent_at: Instant,
-) -> Result<ShardRegistration, String> {
-    let executor_count =
-        executor_count_from_proto(success.executor_count, "RegisterSuccess.executor_count")?;
-    Ok(ShardRegistration {
-        number_of_shards: success.number_of_shards,
-        lease: ShardLease {
-            shard_epochs: shard_epochs_from_proto(success.shard_epochs)?,
-            executor_count,
-            expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)?,
-            revision: ShardLeaseRevision::from_wire(&success.incarnation_id, success.revision)
-                .map_err(|error| format!("RegisterSuccess.{error}"))?,
-        },
-    })
-}
-
 fn expires_at_from_ttl(
     lease_ttl: Option<prost_types::Duration>,
     sent_at: Instant,
@@ -343,6 +332,135 @@ impl ShardManager for GrpcShardManager {
                 .try_into()
                 .map_err(ShardManagerError::ConversionError),
             Some(get_routing_table_response::Result::Failure(failure)) => Err(failure.into()),
+        }
+    }
+
+    async fn register(
+        &self,
+        endpoint: ExecutorEndpoint,
+        pod_name: Option<String>,
+        executor_id: Uuid,
+    ) -> Result<ShardRegistration, ShardManagerError> {
+        with_retries(
+            "shard_manager",
+            "register",
+            Some(format!("{pod_name:?}")),
+            &self.retries,
+            &(self.clone(), endpoint, pod_name, executor_id),
+            |(shard_manager, endpoint, pod_name, executor_id)| {
+                Box::pin(async move {
+                    let (sent_at, response) = shard_manager
+                        .router
+                        .call("register", Attempts::Retried, move |client| {
+                            let request = RegisterRequest {
+                                endpoint: Some((*endpoint).into()),
+                                pod_name: pod_name.clone(),
+                                executor_id: executor_id.to_string(),
+                            };
+                            Box::pin(async move {
+                                let (sent_at, response) = issued(client.register(request)).await;
+                                response.map(|response| (sent_at, response))
+                            })
+                        })
+                        .await?;
+
+                    match response.into_inner().result {
+                        None => Err(ShardManagerError::empty_response()),
+                        Some(register_response::Result::Success(success)) => {
+                            Ok(ShardRegistration {
+                                number_of_shards: success.number_of_shards,
+                                lease: ShardLease {
+                                    shard_epochs: shard_epochs_from_proto(success.shard_epochs)
+                                        .map_err(ShardManagerError::ConversionError)?,
+                                    executor_count: executor_count_from_proto(
+                                        success.executor_count,
+                                        "RegisterSuccess.executor_count",
+                                    )
+                                    .map_err(ShardManagerError::ConversionError)?,
+                                    expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
+                                        .map_err(ShardManagerError::ConversionError)?,
+                                    revision: ShardLeaseRevision::from_wire(
+                                        &success.incarnation_id,
+                                        success.revision,
+                                    )
+                                    .map_err(|error| {
+                                        ShardManagerError::ConversionError(format!(
+                                            "RegisterSuccess.{error}"
+                                        ))
+                                    })?,
+                                },
+                            })
+                        }
+                        Some(register_response::Result::Failure(failure)) => Err(failure.into()),
+                    }
+                })
+            },
+            |_| true,
+        )
+        .await
+    }
+
+    /// One attempt, never retried inside the client: the renewal loop backs off failures itself
+    /// on a schedule derived from the lease, and stacking the client's `Unavailable` retries under
+    /// that would let a single pass sit in the RPC for longer than the lease it is renewing - and,
+    /// on a stop, for longer than the grace the deregister has to be sent in.
+    async fn renew_shard_lease(
+        &self,
+        executor_id: Uuid,
+        shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    ) -> Result<ShardLease, ShardLeaseError> {
+        let (sent_at, response) = self
+            .router
+            .call("renew_shard_lease", Attempts::Once, move |client| {
+                let request = RenewShardLeaseRequest {
+                    executor_id: executor_id.to_string(),
+                    shard_epochs: shard_epochs_to_proto(
+                        shard_epochs
+                            .iter()
+                            .map(|(shard_id, epoch)| (*shard_id, *epoch)),
+                    ),
+                };
+                Box::pin(async move {
+                    let (sent_at, response) = issued(client.renew_shard_lease(request)).await;
+                    response.map(|response| (sent_at, response))
+                })
+            })
+            .await?;
+
+        match response.into_inner().result {
+            None => Err(ShardLeaseError::empty_response()),
+            Some(renew_shard_lease_response::Result::Success(lease)) => {
+                shard_lease_from_wire(lease, sent_at).map_err(ShardLeaseError::ConversionError)
+            }
+            Some(renew_shard_lease_response::Result::Failure(failure)) => Err(failure.into()),
+        }
+    }
+
+    async fn deregister(
+        &self,
+        executor_id: Uuid,
+        shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    ) -> Result<(), ShardLeaseError> {
+        let response = self
+            .router
+            .call("deregister", Attempts::Once, move |client| {
+                let request = DeregisterRequest {
+                    executor_id: executor_id.to_string(),
+                    shard_epochs: shard_epochs_to_proto(
+                        shard_epochs
+                            .iter()
+                            .map(|(shard_id, epoch)| (*shard_id, *epoch)),
+                    ),
+                };
+                Box::pin(client.deregister(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(ShardLeaseError::empty_response()),
+            Some(deregister_response::Result::Success(_)) => Ok(()),
+            Some(deregister_response::Result::Failure(failure)) => Err(failure.into()),
         }
     }
 
@@ -729,18 +847,6 @@ impl From<tonic::Status> for ShardLeaseError {
     }
 }
 
-impl From<ShardManagerError> for ShardLeaseError {
-    fn from(error: ShardManagerError) -> Self {
-        match error {
-            ShardManagerError::ConversionError(message) => Self::ConversionError(message),
-            ShardManagerError::InternalServerError(message) => Self::InternalServerError(message),
-            ShardManagerError::InvalidRequest(message)
-            | ShardManagerError::Timeout(message)
-            | ShardManagerError::InternalClientError(message) => Self::InternalClientError(message),
-        }
-    }
-}
-
 impl From<String> for ShardLeaseError {
     fn from(value: String) -> Self {
         Self::internal_client_error(value)
@@ -756,8 +862,6 @@ impl From<&'static str> for ShardLeaseError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::protobuf::shard_epochs_to_proto;
-    use prost::Message;
     use std::time::{Duration, Instant};
     use test_r::test;
 
@@ -799,11 +903,7 @@ mod tests {
         // the answer took its time
         std::thread::sleep(Duration::from_millis(20));
 
-        let bytes = on_the_wire.encode_to_vec();
-        let decoded =
-            golem_api_grpc::proto::golem::shardmanager::v1::ShardLease::decode(bytes.as_slice())
-                .unwrap();
-        let lease = shard_lease_from_wire(decoded, sent_at).unwrap();
+        let lease = shard_lease_from_wire(on_the_wire, sent_at).unwrap();
 
         assert_eq!(lease.executor_count.get(), 7);
         assert_eq!(lease.expires_at, sent_at + Duration::from_secs(60));
@@ -817,79 +917,6 @@ mod tests {
                 incarnation,
                 number: 3
             }
-        );
-    }
-
-    #[test]
-    fn a_lease_with_zero_executors_does_not_decode() {
-        let lease = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
-            shard_epochs: vec![],
-            executor_count: 0,
-            lease_ttl: Some(prost_types::Duration {
-                seconds: 60,
-                nanos: 0,
-            }),
-            revision: 3,
-            incarnation_id: Uuid::from_u128(0x5eed).to_string(),
-        };
-        let bytes = lease.encode_to_vec();
-        let decoded =
-            golem_api_grpc::proto::golem::shardmanager::v1::ShardLease::decode(bytes.as_slice())
-                .unwrap();
-        assert_eq!(
-            shard_lease_from_wire(decoded, Instant::now()).unwrap_err(),
-            "ShardLease.executor_count must not be 0"
-        );
-    }
-
-    #[test]
-    fn registration_wire_count_survives_decoding_and_zero_is_refused() {
-        let incarnation = Uuid::from_u128(0x5eed);
-        let sent_at = Instant::now();
-        let registration = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess {
-            number_of_shards: 8,
-            shard_epochs: shard_epochs_to_proto([(ShardId::new(2), ShardEpoch(9))]),
-            executor_count: 4,
-            lease_ttl: Some(prost_types::Duration {
-                seconds: 60,
-                nanos: 0,
-            }),
-            revision: 7,
-            incarnation_id: incarnation.to_string(),
-        };
-        let bytes = registration.encode_to_vec();
-        let decoded = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess::decode(
-            bytes.as_slice(),
-        )
-        .unwrap();
-        let grant = registration_from_wire(decoded, sent_at).unwrap();
-        assert_eq!(grant.number_of_shards, 8);
-        assert_eq!(grant.lease.executor_count.get(), 4);
-        assert_eq!(
-            grant.lease.shard_epochs,
-            BTreeMap::from([(ShardId::new(2), ShardEpoch(9))])
-        );
-        assert_eq!(grant.lease.expires_at, sent_at + Duration::from_secs(60));
-        assert_eq!(
-            grant.lease.revision,
-            ShardLeaseRevision {
-                incarnation,
-                number: 7
-            }
-        );
-
-        let malformed = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess {
-            executor_count: 0,
-            ..registration
-        };
-        let bytes = malformed.encode_to_vec();
-        let decoded = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess::decode(
-            bytes.as_slice(),
-        )
-        .unwrap();
-        assert_eq!(
-            registration_from_wire(decoded, sent_at).unwrap_err(),
-            "RegisterSuccess.executor_count must not be 0"
         );
     }
 

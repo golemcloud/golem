@@ -3902,8 +3902,8 @@ mod rejection_mapping_tests {
     use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
     use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
     use golem_service_base::clients::shard_manager::{
-        BatchRenewalEntry, ExecutorEndpoint, QuotaError, ShardLease, ShardLeaseClient,
-        ShardLeaseError, ShardManager, ShardManagerError, ShardRegistration,
+        BatchRenewalEntry, ExecutorEndpoint, QuotaError, ShardLease, ShardLeaseError, ShardManager,
+        ShardManagerError, ShardRegistration,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::grpc::client::{GrpcClientConfig, MultiTargetGrpcClient};
@@ -4017,7 +4017,11 @@ mod rejection_mapping_tests {
 
     #[async_trait::async_trait]
     #[golem_async_trait::region_simple]
-    impl ShardLeaseClient for StaticShardManager {
+    impl ShardManager for StaticShardManager {
+        async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
+            Ok(self.0.clone())
+        }
+
         async fn register(
             &self,
             _endpoint: ExecutorEndpoint,
@@ -4041,14 +4045,6 @@ mod rejection_mapping_tests {
             _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
         ) -> Result<(), ShardLeaseError> {
             unreachable!()
-        }
-    }
-
-    #[async_trait::async_trait]
-    #[golem_async_trait::region_simple]
-    impl ShardManager for StaticShardManager {
-        async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
-            Ok(self.0.clone())
         }
 
         async fn acquire_quota_lease(

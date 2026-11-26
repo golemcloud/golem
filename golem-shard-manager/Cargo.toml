@@ -74,10 +74,8 @@ libc = { workspace = true }
 base64 = { workspace = true }
 figment = { workspace = true }
 golem-test-framework = { workspace = true }
-golem-worker-executor = { workspace = true }
 h2 = { workspace = true }
 hyper-util = { workspace = true }
-prost = { workspace = true }
 rcgen = { workspace = true, features = ["pem"] }
 rsa = { workspace = true }
 test-r = { workspace = true }

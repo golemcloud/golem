@@ -31,7 +31,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
 use golem_schema::proto::golem::common::Empty;
 use golem_service_base::clients::shard_manager::{
-    GrpcShardManager, GrpcShardManagerConfig, ShardLeaseClient, ShardManager,
+    GrpcShardManager, GrpcShardManagerConfig, ShardManager,
 };
 use golem_service_base::clients::shard_manager_leader::{
     LeaderAddress, not_leader_status, refusal_status,

@@ -20,11 +20,14 @@ use crate::services::shutdown::{self, Shutdown};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use golem_common::base_model::shard_lease;
-use golem_common::model::{ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId};
+use golem_common::model::{
+    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
+};
 use golem_service_base::clients::shard_manager::{
     ExecutorEndpoint, ShardLease, ShardLeaseError, ShardManagerError,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::{Duration, Instant};
@@ -45,25 +48,13 @@ const MAX_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// shutdown arm can fire.
 pub type RenewalDelay = Option<Duration>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RenewalRetryState {
-    backoff: Duration,
-    granted_cadence: RenewalDelay,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RenewalRetryEvent {
-    Failed,
-    Granted(RenewalDelay),
-}
-
 /// What the receipt path did with the agents on a delivered set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecoveryOutcome {
     /// Agents on lost shards were swept, and agents were recovered for the set.
     Recovered,
     /// Swept, but not recovered: the local lease had lapsed, and a fenced executor starts
-    /// nothing. An accepted grant runs the recovery once the lease is live.
+    /// nothing. The grant that revives the lease runs the recovery.
     DeferredUntilLeaseIsLive,
 }
 
@@ -83,19 +74,6 @@ pub type ShardAssignmentChangedHook = Arc<ShardAssignmentChangedHookFn>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecoveryTicket(u64);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RecoveryDebt {
-    NoDebt,
-    Owed(RecoveryTicket),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RecoveryDebtEvent {
-    Deferred(RecoveryTicket),
-    Completed(RecoveryTicket),
-    LeaseAdopted(Option<ShardDeliveryOutcome>),
-}
-
 #[async_trait]
 pub trait ShardManagerService: Send + Sync {
     /// Registers this executor and returns the shard assignment the manager
@@ -106,11 +84,18 @@ pub trait ShardManagerService: Send + Sync {
         pod_name: Option<String>,
     ) -> Result<ShardAssignment, ShardManagerError>;
 
+    /// One renewal pass: assert the set this executor believes it holds, and
+    /// apply whatever the manager answers. Returns how long to wait before the
+    /// next pass, or `None` to park until shutdown. Public so tests can drive
+    /// it without a timer, exactly as `GrpcQuotaService::renew_all` is driven.
+    async fn renew_shard_lease(&self) -> RenewalDelay;
+
     /// Graceful release of the shard lease. Never fails a shutdown.
     async fn deregister(&self);
 
-    /// Requests a renewal before the timer fires. The grant identifies the manager
-    /// process in charge and carries its set. No-op by default.
+    /// Runs the next renewal pass now instead of when its timer fires. Called when a push arrived
+    /// from a shard manager process this executor does not follow: the renewal's answer names
+    /// the process in charge and carries its set. No-op by default.
     fn renew_now(&self) {}
 
     /// Installs the hook fired when a re-registration or a corrected renewal
@@ -118,10 +103,11 @@ pub trait ShardManagerService: Send + Sync {
     /// implementation that never re-registers has nothing to announce.
     fn set_assignment_changed_hook(&self, _hook: &ShardAssignmentChangedHook) {}
 
-    /// Records that recovery of the agents for the current set is owed and returns its ticket.
-    /// This precedes the recovery attempt. A lapsed lease, a failed recovery and a running
-    /// recovery all leave the debt owed. The next accepted grant runs recovery once the lease
-    /// is live. A stale renewal can extend the lease but does not run recovery. No-op by default.
+    /// Registers that a recovery of the agents for the current set is owed, and returns the
+    /// ticket the attempt started now hands back if it completes. Called by the receipt path
+    /// before anything runs: a push that lands on a lapsed lease, a recovery that fails, and a
+    /// recovery that is still running all leave it owed, and the next grant runs it. No-op by
+    /// default.
     fn recovery_deferred(&self) -> RecoveryTicket {
         RecoveryTicket(0)
     }
@@ -243,7 +229,7 @@ impl AnnouncementSingleFlight {
 }
 
 pub struct GrpcShardManagerService {
-    client: Arc<dyn golem_service_base::clients::shard_manager::ShardLeaseClient>,
+    client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
     shard_service: Arc<dyn ShardService>,
     shutdown: Shutdown,
     /// The identity of this executor's shard lease. Regenerated whenever the
@@ -259,10 +245,12 @@ pub struct GrpcShardManagerService {
     renewal_loop_started: AtomicBool,
     /// Wakes the renewal loop ahead of its timer; see [`ShardManagerService::renew_now`].
     renew_now: Arc<tokio::sync::Notify>,
-    /// Exponential backoff for failed renewals. It starts at `MIN_RENEWAL_INTERVAL`
-    /// and doubles up to `MAX_RETRY_INTERVAL`, capped by the granted cadence when present.
-    /// Every grant resets it.
-    retry: RwLock<RenewalRetryState>,
+    /// Exponential backoff for failed renewals: doubles from
+    /// `MIN_RENEWAL_INTERVAL` up to `retry_cap()`, reset by every grant.
+    retry_backoff: RwLock<Duration>,
+    /// The cadence the last granted lease implied (`TTL / 3`), which caps the
+    /// backoff so a retry never waits longer than the lease it is saving.
+    granted_cadence: RwLock<Option<Duration>>,
     /// Fired when a re-registration or a corrected renewal replaces the shard assignment.
     ///
     /// Weak, following `LazyWorkerActivator`: the hook closes over the service graph that owns
@@ -272,10 +260,15 @@ pub struct GrpcShardManagerService {
     /// Shortest per-attempt deadline this executor will use; see [`Self::rpc_deadline`].
     /// A field rather than the constant so a test does not have to wait out the production floor.
     rpc_deadline_floor: Duration,
-    /// Atomic encoding of `RecoveryDebt`. Only `recovery_debt_transition` decides changes.
-    /// An unchanged accepted grant still requests recovery while debt is owed. Completion
-    /// retires only its own ticket, so an older attempt cannot retire newer debt.
-    recovery_debt: AtomicU64,
+    /// The newest recovery attempt still owed, as its ticket; `0` is none. The next grant runs a
+    /// recovery while it is non-zero, even if the set is unchanged: a push that fails is retried
+    /// by the shard manager, but a renewal has nobody to retry it, and an unchanged grant would
+    /// otherwise never run it again. A ticket rather than a flag because two attempts can
+    /// overlap: a renewal's recovery can outlast the lease, a push can then land and defer its
+    /// own, and the first to finish must not retire the second's, because it scanned the set
+    /// before the push changed it. Only [`Self::recovery_succeeded`] with the matching ticket
+    /// clears this.
+    recovery_outstanding: AtomicU64,
     /// Source of tickets; never reused, so an attempt that outlives a full clear-and-defer cycle
     /// cannot collide with a later one.
     recovery_tickets: AtomicU64,
@@ -286,7 +279,7 @@ pub struct GrpcShardManagerService {
 
 impl GrpcShardManagerService {
     pub fn new(
-        client: Arc<dyn golem_service_base::clients::shard_manager::ShardLeaseClient>,
+        client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
         shard_service: Arc<dyn ShardService>,
         shutdown: Shutdown,
     ) -> Arc<Self> {
@@ -301,7 +294,7 @@ impl GrpcShardManagerService {
     /// [`Self::new`] with the per-attempt deadline floor taken as a parameter, so a test does not
     /// have to wait out the production one.
     pub fn new_with_rpc_deadline_floor(
-        client: Arc<dyn golem_service_base::clients::shard_manager::ShardLeaseClient>,
+        client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
         shard_service: Arc<dyn ShardService>,
         shutdown: Shutdown,
         rpc_deadline_floor: Duration,
@@ -315,13 +308,11 @@ impl GrpcShardManagerService {
             me: me.clone(),
             renewal_loop_started: AtomicBool::new(false),
             renew_now: Arc::new(tokio::sync::Notify::new()),
-            retry: RwLock::new(RenewalRetryState {
-                backoff: MIN_RENEWAL_INTERVAL,
-                granted_cadence: None,
-            }),
+            retry_backoff: RwLock::new(MIN_RENEWAL_INTERVAL),
+            granted_cadence: RwLock::new(None),
             assignment_changed_hook: RwLock::new(None),
             rpc_deadline_floor,
-            recovery_debt: AtomicU64::new(encode_recovery_debt(RecoveryDebt::NoDebt)),
+            recovery_outstanding: AtomicU64::new(0),
             recovery_tickets: AtomicU64::new(0),
             announcement_single_flight: AnnouncementSingleFlight::new(),
         })
@@ -332,11 +323,12 @@ impl GrpcShardManagerService {
     /// all of it - and never less than the floor, so it always outlasts the manager's own budget
     /// for storing what the call asked for.
     ///
-    /// The retry backoff caps the wait between attempts. This deadline limits one attempt.
-    /// Using the backoff cap here would let a hung call consume a whole renewal period.
+    /// Deliberately not `retry_cap()`. The backoff ceiling answers "how long may we wait between
+    /// attempts", this answers "how long may one attempt take"; conflating them let a single hung
+    /// call consume a whole renewal period.
     fn rpc_deadline(&self) -> Duration {
         shard_lease::rpc_deadline(
-            self.retry.read().unwrap().granted_cadence,
+            *self.granted_cadence.read().unwrap(),
             self.rpc_deadline_floor,
         )
     }
@@ -345,29 +337,40 @@ impl GrpcShardManagerService {
         *self.executor_id.read().unwrap()
     }
 
-    fn apply_retry_event(&self, event: RenewalRetryEvent) -> RenewalDelay {
-        let mut state = self.retry.write().unwrap();
-        let (next, delay) = renewal_retry_transition(*state, event);
-        *state = next;
-        delay
+    /// `min(last granted TTL / 3, 30 s)` — the ceiling the retry backoff climbs
+    /// to. Before anything has been granted there is no lease to
+    /// outlive, so only the absolute ceiling applies.
+    ///
+    /// Bounds the wait *between* attempts only; one attempt is bounded by
+    /// [`Self::rpc_deadline`].
+    fn retry_cap(&self) -> Duration {
+        match *self.granted_cadence.read().unwrap() {
+            Some(cadence) => cadence.min(MAX_RETRY_INTERVAL),
+            None => MAX_RETRY_INTERVAL,
+        }
     }
 
-    fn apply_recovery_event(&self, event: RecoveryDebtEvent) -> bool {
-        // `try_update` repeats the transition with the current state after a failed CAS.
-        let previous = self
-            .recovery_debt
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |encoded| {
-                let (next, _) = recovery_debt_transition(decode_recovery_debt(encoded), event);
-                Some(encode_recovery_debt(next))
-            })
-            .expect("every recovery event supplies a state");
-        recovery_debt_transition(decode_recovery_debt(previous), event).1
+    /// The delay after a failed renewal: the current backoff, which then
+    /// doubles for the next failure, capped by `retry_cap()`.
+    fn next_retry_delay(&self) -> RenewalDelay {
+        let cap = self.retry_cap();
+        let mut backoff = self.retry_backoff.write().unwrap();
+        let delay = (*backoff).min(cap);
+        *backoff = delay.saturating_mul(2).min(cap);
+        Some(delay)
+    }
+
+    /// A granted lease resets the backoff to its first step and records the
+    /// cadence that caps it.
+    fn record_granted(&self, cadence: RenewalDelay) {
+        *self.retry_backoff.write().unwrap() = MIN_RENEWAL_INTERVAL;
+        *self.granted_cadence.write().unwrap() = cadence;
     }
 
     /// Tell the executor its shard assignment changed, so running
     /// agents are recovered for the new set. A failure here is logged, never
     /// fatal — the lease itself is already installed — and remembered, so the
-    /// next accepted grant runs the recovery again once the lease is live.
+    /// next grant runs the recovery again.
     ///
     /// The attempt is registered here as well as inside the hook: the hook is
     /// the receipt path, which registers and retires its own ticket, but a
@@ -468,41 +471,49 @@ impl GrpcShardManagerService {
         });
     }
 
-    /// Applies a granted lease and returns the cadence for the next pass and whether recovery
-    /// is owed. The renewal loop schedules recovery through [`AnnouncementSingleFlight`], so a
-    /// slow sweep does not delay the next renewal RPC.
+    /// Applies a granted lease and returns the cadence for the next pass, together with whether
+    /// [`Self::announce_assignment_changed`] is owed - the caller decides how to run it, rather
+    /// than this awaiting it inline, so that a caller which must not block on a slow sweep (the
+    /// renewal loop, via `renew_shard_lease_internal`) can hand it to
+    /// [`AnnouncementSingleFlight`] instead. [`ShardManagerService::renew_shard_lease`] awaits it
+    /// right here for every other caller, so nothing outside the loop observes any change: a test
+    /// calling it directly still sees the hook run before it returns.
     ///
-    /// An accepted renewal records the expiry, revision and executor count,
-    /// even when the shard set does not change. After an accepted reply, the
-    /// renewal loop requests recovery if the set changed or recovery is still owed.
-    ///
-    /// A grant whose set is older than the last delivery applied crossed with a
-    /// push on the network: its set is ignored, or it would put the older set back,
-    /// and its lease is adopted, because it answers this executor's own request.
-    fn adopt_lease(&self, lease: ShardLease) -> (RenewalDelay, bool) {
-        let ShardLease {
-            shard_epochs,
+    /// The grant is the shard manager's set for this executor. Normally that
+    /// is exactly what was held, and only the lease clock moves. When it is
+    /// not, the manager is correcting a push this executor never received,
+    /// wider or narrower, and it is an assignment change like any other: the
+    /// hook runs the same sweep-and-recover the push path does. A grant whose
+    /// set is older than the last delivery applied crossed with a push on the
+    /// network: its set is ignored, or it would put the older set back, and
+    /// its lease is adopted, because it answers this executor's own request.
+    fn adopt_lease(
+        &self,
+        shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        expires_at: Instant,
+        revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
+    ) -> (RenewalDelay, bool) {
+        let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
+        let announcement_owed = match self.shard_service.update_lease(
+            &shard_epochs,
             expires_at,
             revision,
             executor_count,
-        } = lease;
-        let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
-        let outcome =
-            self.shard_service
-                .update_lease(&shard_epochs, expires_at, revision, executor_count);
-        let announcement_owed = self.apply_recovery_event(RecoveryDebtEvent::LeaseAdopted(
-            outcome.as_ref().ok().copied(),
-        ));
-        match outcome {
+        ) {
             Ok(ShardDeliveryOutcome::Applied { set_changed: true }) => {
                 info!(
                     %revision,
                     "Shard lease renewal corrected the shard set; sweeping and recovering agents"
                 );
+                true
             }
             Ok(ShardDeliveryOutcome::Applied { set_changed: false }) => {
-                if announcement_owed {
+                if self.recovery_outstanding.load(Ordering::SeqCst) != 0 {
                     info!(%revision, "Running the agent recovery still owed from an earlier delivery");
+                    true
+                } else {
+                    false
                 }
             }
             Ok(ShardDeliveryOutcome::Stale { delivered, applied }) => {
@@ -511,15 +522,17 @@ impl GrpcShardManagerService {
                     %applied,
                     "Ignoring the shard set of a renewal older than the last delivery applied; the lease clock moved"
                 );
+                false
             }
             // Only a push is refused for its sender: a reply's sender is the one followed.
-            Ok(ShardDeliveryOutcome::FromAnotherManager { .. }) => {}
+            Ok(ShardDeliveryOutcome::FromAnotherManager { .. }) => false,
             Err(error) => {
                 warn!(%error, "Failed to apply a renewed shard lease");
+                false
             }
         };
         let cadence = renewal_interval_for(Some(expires_at), Instant::now());
-        self.apply_retry_event(RenewalRetryEvent::Granted(cadence));
+        self.record_granted(cadence);
         (cadence, announcement_owed)
     }
 
@@ -544,7 +557,9 @@ impl GrpcShardManagerService {
             ))
         })?;
 
-        // `ShardId::from_agent_id` divides by it.
+        // `ShardId::from_agent_id` divides by it, so a zero would abort this executor on its
+        // first routing decision rather than fail the registration. `AssignShards` refuses one
+        // for the same reason; this is the other door the count comes through.
         if number_of_shards == 0 {
             return Err(ShardManagerError::ConversionError(
                 "RegisterSuccess.number_of_shards must not be 0".to_string(),
@@ -558,22 +573,26 @@ impl GrpcShardManagerService {
         // and issues no RPCs at all.
         let cadence = renewal_interval_for(Some(registration.lease.expires_at), Instant::now());
         record_shard_lease_metrics_started();
-        self.apply_retry_event(RenewalRetryEvent::Granted(cadence));
+        self.record_granted(cadence);
         self.start_renewal_loop(cadence);
 
         Ok((number_of_shards, registration.lease))
     }
 
-    /// Renews and adopts one grant, including re-registration after a lost lease. The one
-    /// renewal loop awaits this pass before it starts another. Recovery is returned as a
-    /// separate obligation and does not delay renewal.
+    /// [`ShardManagerService::renew_shard_lease`], minus running the announcement it can end up
+    /// owing: returns the delay for the next pass and whether
+    /// [`Self::announce_assignment_changed`] still needs to run. Every caller other than the
+    /// renewal loop goes through the trait method, which awaits it right there - this split exists
+    /// solely so the loop (`start_renewal_loop`) can hand the announcement to
+    /// [`AnnouncementSingleFlight`] instead of awaiting it inline, so a slow sweep cannot stall the
+    /// next renewal RPC.
     async fn renew_shard_lease_internal(&self) -> (RenewalDelay, bool) {
         let held = match self.shard_service.current_assignment() {
             Ok(assignment) => assignment.held_epochs(),
             Err(error) => {
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::NotRegistered);
                 warn!(%error, "Skipping shard lease renewal, no shard assignment yet");
-                return (self.apply_retry_event(RenewalRetryEvent::Failed), false);
+                return (self.next_retry_delay(), false);
             }
         };
 
@@ -590,13 +609,18 @@ impl GrpcShardManagerService {
                         deadline_ms = deadline.as_millis(),
                         "Shard lease renewal did not answer in time; backing off"
                     );
-                    return (self.apply_retry_event(RenewalRetryEvent::Failed), false);
+                    return (self.next_retry_delay(), false);
                 }
             };
         match renewed {
             Ok(lease) => {
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::Granted);
-                self.adopt_lease(lease)
+                self.adopt_lease(
+                    lease.shard_epochs,
+                    lease.expires_at,
+                    lease.revision,
+                    lease.executor_count,
+                )
             }
             Err(ShardLeaseError::LeaseNotFound(details)) => {
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::LeaseNotFound);
@@ -616,7 +640,7 @@ impl GrpcShardManagerService {
                 match registration {
                     None => {
                         error!("Cannot re-register: this executor never completed a registration");
-                        (self.apply_retry_event(RenewalRetryEvent::Failed), false)
+                        (self.next_retry_delay(), false)
                     }
                     // Bounded like a renewal: the assignment is already cleared, so a manager that
                     // accepts the call and stalls would otherwise hold this executor with no shards
@@ -632,7 +656,7 @@ impl GrpcShardManagerService {
                                 deadline_ms = self.rpc_deadline().as_millis(),
                                 "Re-registration after a lost lease timed out, retrying"
                             );
-                            (self.apply_retry_event(RenewalRetryEvent::Failed), false)
+                            (self.next_retry_delay(), false)
                         }
                         Ok(Ok((number_of_shards, lease))) => {
                             let outcome = self.shard_service.register(
@@ -664,7 +688,7 @@ impl GrpcShardManagerService {
                         }
                         Ok(Err(error)) => {
                             warn!(%error, "Re-registration after a lost lease failed");
-                            (self.apply_retry_event(RenewalRetryEvent::Failed), false)
+                            (self.next_retry_delay(), false)
                         }
                     },
                 }
@@ -675,84 +699,9 @@ impl GrpcShardManagerService {
                 // admission the moment it passes.
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::Failed);
                 warn!(%error, "Shard lease renewal failed, retrying");
-                (self.apply_retry_event(RenewalRetryEvent::Failed), false)
+                (self.next_retry_delay(), false)
             }
         }
-    }
-}
-
-/// Gives the retry state and delay after a failure or grant. A grant resets the backoff.
-fn renewal_retry_transition(
-    state: RenewalRetryState,
-    event: RenewalRetryEvent,
-) -> (RenewalRetryState, RenewalDelay) {
-    match event {
-        RenewalRetryEvent::Failed => {
-            let cap = state
-                .granted_cadence
-                .unwrap_or(MAX_RETRY_INTERVAL)
-                .min(MAX_RETRY_INTERVAL);
-            let delay = state.backoff.min(cap);
-            (
-                RenewalRetryState {
-                    backoff: delay.saturating_mul(2).min(cap),
-                    ..state
-                },
-                Some(delay),
-            )
-        }
-        RenewalRetryEvent::Granted(cadence) => (
-            RenewalRetryState {
-                backoff: MIN_RENEWAL_INTERVAL,
-                granted_cadence: cadence,
-            },
-            cadence,
-        ),
-    }
-}
-
-/// Gives the debt after the event and whether the grant needs a recovery announcement.
-/// Adoption preserves debt. Only completion of the current ticket clears it.
-fn recovery_debt_transition(debt: RecoveryDebt, event: RecoveryDebtEvent) -> (RecoveryDebt, bool) {
-    match event {
-        RecoveryDebtEvent::Deferred(ticket) => {
-            let next = match debt {
-                RecoveryDebt::Owed(current) if current.0 > ticket.0 => debt,
-                _ => RecoveryDebt::Owed(ticket),
-            };
-            (next, false)
-        }
-        RecoveryDebtEvent::Completed(ticket) => (
-            if debt == RecoveryDebt::Owed(ticket) {
-                RecoveryDebt::NoDebt
-            } else {
-                debt
-            },
-            false,
-        ),
-        RecoveryDebtEvent::LeaseAdopted(outcome) => (
-            debt,
-            match outcome {
-                Some(ShardDeliveryOutcome::Applied { set_changed }) => {
-                    set_changed || matches!(debt, RecoveryDebt::Owed(_))
-                }
-                _ => false,
-            },
-        ),
-    }
-}
-
-fn decode_recovery_debt(encoded: u64) -> RecoveryDebt {
-    match encoded {
-        0 => RecoveryDebt::NoDebt,
-        ticket => RecoveryDebt::Owed(RecoveryTicket(ticket)),
-    }
-}
-
-fn encode_recovery_debt(debt: RecoveryDebt) -> u64 {
-    match debt {
-        RecoveryDebt::NoDebt => 0,
-        RecoveryDebt::Owed(ticket) => ticket.0,
     }
 }
 
@@ -790,6 +739,18 @@ impl ShardManagerService for GrpcShardManagerService {
         })
     }
 
+    /// Drives [`Self::renew_shard_lease_internal`] and, unlike the renewal loop, awaits the
+    /// announcement it may come back owing right here - so every caller other than the loop
+    /// itself (every test in this file included) sees exactly the synchronous behaviour this had
+    /// before the split: the hook has run by the time this returns.
+    async fn renew_shard_lease(&self) -> RenewalDelay {
+        let (delay, announcement_owed) = self.renew_shard_lease_internal().await;
+        if announcement_owed {
+            self.announce_assignment_changed().await;
+        }
+        delay
+    }
+
     async fn deregister(&self) {
         let held = self
             .shard_service
@@ -819,13 +780,22 @@ impl ShardManagerService for GrpcShardManagerService {
     }
 
     fn recovery_deferred(&self) -> RecoveryTicket {
-        let ticket = RecoveryTicket(self.recovery_tickets.fetch_add(1, Ordering::SeqCst) + 1);
-        self.apply_recovery_event(RecoveryDebtEvent::Deferred(ticket));
-        ticket
+        let ticket = self.recovery_tickets.fetch_add(1, Ordering::SeqCst) + 1;
+        // `fetch_max`, so two attempts registering concurrently leave the newer one owed whatever
+        // order their stores land in.
+        self.recovery_outstanding
+            .fetch_max(ticket, Ordering::SeqCst);
+        RecoveryTicket(ticket)
     }
 
     fn recovery_succeeded(&self, ticket: RecoveryTicket) {
-        self.apply_recovery_event(RecoveryDebtEvent::Completed(ticket));
+        // Retires the owed recovery only if this attempt is still the newest one registered.
+        let _ = self.recovery_outstanding.compare_exchange(
+            ticket.0,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
     }
 }
 
@@ -841,24 +811,17 @@ impl ShardManagerService for ShardManagerServiceSingleShard {
         _endpoint: ExecutorEndpoint,
         _pod_name: Option<String>,
     ) -> Result<ShardAssignment, ShardManagerError> {
-        // `expires_at: None` — the single binary has no shard manager to renew
-        // against and must never fence itself.
+        // This adapter has no shard manager to renew against, so its assignment never expires.
         Ok(ShardAssignment::unexpiring(1, [ShardId::new(0)]))
     }
 
-    async fn deregister(&self) {}
-}
-
-#[cfg(test)]
-impl GrpcShardManagerService {
-    /// Runs one production renewal pass and waits for its recovery before assertions run.
+    /// No lease to renew, and no expiry to poll against: the loop this service
+    /// never starts would park here anyway.
     async fn renew_shard_lease(&self) -> RenewalDelay {
-        let (delay, announcement_owed) = self.renew_shard_lease_internal().await;
-        if announcement_owed {
-            self.announce_assignment_changed().await;
-        }
-        delay
+        None
     }
+
+    async fn deregister(&self) {}
 }
 
 #[cfg(test)]

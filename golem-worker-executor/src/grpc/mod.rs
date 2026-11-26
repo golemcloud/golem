@@ -92,11 +92,11 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
-use golem_common::model::protobuf::to_protobuf_resource_description;
+use golem_common::model::protobuf::{shard_epochs_from_proto, to_protobuf_resource_description};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
     AgentStatus, AgentStatusRecord, OwnedAgentId, ScanCursor, ShardDeliveryOutcome, ShardEpoch,
-    ShardLeaseRevision, Timestamp,
+    ShardId, ShardLeaseRevision, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::clients::shard_manager::ExecutorEndpoint;

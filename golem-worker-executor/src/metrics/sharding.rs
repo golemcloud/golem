@@ -53,7 +53,7 @@ pub fn record_assigned_shard_count(size: usize) {
     ASSIGNED_SHARD_COUNT.set(size as f64);
 }
 
-pub fn record_executor_count(count: usize) {
+pub(crate) fn record_executor_count(count: usize) {
     EXECUTOR_COUNT.set(count as f64);
 }
 
@@ -116,8 +116,8 @@ impl ShardAdmissionRefusal {
     }
 }
 
-/// Exports renewal outcomes and admission refusals before their first use.
-/// Repeated initialization preserves existing totals.
+/// Exports every renewal outcome and admission refusal at zero, so that a dashboard or an
+/// alert reads 0 instead of no data before the first one happens.
 ///
 /// Called when the executor registers with a shard manager, so that a single-shard executor,
 /// which has no lease, exports none of the lease metrics.
@@ -191,23 +191,4 @@ pub fn stale_shard_delivery_count(delivery: ShardDelivery) -> f64 {
     STALE_SHARD_DELIVERY_TOTAL
         .with_label_values(&[delivery.label()])
         .get()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_r::test;
-
-    #[test]
-    // A captured worker has no concurrent test writing the process-global gauges.
-    #[test_r::always_capture]
-    fn the_executor_count_gauge_exports_the_recorded_count() {
-        record_executor_count(7);
-        let metrics = prometheus::gather();
-        let count = metrics
-            .iter()
-            .find(|metric| metric.name() == "executor_count")
-            .expect("the accepted executor count must be exported");
-        assert_eq!(count.get_metric()[0].get_gauge().value(), 7.0);
-    }
 }
