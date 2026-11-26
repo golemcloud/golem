@@ -58,6 +58,8 @@ The host applies code defaults only to absent static values, below deployment an
 creation values. The accessor reads the host result; it does not apply defaults.
 An explicit null differs from an omitted default. Optional tuple positions use
 null in canonical JSON and retain their positions.
+Nullable fields below optional managed groups are rejected because the host
+schema cannot represent nested options.
 
 Config field names use lowerCamelCase in metadata, including record fields and
 discriminator field names. TypeScript property names remain as declared. Catalog
@@ -70,6 +72,8 @@ defaults and native factory callbacks, fail with a diagnostic. Use
 can also be assembled from its literal field defaults. Partial nested defaults
 that cannot describe a complete value fail instead of being dropped. Transforms
 and catch/fallback schemas are not static defaults.
+Static config rejects Zod string transforms such as `trim`, `toLowerCase` and
+`toUpperCase`, and Zod overwrites, before executing their checks.
 
 Native string-discriminated record unions retain their discriminator and tags.
 Use `s.union([{ tag, schema, discriminator }, ...])` for explicit canonical named

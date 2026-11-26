@@ -271,6 +271,18 @@ const zodWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
     );
   }
 
+  if (context?.config) {
+    const def = (schema as any)._zod?.def ?? (schema as any)._def;
+    for (const check of def.checks ?? []) {
+      if (
+        check._zod?.def.check === 'overwrite' ||
+        ['trim', 'toLowerCase', 'toUpperCase'].includes(check.kind)
+      ) {
+        throw new TypeError('Static config cannot use Zod transformations or overwrites');
+      }
+    }
+  }
+
   if (kind === 'lazy') {
     // `z.lazy(() => S)` defers to its (stable) inner schema. Recursion is handled
     // by the cycle-aware `recurse`: a self-reference resolves to the same schema

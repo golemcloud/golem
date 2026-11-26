@@ -358,17 +358,44 @@ describe('static config', () => {
     }
   });
 
-  it('preserves a present nullable default below an optional managed group', () => {
-    const [entry] = compileConfig({
-      service: z
-        .object({ value: s.default(z.string().nullable(), null), key: s.secret(z.string()) })
-        .optional(),
-    });
-    expect(entry.defaultValue).toEqual({
-      tag: 'option',
-      value: { tag: 'option', value: undefined },
-    });
+  it('rejects nullable leaves below optional managed groups instead of emitting nested options', () => {
+    for (const value of [z.string().nullable(), s.default(z.string().nullable(), null)]) {
+      expect(() =>
+        compileConfig({
+          service: z.object({ value, key: s.secret(z.string()) }).optional(),
+        }),
+      ).toThrow(/Nullable static config.*service.value.*optional group/);
+    }
+    const [entry] = compileConfig({ value: s.default(z.string().nullable(), null) });
+    expect(entry.defaultValue).toEqual({ tag: 'option', value: undefined });
     expect(entry.codec.fromValue(entry.defaultValue!)).toBeNull();
+  });
+
+  it('rejects transforming scalar checks before validating static defaults', () => {
+    let overwriteCalls = 0;
+    const overwrite = z.string().overwrite((value) => {
+      overwriteCalls++;
+      return value.trim();
+    });
+    for (const schema of [
+      z3
+        .string()
+        .trim()
+        .refine((value) => value === 'x'),
+      z3.string().toLowerCase(),
+      z3.string().toUpperCase(),
+      z
+        .string()
+        .trim()
+        .refine((value) => value === 'x'),
+      overwrite,
+    ]) {
+      expect(() => compileConfig({ value: s.default(schema, ' x ') })).toThrow(
+        /transformations|overwrites/,
+      );
+      expect(() => compileConfig({ value: schema })).toThrow(/transformations|overwrites/);
+    }
+    expect(overwriteCalls).toBe(0);
   });
 
   it('allows refinement and identity wrappers without executing transformations', () => {

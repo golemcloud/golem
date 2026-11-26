@@ -175,6 +175,11 @@ function buildLeafDeclaration(
       required: true,
     };
   }
+  if (underOptional && codec.optionKind === 'nullable') {
+    throw new TypeError(
+      `Nullable static config at '${path.join('.')}' cannot be nested under an optional group`,
+    );
+  }
   const leafIsOptional = isOptionCodec(codec) && codec.optionKind !== 'nullable';
   // Lift a non-option leaf that sits under an optional group so an unset value
   // reads as `option none` (=> undefined) instead of trapping the guest.
