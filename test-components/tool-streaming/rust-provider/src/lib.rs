@@ -2499,7 +2499,8 @@ impl Streaming for StreamingImpl {
 
                         let fields = types::Fields::from_list(&[]).unwrap();
                         let (_, trailers) = wit_future::new(|| Ok(None));
-                        let (request, _transmit) = types::Request::new(fields, None, trailers, None);
+                        let (request, _transmit) =
+                            types::Request::new(fields, None, trailers, None);
                         request.set_scheme(Some(&types::Scheme::Https)).unwrap();
                         let port = std::env::var("IDEMPOTENCY_EFFECT_PORT").unwrap();
                         request
