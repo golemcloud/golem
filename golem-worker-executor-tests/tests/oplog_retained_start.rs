@@ -381,7 +381,9 @@ async fn the_retry_count_and_the_last_error_read_from_the_retained_start(
         OplogIndex::INITIAL < retained_start && retained_start < snapshot,
         "start {retained_start}, snapshot {snapshot}"
     );
-    drop(executor);
+    // The release waits until the executor stopped, so it writes nothing after the storage edit
+    // below.
+    executor.release().await?;
 
     force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
     let faults = KeyValueStorageFaults::default();
@@ -648,7 +650,9 @@ async fn a_create_after_the_retained_start_finds_the_initialization(
     let retained_start = OplogIndex::from_u64(2);
     assert_eq!(initialized.len(), 1, "{initialized:?}");
     assert!(initialized[0] >= retained_start, "{initialized:?}");
-    drop(executor);
+    // The release waits until the executor stopped, so it writes nothing after the storage edit
+    // below.
+    executor.release().await?;
 
     force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
     let executor = start(deps, &context).await?;
