@@ -1636,7 +1636,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     assert_eq!(
         scheduler
             .count_due(
-                jiff::Timestamp::now() + jiff::SignedDuration::from_hours((1) * 24),
+                jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24),
                 &assignment
             )
             .await?,

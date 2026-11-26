@@ -64,9 +64,34 @@ pub struct CreateParameters {
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
     pub instance_id: Uuid,
     pub create_request: CreateRequest,
+    pub standalone_tool: Option<Box<StandaloneToolInvocation>>,
     /// Whether the owner is a never-live sandbox. A marked owner reports the `Sandboxed` status.
     /// The mark never changes after the `Create` entry.
     pub never_live: bool,
+}
+
+/// The identity of the standalone invocation that owns this oplog.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct StandaloneToolInvocation {
+    pub tool_name: crate::model::tool::ToolName,
+    pub command_path: Vec<String>,
+    pub invocation_id: crate::model::InvocationId,
+    pub caller: Caller,
+}
+
+impl StandaloneToolInvocation {
+    pub fn public(
+        &self,
+        claims: crate::model::caller::ClaimVisibility,
+    ) -> crate::model::oplog::PublicStandaloneToolInvocation {
+        crate::model::oplog::PublicStandaloneToolInvocation {
+            tool_name: self.tool_name.clone(),
+            command_path: self.command_path.clone(),
+            invocation_id: self.invocation_id,
+            caller: crate::model::caller::PublicCaller::new(&self.caller, claims),
+        }
+    }
 }
 
 /// The request that created an owner: its kind, its idempotency key, and the caller and
@@ -150,6 +175,7 @@ pub struct CreateProjectionParameters {
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
     pub instance_id: Uuid,
     pub never_live: bool,
+    pub standalone_tool: Option<crate::model::oplog::PublicStandaloneToolInvocation>,
 }
 
 impl From<CreateParameters> for CreateProjectionParameters {
@@ -173,6 +199,7 @@ impl From<CreateParameters> for CreateProjectionParameters {
             local_agent_config,
             instance_id,
             create_request: _,
+            standalone_tool,
             never_live,
         } = value;
         Self {
@@ -191,6 +218,8 @@ impl From<CreateParameters> for CreateProjectionParameters {
             local_agent_config,
             instance_id,
             never_live,
+            standalone_tool: standalone_tool
+                .map(|tool| tool.public(crate::model::caller::ClaimVisibility::Shown)),
         }
     }
 }

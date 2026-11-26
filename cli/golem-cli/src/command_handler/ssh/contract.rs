@@ -514,30 +514,14 @@ pub fn prompt(
 
 /// The command that looks up a submission's result later under its idempotency key, without
 /// running it again. `global_args` are the profile and environment flags of this session.
-pub fn lookup_command(
-    executable: &str,
-    global_args: &[String],
-    agent: &str,
-    key: &str,
-    tool: &str,
-) -> String {
+pub fn lookup_command(executable: &str, global_args: &[String], agent: &str, key: &str) -> String {
     let mut args = vec![executable.to_string()];
     args.extend(global_args.iter().cloned());
-    args.extend(
-        [
-            "tool",
-            "invoke",
-            "--agent",
-            agent,
-            "--lookup",
-            "--idempotency-key",
-            key,
-            tool,
-            "--",
-            RUN,
-        ]
-        .map(str::to_string),
-    );
+    args.extend([
+        "invocation".to_string(),
+        "get".to_string(),
+        format!("{agent}.{key}"),
+    ]);
     args.iter()
         .map(|arg| shlex::try_quote(arg).map_or_else(|_| arg.clone(), |quoted| quoted.into_owned()))
         .collect::<Vec<_>>()
@@ -1197,10 +1181,8 @@ mod tests {
                 &strings(&["--profile", "my profile"]),
                 "A(\"m1\")",
                 "k-1",
-                "bash"
             ),
-            "golem --profile 'my profile' tool invoke --agent 'A(\"m1\")' --lookup \
-             --idempotency-key k-1 bash -- run"
+            "golem --profile 'my profile' invocation get 'A(\"m1\").k-1'"
         );
     }
 

@@ -125,6 +125,7 @@ impl WorkerService for DefaultWorkerService {
                     instance_id,
                     create_request,
                     never_live,
+                    standalone_tool,
                 } = *parameters;
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 debug_assert_eq!(AgentFingerprint(instance_id), resolved_fingerprint);
@@ -192,6 +193,7 @@ impl WorkerService for DefaultWorkerService {
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
                     create_request,
+                    standalone_tool,
                 };
 
                 let fingerprint = AgentFingerprint(instance_id);

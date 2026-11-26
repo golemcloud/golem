@@ -124,7 +124,8 @@ pub struct BenchmarkCliParameters {
     #[arg(long, default_value = "false")]
     pub primary_only: bool,
 
-    /// Retain raw duration and count samples in JSON.
+    /// Retain aggregate raw-sample views for a single benchmark. Suite JSON and
+    /// explicit iteration evidence always retain all raw samples.
     #[arg(long, default_value = "false")]
     pub retain_details: bool,
 

@@ -500,6 +500,46 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         Ok(active_agent.primary())
     }
 
+    pub async fn get_or_add_standalone_tool<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        invocation: golem_common::model::oplog::StandaloneToolInvocation,
+        invocation_context: &InvocationContextStack,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
+        let caller = invocation.caller.clone();
+        let key = IdempotencyKey::new(invocation.invocation_id.to_string());
+        let owner = NewOwner {
+            standalone_tool: Some(Box::new(invocation)),
+            ..NewOwner::untyped(component_id)
+        };
+        active_agent
+            .primary
+            .ensure_created(
+                None,
+                Vec::new(),
+                Some(component_revision),
+                None,
+                invocation_context.clone(),
+                caller,
+                InvocationFreshnessDisposition::MayExist,
+                WorkerCreationMode::StandaloneTool,
+                CreateIntent::Create {
+                    owner,
+                    exclusive: false,
+                    idempotency_key: Some(key),
+                },
+            )
+            .await?;
+        Ok(active_agent.primary())
+    }
+
     /// Acquires a cached or persisted worker without ever creating a logical agent.
     /// The cache initialization is shared with create-or-load, so absence is decided
     /// inside the single-flight constructor rather than by a racy preflight lookup.

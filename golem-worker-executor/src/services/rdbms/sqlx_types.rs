@@ -100,6 +100,12 @@ where
     fn array_type_info() -> sqlx::postgres::PgTypeInfo {
         T::Sql::array_type_info()
     }
+
+    // SQLx checks a column against this, not against `array_type_info`. Some types accept
+    // more than one array type: a bit vector reads both `BIT[]` and `VARBIT[]` columns.
+    fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        T::Sql::array_compatible(ty)
+    }
 }
 
 impl SqlType for jiff::civil::Date {
@@ -352,5 +358,21 @@ mod tests {
             <Vec<SqlValue<ValuesRange<jiff::Timestamp>>> as Type<sqlx::Postgres>>::type_info(),
             <Vec<PgRange<time::OffsetDateTime>> as Type<sqlx::Postgres>>::type_info(),
         );
+    }
+
+    #[test]
+    fn sql_bit_arrays_accept_bit_and_varbit_columns() {
+        // The OIDs of BIT[] and VARBIT[].
+        for oid in [1561, 1563] {
+            let column = sqlx::postgres::PgTypeInfo::with_oid(sqlx::postgres::types::Oid(oid));
+            assert!(
+                <Vec<bit_vec_sqlx::BitVec> as Type<sqlx::Postgres>>::compatible(&column),
+                "SQLx reads a column with OID {oid} as a bit vector array"
+            );
+            assert!(
+                <Vec<SqlValue<bit_vec::BitVec>> as Type<sqlx::Postgres>>::compatible(&column),
+                "the adapter must read a column with OID {oid} as SQLx does"
+            );
+        }
     }
 }

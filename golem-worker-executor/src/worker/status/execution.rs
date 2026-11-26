@@ -24,6 +24,8 @@ pub(super) fn calculate_latest_worker_status(
     skipped_regions: &DeletedRegions,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
+    terminal_failure_at: &mut Option<Timestamp>,
+    terminal_failure_index: &mut Option<OplogIndex>,
 ) -> LatestWorkerStatus {
     for (idx, entry) in entries {
         // Errors are counted in skipped regions too (but not in deleted ones), so retained
@@ -62,6 +64,7 @@ pub(super) fn calculate_latest_worker_status(
             continue;
         }
 
+        let was_terminal = matches!(current_status, AgentStatus::Failed | AgentStatus::Exited);
         // For non-skipped errors, update the worker status based on the accumulated retry count
         if !deleted_regions.is_in_deleted_region(*idx)
             && let OplogEntry::Error {
@@ -272,6 +275,15 @@ pub(super) fn calculate_latest_worker_status(
             )
         {
             current_status = status_before_entry;
+        }
+        if matches!(current_status, AgentStatus::Failed | AgentStatus::Exited) {
+            if !was_terminal {
+                *terminal_failure_at = Some(entry.timestamp());
+                *terminal_failure_index = Some(*idx);
+            }
+        } else {
+            *terminal_failure_at = None;
+            *terminal_failure_index = None;
         }
     }
     (

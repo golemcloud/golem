@@ -1339,6 +1339,8 @@ pub trait Streaming {
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
 
+    async fn invocation_id(&self, rpc_name: Option<String>) -> String;
+
     async fn echo_secret(
         &self,
         value: GuestSecretHandle,
@@ -1865,6 +1867,94 @@ async fn run_open_websocket_receive_wait(
     unreachable!("the open receive wait returns only through cancellation")
 }
 
+// Sends a POST to `HTTP_HOLD_PORT`, whose peer answers with response headers at once and then
+// holds the connection. The body writes one request-body chunk and keeps the request body open,
+// so the request-body transmission stays in flight after `send` returns. Once `send` returned,
+// pauses at a promise checkpoint, then writes one stdout chunk and waits until the caller cancels.
+async fn run_open_request_body_transmit_wait(
+    mut stdout: OutputStream,
+) -> Result<StreamSummary, StreamingError> {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let port = std::env::var("HTTP_HOLD_PORT").expect("HTTP_HOLD_PORT is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid HTTP fields");
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (_trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set HTTP method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set HTTP scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set HTTP authority");
+    request
+        .set_path_with_query(Some("/hold"))
+        .expect("set HTTP path");
+    let send_then_checkpoint = async {
+        let _response = client::send(request)
+            .await
+            .expect("send the held HTTP request");
+        wait_at_promise_checkpoint("open-call-held").await;
+        assert!(write_chunk(&mut stdout, b"open-call-held".to_vec()).await);
+        std::future::pending::<()>().await;
+    };
+    let upload = async {
+        assert!(body_tx.write_all(b"open".to_vec()).await.is_empty());
+        std::future::pending::<()>().await;
+    };
+    let transmit = async {
+        let outcome = transmit.await;
+        panic!("the held request body finished transmitting: {outcome:?}");
+    };
+    (send_then_checkpoint, upload, transmit).join().await;
+    unreachable!("the open transmission wait returns only through cancellation")
+}
+
+// Holds a nested `marker-echo` tool call whose stdin stays open. Pauses at a promise checkpoint,
+// then writes one stdout chunk and waits until the caller cancels.
+async fn run_open_nested_invoke_wait(
+    mut stdout: OutputStream,
+) -> Result<StreamSummary, StreamingError> {
+    use futures_concurrency::prelude::*;
+
+    let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+    let (writer, nested_stdin, _closed) = tool_host::create_stdin();
+    let (nested_target, mut nested_stdout) = tool_host::create_output();
+    let nested = rpc.async_invoke_and_await(
+        &["run".to_string()],
+        raw_run_input("marker-echo"),
+        Some(nested_stdin),
+        Some(nested_target),
+        None,
+    );
+    writer
+        .write(b"open".to_vec())
+        .await
+        .expect("write nested stdin");
+    let drain = async {
+        while let Some(item) = nested_stdout.next().await {
+            item.expect("nested marker-echo stdout failed");
+        }
+        std::future::pending::<()>().await;
+    };
+    let result = async {
+        let result = nested.get().await;
+        panic!("the nested call with open stdin returned {result:?}");
+    };
+    let checkpoint = async {
+        wait_at_promise_checkpoint("open-call-held").await;
+        assert!(write_chunk(&mut stdout, b"open-call-held".to_vec()).await);
+        std::future::pending::<()>().await;
+    };
+    (drain, result, checkpoint).join().await;
+    unreachable!("the open nested invoke wait returns only through cancellation")
+}
+
 fn write_owner_file(path: &str, bytes: &[u8]) -> Result<(), String> {
     let (root, _) = wasi::filesystem::preopens::get_directories()
         .into_iter()
@@ -2175,6 +2265,12 @@ impl Streaming for StreamingImpl {
         }
         if mode == "open-receive-wait" {
             return run_open_websocket_receive_wait(stdout).await;
+        }
+        if mode == "open-transmit-wait" {
+            return run_open_request_body_transmit_wait(stdout).await;
+        }
+        if mode == "open-nested-invoke-wait" {
+            return run_open_nested_invoke_wait(stdout).await;
         }
         if let Some(size) = mode.strip_prefix("piped-unread-source:") {
             let size: usize = size.parse().expect("source chunk size");
@@ -2491,8 +2587,36 @@ impl Streaming for StreamingImpl {
                 wait_at_crash_checkpoint(&stdout, "capable-terminal-retained-child").await;
             }
             "atomic-idempotency-child" => {
-                let _ = golem_rust::generate_idempotency_key();
-                send_idempotent_effect().await;
+                let error_mode = std::env::var("HTTP_ERROR_MODE").ok();
+                let error = async {
+                    if error_mode.is_some() {
+                        use golem_rust::wasip3::http::{client, types};
+                        use golem_rust::wasip3::wit_future;
+
+                        let fields = types::Fields::from_list(&[]).unwrap();
+                        let (_, trailers) = wit_future::new(|| Ok(None));
+                        let (request, _transmit) =
+                            types::Request::new(fields, None, trailers, None);
+                        request.set_scheme(Some(&types::Scheme::Https)).unwrap();
+                        let port = std::env::var("IDEMPOTENCY_EFFECT_PORT").unwrap();
+                        request
+                            .set_authority(Some(&format!("127.0.0.1:{port}")))
+                            .unwrap();
+                        request.set_path_with_query(Some("/unsupported")).unwrap();
+                        assert!(matches!(
+                            client::send(request).await,
+                            Err(types::ErrorCode::TlsProtocolError)
+                        ));
+                    }
+                };
+                if error_mode.as_deref() == Some("overlap") {
+                    let _ = golem_rust::generate_idempotency_key();
+                    (send_idempotent_effect(), error).join().await;
+                } else {
+                    error.await;
+                    let _ = golem_rust::generate_idempotency_key();
+                    send_idempotent_effect().await;
+                }
             }
             "historical-reconstruction-gate" => {
                 while let Some(item) = stdin.next().await {
@@ -2574,6 +2698,25 @@ impl Streaming for StreamingImpl {
         Ok(summary)
     }
 
+    async fn invocation_id(&self, rpc_name: Option<String>) -> String {
+        let id = golem_rust::golem_agentic::golem::agent::invocation_context::invocation_id()
+            .expect("tool runs inside an invocation");
+        if let Some(name) = rpc_name {
+            let _report = CallerReportClient::upsert(name).report().await;
+        }
+        let owner = match id.owner {
+            wire::InvocationOwner::Agent(agent) => {
+                golem_rust::Uuid::from_u64_pair(agent.uuid.high_bits, agent.uuid.low_bits)
+                    .to_string()
+            }
+            wire::InvocationOwner::Tool(name) => name,
+        };
+        format!(
+            "{owner}.{}",
+            golem_rust::Uuid::from_u64_pair(id.id.high_bits, id.id.low_bits)
+        )
+    }
+
     async fn no_stream(&self, value: String) -> Result<String, StreamingError> {
         if value == "first" || value == "second" {
             golem_rust::oplog_commit(0);
@@ -2586,10 +2729,24 @@ impl Streaming for StreamingImpl {
                 .expect("append native declared-error invocation order");
             return Err(StreamingError::Declared { bytes_read: 0 });
         }
-        if value == "native-order" {
+        if value == "standalone-before-effect" {
+            wait_at_crash_checkpoint(&value, "standalone-before-effect").await;
+        }
+        if value == "standalone-promise" {
+            wait_at_promise_checkpoint("standalone-promise").await;
+        }
+        if value == "native-order"
+            || value == "standalone-before-effect"
+            || value == "standalone-after-effect"
+            || value == "standalone-promise"
+            || value == "standalone-held-effect"
+        {
             record_native_order_external_effect().await;
             append_owner_file("/native-tool-order.log", b"T")
                 .expect("append native external tool invocation order");
+        }
+        if value == "standalone-after-effect" {
+            wait_at_crash_checkpoint(&value, "standalone-after-effect").await;
         }
         Ok(format!("no-stream:{value}"))
     }

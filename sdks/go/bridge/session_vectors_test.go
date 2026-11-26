@@ -326,6 +326,11 @@ func TestServerMessagesParse(t *testing.T) {
 		if err != nil || kind != vector["type"] {
 			t.Fatalf("%s: %v", vector["name"], err)
 		}
+		if kind == "invocationAccepted" || kind == "invocationReady" {
+			if err := m.members(kind, []string{"attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"}, "invocationId"); err != nil {
+				t.Fatalf("%s: %v", vector["name"], err)
+			}
+		}
 		if kind == "stream-end" {
 			if _, _, err := m.streamEnd(true); err != nil {
 				t.Fatalf("%s: %v", vector["name"], err)

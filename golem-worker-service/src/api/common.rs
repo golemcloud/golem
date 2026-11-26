@@ -327,6 +327,9 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::AgentNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
+            WorkerExecutorError::NotAnAgent { .. } => {
+                Self::bad_request(api::error_code::NOT_AN_AGENT, error)
+            }
             WorkerExecutorError::AgentAlreadyExists { .. } => {
                 Self::conflict(api::error_code::AGENT_ALREADY_EXISTS, error)
             }

@@ -25,6 +25,7 @@ test "accepted invocation identity is final and stable across resume" {
       ),
     ),
   )
+  message["invocationId"] = Json::string("weather.00000000-0000-0000-0000-000000000123")
   validate_message_fields(message, "invocationAccepted")
   message["type"] = Json::string("invocationReady")
   validate_message_fields(message, "invocationReady")

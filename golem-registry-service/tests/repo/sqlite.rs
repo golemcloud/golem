@@ -162,6 +162,21 @@ async fn deps(db: &SqliteDb) -> Deps {
 // Test cases --------------------------------------------------------------------------------------
 
 #[test]
+async fn permission_share_mutations_invalidate_target_authentication(deps: &Deps, db: &SqliteDb) {
+    crate::repo::permission_share::mutations_invalidate_target_authentication(deps, db).await;
+}
+
+#[test]
+async fn permission_share_invalidation_failure_rolls_back_mutations(deps: &Deps, db: &SqliteDb) {
+    crate::repo::permission_share::invalidation_failure_rolls_back_mutations(deps, db).await;
+}
+
+#[test]
+async fn permission_share_creation_signals_only_after_success(deps: &Deps, db: &SqliteDb) {
+    crate::repo::permission_share::creation_signals_only_after_success(deps, db).await;
+}
+
+#[test]
 async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &Deps) {
     crate::repo::common::test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps).await;
 }

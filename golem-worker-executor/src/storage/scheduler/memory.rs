@@ -76,6 +76,40 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         Ok(())
     }
 
+    async fn get_action(
+        &self,
+        schedule_id: &ScheduleId,
+    ) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .get(&schedule_id.id)
+            .map(|entry| entry.action.clone()))
+    }
+
+    async fn replace_action(
+        &self,
+        schedule_id: &ScheduleId,
+        expected_action: &[u8],
+        action: &[u8],
+        due_at: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(&schedule_id.id)
+            && entry.action == expected_action
+        {
+            entry.action = action.to_vec();
+            entry.due_at_ms = datetime_to_millis(due_at);
+            entry.lease_owner = None;
+            entry.lease_until_ms = None;
+            entry.attempt_count = 0;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     async fn claim_due(
         &self,
         now: jiff::Timestamp,
@@ -154,6 +188,29 @@ impl SchedulerStorage for InMemorySchedulerStorage {
             && requested_until_ms > now_ms
         {
             entry.lease_until_ms = Some(current_until_ms.max(requested_until_ms));
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn reschedule(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+        due_at: jiff::Timestamp,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(&schedule_id.id)
+            && entry.lease_owner == Some(lease_owner)
+            && entry
+                .lease_until_ms
+                .is_some_and(|until| until > datetime_to_millis(now))
+        {
+            entry.due_at_ms = datetime_to_millis(due_at);
+            entry.lease_owner = None;
+            entry.lease_until_ms = None;
             Ok(true)
         } else {
             Ok(false)

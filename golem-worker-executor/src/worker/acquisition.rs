@@ -672,6 +672,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
             }
             self.ensure_owns_key(create_intent.owner())?;
+            if creation_mode == WorkerCreationMode::StandaloneTool
+                && let Some(owner) = create_intent.owner()
+                && (self.initial_worker_metadata.component_id != owner.component_id
+                    || self
+                        .initial_worker_metadata
+                        .standalone_tool
+                        .as_ref()
+                        .zip(owner.standalone_tool.as_ref())
+                        .is_none_or(|(accepted, requested)| {
+                            accepted.tool_name != requested.tool_name
+                                || accepted.command_path != requested.command_path
+                                || accepted.invocation_id != requested.invocation_id
+                        }))
+            {
+                return Err(WorkerExecutorError::CreateIdempotencyKeyConflict {
+                    agent_id: self.agent_id(),
+                });
+            }
             // Construction success belongs to all waiters. Only the task's originating caller
             // may treat a newly written Create as its own, rather than an existing incarnation.
             let exclusive = matches!(
@@ -933,6 +951,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             worker.retire_if_shard_left_during_construction().await;
                             if !worker.owner_retirement_requested.is_cancelled() {
                                 worker.register_pending_invocation_wakes().await;
+                                worker.schedule_finished_invocation_retention().await;
                             }
                         }
                     };
@@ -1174,6 +1193,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             initial_worker_metadata.fingerprint,
             initial_worker_metadata.agent_mode,
             initial_worker_metadata.created_by,
+            initial_worker_metadata
+                .standalone_tool
+                .as_ref()
+                .map(|tool| tool.invocation_id),
             oplog.clone(),
             current_status.clone(),
             last_known_status_detached.clone(),
@@ -1428,16 +1451,46 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .map_err(WorkerExecutorError::invalid_request)?,
         };
-        if matches!(owner_context, ResolvedOwnerContext::ComponentBaseline)
+        if initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool
             && initial_worker_metadata.agent_mode == AgentMode::Durable
         {
             return Err(WorkerExecutorError::invalid_request(
                 "An external tool owner cannot use durable mode",
             ));
         }
+        if initial_worker_metadata.owner_kind == OwnerKind::StandaloneTool {
+            let invocation = initial_worker_metadata
+                .standalone_tool
+                .as_ref()
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(
+                        "standalone tool owner has no invocation identity",
+                    )
+                })?;
+            let tool_type_id = owned_agent_id.agent_id.type_id().ok_or_else(|| {
+                WorkerExecutorError::invalid_request("standalone tool owner has a reserved tag")
+            })?;
+            if agent_mode != AgentMode::Durable
+                || owned_agent_id.agent_id
+                    != AgentId::standalone_tool_invocation(
+                        owned_agent_id.environment_id,
+                        tool_type_id,
+                        invocation.invocation_id,
+                    )
+            {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid standalone tool owner identity or mode",
+                ));
+            }
+        }
         let ResolvedAgentProperties {
             snapshot_policy, ..
-        } = resolve_agent_properties(this, &owner_context, &initial_component.metadata);
+        } = resolve_agent_properties(
+            this,
+            &owner_context,
+            initial_worker_metadata.owner_kind,
+            &initial_component.metadata,
+        );
         let execution_status = Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
             agent_mode,
             timestamp: Timestamp::now_utc(),
@@ -1476,6 +1529,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             + HasOplogService
             + HasEnvironmentStateService
             + HasShardService
+            + HasSchedulerService
             + Sync,
     >(
         this: &T,
@@ -1572,7 +1626,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let ResolvedAgentProperties {
                     agent_mode,
                     snapshot_policy,
-                } = resolve_agent_properties(this, &owner_context, &component.metadata);
+                } = resolve_agent_properties(this, &owner_context, owner_kind, &component.metadata);
 
                 let execution_status = ExecutionStatus::Suspended {
                     agent_mode,
@@ -1651,6 +1705,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     last_known_status: initial_status.clone(),
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
+                    standalone_tool: new_owner.standalone_tool.clone(),
                     create_request: create_intent.request(
                         caller.clone(),
                         &invocation_context
@@ -1702,6 +1757,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         local_agent_config,
                         instance_id,
                         create_request: initial_worker_metadata.create_request.clone(),
+                        standalone_tool: new_owner.standalone_tool.clone(),
                         never_live: false,
                     }));
 
@@ -1764,6 +1820,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 pub(in crate::worker) fn resolve_agent_properties<T: HasConfig>(
     deps: &T,
     owner_context: &ResolvedOwnerContext,
+    owner_kind: OwnerKind,
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
     match owner_context {
@@ -1781,7 +1838,11 @@ pub(in crate::worker) fn resolve_agent_properties<T: HasConfig>(
             }
         }
         ResolvedOwnerContext::ComponentBaseline => ResolvedAgentProperties {
-            agent_mode: AgentMode::Ephemeral,
+            agent_mode: if owner_kind == OwnerKind::StandaloneTool {
+                AgentMode::Durable
+            } else {
+                AgentMode::Ephemeral
+            },
             snapshot_policy: SnapshotPolicy::Disabled,
         },
         ResolvedOwnerContext::OplogProcessor => ResolvedAgentProperties {

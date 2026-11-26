@@ -59,6 +59,7 @@ mod tests;
 pub mod tool_middleware;
 pub mod tool_middleware_release;
 pub mod tool_release;
+pub mod volume;
 
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
