@@ -738,6 +738,9 @@ async fn sdk_diagnostics_and_public_errors_do_not_disclose_reflected_credentials
     let (endpoint, mut requests, server) = server(vec![
         metadata(7, "\"old\"", "old-7"),
         response(403, "<Error><Code>AccessDenied</Code><Message>volume-secret volume-token</Message><RequestId>volume-token</RequestId></Error>"),
+        response(500, "<Error><Code>NoSuchKey</Code><Message>volume-secret volume-token</Message></Error>"),
+        response(503, "<Error><Code>AccessDenied</Code><Message>volume-secret volume-token</Message></Error>"),
+        response(599, "<Error><Code>PreconditionFailed</Code><Message>volume-secret volume-token</Message></Error>"),
         response(503, "<Error><Code>ServiceUnavailable</Code><Message>volume-secret volume-token</Message></Error>"),
     ]).await;
     async {
@@ -753,6 +756,14 @@ async fn sdk_diagnostics_and_public_errors_do_not_disclose_reflected_credentials
         assert_opaque_debug(&error);
         assert!(!error.to_string().contains("volume-secret"));
         assert!(!error.to_string().contains("volume-token"));
+        futures::stream::iter(0..3)
+            .then(|_| async {
+                let error = file.read(0..1).await.err().unwrap();
+                assert_eq!(error, VolumeError::Unanswered);
+                assert_opaque_debug(&error);
+            })
+            .collect::<()>()
+            .await;
         let error = client.open(&path("book")).await.unwrap_err();
         assert_eq!(error, VolumeError::Unanswered);
         assert_eq!(
@@ -766,7 +777,7 @@ async fn sdk_diagnostics_and_public_errors_do_not_disclose_reflected_credentials
     let logs = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
     assert!(!logs.contains("volume-secret"));
     assert!(!logs.contains("volume-token"));
-    assert_eq!(std::iter::from_fn(|| requests.try_recv().ok()).count(), 3);
+    assert_eq!(std::iter::from_fn(|| requests.try_recv().ok()).count(), 6);
     server.abort();
 }
 
@@ -885,6 +896,9 @@ async fn placement_preserves_lifecycle_expiration_observations() {
         response(200, "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>"),
         listing(&[], None),
         response(200, "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><And><Prefix>corpus/</Prefix><Tag><Key>scope</Key><Value>archive</Value></Tag></And></Filter><NoncurrentVersionExpiration><NoncurrentDays>17</NoncurrentDays><NewerNoncurrentVersions>5</NewerNoncurrentVersions></NoncurrentVersionExpiration></Rule></LifecycleConfiguration>"),
+        response(200, "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>"),
+        listing(&[], None),
+        response(503, "<Error><Code>NoSuchLifecycleConfiguration</Code></Error>"),
     ]).await;
     let result = place(config(&endpoint), credentials(), allowed())
         .await
@@ -900,7 +914,12 @@ async fn placement_preserves_lifecycle_expiration_observations() {
             }),
         }]
     );
-    assert_eq!(std::iter::from_fn(|| requests.try_recv().ok()).count(), 3);
+    let unavailable = place(config(&endpoint), credentials(), allowed())
+        .await
+        .unwrap();
+    assert_eq!(unavailable.version_read, VersionRead::NoObject);
+    assert_eq!(unavailable.lifecycle, Err(VolumeError::Unanswered));
+    assert_eq!(std::iter::from_fn(|| requests.try_recv().ok()).count(), 6);
     server.abort();
 }
 

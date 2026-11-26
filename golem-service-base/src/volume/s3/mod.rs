@@ -25,11 +25,11 @@ use super::{
 };
 use crate::aws::AwsCredentials;
 use async_trait::async_trait;
-use aws_sdk_s3::config::{BehaviorVersion, Region, RequestChecksumCalculation};
+use aws_sdk_s3::config::{BehaviorVersion, Region};
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::types::{BucketVersioningStatus, ExpirationStatus};
 use aws_smithy_runtime_api::client::http::{SharedHttpConnector, http_client_fn};
-use aws_smithy_types::{retry::RetryConfig, timeout::TimeoutConfig};
+use aws_smithy_types::retry::RetryConfig;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,7 +37,6 @@ use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::instrument::WithSubscriber;
 use tracing::subscriber::NoSubscriber;
 
@@ -250,6 +249,7 @@ fn failure<E: ProvideErrorMetadata + Error + 'static>(
         .as_service_error()
         .and_then(ProvideErrorMetadata::code);
     match (status, code) {
+        (Some(500..=599), _) => VolumeError::Unanswered,
         (Some(401 | 403), _)
         | (
             _,
@@ -275,7 +275,6 @@ fn failure<E: ProvideErrorMetadata + Error + 'static>(
         (Some(405), _) if recorded => VolumeError::Changed,
         (Some(416), _) => VolumeError::InvalidResponse,
         (Some(400), _) => VolumeError::InvalidRequest,
-        (Some(500..=599), _) => VolumeError::Unanswered,
         (Some(_), _) => VolumeError::InvalidResponse,
         _ if matches!(error, SdkError::ResponseError(_)) => VolumeError::InvalidResponse,
         _ => VolumeError::Unanswered,
@@ -319,13 +318,7 @@ impl S3Volume {
             .credentials_provider(credentials.0)
             .force_path_style(true)
             .http_client(http_client_fn(move |_, _| transport.clone()))
-            .retry_config(RetryConfig::disabled())
-            .timeout_config(
-                TimeoutConfig::builder()
-                    .operation_timeout(Duration::from_secs(60))
-                    .build(),
-            )
-            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
+            .retry_config(RetryConfig::disabled());
         if let Some(endpoint) = &config.endpoint {
             sdk = sdk.endpoint_url(endpoint.as_ref());
         }
@@ -439,9 +432,12 @@ impl S3Volume {
         let result = match result {
             Err(error)
                 if error
-                    .as_service_error()
-                    .and_then(ProvideErrorMetadata::code)
-                    == Some("NoSuchLifecycleConfiguration") =>
+                    .raw_response()
+                    .is_some_and(|response| response.status().as_u16() == 404)
+                    && error
+                        .as_service_error()
+                        .and_then(ProvideErrorMetadata::code)
+                        == Some("NoSuchLifecycleConfiguration") =>
             {
                 return Ok(Box::new([]));
             }
