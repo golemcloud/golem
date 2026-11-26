@@ -61,6 +61,13 @@ fn tool_webhook() -> EntityTarget {
     }
 }
 
+fn tool_promise() -> PromiseTarget {
+    PromiseTarget {
+        id: EntityIdText("promise_3xAmPlE".to_string()),
+        owner: PromiseOwner::Invocation(tool_invocation()),
+    }
+}
+
 fn every_presented_input() -> PresentedAuthority {
     PresentedAuthority::none()
         .with_token(PresentedToken::new("golem_ct_first"))
@@ -286,7 +293,23 @@ fn requests_round_trip_through_json_and_desert() {
         .unwrap(),
     );
 
-    for request in [hosted_exec, close_webhook, retry, create] {
+    let send_to_tool_promise = AuthorizationRequest::new(
+        sample_caller(),
+        Operation::single(
+            CatalogOperation::SendToPromise,
+            Resource::None,
+            Target::Promise(tool_promise()),
+        )
+        .unwrap(),
+    );
+
+    for request in [
+        hosted_exec,
+        close_webhook,
+        retry,
+        create,
+        send_to_tool_promise,
+    ] {
         assert_eq!(round_trip_json(&request), request);
         assert_eq!(round_trip_desert(&request), request);
     }
@@ -526,14 +549,7 @@ fn task_input_needs_invocation_read_on_the_task_and_promise_send_on_its_input_pr
         id: EntityIdText("task_7".to_string()),
         owner: Owner::Agent(agent()),
     });
-    let input_promise = Target::Promise(PromiseTarget {
-        promise_id: PromiseId {
-            agent_id: agent().agent_id,
-            fingerprint: fingerprint(),
-            oplog_idx: OplogIndex::from_u64(42),
-        },
-        owner: agent(),
-    });
+    let input_promise = Target::Promise(agent_promise());
 
     assert_eq!(
         CatalogOperation::SendTaskInput
@@ -573,6 +589,40 @@ fn task_input_needs_invocation_read_on_the_task_and_promise_send_on_its_input_pr
         ),
         Err(OperationShapeError::PartCount { .. })
     ));
+}
+
+/// A promise that an agent created, with today's promise ID in its text form.
+fn agent_promise() -> PromiseTarget {
+    let promise_id = PromiseId {
+        agent_id: agent().agent_id,
+        fingerprint: fingerprint(),
+        oplog_idx: OplogIndex::from_u64(42),
+    };
+    PromiseTarget {
+        id: EntityIdText(promise_id.to_string()),
+        owner: PromiseOwner::Agent(agent()),
+    }
+}
+
+#[test]
+fn a_promise_is_owned_by_the_agent_or_the_tool_invocation_that_created_it() {
+    let by_agent = Target::Promise(agent_promise());
+    let by_tool_invocation = Target::Promise(tool_promise());
+
+    assert_eq!(by_agent.owner_kind(), Some(OwnerKind::Agent));
+    assert_eq!(by_tool_invocation.owner_kind(), Some(OwnerKind::Invocation));
+
+    for promise in [by_agent, by_tool_invocation] {
+        let send = Operation::single(
+            CatalogOperation::SendToPromise,
+            Resource::None,
+            promise.clone(),
+        )
+        .unwrap();
+        assert_eq!(send.parts()[0].target, promise);
+        assert_eq!(round_trip_json(&promise), promise);
+        assert_eq!(round_trip_desert(&promise), promise);
+    }
 }
 
 #[test]
