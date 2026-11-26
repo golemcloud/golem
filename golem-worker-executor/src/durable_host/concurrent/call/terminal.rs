@@ -784,6 +784,7 @@ pub(super) fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseP3KeyvalueIncomingValueStream>(),
         TypeId::of::<HostResponseP3BlobstoreIncomingValueStream>(),
         TypeId::of::<HostResponseP3HttpClientConsumeBodyChunk>(),
+        TypeId::of::<HostResponseP3HttpRequestBodyWrite>(),
         TypeId::of::<HostResponseP3SocketsTcpReceiveChunk>(),
         TypeId::of::<HostResponseP3SocketsTcpSendChunk>(),
         TypeId::of::<HostResponseGolemApiCard>(),

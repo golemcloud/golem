@@ -4,10 +4,10 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
-use super::response_body::{HttpFutureDelivery, HttpFutureDeliveryGuard};
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, DeferredCallReplayOutcome, DurableCallSession, InvocationIdSource,
-    LeaveIncompleteOnDrop, ReplayAccessStartOutcome, resolve_current_observational_owner,
+    AccessClaimOptions, CompletionDelivery, DeferredCallReplayOutcome, DurableCallSession,
+    InvocationIdSource, LeaveIncompleteOnDrop, ReplayAccessStartOutcome,
+    resolve_current_observational_owner,
 };
 use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::p3::{DurableP3, durable_worker_ctx};
@@ -27,16 +27,41 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use tokio::sync::{mpsc, oneshot};
 use wasmtime::component::{
-    Access, Accessor, GuestWriteInterceptor, Lift, Source, StreamResult, VecBuffer, WriteBuffer,
+    Access, Accessor, GuestWriteInterceptor, Lift, Source, StreamResult, TerminalConsumption,
+    VecBuffer, WriteBuffer,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
+
+struct WriteDeliveryGuard(Option<CompletionDelivery>);
+
+impl WriteDeliveryGuard {
+    fn observe(mut self, consumption: TerminalConsumption) {
+        let delivery = self.0.take().unwrap();
+        match consumption {
+            TerminalConsumption::Delivered => delivery.delivered(),
+            TerminalConsumption::NotDelivered => drop(delivery),
+            TerminalConsumption::Superseded => {
+                tracing::error!("HTTP write terminal observer was superseded");
+                delivery.suppress();
+            }
+        }
+    }
+}
+
+impl Drop for WriteDeliveryGuard {
+    fn drop(&mut self) {
+        if let Some(delivery) = self.0.take() {
+            delivery.suppress();
+        }
+    }
+}
 
 struct WriteDemand {
     offered: usize,
     invocation_id: InvocationIdSource,
     plan: oneshot::Sender<WritePlan>,
     accepted: oneshot::Receiver<SerializableP3HttpWriteOutcome>,
-    delivery: oneshot::Sender<HttpFutureDeliveryGuard>,
+    delivery: oneshot::Sender<WriteDeliveryGuard>,
 }
 
 enum WritePlan {
@@ -50,28 +75,25 @@ enum WriteState<T> {
         offered: usize,
         plan: oneshot::Receiver<WritePlan>,
         accepted: Option<oneshot::Sender<SerializableP3HttpWriteOutcome>>,
-        delivery: oneshot::Receiver<HttpFutureDeliveryGuard>,
     },
     Accepting {
         offered: usize,
         accepted: Option<oneshot::Sender<SerializableP3HttpWriteOutcome>>,
-        delivery: oneshot::Receiver<HttpFutureDeliveryGuard>,
     },
     Replaying {
         outcome: SerializableP3HttpWriteOutcome,
         buffer: VecBuffer<T>,
         forward_empty: bool,
-        delivery: oneshot::Receiver<HttpFutureDeliveryGuard>,
     },
     Delivering {
         result: StreamResult,
-        delivery: oneshot::Receiver<HttpFutureDeliveryGuard>,
     },
 }
 
 pub(super) struct HttpRequestWriteInterceptor<T> {
     demands: mpsc::Sender<WriteDemand>,
     state: WriteState<T>,
+    delivery: Option<oneshot::Receiver<WriteDeliveryGuard>>,
     identify: fn(
         &mut dyn Any,
         Option<&GuestTaskContext>,
@@ -146,8 +168,8 @@ impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<
                         offered,
                         plan,
                         accepted: Some(accepted),
-                        delivery,
                     };
+                    this.delivery = Some(delivery);
                     // Both live and replay asynchronous writes use the scheduled path.
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
@@ -156,17 +178,13 @@ impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<
                     offered,
                     plan,
                     accepted,
-                    delivery,
                 } => {
                     let plan = ready!(Pin::new(plan).poll(cx))
                         .map_err(|_| wasmtime::Error::msg("HTTP write preparation stopped"))?;
-                    let (_, replacement) = oneshot::channel();
-                    let delivery = std::mem::replace(delivery, replacement);
                     this.state = match plan {
                         WritePlan::Live => WriteState::Accepting {
                             offered: *offered,
                             accepted: accepted.take(),
-                            delivery,
                         },
                         WritePlan::Replay(outcome) => {
                             let (_, count) = stream_result(&outcome);
@@ -190,16 +208,11 @@ impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<
                                     ),
                                 outcome,
                                 buffer: items.into(),
-                                delivery,
                             }
                         }
                     };
                 }
-                WriteState::Accepting {
-                    offered,
-                    accepted,
-                    delivery,
-                } => {
+                WriteState::Accepting { offered, accepted } => {
                     let result = ready!(native(
                         cx,
                         store.as_context_mut(),
@@ -215,17 +228,12 @@ impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<
                     accepted.take().unwrap().send(outcome).map_err(|_| {
                         wasmtime::Error::msg("HTTP write recorder dropped acceptance")
                     })?;
-                    let (_, replacement) = oneshot::channel();
-                    this.state = WriteState::Delivering {
-                        result,
-                        delivery: std::mem::replace(delivery, replacement),
-                    };
+                    this.state = WriteState::Delivering { result };
                 }
                 WriteState::Replaying {
                     outcome,
                     buffer,
                     forward_empty,
-                    delivery,
                 } => {
                     if *forward_empty || !buffer.remaining().is_empty() {
                         let result = ready!(native(
@@ -250,15 +258,17 @@ impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<
                     if matches!(result, StreamResult::Cancelled) && !finish {
                         return Poll::Pending;
                     }
-                    let (_, replacement) = oneshot::channel();
-                    this.state = WriteState::Delivering {
-                        result,
-                        delivery: std::mem::replace(delivery, replacement),
-                    };
+                    this.state = WriteState::Delivering { result };
                 }
-                WriteState::Delivering { result, delivery } => {
-                    let guard = ready!(Pin::new(delivery).poll(cx))
-                        .map_err(|_| wasmtime::Error::msg("HTTP write delivery stopped"))?;
+                WriteState::Delivering { result } => {
+                    let delivery = this
+                        .delivery
+                        .as_mut()
+                        .ok_or_else(|| wasmtime::Error::msg("HTTP write delivery missing"))?;
+                    let guard = ready!(Pin::new(delivery).poll(cx));
+                    this.delivery = None;
+                    let guard =
+                        guard.map_err(|_| wasmtime::Error::msg("HTTP write delivery stopped"))?;
                     source.register_write_observer(&mut store, move |consumption| {
                         guard.observe(consumption)
                     })?;
@@ -301,6 +311,7 @@ where
     Ok(HttpRequestWriteInterceptor {
         demands,
         state: WriteState::Idle,
+        delivery: None,
         identify: |data, task_context| {
             let ctx = data
                 .downcast_mut::<Ctx>()
@@ -478,9 +489,7 @@ where
             token.suppress();
             return Err(error.into());
         }
-        let delivery = HttpFutureDelivery::new();
-        delivery.arm(token)?;
-        let _ = delivery_tx.send(HttpFutureDeliveryGuard::new(delivery));
+        let _ = delivery_tx.send(WriteDeliveryGuard(Some(token)));
     }
     Ok(())
 }

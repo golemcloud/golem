@@ -18,9 +18,10 @@ use golem_common::model::oplog::attachment::{
     ToolAttachmentSlot, ToolAttachmentTerminal,
 };
 use golem_common::model::oplog::payload::{
-    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemToolTools, HostResponseRandomBytes,
-    HostResponseToolAttachmentClosed, HostResponseToolAttachmentCreated,
-    HostResponseToolAttachmentTerminalResult, HostResponseToolAttachmentWrite,
+    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemToolTools,
+    HostResponseP3HttpRequestBodyWrite, HostResponseRandomBytes, HostResponseToolAttachmentClosed,
+    HostResponseToolAttachmentCreated, HostResponseToolAttachmentTerminalResult,
+    HostResponseToolAttachmentWrite,
     tool_attachment::{
         ToolAttachmentCreated, ToolAttachmentTerminalOutcome, ToolAttachmentWriteOutcome,
     },
@@ -50,6 +51,10 @@ where
 
 #[test]
 fn response_encoding_preserves_payload() {
+    assert_response_roundtrip(HostResponseP3HttpRequestBodyWrite {});
+    assert!(response_has_bounded_encoding_stack::<
+        HostResponseP3HttpRequestBodyWrite,
+    >());
     assert_response_roundtrip(HostResponseRandomBytes {
         bytes: vec![1, 2, 3, 4],
     });
@@ -89,6 +94,7 @@ async fn response_encoding_on_wasmtime_fiber() -> anyhow::Result<()> {
     )?;
     let mut linker = wasmtime::Linker::new(&engine);
     linker.func_wrap("host", "encode", || -> wasmtime::Result<()> {
+        assert_response_roundtrip(HostResponseP3HttpRequestBodyWrite {});
         for slot in [
             ToolAttachmentSlot::Stdin,
             ToolAttachmentSlot::Stdout,
