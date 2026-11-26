@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::http::transport::HttpTransport;
 
 #[cfg(test)]
 mod tests;
@@ -25,23 +26,10 @@ pub(in crate::durable_host::p3::http) fn poison_p3_pooled_connection(
     }
 }
 
-/// The transport response, its I/O task and the optional pooled connection.
-type TransportResult = Result<
-    (
-        http::Response<UnsyncBoxBody<Bytes, wasmtime_wasi_http::Error>>,
-        Box<dyn Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send>,
-        Option<PooledConnection>,
-    ),
-    wasmtime_wasi_http::Error,
->;
-
 impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
-    pub(super) async fn attempt<Fut>(
+    pub(super) async fn attempt(
         &self,
-        transport: impl FnOnce(
-            http::Request<UnsyncBoxBody<Bytes, wasmtime_wasi_http::Error>>,
-            Option<wasmtime_wasi_http::RequestOptions>,
-        ) -> Fut,
+        transport: &(impl HttpTransport + ?Sized),
     ) -> Result<
         (
             http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
@@ -49,10 +37,7 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
             Option<PooledConnection>,
         ),
         ErrorCode,
-    >
-    where
-        Fut: Future<Output = TransportResult>,
-    {
+    > {
         let body = self
             .body
             .replayer()
@@ -66,7 +51,8 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
             .map_err(|err| ErrorCode::InternalError(Some(err.to_string())))?;
         *request.headers_mut() = self.headers.clone();
 
-        let (response, io, connection) = transport(request, self.options)
+        let (response, io, connection) = transport
+            .send(request, self.options)
             .await
             .map_err(|error| self.hooks.clone().transport_error_to_p3(&error))?;
         let mut body_hooks = self.hooks.clone();

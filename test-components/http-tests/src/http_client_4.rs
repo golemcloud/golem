@@ -1533,7 +1533,7 @@ async fn do_read_sse_without_ids() -> String {
                     .ok()
                     .map(|key| ("idempotency-key".to_string(), key.into_bytes())),
             )
-            .collect::<Vec<_>>(),
+            .collect::<Box<[_]>>(),
     )
     .unwrap();
     // Dropping the writer ends the empty request body without trailers, so the recorded

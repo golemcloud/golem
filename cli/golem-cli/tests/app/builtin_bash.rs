@@ -1669,9 +1669,8 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
     let ctx = context().await;
     let (address, mut arrived, stop, server) = http_checkpoint_server().await;
 
-    // GET: crash while the request is parked (never answered), then release the one that
-    // arrives after recovery. Golem's wasi:http durability treats GET as idempotent, so
-    // recovery re-issues it rather than trying to replay a result that was never recorded.
+    // Crash while the server holds the GET response. The durable send is still incomplete,
+    // so recovery can resend it under the original Start. POST uses the same repair path.
     let get_key = "bash-http-get-replay";
     let get_script = format!("curl -s http://{address}/checkpoint >/dev/null; echo status=$?");
     let get_key = trigger(&ctx, "", &get_script, get_key).await;
@@ -1683,9 +1682,8 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
     simulate_crash(&ctx).await;
     let resent_get = next_http_arrival(&mut arrived).await;
     assert_eq!(resent_get.method, "GET", "recovery must re-send the GET");
-    // Golem's own durability layer derives this header from the call's oplog `Start` index and
-    // re-derives the same value on a resend, so a match here proves this is the original call
-    // being replayed, not a second, unrelated request.
+    // Recovery derives the same header from the invocation key and durable call position.
+    // An entity's logical key position takes precedence over its physical Start index.
     assert_eq!(resent_get.idempotency_key, first_get.idempotency_key);
     drop(first_get);
     resent_get.release.send(()).unwrap();
