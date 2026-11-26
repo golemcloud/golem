@@ -970,10 +970,20 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		// The tag is not carried in the JSON, so branches are tried in
 		// declaration order and the first that fits wins. A failed attempt
 		// leaves nothing behind, since building returns a value rather than
-		// appending to a pool.
-		for _, branch := range b.Branches {
-			if built, err := p.build(branch.Body, value, child(path, branch.Tag)); err == nil {
-				return UnionValue{Tag: branch.Tag, Body: built}, nil
+		// appending to a pool. An unrestricted packer first tries the branches
+		// with restrictions checked, so skipping them does not change which
+		// branch a value takes.
+		passes := []*packer{p}
+		if p.unrestricted {
+			strict := *p
+			strict.unrestricted = false
+			passes = []*packer{&strict, p}
+		}
+		for _, q := range passes {
+			for _, branch := range b.Branches {
+				if built, err := q.build(branch.Body, value, child(path, branch.Tag)); err == nil {
+					return UnionValue{Tag: branch.Tag, Body: built}, nil
+				}
 			}
 		}
 		return nil, fmt.Errorf("%s: value matches no declared union branch", pathOrRoot(path))
