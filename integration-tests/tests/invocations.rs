@@ -14,25 +14,50 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use golem_client::api::{AgentClient, AgentError, InvocationClient, InvocationError};
+use golem_client::api::{
+    AgentClient, AgentError, InvocationClient, InvocationClientLive, InvocationError,
+    RegistryServiceClient,
+};
 use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, InvocationKind, InvocationOutcome,
     InvocationState, InvocationSummary,
 };
 use golem_common::base_model::api::error_code;
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::component::{ComponentUpdate, ToolDeploymentConfigUpdate};
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
-use golem_common::schema::{ExternalSchemaValue, FromSchema, TypedSchemaValue};
+use golem_common::schema::{
+    ExternalSchemaValue, ExternalTypedSchemaValue, FromSchema, IntoSchema, IntoTypedSchemaValue,
+    TypedSchemaValue,
+};
 use golem_common::{agent_key, data_value};
+use golem_test_framework::components::worker_service::{
+    WorkerService, restartable::RestartableWorkerService,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
-use std::collections::HashSet;
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
+
+#[derive(IntoSchema)]
+struct StandaloneToolInput {
+    value: String,
+}
+
+struct ToolInvocationReceipt {
+    invocation_id: String,
+    body: Value,
+}
 
 fn error_code<T: std::fmt::Debug>(
     result: Result<T, golem_client::Error<InvocationError>>,
@@ -55,19 +80,6 @@ fn error_code<T: std::fmt::Debug>(
 async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_scope(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    use golem_client::api::RegistryServiceClient;
-    use golem_common::model::auth::TokenSecret;
-    use golem_common::model::component::{ComponentUpdate, ToolDeploymentConfigUpdate};
-    use golem_common::model::permission_share::{
-        PermissionShareCreation, PermissionShareData, PermissionShareName,
-    };
-    use golem_common::schema::{ExternalTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue};
-    use golem_test_framework::components::worker_service::{
-        WorkerService, restartable::RestartableWorkerService,
-    };
-    use serde_json::{Value, json};
-    use std::collections::BTreeMap;
-
     let user = deps.user().await?;
     let other = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
@@ -168,59 +180,57 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
         service.http_port(),
         env.id
     );
-    let input: ExternalTypedSchemaValue = TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::record_from_fields([(
-            "value",
-            SchemaType::string(),
-        )])),
-        SchemaValue::Record {
-            fields: vec![SchemaValue::String("scope-and-restart".into())],
-        },
-    )
+    let input: ExternalTypedSchemaValue = StandaloneToolInput {
+        value: "scope-and-restart".into(),
+    }
+    .into_typed_schema_value()?
     .try_into()
     .map_err(anyhow::Error::msg)?;
-    let invoke = async |token: &TokenSecret, hosted: bool| -> anyhow::Result<(String, Value)> {
-        let response = http
-            .post(format!("{base}/invoke-tool"))
-            .bearer_auth(token.secret())
-            .header("Idempotency-Key", "shared-key")
-            .json(&json!({
-                "agentId": hosted.then_some(agent.agent_id),
-                "componentId": (!hosted).then_some(caller.id),
-                "toolName": "streaming", "commandPath": ["no-stream"],
-                "input": input, "mode": "await",
-            }))
-            .send()
-            .await?;
-        let status = response.status();
-        if !status.is_success() {
-            anyhow::bail!(
-                "tool invocation returned {status}: {}",
-                response.text().await?
-            );
-        }
-        let id = response
-            .headers()
-            .get("Golem-Invocation-Id")
-            .expect("acceptance header")
-            .to_str()?
-            .to_string();
-        Ok((id, response.json().await?))
-    };
-    let (id, receipt) = invoke(&user.token, false).await?;
+    let invoke =
+        async |token: &TokenSecret, hosted: bool| -> anyhow::Result<ToolInvocationReceipt> {
+            let response = http
+                .post(format!("{base}/invoke-tool"))
+                .bearer_auth(token.secret())
+                .header("Idempotency-Key", "shared-key")
+                .json(&json!({
+                    "agentId": hosted.then_some(agent.agent_id),
+                    "componentId": (!hosted).then_some(caller.id),
+                    "toolName": "streaming", "commandPath": ["no-stream"],
+                    "input": input, "mode": "await",
+                }))
+                .send()
+                .await?;
+            let status = response.status();
+            if !status.is_success() {
+                anyhow::bail!(
+                    "tool invocation returned {status}: {}",
+                    response.text().await?
+                );
+            }
+            let id = response
+                .headers()
+                .get("Golem-Invocation-Id")
+                .expect("acceptance header")
+                .to_str()?
+                .to_string();
+            Ok(ToolInvocationReceipt {
+                invocation_id: id,
+                body: response.json().await?,
+            })
+        };
+    let ToolInvocationReceipt {
+        invocation_id: id,
+        body: receipt,
+    } = invoke(&user.token, false).await?;
+    // Completed standalone invocation → public tool owner and identical result after restart.
     assert_eq!(
         id,
         format!("streaming.{}", receipt["idempotencyKey"].as_str().unwrap())
     );
     let client = service.invocation_http_client(&user.token).await;
-    let before = client.get_invocation(&env.id.0, &id).await?;
-    assert_eq!(before.summary.state, InvocationState::Completed);
-    assert!(matches!(before.result, Some(InvocationOutcome::Tool(_))));
-    service.restart().await;
-    let after = client.get_invocation(&env.id.0, &id).await?;
-    assert_eq!(after.summary.invocation_id, id);
-    assert_eq!(serde_json::to_value(after)?, serde_json::to_value(before)?);
+    verify_standalone_result_after_service_restart(&service, &client, env.id.0, &id).await?;
     let other_client = service.invocation_http_client(&other.token).await;
+    // Same external key, other caller scope → not found, then a distinct invocation.
     assert_eq!(
         error_code(
             other_client
@@ -237,7 +247,10 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
         .0,
         404
     );
-    let (other_id, _) = invoke(&other.token, false).await?;
+    let ToolInvocationReceipt {
+        invocation_id: other_id,
+        ..
+    } = invoke(&other.token, false).await?;
     assert_ne!(other_id, id);
     assert_eq!(
         other_client
@@ -254,7 +267,11 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
             .invocation_id,
         other_id
     );
-    let (hosted_id, _) = invoke(&user.token, true).await?;
+    // Hosted invocation → agent-owned identity; standalone owners do not enter agent listing.
+    let ToolInvocationReceipt {
+        invocation_id: hosted_id,
+        ..
+    } = invoke(&user.token, true).await?;
     assert!(hosted_id.starts_with(&format!("{}.", agent.agent_id)));
     let hosted = client
         .list_invocations(
@@ -289,6 +306,7 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0]["agentId"], serde_json::to_value(agent.agent_id)?);
 
+    // Tool removed after acceptance → get, cancel and full-key lookup still resolve history.
     registry
         .update_component(
             &component.id.0,
@@ -303,10 +321,47 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
         )
         .await?;
     user.deploy_environment(env.id).await?;
+    verify_invocation_history_after_tool_removal(
+        &service,
+        &client,
+        env.id.0,
+        &id,
+        &hosted_id,
+        agent.agent_id.0,
+    )
+    .await
+}
+
+async fn verify_standalone_result_after_service_restart(
+    service: &RestartableWorkerService,
+    client: &InvocationClientLive,
+    environment_id: Uuid,
+    id: &str,
+) -> anyhow::Result<()> {
+    let before = client.get_invocation(&environment_id, id).await?;
+    assert_eq!(before.summary.state, InvocationState::Completed);
+    assert!(matches!(before.result, Some(InvocationOutcome::Tool(_))));
     service.restart().await;
+    // Completed standalone result → identical public history after service reconstruction.
+    let after = client.get_invocation(&environment_id, id).await?;
+    assert_eq!(after.summary.invocation_id, id);
+    assert_eq!(serde_json::to_value(after)?, serde_json::to_value(before)?);
+    Ok(())
+}
+
+async fn verify_invocation_history_after_tool_removal(
+    service: &RestartableWorkerService,
+    client: &InvocationClientLive,
+    environment_id: Uuid,
+    id: &str,
+    hosted_id: &str,
+    agent_id: Uuid,
+) -> anyhow::Result<()> {
+    service.restart().await;
+    // Tool removed after acceptance → get/cancel/full-key lookup work; partial lookup stays invalid.
     assert_eq!(
         client
-            .get_invocation(&env.id.0, &id)
+            .get_invocation(&environment_id, id)
             .await?
             .summary
             .invocation_id,
@@ -314,15 +369,15 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
     );
     assert_eq!(
         client
-            .cancel_invocation(&env.id.0, &id)
+            .cancel_invocation(&environment_id, id)
             .await?
             .invocation_id,
         id
     );
-    for (owner, expected) in [(None, &id), (Some(&agent.agent_id.0), &hosted_id)] {
+    for (owner, expected) in [(None, id), (Some(&agent_id), hosted_id)] {
         let found = client
             .lookup_invocations(
-                &env.id.0,
+                &environment_id,
                 owner,
                 Some("streaming"),
                 Some("no-stream"),
@@ -330,12 +385,12 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
                 "shared-key",
             )
             .await?;
-        assert_eq!(&found.invocations[0].invocation_id, expected);
+        assert_eq!(found.invocations[0].invocation_id, expected);
         assert_eq!(
             error_code(
                 client
                     .lookup_invocations(
-                        &env.id.0,
+                        &environment_id,
                         owner,
                         Some("streaming"),
                         None,

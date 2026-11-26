@@ -20,26 +20,26 @@
 use desert_rust::BinaryCodec;
 use goldenfile::Mint;
 use goldenfile::differs::Differ;
+use golem_api_grpc::proto::golem::worker::RawOplogEntry;
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentMode, OwnerKind};
+use golem_common::model::caller::Caller;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::TraceId;
+use golem_common::model::oplog::{
+    CreateParameters, CreateRequest, CreateRequestKind, OplogEntry, StandaloneToolInvocation,
+};
+use golem_common::model::{AgentId, IdempotencyKey, InvocationId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::io::Write;
 use std::path::Path;
 use test_r::test;
+use uuid::Uuid;
 
 #[test]
 fn standalone_tool_create_roundtrips() {
-    use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, OwnerKind};
-    use golem_common::model::caller::Caller;
-    use golem_common::model::component::ComponentId;
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::invocation_context::TraceId;
-    use golem_common::model::oplog::{
-        CreateParameters, CreateRequest, CreateRequestKind, StandaloneToolInvocation,
-    };
-    use golem_common::model::{AgentId, InvocationId, Timestamp};
-    use uuid::Uuid;
-
     let invocation_id = InvocationId(Uuid::from_u128(13));
     let metadata = CreateParameters {
         component_id: ComponentId(Uuid::from_u128(1)),
@@ -49,8 +49,7 @@ fn standalone_tool_create_roundtrips() {
         agent_id: AgentId::from_parts(7, 3),
         owner_kind: OwnerKind::StandaloneTool,
         agent_mode: AgentMode::Durable,
-        component_revision: golem_common::model::component::ComponentRevision::try_from(5u64)
-            .unwrap(),
+        component_revision: ComponentRevision::try_from(5u64).unwrap(),
         env: vec![],
         environment_id: EnvironmentId(Uuid::from_u128(2)),
         created_by: AccountId(Uuid::from_u128(4)),
@@ -62,9 +61,7 @@ fn standalone_tool_create_roundtrips() {
         instance_id: Uuid::from_u128(6),
         create_request: CreateRequest {
             kind: CreateRequestKind::GetOrCreate,
-            idempotency_key: Some(golem_common::model::IdempotencyKey::new(
-                invocation_id.to_string(),
-            )),
+            idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string())),
             caller: Caller::anonymous(),
             trace_id: TraceId::from_string("00112233445566778899aabbccddeeff").unwrap(),
             trace_states: vec![],
@@ -78,21 +75,14 @@ fn standalone_tool_create_roundtrips() {
         })),
         never_live: false,
     };
-    let entry = golem_common::model::oplog::OplogEntry::Create {
+    let entry = OplogEntry::Create {
         timestamp: Timestamp::from(1_700_000_000_000u64),
         parameters: Box::new(metadata),
     };
     let encoded = serialize(&entry).unwrap();
-    assert_eq!(
-        deserialize::<golem_common::model::oplog::OplogEntry>(&encoded).unwrap(),
-        entry
-    );
-    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
-        entry.clone().try_into().unwrap();
-    assert_eq!(
-        golem_common::model::oplog::OplogEntry::try_from(proto).unwrap(),
-        entry
-    );
+    assert_eq!(deserialize::<OplogEntry>(&encoded).unwrap(), entry);
+    let proto: RawOplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
     let mut mint = Mint::new("tests/goldenfiles");
     mint.new_goldenfile("standalone_tool_create.bin")
         .unwrap()

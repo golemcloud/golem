@@ -217,6 +217,90 @@ fn lease_action() -> ScheduledAction {
     }
 }
 
+async fn assert_replaced_action_invalidates_old_lease(
+    holder: &(dyn SchedulerStorage + Send + Sync),
+    contender: &(dyn SchedulerStorage + Send + Sync),
+    now: DateTime<Utc>,
+    assignment: &ShardAssignment,
+    action: &ScheduledAction,
+) {
+    const CLAIM_TTL: Duration = Duration::from_secs(30);
+    const STALE_RENEWAL: Duration = Duration::from_secs(90);
+    let id = ScheduleId::fresh();
+    let original = serialize(action).unwrap();
+    let replacement = serialize(&lease_action()).unwrap();
+    assert_ne!(original, replacement);
+
+    // Compare-and-replace → only the exact stored incarnation can be replaced.
+    assert_eq!(holder.get_action(&id).await.unwrap(), None);
+    holder
+        .insert(id, now, ShardId::new(0), &original)
+        .await
+        .unwrap();
+    assert_eq!(
+        contender.get_action(&id).await.unwrap(),
+        Some(original.clone())
+    );
+    let claim = holder
+        .claim_due(now, assignment, 1, CLAIM_TTL)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(
+        !contender
+            .replace_action(&id, &replacement, &original, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        contender
+            .replace_action(&id, &original, &replacement, now)
+            .await
+            .unwrap()
+    );
+
+    // Replaced incarnation's lease → cannot remove, postpone, renew or replace the new timer.
+    assert!(!holder.ack(&id, claim.lease_owner, now).await.unwrap());
+    assert!(
+        !holder
+            .reschedule(&id, claim.lease_owner, now + ChronoDuration::days(9), now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !holder
+            .extend_lease(&id, claim.lease_owner, now + STALE_RENEWAL, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !holder
+            .replace_action(&id, &original, &original, now)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        holder.get_action(&id).await.unwrap(),
+        Some(replacement.clone())
+    );
+
+    // Replacement → immediately claimable with a fresh token and a reset attempt count.
+    let new_claim = contender
+        .claim_due(now, assignment, 1, CLAIM_TTL)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_ne!(claim.lease_owner, new_claim.lease_owner);
+    assert_eq!(serialize(&new_claim.action).unwrap(), replacement);
+    assert_eq!(new_claim.attempt_count, 1);
+    assert!(
+        contender
+            .ack(&id, new_claim.lease_owner, now)
+            .await
+            .unwrap()
+    );
+}
+
 async fn assert_scheduler_lease_contracts(
     holder: &(dyn SchedulerStorage + Send + Sync),
     contender: &(dyn SchedulerStorage + Send + Sync),
@@ -275,74 +359,8 @@ async fn assert_scheduler_lease_contracts(
     );
     assert_eq!(holder.count_due(now, &assignment).await.unwrap(), 0);
 
-    let id = ScheduleId::fresh();
-    let original = serialize(&action).unwrap();
-    let replacement = serialize(&lease_action()).unwrap();
-    assert_ne!(original, replacement);
-    assert_eq!(holder.get_action(&id).await.unwrap(), None);
-    holder
-        .insert(id, now, ShardId::new(0), &original)
-        .await
-        .unwrap();
-    assert_eq!(
-        contender.get_action(&id).await.unwrap(),
-        Some(original.clone())
-    );
-    let claim = holder
-        .claim_due(now, &assignment, 1, Duration::from_secs(30))
-        .await
-        .unwrap()
-        .remove(0);
-    assert!(
-        !contender
-            .replace_action(&id, &replacement, &original, now)
-            .await
-            .unwrap()
-    );
-    assert!(
-        contender
-            .replace_action(&id, &original, &replacement, now)
-            .await
-            .unwrap()
-    );
-    // A claim of the replaced incarnation cannot remove or postpone the new timer.
-    assert!(!holder.ack(&id, claim.lease_owner, now).await.unwrap());
-    assert!(
-        !holder
-            .reschedule(&id, claim.lease_owner, now + ChronoDuration::days(9), now)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !holder
-            .extend_lease(&id, claim.lease_owner, now + Duration::from_secs(90), now)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !holder
-            .replace_action(&id, &original, &original, now)
-            .await
-            .unwrap()
-    );
-    assert_eq!(
-        holder.get_action(&id).await.unwrap(),
-        Some(replacement.clone())
-    );
-    let new_claim = contender
-        .claim_due(now, &assignment, 1, Duration::from_secs(30))
-        .await
-        .unwrap()
-        .remove(0);
-    assert_ne!(claim.lease_owner, new_claim.lease_owner);
-    assert_eq!(serialize(&new_claim.action).unwrap(), replacement);
-    assert_eq!(new_claim.attempt_count, 1);
-    assert!(
-        contender
-            .ack(&id, new_claim.lease_owner, now)
-            .await
-            .unwrap()
-    );
+    assert_replaced_action_invalidates_old_lease(holder, contender, now, &assignment, &action)
+        .await;
 
     let ttl = Duration::from_secs(10);
     let expiry = now + ttl;
