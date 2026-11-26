@@ -99,6 +99,7 @@ fn metadata(
         parent: None,
         last_known_status: AgentStatusRecord::default(),
         constructor_parameters: None,
+        standalone_tool: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
         create_request: golem_common::model::oplog::CreateRequest::new(

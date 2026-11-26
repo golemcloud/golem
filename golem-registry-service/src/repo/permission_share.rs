@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::registry_change::{RequiresNotificationSignal, RequiresSignalExt};
+use super::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
 use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
 use crate::repo::model::card::CardRecord;
@@ -40,7 +42,10 @@ pub trait PermissionShareRepo: Send + Sync {
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
         card: CardRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError>;
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    >;
 
     async fn update(
         &self,
@@ -115,7 +120,10 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
         card: CardRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    > {
         self.repo
             .create(owner_account_id, target_account_id, revision, card)
             .instrument(Self::span_account_id(owner_account_id))
@@ -258,7 +266,10 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
         card: CardRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    > {
         let result = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
@@ -290,6 +301,11 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                     revision.card_id = Some(card.card_id);
                     let revision = Self::insert_revision(tx, revision).await?;
 
+                    let change_event =
+                        NewRegistryChangeEvent::account_tokens_invalidated(share.target_account_id);
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                        .await?;
+
                     Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
                         owner_account_id: share.owner_account_id,
                         target_account_id: share.target_account_id,
@@ -300,7 +316,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.requires_notification_signal())
     }
 
     async fn update(
@@ -348,6 +364,11 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                         DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(old_card_id))
                             .await?;
                     }
+
+                    let change_event =
+                        NewRegistryChangeEvent::account_tokens_invalidated(share.target_account_id);
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                        .await?;
 
                     Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
                         owner_account_id: share.owner_account_id,
@@ -397,6 +418,11 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                             .await?;
                         revision.card_id = None;
                     }
+
+                    let change_event =
+                        NewRegistryChangeEvent::account_tokens_invalidated(share.target_account_id);
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                        .await?;
 
                     Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
                         owner_account_id: share.owner_account_id,

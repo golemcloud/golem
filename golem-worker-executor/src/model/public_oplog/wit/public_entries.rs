@@ -70,6 +70,9 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
             golem_common::model::agent::OwnerKind::OplogProcessor => {
                 oplog::OwnerKind::OplogProcessor
             }
+            golem_common::model::agent::OwnerKind::StandaloneTool => {
+                oplog::OwnerKind::StandaloneTool
+            }
         },
         agent_mode: match agent_mode {
             golem_common::model::agent::AgentMode::Durable => oplog::AgentMode::Durable,
@@ -97,6 +100,12 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         .collect::<Result<Vec<_>, String>>()?,
         instance_id: instance_id.into(),
         never_live: never_live,
+        standalone_tool: standalone_tool.map(|tool| oplog::StandaloneToolInvocation {
+            tool_name: tool.tool_name.to_string(),
+            command_path: tool.command_path,
+            invocation_id: tool.invocation_id.0.into(),
+            caller: public_caller_to_wit(tool.caller),
+        }),
     } }
     Start { record StartParams => StartParameters {
         timestamp: timestamp.into(),

@@ -1913,8 +1913,10 @@ pub struct InjectToPrebuiltQuickJs {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreinitializeJs {
-    /// The path to the input WASM component to pre-initialize
+    /// The path to the prebuilt QuickJS WASM template
     pub preinitialize_js: String,
+    /// The path to the JS module passed to the template's initializer
+    pub module: String,
     /// The path to the pre-initialized output WASM component
     pub into: String,
 }

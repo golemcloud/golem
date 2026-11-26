@@ -456,6 +456,7 @@ impl PublicInvocationSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::{AgentId, OwnedInvocationId};
 
     #[test_r::test]
     fn public_record_preserves_native_positional_value_encoding() {
@@ -485,10 +486,13 @@ mod tests {
     }
 
     fn accepted(channel: u32, stream_token: &str) -> PublicServerMessage {
+        let agent_id = AgentId::from_parts(7, 4);
+        let idempotency_key = InvocationId(uuid::Uuid::from_u128(1));
         PublicServerMessage::InvocationAccepted {
             attempt_id: uuid::Uuid::new_v4(),
-            agent_id: golem_common::model::AgentId::from_parts(7, 4),
-            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
+            agent_id,
+            invocation_id: OwnedInvocationId::new(agent_id, idempotency_key),
+            idempotency_key,
             mappings: vec![mapping(channel, stream_token)],
             session_token: "session".to_string(),
             version: INVOCATION_SESSION_VERSION,

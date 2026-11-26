@@ -63,7 +63,18 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     local_agent_config,
                     instance_id,
                     never_live,
+                    mut standalone_tool,
                 } = *parameters;
+                if !claims.is_shown()
+                    && let Some(tool) = &mut standalone_tool
+                {
+                    use golem_common::model::caller::PublicPrincipal;
+                    for principal in [&mut tool.caller.original, &mut tool.caller.immediate] {
+                        if let PublicPrincipal::User(user) = principal {
+                            user.claims = None;
+                        }
+                    }
+                }
                 let metadata = components
                     .get_metadata(owner_component_id, Some(component_revision))
                     .await
@@ -108,6 +119,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     local_agent_config,
                     instance_id,
                     never_live,
+                    standalone_tool,
                 }));
             }
             golem_common::model::oplog::OplogEnrichmentEntry::Other(value) => value,

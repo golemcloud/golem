@@ -29,12 +29,15 @@ default = ["analysis"]
 # use only those and do not need twiggy, WAT/WIT decoding or the command line.
 analysis = [
     "dep:anyhow",
+    "dep:camino",
     "dep:clap",
     "dep:hex",
     "dep:regex",
     "dep:sha2",
+    "dep:tempfile",
     "dep:twiggy-ir",
     "dep:twiggy-parser",
+    "dep:wasm-rquickjs",
     "dep:wasmparser",
     "dep:wasmprinter",
     "dep:wit-component",
@@ -43,6 +46,7 @@ analysis = [
 
 [dependencies]
 anyhow = { workspace = true, optional = true }
+camino = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 flate2 = { workspace = true }
 hex = { workspace = true, optional = true }
@@ -50,8 +54,10 @@ regex = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 twiggy-ir = { workspace = true, optional = true }
 twiggy-parser = { workspace = true, optional = true }
+wasm-rquickjs = { workspace = true, optional = true }
 wasmparser = { workspace = true, optional = true }
 wasmprinter = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }

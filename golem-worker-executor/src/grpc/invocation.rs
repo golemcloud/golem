@@ -394,15 +394,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    /// Resolves an existing component agent for `operation` without starting it. A missing agent,
-    /// or one that a running delete has claimed, gives `AgentNotFound`.
+    /// Resolves an existing component agent for `operation` without starting it. Standalone tool
+    /// owners also permit cancellation. A missing or deleting owner gives `AgentNotFound`.
     pub(super) async fn get_existing_for_management(
         &self,
         owned_agent_id: &OwnedAgentId,
         operation: &str,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let worker = Worker::get_exact_existing_suspended(self, owned_agent_id).await?;
-        worker.ensure_component_agent_ingress(operation)?;
+        if operation != "cancel"
+            || worker.get_initial_worker_metadata().owner_kind
+                != golem_common::model::agent::OwnerKind::StandaloneTool
+        {
+            worker.ensure_component_agent_ingress(operation)?;
+        }
         if worker.answers_as_deleted().await {
             return Err(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),

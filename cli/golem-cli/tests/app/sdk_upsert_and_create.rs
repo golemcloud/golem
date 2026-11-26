@@ -233,9 +233,9 @@ async fn effect_agent_upserts_one_agent_and_creates_distinct_agents_without_a_ke
                           count,
                           aCount,
                           bCount,
-                          firstId.uuid === againId.uuid,
-                          aId.uuid !== firstId.uuid && bId.uuid !== firstId.uuid,
-                          aId.uuid !== bId.uuid,
+                          firstId === againId,
+                          aId !== firstId && bId !== firstId,
+                          aId !== bId,
                         ].join("|");
                       }).pipe(Effect.orDie, Effect.scoped),
                   }),
