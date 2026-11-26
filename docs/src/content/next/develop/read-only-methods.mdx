@@ -66,7 +66,7 @@ instance does not. `ttl(d)` entries additionally expire by time. `no-cache` neve
 The executor keys each cached result on the method, the normalized input and the full caller of the invocation:
 the original and immediate principals and the tokens (see
 [Make Secure HTTP APIs](/next/invoke/making-custom-apis/authentication)). Two calls by the same signed-in user can
-share an entry. Calls by two different users never share one. All anonymous calls share one entry. There is no
+share an entry. Calls by two different users never share one. Anonymous calls share an entry only when their whole caller record is the same, for example two anonymous requests that carry no token. There is no
 option for this, and a method needs no extra parameter for it.
 
 So a read-only method can return a view that depends on who is calling. It reads its caller from the invocation

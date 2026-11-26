@@ -70,7 +70,7 @@ pub fn CounterAgent::pure_compute(self: Self, x: UInt, y: UInt) -> UInt {
 
 ## Caching per Caller (automatic)
 
-The cache is always keyed per caller: the full caller of the invocation is part of the key, so each signed-in user gets their own entry, and all anonymous calls share one. There is no argument for this on the attribute. A read-only method that needs to know who is calling takes an `@agents.InvocationContext` parameter, like any other method:
+The cache is always keyed per caller: the full caller of the invocation is part of the key, so each signed-in user gets their own entry, and anonymous calls share one only when their whole caller record is the same (for example, no token). There is no argument for this on the attribute. A read-only method that needs to know who is calling takes an `@agents.InvocationContext` parameter, like any other method:
 
 ```moonbit
 #derive.read_only

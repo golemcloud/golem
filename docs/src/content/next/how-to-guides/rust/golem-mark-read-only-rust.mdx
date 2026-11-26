@@ -72,7 +72,7 @@ fn pure_compute(&self, x: u32, y: u32) -> u32;
 
 ## Caching per Caller (automatic)
 
-The cache is always keyed per caller: the full caller of the invocation is part of the key, so each signed-in user gets their own entry, and all anonymous calls share one. There is no option for this on the attribute. A read-only method that needs to know who is calling takes an `InvocationContext` parameter, like any other method:
+The cache is always keyed per caller: the full caller of the invocation is part of the key, so each signed-in user gets their own entry, and anonymous calls share one only when their whole caller record is the same (for example, no token). There is no option for this on the attribute. A read-only method that needs to know who is calling takes an `InvocationContext` parameter, like any other method:
 
 ```rust
 use golem_rust::agentic::InvocationContext;

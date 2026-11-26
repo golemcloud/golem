@@ -126,7 +126,8 @@ var GetCatalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly(), 
 ## Caching per caller
 
 Read-only results are cached per `(method, input, caller)`: each caller gets its own
-entry, and all anonymous calls share one. There is no option for this. A read-only
+entry, and anonymous calls share one only when their whole caller record is the same
+(for example, no token). There is no option for this. A read-only
 handler reads its caller with `ctx.Caller()`, like any other handler:
 
 ```go
