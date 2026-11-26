@@ -369,9 +369,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
         #[cfg(any(test, feature = "test-utils"))]
-        if mode == UpdateMode::Automatic {
-            worker.pass_update_request_probe(crate::worker::UpdateRequestPoint::StatusRead);
-        }
+        let metadata = match (mode == UpdateMode::Automatic)
+            .then(|| {
+                worker.take_update_request_probe(crate::worker::UpdateRequestPoint::StatusRead)
+            })
+            .flatten()
+        {
+            Some(queued) => {
+                crate::worker::state_actor::STATUS_READ_QUEUED
+                    .scope(
+                        std::cell::Cell::new(Some(queued)),
+                        worker.try_get_latest_worker_metadata(),
+                    )
+                    .await?
+            }
+            None => worker.try_get_latest_worker_metadata().await?,
+        };
+        #[cfg(not(any(test, feature = "test-utils")))]
         let metadata = worker.try_get_latest_worker_metadata().await?;
         if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
             return Err(WorkerExecutorError::invalid_request(
@@ -914,13 +928,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         reached_rx
     }
 
+    /// The signal of the probe when it is armed for `point`.
     #[cfg(any(test, feature = "test-utils"))]
-    fn pass_update_request_probe(&self, point: crate::worker::UpdateRequestPoint) {
+    fn take_update_request_probe(
+        &self,
+        point: crate::worker::UpdateRequestPoint,
+    ) -> Option<tokio::sync::oneshot::Sender<()>> {
         let mut probe = self.update_request_probe.lock().unwrap();
-        if probe.as_ref().is_some_and(|(armed, _)| *armed == point)
-            && let Some((_, reached)) = probe.take()
-        {
-            let _ = reached.send(());
+        if probe.as_ref().is_some_and(|(armed, _)| *armed == point) {
+            probe.take().map(|(_, reached)| reached)
+        } else {
+            None
         }
     }
 
@@ -948,7 +966,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
         #[cfg(any(test, feature = "test-utils"))]
-        self.pass_update_request_probe(crate::worker::UpdateRequestPoint::Admission);
+        if let Some(admitted) =
+            self.take_update_request_probe(crate::worker::UpdateRequestPoint::Admission)
+        {
+            let _ = admitted.send(());
+        }
         let status = self.state_actor.status().await;
         if lifecycle::has_duplicate_pending_update(&status, target_revision) {
             return Err(WorkerExecutorError::invalid_request(

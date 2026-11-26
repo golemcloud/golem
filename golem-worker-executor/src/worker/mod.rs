@@ -610,8 +610,7 @@ enum DeletionRuntime {
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdateRequestPoint {
-    /// Right before the request submits its first status read. From there the request submits
-    /// the read without yielding, so the read queues behind a status fold that is held.
+    /// The request queued its first status read, behind any status fold that is held.
     StatusRead,
     /// The request holds the instance lock, before it reads the status for its duplicate check.
     Admission,

@@ -329,9 +329,9 @@ async fn a_crash_around_the_outcome_commit_of_a_never_live_fork_leaves_one_outco
 /// E3c and the stop handoff: an automatic update requested while the previous update's outcome
 /// commits, while the generation stops after its admission, and right after the outcome became
 /// visible, while the generation unloads. The held generation is released only after the second
-/// request reached its first status read, which queues behind the held commit, or, across the
-/// early stop, entered its admission under the instance lock. Each later update runs in a later
-/// generation: the fork ends with two outcomes and no pending update.
+/// request queued its first status read behind the held commit, or, across the early stop,
+/// entered its admission under the instance lock. Each later update runs in a later generation:
+/// the fork ends with two outcomes and no pending update.
 #[test]
 #[timeout("6m")]
 async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later_generation(
