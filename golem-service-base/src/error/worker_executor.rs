@@ -1785,6 +1785,11 @@ mod read_only_violation_trap_tests {
             let status: Status = expected.clone().into();
 
             assert_eq!(status.code(), tonic::Code::InvalidArgument);
+            assert!(
+                status.message().contains("index 42"),
+                "{}",
+                status.message()
+            );
             assert_eq!(
                 WorkerExecutorError::from_status_details(&status),
                 Some(expected.clone())
