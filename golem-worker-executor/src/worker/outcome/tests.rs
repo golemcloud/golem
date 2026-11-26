@@ -161,11 +161,11 @@ fn initialization_started(key: InvocationId) -> OplogEntry {
 }
 
 /// The walk for the initialization of a fork reads from the retained start. It finds an
-/// initialization at or after the start, and gives no key, with no read error, for an
-/// initialization below the start.
+/// initialization at or after the start, also after another invocation, and gives no key, with
+/// no read error, for an initialization below the start.
 #[test]
 async fn the_initialization_walk_reads_from_the_retained_start() {
-    use crate::services::oplog::retention::test_oplog::{RetainedOplog, jump};
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, invocation_started, jump};
 
     let key = InvocationId(uuid::Uuid::from_u128(0x1455));
     let after = RetainedOplog::new().await;
@@ -173,7 +173,7 @@ async fn the_initialization_walk_reads_from_the_retained_start() {
         .add([
             jump(1),
             jump(2),
-            jump(3),
+            invocation_started(),
             initialization_started(key),
             jump(5),
         ])
