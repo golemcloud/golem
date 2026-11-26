@@ -8,7 +8,10 @@ or fall back to local measurements when CI evidence is missing.
 Run `cargo make analyze-ci-benchmarks` from the Golem commit to investigate. The command
 clones a read-only snapshot of `golemcloud/benchmark-results`, selects the newest published
 `CI` result for the exact Golem commit and `github-actions-blacksmith-32vcpu` runner, and
-uses that repository's analyzer. It verifies the selected detail record and retains the
+invokes that repository's `scripts/analyze-ci-benchmarks.mjs` command. The results repository
+owns result selection, detail validation, regression analysis and their tests; Golem only
+supplies the commit, runner and output directory. The command verifies the selected detail
+record and retains the
 results repository commit, detail hash, failures and analysis under a unique `tmp/` directory.
 It does not substitute another Golem commit. A missing result produces `missing-ci-result`,
 with `shouldAlert: false`, without starting a build, benchmark, dispatch or publication.

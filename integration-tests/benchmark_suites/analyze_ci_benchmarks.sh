@@ -12,6 +12,6 @@ output="$(mktemp -d "$artifact_dir/ci-benchmark-analysis-XXXXXXXX")"
 # This checkout is a read-only snapshot of published results, never a publisher.
 git clone --depth 1 "$results_repository" "$output/benchmark-results"
 git -C "$output/benchmark-results" rev-parse HEAD > "$output/results-commit.txt"
-node "$root/integration-tests/benchmark_suites/analyze_ci_benchmarks.mjs" \
+node "$output/benchmark-results/scripts/analyze-ci-benchmarks.mjs" \
     "$output/benchmark-results" "$source_commit" "$runner_id" "$output"
 echo "Analysis evidence: $output"
