@@ -20,8 +20,9 @@
 //!
 //! Conversely, for `If-None-Match` revalidation requests, the worker-service
 //! can produce a `304 Not Modified` response without invoking the executor
-//! when the supplied `ETag` matches the agent's current oplog index and the
-//! caller of the request. The `ETag` holds a digest of the caller, so one
+//! when the supplied `ETag` matches the agent's current state oplog index (the
+//! latest entry other than an `AgentInvocationSettled`) and the caller of the
+//! request. The `ETag` holds a digest of the caller, so one
 //! caller's validator never revalidates another caller's request, even when a
 //! private response tells the browser to revalidate every time.
 //!

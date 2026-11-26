@@ -36,7 +36,10 @@ mod go_native_tool;
 mod go_principal;
 mod go_tools;
 mod initial_cards;
+mod invocations;
 mod mcp_import;
+// The platform TLS verifier honours SSL_CERT_FILE on Linux.
+#[cfg(target_os = "linux")]
 mod mcp_oauth;
 mod mcp_serve;
 mod moonbit_guest_streams;
@@ -61,6 +64,7 @@ mod scala_http_router;
 mod scala_sbt_mill;
 mod scala_tool_middleware;
 mod scala_tool_sources;
+mod sdk_upsert_and_create;
 mod secrets;
 mod self_identity;
 mod server_config;
@@ -68,6 +72,8 @@ mod server_config;
 mod server_restart;
 mod service_config_failure;
 mod ssh;
+// The platform TLS verifier honours SSL_CERT_FILE on Linux.
+#[cfg(target_os = "linux")]
 mod tls_endpoint;
 mod tool_metadata_conformance;
 mod tool_middleware;
@@ -178,6 +184,7 @@ tag_suite!(scala_http_router, agents_guest_bridge);
 tag_suite!(scala_tool_sources, agents_guest_bridge);
 tag_suite!(scala_sbt_mill, deploy);
 tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(sdk_upsert_and_create, deploy);
 tag_suite!(secrets, deploy);
 tag_suite!(self_identity, deploy);
 tag_suite!(ssh, deploy);
@@ -195,8 +202,6 @@ tag_suite!(typescript_native_source, agents_guest_bridge);
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
-#[cfg(unix)]
-use expectrl::process::unix::{Signal, WaitStatus};
 use expectrl::{Eof, Expect};
 use golem_cli::app::build::task_result_marker::{
     ExtractComponentMetadataMarkerHash, TaskResultMarker,
@@ -309,7 +314,7 @@ pub(crate) const CLOSED_OUTPUT_EXIT: i32 = 141;
 #[derive(Clone, Copy)]
 enum CloseWhen {
     AtSpawn,
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[allow(dead_code)]
     Quiet,
     AfterBytes(usize),
 }
@@ -855,18 +860,6 @@ impl TestContext {
             .await
     }
 
-    /// Closes the read end of stdout once the CLI has printed nothing for a while, as `head`
-    /// does after it has read enough.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    async fn cli_closing_stdout_when_quiet<I, S>(&self, command_args: I) -> RawOutput
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        self.cli_closing_output(command_args, ClosedStream::Stdout, CloseWhen::Quiet)
-            .await
-    }
-
     /// Closes the read end of stdout once the CLI has printed at least `bytes` bytes, as
     /// `head -c` does. The result holds the bytes that were read before the close.
     async fn cli_closing_stdout_after_bytes<I, S>(&self, command_args: I, bytes: usize) -> RawOutput
@@ -995,6 +988,52 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        let (child, mut stdout) = self.spawn_cli_process(command_args);
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let line = stdout
+                    .next_line()
+                    .await
+                    .expect("failed to read golem-cli stdout")
+                    .expect("golem-cli exited before the expected output");
+                println!("> golem-cli - stdout: {line}");
+                if line.contains(expected) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("failed to observe expected golem-cli output");
+        tokio::time::sleep(pause_after_match).await;
+        forward_stdout(stdout);
+
+        child
+    }
+
+    /// Spawns a long-running golem-cli command without waiting for any of its output.
+    fn cli_process<I, S>(&self, command_args: I) -> Child
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let (child, stdout) = self.spawn_cli_process(command_args);
+        forward_stdout(stdout);
+        child
+    }
+
+    /// Spawns golem-cli, forwards its stderr and returns its stdout lines.
+    fn spawn_cli_process<I, S>(
+        &self,
+        command_args: I,
+    ) -> (
+        Child,
+        tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    )
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         self.rewrite_local_http_domain_ports();
 
         let mut args = vec![
@@ -1027,7 +1066,7 @@ impl TestContext {
             .spawn()
             .unwrap();
 
-        let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+        let stdout = BufReader::new(child.stdout.take().unwrap()).lines();
         let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
         tokio::spawn(async move {
             while let Ok(Some(line)) = stderr.next_line().await {
@@ -1035,29 +1074,7 @@ impl TestContext {
             }
         });
 
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let line = stdout
-                    .next_line()
-                    .await
-                    .expect("failed to read golem-cli stdout")
-                    .expect("golem-cli exited before the expected output");
-                println!("> golem-cli - stdout: {line}");
-                if line.contains(expected) {
-                    break;
-                }
-            }
-        })
-        .await
-        .expect("failed to observe expected golem-cli output");
-        tokio::time::sleep(pause_after_match).await;
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = stdout.next_line().await {
-                println!("> golem-cli - stdout: {line}");
-            }
-        });
-
-        child
+        (child, stdout)
     }
 
     /// Spawns a long-running golem-cli command and returns the child together with the first
@@ -1190,71 +1207,91 @@ impl TestContext {
         .context("interactive session failed")
         .unwrap()
     }
+}
 
-    #[cfg(unix)]
-    async fn cli_ctrl_c_after<I, S>(
-        &self,
-        command_args: I,
-        expected: &str,
-        pause_after_match: Duration,
-    ) -> i32
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        self.rewrite_local_http_domain_ports();
+#[cfg(unix)]
+mod unix {
+    use super::*;
+    use expectrl::process::unix::{Signal, WaitStatus};
 
-        let mut args = vec![
-            "--config-dir".to_string(),
-            self.config_dir.path().to_str().unwrap().to_string(),
-        ];
-        args.extend(
-            command_args
-                .into_iter()
-                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
-        );
+    impl TestContext {
+        /// Closes the read end of stdout once the CLI has printed nothing for a while, as `head`
+        /// does after it has read enough.
+        pub(super) async fn cli_closing_stdout_when_quiet<I, S>(&self, command_args: I) -> RawOutput
+        where
+            I: IntoIterator<Item = S>,
+            S: AsRef<OsStr>,
+        {
+            self.cli_closing_output(command_args, ClosedStream::Stdout, CloseWhen::Quiet)
+                .await
+        }
 
-        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
-        let golem_cli_path = self.golem_cli_path.clone();
-        let env = self.env.clone();
-        let expected = expected.to_string();
+        pub(super) async fn cli_ctrl_c_after<I, S>(
+            &self,
+            command_args: I,
+            expected: &str,
+            pause_after_match: Duration,
+        ) -> i32
+        where
+            I: IntoIterator<Item = S>,
+            S: AsRef<OsStr>,
+        {
+            self.rewrite_local_http_domain_ports();
 
-        tokio::task::spawn_blocking(move || {
-            let mut command = std::process::Command::new(golem_cli_path);
-            command
-                .current_dir(working_dir)
-                .env_remove("GOLEM_BUILTIN_LOCAL_URL")
-                .envs(env)
-                .env("TERM", "xterm-256color")
-                .args(args);
-            let mut session = expectrl::Session::spawn(command)
-                .expect("failed to spawn interactive golem-cli session");
-            session.set_expect_timeout(Some(Duration::from_secs(30)));
-            session
-                .expect(expected.as_str())
-                .expect("failed to observe invocation acceptance before Ctrl-C");
-            std::thread::sleep(pause_after_match);
-            session
-                .get_process_mut()
-                .signal(Signal::SIGINT)
-                .expect("failed to send Ctrl-C");
-            session
-                .expect(Eof)
-                .expect("failed to observe EOF after Ctrl-C");
+            let mut args = vec![
+                "--config-dir".to_string(),
+                self.config_dir.path().to_str().unwrap().to_string(),
+            ];
+            args.extend(
+                command_args
+                    .into_iter()
+                    .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+            );
 
-            match session
-                .get_process()
-                .wait()
-                .expect("failed to wait for golem-cli exit status")
-            {
-                WaitStatus::Exited(_, code) => code,
-                status => panic!("golem-cli did not exit normally after Ctrl-C: {status:?}"),
-            }
-        })
-        .await
-        .expect("failed to run Ctrl-C CLI session")
+            let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+            let golem_cli_path = self.golem_cli_path.clone();
+            let env = self.env.clone();
+            let expected = expected.to_string();
+
+            tokio::task::spawn_blocking(move || {
+                let mut command = std::process::Command::new(golem_cli_path);
+                command
+                    .current_dir(working_dir)
+                    .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+                    .envs(env)
+                    .env("TERM", "xterm-256color")
+                    .args(args);
+                let mut session = expectrl::Session::spawn(command)
+                    .expect("failed to spawn interactive golem-cli session");
+                session.set_expect_timeout(Some(Duration::from_secs(30)));
+                session
+                    .expect(expected.as_str())
+                    .expect("failed to observe invocation acceptance before Ctrl-C");
+                std::thread::sleep(pause_after_match);
+                session
+                    .get_process_mut()
+                    .signal(Signal::SIGINT)
+                    .expect("failed to send Ctrl-C");
+                session
+                    .expect(Eof)
+                    .expect("failed to observe EOF after Ctrl-C");
+
+                match session
+                    .get_process()
+                    .wait()
+                    .expect("failed to wait for golem-cli exit status")
+                {
+                    WaitStatus::Exited(_, code) => code,
+                    status => panic!("golem-cli did not exit normally after Ctrl-C: {status:?}"),
+                }
+            })
+            .await
+            .expect("failed to run Ctrl-C CLI session")
+        }
     }
+}
 
+impl TestContext {
     async fn cli_interactive_repl_test<I, S, F>(&mut self, args: I, session_fn: F)
     where
         I: IntoIterator<Item = S>,
@@ -2146,4 +2183,12 @@ fn go_component_dir(ctx: &TestContext) -> std::path::PathBuf {
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .find(|path| path.join("go.mod").exists())
         .unwrap_or_else(|| ctx.cwd_path().to_path_buf())
+}
+
+fn forward_stdout(mut stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>) {
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = stdout.next_line().await {
+            println!("> golem-cli - stdout: {line}");
+        }
+    });
 }

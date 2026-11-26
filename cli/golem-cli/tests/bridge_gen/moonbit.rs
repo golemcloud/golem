@@ -52,6 +52,9 @@ use golem_common::schema::{
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
+#[path = "moonbit_recovery.rs"]
+mod recovery;
+
 /// Builds the structural multimodal schema type `list<variant<…> Role::Multimodal>`
 /// from `(case_name, payload)` modalities.
 fn multimodal(cases: Vec<(&str, SchemaType)>) -> SchemaType {
@@ -680,7 +683,6 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
         "body: @model.Duration",
         "\"schema-complete.Recursive\"",
         "[\"en\", \"de\"]",
-        "[\"fr\"]",
     ] {
         assert!(source.contains(expected), "missing {expected}:\n{source}");
     }
@@ -1828,7 +1830,7 @@ fn guest_mode_moon_checks_unstructured_text_codec() {
 }
 
 #[test]
-fn guest_mode_unstructured_text_encoder_rejects_disallowed_language() {
+fn guest_mode_unstructured_text_encoder_leaves_language_restrictions_to_the_server() {
     let media = def(
         "media",
         SchemaType::record(vec![named_field(
@@ -1850,13 +1852,8 @@ fn guest_mode_unstructured_text_encoder_rejects_disallowed_language() {
     let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
     std::fs::write(
         guest.path().join("client/unstructured_wbtest.mbt"),
-        r#"test "unstructured text encoder enforces language restrictions" {
-  try encode_Media({ body: Inline("bonjour", Some("fr")) }) catch {
-    CodecError(_) => ()
-    _ => fail("expected CodecError for a disallowed language")
-  } noraise {
-    _ => fail("expected CodecError for a disallowed language")
-  }
+        r#"test "unstructured text encoder leaves language restrictions to the server" {
+  ignore(encode_Media({ body: Inline("bonjour", Some("fr")) }))
 }
 "#,
     )
@@ -1973,8 +1970,8 @@ fn guest_mode_moon_checks_referenced_unstructured_codecs_with_distinct_restricti
     );
     let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
-    assert!(source.contains("guest_decode_unstructured_text(fields[0], [\"en\", \"de\"])"));
-    assert!(source.contains("guest_decode_unstructured_binary(fields[1], [\"image/png\"])"));
+    assert!(source.contains("guest_decode_unstructured_text(fields[0])"));
+    assert!(source.contains("guest_decode_unstructured_binary(fields[1])"));
 
     let output = std::process::Command::new("moon")
         .arg("-C")
@@ -2669,12 +2666,8 @@ fn config_constructors_are_generated() {
     assert!(client.contains(
         "@runtime.create_agent(configuration, \"ConfigAgent\", parameters, keyed~, config=agent_config, env~)"
     ));
-    // Only a keyed create keeps the parameters for streaming calls.
-    assert!(
-        client.contains(
-            "parameters=if keyed { Some(parameters) } else { None }, target=Some(response)"
-        )
-    );
+    // Every create pins its ID and fingerprint without retaining the constructor.
+    assert!(client.contains("parameters=None, target=Some(response)"));
 }
 
 #[test]
@@ -2979,7 +2972,7 @@ fn multimodal_enums_are_deduplicated() {
 // --- Unstructured text / binary restrictions -------------------------------
 
 #[test]
-fn unstructured_text_and_binary_restrictions_are_enforced() {
+fn unstructured_text_and_binary_decoders_leave_restrictions_to_the_server() {
     let agent_type = agent(
         "MediaAgent",
         "moonbit",
@@ -3011,13 +3004,9 @@ fn unstructured_text_and_binary_restrictions_are_enforced() {
     // Ergonomic wrapper return types.
     assert!(client.contains("-> @runtime.UnstructuredText raise {"));
     assert!(client.contains("-> @runtime.UnstructuredBinary raise {"));
-    // Decode validates against the allowed language / MIME lists.
-    assert!(client.contains(
-        "@runtime.unstructured_text_from_schema_value(\"output\", value, [\"en\", \"de\"])"
-    ));
-    assert!(client.contains(
-        "@runtime.unstructured_binary_from_schema_value(\"output\", value, [\"image/png\"])"
-    ));
+    // Decode leaves the allowed language / MIME lists to the server.
+    assert!(client.contains("@runtime.unstructured_text_from_schema_value(\"output\", value)"));
+    assert!(client.contains("@runtime.unstructured_binary_from_schema_value(\"output\", value)"));
 }
 
 #[test]
@@ -3352,7 +3341,6 @@ test "agent failures surface stderr and still reject unknown members" {
 #[test]
 #[test_r::timeout("300s")]
 async fn accepted_streaming_invocation_recovers_with_takeover() {
-    use std::io::BufRead;
     let pkg = GeneratedPackage::new(agent(
         "RecoveryAgent",
         "rust",
@@ -3369,6 +3357,8 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
     const STABLE: &str = "5000";
     for (mode, expected_error, reconnect, stable) in [
         ("success", "", window, STABLE),
+        ("success-id", "", window, STABLE),
+        ("success-key-known", "", window, STABLE),
         ("resume-retryable", "", window, STABLE),
         ("initial", "terminal rejection", window, STABLE),
         ("other", "terminal rejection", window, STABLE),
@@ -3400,6 +3390,22 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         ("stable-reset", "", "Within(1000)", "300"),
         ("input-failure-replay", "", window, STABLE),
         ("input-eof-replay", "", window, STABLE),
+        ("input-server-failure", "", window, STABLE),
+        ("input-server-outcome-resume", "", window, STABLE),
+        ("input-queued-ready", "", window, STABLE),
+        ("queued-ready", "", window, STABLE),
+        (
+            "ready-twice",
+            "protocol-error: unexpected invocation readiness",
+            window,
+            STABLE,
+        ),
+        (
+            "ready-mismatch",
+            "attempt-conflict: acceptance attempt does not match",
+            window,
+            STABLE,
+        ),
         ("output-failed", "typed-failure", window, STABLE),
         ("output-cancel-race", "", window, STABLE),
         ("output-cancel-after-resume-head", "", window, STABLE),
@@ -3415,25 +3421,28 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             STABLE,
         ),
     ] {
-        let mut server = std::process::Command::new("python3")
-            .arg("-u")
-            .arg(
-                workspace_root()
-                    .unwrap()
-                    .join("cli/golem-cli/tests/bridge_gen/moonbit_recovery.py"),
-            )
-            .arg(mode)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut port = String::new();
-        std::io::BufReader::new(server.stdout.take().unwrap())
-            .read_line(&mut port)
-            .unwrap();
+        eprintln!("MoonBit recovery mode: {mode}");
+        let server = recovery::RecoveryServer::start(mode);
         std::fs::write(
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
-                .replace("__PORT__", port.trim())
+                .replace(
+                    "parameters=Some(TupleValue([])),\n    target=None,",
+                    if mode == "success-id" {
+                        "parameters=None,\n    target=Some({ agent_id: try! AgentId::parse(\"00000000-0000-8000-8000-000000000abc\"), agent_fingerprint: \"pinned\" }),"
+                    } else {
+                        "parameters=Some(TupleValue([])),\n    target=None,"
+                    },
+                )
+                .replace(
+                    "let resolved = recovery_agent()",
+                    if mode == "success-key-known" {
+                        "let resolved = recovery_agent()\n  resolved.known_agent_id = Some(AgentId::parse(\"00000000-0000-8000-8000-000000000abc\"))"
+                    } else {
+                        "let resolved = recovery_agent()"
+                    },
+                )
+                .replace("__PORT__", &server.port.to_string())
                 .replace("__MODE__", mode)
                 .replace("__ERROR__", expected_error)
                 .replace("__RECONNECT__", reconnect)
@@ -3451,16 +3460,8 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         .unwrap();
         // The runtime's own tests run with the other generated modules; each
         // mode runs only its recovery test against its peer.
-        let result =
-            std::panic::catch_unwind(|| pkg.test_native_paths(&["runtime/recovery_wbtest.mbt"]));
-        if result.is_err() {
-            let _ = server.kill();
-        }
-        let status = server.wait().unwrap();
-        if let Err(error) = result {
-            std::panic::resume_unwind(error);
-        }
-        assert!(status.success(), "WebSocket recovery assertions failed");
+        pkg.test_native_paths(&["runtime/recovery_wbtest.mbt"]);
+        server.finish();
     }
 }
 
@@ -3636,7 +3637,7 @@ fn rich_agent() -> AgentTypeSchema {
 }
 
 #[test]
-fn external_rich_kinds_round_trip_and_check_units_and_languages() {
+fn external_rich_kinds_round_trip_check_units_and_leave_languages_to_the_server() {
     let pkg = GeneratedPackage::new(rich_agent());
     let client = pkg.client_source();
     for expected in [
@@ -3735,11 +3736,10 @@ test "quantity unit outside the schema is rejected on encode and decode" {
 }
 
 ///|
-test "text language outside the schema is rejected on encode and decode" {
+test "text language outside the schema is left to the server" {
   let codec = rich_codec()
-  assert_true(client_rejects(() => ignore(codec.encode(sample_value("kg", "fr")))))
-  let foreign = @runtime.schema_value_to_json(sample_value("kg", "fr"))
-  assert_true(client_rejects(() => ignore(codec.decode(foreign))))
+  let foreign = sample_value("kg", "fr")
+  assert_true(codec.decode(codec.encode(foreign)) == foreign)
 }
 "#
         .replace("__GRAPH__", &graph_json),
@@ -3749,7 +3749,7 @@ test "text language outside the schema is rejected on encode and decode" {
 }
 
 #[test]
-fn guest_rich_kinds_use_sdk_types_and_check_units_and_languages() {
+fn guest_rich_kinds_use_sdk_types_check_units_and_leave_restrictions_to_the_server() {
     let guest = generate_without_check(rich_agent(), MoonBitBridgeMode::GuestWasmRpc);
     let client = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
     for expected in [
@@ -3821,16 +3821,9 @@ test "rich kinds round trip through the guest codec" {
 }
 
 ///|
-test "binary MIME type outside the schema is rejected on encode and decode" {
-  try encode_Rich(sample("en", image_mime="image/gif")) catch {
-    CodecError(_) => ()
-    _ => fail("expected CodecError for a disallowed MIME type")
-  } noraise {
-    _ => fail("expected CodecError for a disallowed MIME type")
-  }
-  assert_decode_rejected(
-    sample_value("kg", "en", image_mime=Some("image/gif")),
-  )
+test "binary MIME type outside the schema is left to the server" {
+  let value = sample("en", image_mime="image/gif")
+  assert_true(decode_Rich(encode_Rich(value)) == value)
 }
 
 ///|
@@ -3839,15 +3832,9 @@ test "quantity unit outside the schema is rejected on decode" {
 }
 
 ///|
-test "text language outside the schema is rejected on encode and decode" {
+test "text language outside the schema is left to the server" {
   let value = sample("fr")
-  try encode_Rich(value) catch {
-    CodecError(_) => ()
-    _ => fail("expected CodecError for a disallowed language")
-  } noraise {
-    _ => fail("expected CodecError for a disallowed language")
-  }
-  assert_decode_rejected(sample_value("kg", "fr"))
+  assert_true(decode_Rich(encode_Rich(value)) == value)
 }
 "#,
     )

@@ -327,7 +327,7 @@ export async function createRemoteAgent(
       env: (options.env ?? []).map(([name, value]) => [name, value] as [string, string]),
     }),
   );
-  const agentId = AgentId.from(created.agentId);
+  const agentId = AgentId.fromWit(created.agentId);
   return boundRemoteAgent(`${agentTypeName}[${agentId.toString()}]`, created.client);
 }
 
@@ -336,13 +336,10 @@ export async function createRemoteAgent(
  * unknown ID, or the ID of an agent of another type, fails with a `not-found`
  * {@link RemoteCallError}.
  */
-export async function getRemoteAgentById(
-  agentTypeName: string,
-  agentId: AgentId,
-): Promise<RemoteAgentHandle> {
+export function getRemoteAgentById(agentTypeName: string, agentId: AgentId): RemoteAgentHandle {
   const target = `${agentTypeName}[${agentId.toString()}]`;
   const rpc = mapRpcError(`Failed to connect to remote agent ${target}`, () =>
-    WasmRpc.getById(agentTypeName, agentId),
+    WasmRpc.getById(agentTypeName, AgentId.toWit(agentId)),
   );
   return boundRemoteAgent(target, rpc);
 }
@@ -366,7 +363,7 @@ export function bindSelfRemoteAgent(expectedTypeName: string): RemoteAgentHandle
         },
       });
     }
-    const agentId = AgentId.from(rawAgentId);
+    const agentId = AgentId.fromWit(rawAgentId);
     return boundRemoteAgent(`${expectedTypeName}[${agentId.toString()}]`, rpc);
   } catch (error) {
     (rpc as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
@@ -377,7 +374,7 @@ export function bindSelfRemoteAgent(expectedTypeName: string): RemoteAgentHandle
 function boundRemoteAgent(target: string, rpc: WasmRpc): RemoteAgentHandle {
   const agentId = () =>
     mapAsyncRpcError(`Failed to get the ID of remote agent ${target}`, async () =>
-      AgentId.from(await rpc.agentId()),
+      AgentId.fromWit(await rpc.agentId()),
     );
   const remote = remoteTransport(
     rpc,

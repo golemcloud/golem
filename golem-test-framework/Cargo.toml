@@ -22,6 +22,7 @@ golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-model-mock = { workspace = true }
+golem-schema = { workspace = true }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }
@@ -33,7 +34,6 @@ applying = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 bytes = { workspace = true }
-chrono = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
 comfy-table = { workspace = true }
@@ -42,9 +42,11 @@ heck = { workspace = true }
 hex = { workspace = true }
 humantime-serde = { workspace = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 jsonwebtoken = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }
+prost = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }

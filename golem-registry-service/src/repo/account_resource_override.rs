@@ -365,6 +365,7 @@ impl<Repo: AccountResourceOverrideRepo> LoggedAccountResourceOverrideRepo<Repo> 
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: AccountResourceOverrideRepo> AccountResourceOverrideRepo
     for LoggedAccountResourceOverrideRepo<Repo>
 {
@@ -1127,6 +1128,7 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool> {
     async fn get_active_value(
         &self,
@@ -1575,7 +1577,7 @@ mod tests {
 
     #[test]
     fn admin_grant_policy_rejects_disabled_non_increasing_and_invalid_promotion() {
-        let now = SqlDateTime::new(chrono::Utc::now());
+        let now = SqlDateTime::new(jiff::Timestamp::now());
         assert!(matches!(
             DbAccountResourceOverrideRepo::<SqlitePool>::validate_admin_grant(
                 policy(false, true),
@@ -1641,8 +1643,8 @@ mod tests {
 
     #[test]
     fn admin_grant_policy_accepts_valid_grants_and_rejects_conversion_overflow() {
-        let now = SqlDateTime::new(chrono::Utc::now());
-        let future = SqlDateTime::new(chrono::Utc::now() + chrono::Duration::hours(1));
+        let now = SqlDateTime::new(jiff::Timestamp::now());
+        let future = SqlDateTime::new(jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1));
         assert!(
             DbAccountResourceOverrideRepo::<SqlitePool>::validate_admin_grant(
                 policy(true, true),
@@ -1691,7 +1693,7 @@ mod tests {
 
     #[test]
     fn admin_grant_policy_rejects_unlimited_storage_sentinel_and_above() {
-        let now = SqlDateTime::new(chrono::Utc::now());
+        let now = SqlDateTime::new(jiff::Timestamp::now());
         let storage_policy = OverridePolicy {
             dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
             enabled: true,
@@ -1720,7 +1722,7 @@ mod tests {
 
     #[test]
     fn admin_grant_policy_rejects_unlimited_memory_sentinels() {
-        let now = SqlDateTime::new(chrono::Utc::now());
+        let now = SqlDateTime::new(jiff::Timestamp::now());
         let memory_policy = OverridePolicy::memory(10, u64::MAX, true);
 
         for value in [EFFECTIVELY_UNLIMITED_MEMORY_LIMIT, u64::MAX] {

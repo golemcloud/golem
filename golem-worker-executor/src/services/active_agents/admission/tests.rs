@@ -165,6 +165,7 @@ struct FakeEvictionSource {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl EvictionSource for FakeEvictionSource {
     async fn evict_at_most(&self, priority: EvictionPriority, needed_bytes: u64) -> u64 {
         let mut state = self.state.lock().unwrap();
@@ -1024,6 +1025,7 @@ mod grow_lock_ordering {
     }
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl EvictionSource for ScanningEvictionSource {
         async fn evict_at_most(&self, priority: EvictionPriority, _needed_bytes: u64) -> u64 {
             if priority == EvictionPriority::Idle {

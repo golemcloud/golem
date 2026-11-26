@@ -140,31 +140,25 @@ pub(super) fn clear_with(into: &std::path::Path, hook: &dyn ClearHook) -> std::i
     walk(into, Hooks { hook })
 }
 
-#[cfg(unix)]
-fn walk(into: &std::path::Path, hooks: Hooks<'_>) -> std::io::Result<()> {
-    use rustix::fs::{Mode, OFlags};
-    let root = rustix::fs::open(
-        into,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?;
-    let device = rustix::fs::fstat(&root)?.st_dev;
-    unix::clear_tree(root, into, device, hooks)
-}
+use native::walk;
 
-/// The clear is not built for this platform, so it gives an error of the kind `Unsupported`.
 #[cfg(not(unix))]
-fn walk(_into: &std::path::Path, _hooks: Hooks<'_>) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "the clear of the directory of a restore runs only on unix",
-    ))
+mod native {
+    use super::Hooks;
+
+    /// The clear is not built for this platform, so it gives an error of the kind `Unsupported`.
+    pub(super) fn walk(_into: &std::path::Path, _hooks: Hooks<'_>) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "the clear of the directory of a restore runs only on unix",
+        ))
+    }
 }
 
 #[cfg(unix)]
-mod unix {
+mod native {
     use super::{ClearEntry, Hooks, MOST_CLEAR_DEPTH, clear_entry};
-    use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
+    use rustix::fd::{AsFd, OwnedFd};
     use rustix::fs::{AtFlags, Dev, FileType, Mode, OFlags, RawMode};
     use std::ffi::{CString, OsStr};
     use std::ops::ControlFlow;
@@ -174,6 +168,16 @@ mod unix {
     /// The mode that a directory gets before the clear lists it: read, write and search for the
     /// owner, which a listing, an unlink and an entry need.
     const CLEAR_MODE: RawMode = 0o700;
+
+    pub(super) fn walk(into: &Path, hooks: Hooks<'_>) -> std::io::Result<()> {
+        let root = rustix::fs::open(
+            into,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let device = rustix::fs::fstat(&root)?.st_dev;
+        clear_tree(root, into, device, hooks)
+    }
 
     /// One open directory of the walk: its descriptor, its path for the hooks and the messages,
     /// the names of its entries that the walk did not remove yet, and its own name in the
@@ -299,59 +303,75 @@ mod unix {
             )),
             ClearEntry::ChmodThenEnter => {
                 hooks.before_open(&level.path, os_name);
-                let below = open_for_clear(directory, name, &level.path, os_name, hooks)?;
+                let below = platform::open_for_clear(directory, name, &level.path, os_name, hooks)?;
                 Level::new(below, level.path.join(os_name), Some(name.clone())).map(Some)
             }
         }
     }
 
-    /// Opens the directory `name` of `directory` for reading, with the mode [`CLEAR_MODE`], and
-    /// never through a link.
     #[cfg(target_os = "linux")]
-    fn open_for_clear(
-        directory: BorrowedFd<'_>,
-        name: &CString,
-        path: &Path,
-        os_name: &OsStr,
-        hooks: Hooks<'_>,
-    ) -> std::io::Result<OwnedFd> {
-        let held = rustix::fs::openat(
-            directory,
-            name,
-            OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?;
-        hooks.before_mode(path, os_name);
-        let inode = format!("/proc/self/fd/{}", rustix::fd::AsRawFd::as_raw_fd(&held));
-        rustix::fs::chmod(inode.as_str(), Mode::from_raw_mode(CLEAR_MODE))?;
-        let opened = rustix::fs::open(
-            inode.as_str(),
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?;
-        drop(held);
-        Ok(opened)
+    mod platform {
+        use super::{CLEAR_MODE, Hooks};
+        use rustix::fd::{BorrowedFd, OwnedFd};
+        use rustix::fs::{Mode, OFlags};
+        use std::ffi::{CString, OsStr};
+        use std::path::Path;
+
+        /// Opens the directory `name` of `directory` for reading, with the mode [`CLEAR_MODE`], and
+        /// never through a link.
+        pub(super) fn open_for_clear(
+            directory: BorrowedFd<'_>,
+            name: &CString,
+            path: &Path,
+            os_name: &OsStr,
+            hooks: Hooks<'_>,
+        ) -> std::io::Result<OwnedFd> {
+            let held = rustix::fs::openat(
+                directory,
+                name,
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            hooks.before_mode(path, os_name);
+            let inode = format!("/proc/self/fd/{}", rustix::fd::AsRawFd::as_raw_fd(&held));
+            rustix::fs::chmod(inode.as_str(), Mode::from_raw_mode(CLEAR_MODE))?;
+            let opened = rustix::fs::open(
+                inode.as_str(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            drop(held);
+            Ok(opened)
+        }
     }
 
-    /// Opens the directory `name` of `directory` for reading, with the mode [`CLEAR_MODE`], and
-    /// never through a link.
     #[cfg(not(target_os = "linux"))]
-    fn open_for_clear(
-        directory: BorrowedFd<'_>,
-        name: &CString,
-        path: &Path,
-        os_name: &OsStr,
-        hooks: Hooks<'_>,
-    ) -> std::io::Result<OwnedFd> {
-        let opened = rustix::fs::openat(
-            directory,
-            name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?;
-        hooks.before_mode(path, os_name);
-        rustix::fs::fchmod(&opened, Mode::from_raw_mode(CLEAR_MODE))?;
-        Ok(opened)
+    mod platform {
+        use super::{CLEAR_MODE, Hooks};
+        use rustix::fd::{BorrowedFd, OwnedFd};
+        use rustix::fs::{Mode, OFlags};
+        use std::ffi::{CString, OsStr};
+        use std::path::Path;
+
+        /// Opens the directory `name` of `directory` for reading, with the mode [`CLEAR_MODE`], and
+        /// never through a link.
+        pub(super) fn open_for_clear(
+            directory: BorrowedFd<'_>,
+            name: &CString,
+            path: &Path,
+            os_name: &OsStr,
+            hooks: Hooks<'_>,
+        ) -> std::io::Result<OwnedFd> {
+            let opened = rustix::fs::openat(
+                directory,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            hooks.before_mode(path, os_name);
+            rustix::fs::fchmod(&opened, Mode::from_raw_mode(CLEAR_MODE))?;
+            Ok(opened)
+        }
     }
 }
 
@@ -364,17 +384,17 @@ pub(in crate::filesystem_snapshot::backend::rustic) fn destination_is_valid(
     let refused = |kind, reason: &str| {
         std::io::Error::new(kind, format!("the directory {} {reason}", into.display()))
     };
+    if into.to_str().is_none() {
+        return Err(refused(
+            std::io::ErrorKind::InvalidInput,
+            "does not have a UTF-8 path",
+        ));
+    }
     let metadata = std::fs::metadata(into)?;
     if !metadata.is_dir() {
         return Err(refused(
             std::io::ErrorKind::NotADirectory,
             "is not a directory",
-        ));
-    }
-    if into.to_str().is_none() {
-        return Err(refused(
-            std::io::ErrorKind::InvalidInput,
-            "does not have a UTF-8 path",
         ));
     }
     let first = std::fs::read_dir(into)?.next().transpose()?;

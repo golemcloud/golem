@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
-use golem_common::model::caller::{Caller, Principal};
+use golem_common::model::caller::Principal;
 
 use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
@@ -26,7 +26,7 @@ use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp,
+    AgentFingerprint, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{debug, info, warn};
@@ -157,13 +157,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id, caller)
+            .get_existing(deps, owned_agent_id)
             .await
     }
 
@@ -171,19 +170,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
-        caller: Caller,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let mut worker = Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await?;
+        let mut worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         loop {
             if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
                 return outcome.handle().wait().await;
             }
-            worker = match Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await
-            {
+            worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
                 Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
                     worker
                 }
@@ -197,13 +194,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         recover_immediately: bool,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = match Self::get_existing_suspended(deps, owned_agent_id, caller).await {
+        let worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
             Ok(worker) => worker,
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
             Err(error) => return Err(error),
@@ -273,13 +269,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         force: bool,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -355,7 +350,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        // The caller of the request is the requester of the update: every `PendingUpdate` of the
+        // attempt records it.
+        let requester = caller;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -452,7 +450,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ),
             (UpdateMode::Automatic, decision) => {
                 debug!("Enqueuing update");
-                let update_attempt_index = worker.enqueue_automatic_update(target_revision).await?;
+                let update_attempt_index = worker
+                    .enqueue_automatic_update(target_revision, requester)
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -472,7 +472,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(update_attempt_index)
             }
             (UpdateMode::Manual, decision) => {
-                let update_attempt_index = worker.enqueue_manual_update(target_revision).await?;
+                let update_attempt_index = worker
+                    .enqueue_manual_update(target_revision, requester)
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -493,13 +495,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -523,46 +524,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let agent_mode = identity.agent_mode;
 
         let oplog_service = deps.oplog_service();
-        let observed_oplog_index = oplog_service
+        let last_index = oplog_service
             .get_last_index(owned_agent_id, agent_mode)
             .await?;
-        let mut current = observed_oplog_index;
-        let mut found = 0;
-
-        loop {
-            let entries = oplog_service
-                .read_exact(owned_agent_id, agent_mode, current, 1)
-                .await?;
-            let entry = entries.get(&current).ok_or_else(|| {
+        let read = |index: OplogIndex| {
+            let oplog_service = oplog_service.clone();
+            async move {
+                oplog_service
+                    .read_exact(owned_agent_id, agent_mode, index, 1)
+                    .await?
+                    .remove(&index)
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Could not read oplog entry {index} while resolving revert"
+                        ))
+                    })
+            }
+        };
+        cut_point::cut_before_last_invocations(read, last_index, number_of_invocations)
+            .await?
+            .map(|last_oplog_index| ResolvedRevert { last_oplog_index })
+            .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
-                    "Could not read oplog entry {current} while resolving revert"
-                ))
-            })?;
-
-            if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
-                found += 1;
-                if found == number_of_invocations {
-                    return Ok(ResolvedRevert {
-                        last_oplog_index: current.previous(),
-                        observed_oplog_index,
-                    });
-                }
-            }
-
-            if current == OplogIndex::INITIAL {
-                return Err(WorkerExecutorError::invalid_request(format!(
                     "Could not find {number_of_invocations} invocations to revert"
-                )));
-            }
-            current = current.previous();
-        }
+                ))
+            })
     }
 
     pub async fn activate_plugin<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -572,7 +564,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             plugin_priority,
-            caller,
             true,
             expected_fingerprint,
         )
@@ -583,7 +574,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -593,7 +583,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             plugin_priority,
-            caller,
             false,
             expected_fingerprint,
         )
@@ -604,14 +593,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         activate: bool,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -839,6 +827,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn enqueue_automatic_update(
         &self,
         target_revision: ComponentRevision,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         // Admission identity and execution strategy are separate. The first PendingUpdate only
         // admits the request; the invocation loop durably selects full or snapshot-assisted replay
@@ -853,8 +842,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         self.bump_read_only_cache_epoch();
-        let entry =
-            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None);
+        let entry = OplogEntry::pending_update(
+            UpdateDescription::Automatic { target_revision },
+            None,
+            Box::new(requester),
+        );
         let oplog_index = self
             .add_and_commit_oplog_internal(
                 &instance_guard,
@@ -865,16 +857,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(instance_guard);
         Ok(oplog_index)
     }
+    /// Writes the `PendingUpdate` of an update attempt that was admitted earlier. `requester` is
+    /// the requester of that attempt's admission.
     pub(in crate::worker) async fn enqueue_update_for_attempt(
         &self,
         update_description: UpdateDescription,
         update_attempt_index: Option<OplogIndex>,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         // Bump + commit under the same worker lifecycle lock.
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
         self.bump_read_only_cache_epoch();
-        let entry = OplogEntry::pending_update(update_description.clone(), update_attempt_index);
+        let entry = OplogEntry::pending_update(
+            update_description.clone(),
+            update_attempt_index,
+            Box::new(requester),
+        );
         let oplog_index = self
             .add_and_commit_oplog_internal(
                 &instance_guard,
@@ -892,10 +891,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn enqueue_manual_update(
         &self,
         target_revision: ComponentRevision,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         self.ensure_component_agent_ingress("manual update")?;
-        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
-            .await
+        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester,
+        })
+        .await
     }
     /// Reads the `PendingUpdate` oplog entry referenced by `pending` and reconstructs the full
     /// update description, including any snapshot payload reference. The status record only keeps
@@ -913,6 +916,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             other => Err(WorkerExecutorError::unknown(format!(
                 "Expected a PendingUpdate oplog entry at index {}, but found {other:?}",
                 pending.oplog_index
+            ))),
+        }
+    }
+    /// The requester of the automatic update admitted at `admission_index`: the `requester` of
+    /// the `PendingUpdate` there. The executor writes the strategy entry of that update with the
+    /// same requester.
+    pub(in crate::worker) async fn requester_of_admission(
+        &self,
+        admission_index: OplogIndex,
+    ) -> Result<Caller, WorkerExecutorError> {
+        match self.oplog.read(admission_index).await? {
+            OplogEntry::PendingUpdate { requester, .. } => Ok(*requester),
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected the PendingUpdate that admitted an update at index {admission_index}, \
+                 but found {other:?}"
             ))),
         }
     }
@@ -1044,7 +1062,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.revert_to_last_oplog_index(target.last_oplog_index, None)
                     .await
             }
-            RevertWorkerTarget::RevertLastInvocations(_) => {
+            RevertWorkerTarget::RevertLastInvocations(target) => {
                 let resolved_revert = resolved_revert.ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
                         "Count-based revert requires a resolved cutoff",
@@ -1052,7 +1070,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 })?;
                 self.revert_to_last_oplog_index(
                     resolved_revert.last_oplog_index,
-                    Some(resolved_revert.observed_oplog_index),
+                    Some(target.number_of_invocations),
                 )
                 .await
             }
@@ -1072,7 +1090,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|refusal| self.refused_by(refusal))?;
         let decision = ephemeral_start_decision(
             &status,
-            &self.initialization_idempotency_key(),
+            &InvocationId::constructor(self.initial_worker_metadata.fingerprint),
             Timestamp::now_utc(),
         );
         if decision == EphemeralStart::Begin && !status.ephemeral_execution_begun {
@@ -1092,7 +1110,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let decision = ephemeral_start_decision(
             &status,
-            &self.initialization_idempotency_key(),
+            &InvocationId::constructor(self.initial_worker_metadata.fingerprint),
             Timestamp::now_utc(),
         );
         if decision == EphemeralStart::Begin {
@@ -1104,15 +1122,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             });
         }
     }
-    /// Commits cancellation only for scheduled work belonging to this incarnation and scheduling
-    /// agent. Returns false for a stale receipt, withdrawn work, or a start that already won.
+    /// Commits cancellation only for scheduled work belonging to this incarnation whose recorded
+    /// immediate caller is `canceller`: the agent or tool that scheduled it. Returns false for a
+    /// stale receipt, another canceller, withdrawn work, or a start that already won.
     /// Cancelling a never-started ephemeral target also withdraws its constructor reservation, so
     /// it cannot run initialization after its scheduled method was withdrawn.
     pub async fn cancel_scheduled_invocation(
         &self,
         idempotency_key: InvocationId,
         schedule_id: ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
     ) -> Result<bool, WorkerExecutorError> {
         let fingerprint = self.initial_worker_metadata.fingerprint;
         if ScheduleId::for_invocation(fingerprint, &idempotency_key) != schedule_id {
@@ -1149,21 +1168,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(false);
         }
         let invocation = self.hydrate_pending_invocation(pending).await?.invocation;
-        if !matches!(
-            invocation.caller().map(|caller| &caller.immediate),
-            Some(Principal::Agent(agent)) if &agent.address == owner
-        ) {
+        if !invocation
+            .caller()
+            .is_some_and(|caller| caller.immediate.equals(canceller))
+        {
             return Ok(false);
         }
-        self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+        let withdrawn = self
+            .withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
             .await?;
+        drop(instance_guard);
+        self.publish_cancelled(&withdrawn).await;
         Ok(true)
     }
 
+    /// Cancels an invocation that has not started. The decision is taken under the instance
+    /// lock, so a start that wins the race is reported as `Running`, never as a cancel. Waiters
+    /// of a withdrawn invocation are woken with `InvocationCancelled`.
     pub async fn cancel_invocation(
         &self,
         idempotency_key: InvocationId,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<CancelInvocationOutcome, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
         if instance_guard.ensure_not_deleting().is_err() {
@@ -1178,25 +1203,74 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .iter()
             .any(|pending| pending.has_idempotency_key(&idempotency_key))
         {
-            return Ok(());
+            return Ok(
+                if status.current_idempotency_key() == Some(&idempotency_key) {
+                    CancelInvocationOutcome::Running
+                } else {
+                    CancelInvocationOutcome::NotPending
+                },
+            );
         }
 
-        self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+        let withdrawn = self
+            .withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
             .await?;
 
         drop(instance_guard);
+        self.publish_cancelled(&withdrawn).await;
+        Ok(CancelInvocationOutcome::Withdrawn)
+    }
+
+    /// Removes a queued entry whose invocation already has a result, without reporting a cancel:
+    /// its waiters keep the existing result.
+    pub(in crate::worker) async fn discard_pending_duplicate(
+        &self,
+        idempotency_key: InvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+        if instance_guard.ensure_not_deleting().is_err() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot cancel invocation on a deleting worker",
+            ));
+        };
+        let status = self.get_repaired_status().await?;
+        if status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&idempotency_key))
+        {
+            self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+                .await?;
+        }
         Ok(())
     }
 
+    /// Wakes the waiters of withdrawn invocations. A warm fail-fast result cached for a queued
+    /// invocation is dropped first, so the committed cancellation is what later lookups read.
+    async fn publish_cancelled(&self, withdrawn: &[InvocationId]) {
+        {
+            let mut hydrated = self.hydrated_invocation_results.write().await;
+            for key in withdrawn {
+                hydrated.remove(key);
+            }
+        }
+        for key in withdrawn {
+            self.publish_completion(key, Err(WorkerExecutorError::InvocationCancelled));
+        }
+    }
+
     /// Withdraws validated pending work while its instance is locked against starting. A scheduled
-    /// method on a never-started ephemeral target also owns the constructor reservation.
+    /// method on a never-started ephemeral target also owns the constructor reservation. Returns
+    /// the withdrawn keys, after their cancellation is committed.
     async fn withdraw_pending_invocation(
         &self,
         instance_guard: &tokio::sync::MutexGuard<'_, WorkerLifecycle>,
         status: &AgentStatusRecord,
         idempotency_key: InvocationId,
-    ) -> Result<(), WorkerExecutorError> {
-        let initialization_key = self.initialization_idempotency_key();
+    ) -> Result<Vec<InvocationId>, WorkerExecutorError> {
+        let initialization_key =
+            InvocationId::constructor(self.initial_worker_metadata.fingerprint);
+        let mut withdrawn = Vec::new();
         if self.agent_mode() == AgentMode::Ephemeral
             && !status.ephemeral_execution_begun
             && status.pending_invocations.iter().any(|pending| {
@@ -1209,6 +1283,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             self.add_to_oplog(OplogEntry::cancel_pending_invocation(initialization_key))
                 .await?;
+            withdrawn.push(initialization_key);
         }
         self.add_and_commit_oplog_internal(
             instance_guard,
@@ -1216,12 +1291,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some(WorkerCommand::WorkAvailable),
         )
         .await?;
-        Ok(())
+        withdrawn.push(idempotency_key);
+        Ok(withdrawn)
     }
     pub(in crate::worker) async fn revert_to_last_oplog_index(
         self: &Arc<Self>,
         last_oplog_index: OplogIndex,
-        expected_oplog_index: Option<OplogIndex>,
+        number_of_invocations: Option<u64>,
     ) -> Result<(), WorkerExecutorError> {
         if last_oplog_index == OplogIndex::NONE {
             return Err(WorkerExecutorError::invalid_request(
@@ -1286,7 +1362,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             let instance_guard = worker.lock_non_stopping_worker().await;
             let result = worker
-                .append_revert(last_oplog_index, expected_oplog_index)
+                .append_revert(last_oplog_index, number_of_invocations)
                 .await;
             drop(instance_guard);
 
@@ -1303,21 +1379,73 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     /// Called only after owner writers have drained, with the stopped instance locked. Gives the
     /// filesystem snapshot names that the committed revert made unused.
+    ///
+    /// A count-based revert (`number_of_invocations`) applies only while the stopped oplog still
+    /// cuts the last `number_of_invocations` invocations at the authorized `last_oplog_index`.
+    /// A later invocation changes the cut, and so does a revert that dropped one of the counted
+    /// invocations, because the count skips dropped regions; the revert is then rejected as
+    /// stale. Entries appended after the resolution that neither start nor drop an invocation keep
+    /// the cut, such as the settlement of the last invocation; the revert then applies. When the
+    /// last `Revert` of the stopped oplog already drops everything after `last_oplog_index` and no
+    /// invocation started after it, a revert to the same cut already applied, such as an earlier
+    /// dispatch of the same resolution (a repaired guest call or a retried request): it succeeds
+    /// without writing, and returns the snapshot names that the applied revert made unused, in
+    /// case that dispatch stopped before it deleted them.
     pub(in crate::worker) async fn append_revert(
         &self,
         last_oplog_index: OplogIndex,
-        expected_oplog_index: Option<OplogIndex>,
+        number_of_invocations: Option<u64>,
     ) -> Result<Box<[FilesystemSnapshotName]>, WorkerExecutorError> {
         use crate::durable_host::durable_stream::StreamStoreError;
         use crate::services::oplog::DurableStreamOplogRecord;
 
         let region_end = self.oplog.current_oplog_index().await;
-        if let Some(expected_oplog_index) = expected_oplog_index
-            && region_end != expected_oplog_index
-        {
-            return Err(WorkerExecutorError::invalid_request(format!(
-                "Stale count-based revert resolution: expected oplog index {expected_oplog_index}, found {region_end}"
-            )));
+        let entries = self
+            .oplog
+            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
+            .await?;
+        if let Some(number_of_invocations) = number_of_invocations {
+            let applied_region = entries
+                .values()
+                .rev()
+                .find_map(|entry| match entry {
+                    OplogEntry::Revert { dropped_region, .. } => Some(
+                        (dropped_region.start == last_oplog_index.next())
+                            .then(|| dropped_region.clone()),
+                    ),
+                    OplogEntry::AgentInvocationStarted { .. } => Some(None),
+                    _ => None,
+                })
+                .flatten();
+            if let Some(applied_region) = applied_region {
+                let last_known_status = self.get_last_known_status().await;
+                return Ok(filesystem_snapshots::reverted_snapshot_names(
+                    &entries,
+                    &applied_region,
+                    &last_known_status.deleted_regions,
+                ));
+            }
+            let stopped_cut = cut_point::cut_before_last_invocations(
+                |idx| {
+                    std::future::ready(entries.get(&idx).cloned().ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Could not read oplog entry {idx} while checking the revert"
+                        ))
+                    }))
+                },
+                region_end,
+                number_of_invocations,
+            )
+            .await?;
+            if stopped_cut != Some(last_oplog_index) {
+                let stopped_cut = stopped_cut.map_or_else(
+                    || format!("none ({number_of_invocations} invocations not found)"),
+                    |cut| cut.to_string(),
+                );
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Stale count-based revert resolution: authorized cut {last_oplog_index}, cut of the stopped oplog {stopped_cut}"
+                )));
+            }
         }
         if last_oplog_index >= region_end {
             return Err(WorkerExecutorError::invalid_request(
@@ -1330,10 +1458,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             start: region_start,
             end: region_end,
         };
-        let entries = self
-            .oplog
-            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
-            .await?;
 
         {
             cut_point::validate_snapshot_update_boundaries(
@@ -1442,6 +1566,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Revert changes observable state, invalidate cached results.
             self.bump_read_only_cache_epoch();
 
+            let mut cancelled_by_cut = Vec::new();
             if last_known_status.has_durable_stream_history {
                 let identity = (
                     &self.owned_agent_id,
@@ -1464,6 +1589,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     _ => WorkerExecutorError::runtime(error.to_string()),
                 })?;
+                let mut cut_cancelled = Vec::new();
                 let mut entries = vec![
                     DurableStreamOplogRecord::InlineEntry(OplogEntry::revert(
                         dropped_region.clone(),
@@ -1494,12 +1620,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         entries.push(DurableStreamOplogRecord::InlineEntry(
                             OplogEntry::cancel_pending_invocation(*key),
                         ));
+                        cut_cancelled.push(*key);
                     }
                 }
                 self.oplog
                     .add_durable_stream_batch(Box::new(move |_| entries))
                     .await
                     .map_err(|error| self.retire_if_fenced(error))?;
+                cancelled_by_cut = cut_cancelled;
             } else {
                 // Through the fence-aware helper: a revert is a write like any other, and if the
                 // shard has a new owner this must surface rather than be discarded.
@@ -1513,6 +1641,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
             self.hydrated_invocation_results.write().await.clear();
             self.current_component.store(Arc::new(restored_component));
+            self.publish_cancelled(&cancelled_by_cut).await;
             Ok(reverted)
         }
     }
@@ -1633,3 +1762,14 @@ pub mod deletion;
 pub mod retirement;
 pub mod state;
 pub mod stop;
+
+/// What `Worker::cancel_invocation` decided under the instance lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelInvocationOutcome {
+    /// The pending or scheduled invocation was withdrawn; its outcome is `cancelled`.
+    Withdrawn,
+    /// The invocation is running; cancelling it is not supported yet.
+    Running,
+    /// The invocation is neither pending nor running: it is finished or unknown.
+    NotPending,
+}

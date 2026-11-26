@@ -39,7 +39,6 @@ object PublicValueCodec {
     lazy val inner: Schema = schemaField(members, "inner")
     lazy val key: Schema = schemaField(members, "key")
     lazy val mapValue: Schema = schemaField(members, "value")
-    lazy val numericRestrictions: Option[Vector[(String, json.Json)]] = optionalObjectField(members, "restrictions")
   }
 
   final class Codec private[runtime] (
@@ -138,14 +137,14 @@ object PublicValueCodec {
         case ("result", ResultValue(result)) => encodeResult(schema, result, depth, budget, application)
         case ("text", TextValue(text, language)) =>
           validText("text", text); language.foreach(validText("text language", _))
-          validateText(schema, text, language); budget.string(text); language.foreach(budget.string)
+          budget.string(text); language.foreach(budget.string)
           budget.json(json.Json.obj(Vector("text" -> json.Json.string(text)) ++ language.map(v => "language" -> json.Json.string(v))))
         case ("binary", BinaryValue(bytes, mimeType)) =>
           mimeType.foreach(validText("binary MIME type", _))
-          validateBinary(schema, bytes, mimeType); budget.add(bytes.length); mimeType.foreach(budget.string)
+          mimeType.foreach(v => if (!Mime.matcher(v).matches()) fail("invalid MIME type")); budget.add(bytes.length); mimeType.foreach(budget.string)
           budget.json(json.Json.obj(Vector("bytes" -> json.Json.string(Base64.getUrlEncoder.withoutPadding.encodeToString(bytes.toArray))) ++ mimeType.map(v => "mimeType" -> json.Json.string(v))))
-        case ("path", PathValue(v)) => validText("path", v); validatePath(schema, v); budget.string(v); budget.json(json.Json.string(v))
-        case ("url", UrlValue(v)) => validText("url", v); validateUrl(schema, v); budget.string(v); budget.json(json.Json.string(v))
+        case ("path", PathValue(v)) => validText("path", v); budget.string(v); budget.json(json.Json.string(v))
+        case ("url", UrlValue(v)) => validText("url", v); validateUrl(v); budget.string(v); budget.json(json.Json.string(v))
         case ("uuid", UuidValue(v)) =>
           budget.add(16); budget.json(json.Json.string(v.toString))
         case ("datetime", DatetimeValue(v)) =>
@@ -153,7 +152,7 @@ object PublicValueCodec {
         case ("duration", DurationValue(v)) =>
           budget.add(8); budget.json(json.Json.obj("nanoseconds" -> json.Json.string(v.toString)))
         case ("quantity", QuantityValue(mantissa, scale, unit)) =>
-          validText("quantity unit", unit); validateQuantity(schema, mantissa, scale, unit); budget.add(12); budget.string(unit)
+          validText("quantity unit", unit); validateQuantityUnit(schema, unit); budget.add(12); budget.string(unit)
           budget.json(json.Json.obj(
             "mantissa" -> json.Json.string(mantissa.toString),
             "scale" -> json.Json.fromLong(scale.toLong),
@@ -225,19 +224,17 @@ object PublicValueCodec {
 
     private def integer(value: Long, min: Long, max: Long, width: Int, schema: Schema, budget: Budget): json.Json = {
       if (value < min || value > max) fail(s"integer $value is out of range")
-      validateNumeric(schema, BigDecimal(value)); budget.add(width); budget.json(json.Json.fromLong(value))
+      budget.add(width); budget.json(json.Json.fromLong(value))
     }
 
     private def checkedDecimal(value: BigInt, signed: Boolean, schema: Schema, budget: Budget): json.Json = {
       val min = if (signed) MinI64 else BigInt(0); val max = if (signed) MaxI64 else MaxU64
       if (value < min || value > max) fail("integer is out of range")
-      validateNumeric(schema, BigDecimal(value)); budget.add(8); budget.json(json.Json.string(value.toString))
+      budget.add(8); budget.json(json.Json.string(value.toString))
     }
 
     private def encodeFloat(value: Double, isF32: Boolean, width: Int, schema: Schema, budget: Budget, application: Boolean): json.Json = {
       budget.add(width)
-      if (value.isFinite) validateNumeric(schema, BigDecimal(value))
-      else if (hasNumericBounds(schema)) fail("exceptional float does not satisfy numeric restrictions")
       if (application && !value.isFinite) fail("exceptional floats have no application JSON representation")
       budget.json { if (value.isNaN) floatTag("nan")
       else if (value == Double.PositiveInfinity) floatTag("positive-infinity")
@@ -245,92 +242,15 @@ object PublicValueCodec {
       else if (isF32 && !application) json.Json.fromFloat(value.toFloat) else json.Json.fromDouble(value) }
     }
 
-    private def hasNumericBounds(schema: Schema): Boolean =
-      schema.numericRestrictions.exists(r => field(r, "min").isDefined || field(r, "max").isDefined)
-
-    private def validateNumeric(schema: Schema, value: => BigDecimal): Unit =
-      schema.numericRestrictions.foreach { r =>
-        optionalBound(r, "min").foreach(v => if (value < v) fail("number is below schema minimum"))
-        optionalBound(r, "max").foreach(v => if (value > v) fail("number is above schema maximum"))
-      }
-
-    private def optionalBound(obj: Vector[(String, json.Json)], name: String): Option[BigDecimal] =
-      field(obj, name).map { raw =>
-        val bound = objectFields(raw, "numeric bound"); val kind = stringField(bound, "kind"); val v = required(bound, "value")
-        kind match {
-          case "signed" | "unsigned" => parseBigDecimal(numberLiteral(v), "numeric bound")
-          case "float-bits" => BigDecimal(java.lang.Double.longBitsToDouble(BigInt(numberLiteral(v)).toLong))
-          case _ => fail("invalid numeric bound")
-        }
-      }
-
-    private def validateText(schema: Schema, text: String, language: Option[String]): Unit = {
-      val r = objectField(schemaValue(schema), "restrictions")
-      language.foreach(l => if (l.isEmpty || !Language.matcher(l).matches()) fail("invalid BCP-47 language tag"))
-      optionalStringArray(r, "languages").foreach(xs => language.foreach(l => if (!xs.contains(l)) fail("text language is not allowed")))
-      val length = text.codePointCount(0, text.length)
-      optionalU32(r, "minLength").foreach(n => if (length < n) fail("text is shorter than schema minimum"))
-      optionalU32(r, "maxLength").foreach(n => if (length > n) fail("text is longer than schema maximum"))
-      optionalString(r, "regex").foreach(p => if (!compile(p, "text regex").matcher(text).find()) fail("text does not match schema regex"))
-    }
-
-    private def validateBinary(schema: Schema, bytes: Vector[Byte], mime: Option[String]): Unit = {
-      mime.foreach(v => if (!Mime.matcher(v).matches()) fail("invalid MIME type"))
-      val r = objectField(schemaValue(schema), "restrictions")
-      optionalStringArray(r, "mimeTypes").foreach(xs => mime.foreach(m => if (!xs.contains(m)) fail("binary MIME type is not allowed")))
-      optionalU32(r, "minBytes").foreach(n => if (bytes.length < n) fail("binary is shorter than schema minimum"))
-      optionalU32(r, "maxBytes").foreach(n => if (bytes.length > n) fail("binary is longer than schema maximum"))
-    }
-
-    private def validatePath(schema: Schema, value: String): Unit = {
-      if (value.isEmpty) fail("path must be non-empty")
-      val spec = objectField(schemaValue(schema), "spec")
-      optionalStringArray(spec, "allowedExtensions").foreach { extensions =>
-        fileExtension(value).foreach(extension => if (!extensions.contains(extension)) fail("path extension is not allowed"))
-      }
-    }
-
-    private def validateUrl(schema: Schema, value: String): Unit = {
-      if (value.isEmpty) fail("URL must be non-empty")
+    private def validateUrl(value: String): Unit = {
       val uri = try new URI(value) catch { case _: Exception => fail("invalid URL") }
       if (uri.getScheme == null) fail("URL must have a scheme")
-      val r = objectField(schemaValue(schema), "restrictions")
-      optionalStringArray(r, "allowedSchemes").foreach(xs => if (!xs.exists(_.equalsIgnoreCase(uri.getScheme))) fail("URL scheme is not allowed"))
-      optionalStringArray(r, "allowedHosts").foreach(xs => if (uri.getHost == null || !xs.exists(_.equalsIgnoreCase(uri.getHost))) fail("URL host is not allowed"))
     }
 
-    private def validateQuantity(schema: Schema, mantissa: Long, scale: Int, unit: String): Unit = {
+    private def validateQuantityUnit(schema: Schema, unit: String): Unit = {
       val spec = objectField(schemaValue(schema), "spec")
-      val baseUnit = stringField(spec, "baseUnit")
       val allowed = field(spec, "allowedSuffixes").map(asArray).getOrElse(Vector.empty).map(asString)
-      if (if (allowed.isEmpty) unit != baseUnit else !allowed.contains(unit)) fail("quantity unit is not allowed")
-      optionalQuantity(spec, "min").foreach(min => if (!quantityLe(min, (mantissa, scale, unit))) fail("quantity is below schema minimum"))
-      optionalQuantity(spec, "max").foreach(max => if (!quantityLe((mantissa, scale, unit), max)) fail("quantity is above schema maximum"))
-    }
-
-    private def optionalQuantity(obj: Vector[(String, json.Json)], name: String): Option[(Long, Int, String)] =
-      field(obj, name).map { value =>
-        val quantity = objectFields(value, s"quantity $name")
-        exactMembers(quantity, Set("mantissa", "scale", "unit"), s"quantity $name")
-        val mantissa = numberLiteral(required(quantity, "mantissa"))
-        val scale = numberLiteral(required(quantity, "scale"))
-        (
-          try mantissa.toLong catch { case _: NumberFormatException => fail(s"invalid quantity $name mantissa") },
-          try scale.toInt catch { case _: NumberFormatException => fail(s"invalid quantity $name scale") },
-          stringField(quantity, "unit")
-        )
-      }
-
-    private def quantityLe(left: (Long, Int, String), right: (Long, Int, String)): Boolean = {
-      val common = math.max(left._2, right._2)
-      val leftShift = common.toLong - left._2.toLong
-      val rightShift = common.toLong - right._2.toLong
-      if (leftShift > 38 || rightShift > 38) fail("quantity comparison overflows")
-      val leftValue = BigInt(left._1) * BigInt(10).pow(leftShift.toInt)
-      val rightValue = BigInt(right._1) * BigInt(10).pow(rightShift.toInt)
-      if (leftValue < MinI128 || leftValue > MaxI128 || rightValue < MinI128 || rightValue > MaxI128)
-        fail("quantity comparison overflows")
-      leftValue <= rightValue
+      if (if (allowed.isEmpty) unit != stringField(spec, "baseUnit") else !allowed.contains(unit)) fail("quantity unit is not allowed")
     }
 
     private def validateDatetime(value: String): Unit = {
@@ -370,12 +290,6 @@ object PublicValueCodec {
       json.Json.asString(value).toOption.orElse(
         json.Json.asObject(value).toOption.flatMap(fields => field(fields, "text").flatMap(json.Json.asString(_).toOption))
       )
-
-    private def fileExtension(value: String): Option[String] = {
-      val name = value.split('/').lastOption.getOrElse(value)
-      val index = name.lastIndexOf('.')
-      if (index < 0 || index == name.length - 1) None else Some(name.substring(index + 1))
-    }
 
     private def schemaValue(schema: Schema): Vector[(String, json.Json)] = schema.members
     private def schemaArray(schema: Schema, name: String): Vector[json.Json] = arrayField(schemaValue(schema), name)
@@ -435,19 +349,12 @@ object PublicValueCodec {
   private def stringField(obj: Vector[(String, json.Json)], name: String): String = asString(required(obj, name))
   private def optionalString(obj: Vector[(String, json.Json)], name: String): Option[String] = field(obj, name).map(asString)
   private def objectField(obj: Vector[(String, json.Json)], name: String): Vector[(String, json.Json)] = objectFields(required(obj, name), name)
-  private def optionalObjectField(obj: Vector[(String, json.Json)], name: String): Option[Vector[(String, json.Json)]] = field(obj, name).map(objectFields(_, name))
   private def arrayField(obj: Vector[(String, json.Json)], name: String): Vector[json.Json] = asArray(required(obj, name))
-  private def optionalStringArray(obj: Vector[(String, json.Json)], name: String): Option[Vector[String]] = field(obj, name).map(asArray).map(_.map(asString))
   private def schemaField(obj: Vector[(String, json.Json)], name: String): Schema = parseSchema(required(obj, name))
   private def optionalSchemaField(obj: Vector[(String, json.Json)], name: String): Option[Schema] = field(obj, name).map(parseSchema)
   private def u32Field(obj: Vector[(String, json.Json)], name: String): Int = {
     val n = BigDecimal(numberLiteral(required(obj, name))); if (!n.isWhole || n < 0 || n > Int.MaxValue) fail(s"invalid schema '$name'"); n.toInt
   }
-  private def optionalU32(obj: Vector[(String, json.Json)], name: String): Option[Int] = field(obj, name).map { value =>
-    val n = BigDecimal(numberLiteral(value)); if (!n.isWhole || n < 0 || n > Int.MaxValue) fail(s"invalid schema '$name'"); n.toInt
-  }
-  private def parseBigDecimal(value: String, what: String): BigDecimal =
-    try BigDecimal(value) catch { case _: NumberFormatException => fail(s"invalid $what") }
   private def exactMembers(obj: Vector[(String, json.Json)], names: Set[String], what: String): Unit = {
     val actual = obj.map(_._1)
     if (actual.distinct.length != actual.length) fail(s"duplicate member in $what")
@@ -475,10 +382,7 @@ object PublicValueCodec {
   private val MinI64 = BigInt(Long.MinValue)
   private val MaxI64 = BigInt(Long.MaxValue)
   private val MaxU64 = (BigInt(1) << 64) - 1
-  private val MinI128 = -(BigInt(1) << 127)
-  private val MaxI128 = (BigInt(1) << 127) - 1
   private val Mime = Pattern.compile("[A-Za-z0-9!#$&^_.+\\-]+/[A-Za-z0-9!#$&^_.+\\-]+")
-  private val Language = Pattern.compile("[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*")
   private val UuidV4 = Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
   private val Datetime = Pattern.compile("[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,9})?Z")
 }

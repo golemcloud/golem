@@ -33,7 +33,7 @@ use crate::chaos::pinned::{owners_by_pod_in, pod_ip_of, routing_agent_id_in};
 use crate::chaos::summary::LatencyStats;
 use crate::chaos::workload::WorkloadContext;
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::component::ComponentDto;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use serde::{Deserialize, Serialize};
@@ -71,9 +71,9 @@ pub struct Subject<'a> {
 /// The fault window, as the workflow reported it.
 #[derive(Debug, Clone, Copy)]
 pub struct FaultWindow {
-    pub injected_at: DateTime<Utc>,
+    pub injected_at: jiff::Timestamp,
     /// Absent for a run that never saw the fault clear.
-    pub recovered_at: Option<DateTime<Utc>>,
+    pub recovered_at: Option<jiff::Timestamp>,
 }
 
 /// Which side of the fault an event fell on.
@@ -104,7 +104,7 @@ impl Window {
     }
 
     /// Where `at` falls relative to the fault.
-    pub fn of(at: DateTime<Utc>, fault: Option<FaultWindow>) -> Self {
+    pub fn of(at: jiff::Timestamp, fault: Option<FaultWindow>) -> Self {
         match fault {
             None => Window::Unknown,
             Some(window) if at < window.injected_at => Window::BeforeFault,
@@ -131,8 +131,8 @@ impl std::fmt::Display for Window {
 pub fn window_start(
     window: Window,
     fault: Option<FaultWindow>,
-    first_submitted: Option<DateTime<Utc>>,
-) -> Option<DateTime<Utc>> {
+    first_submitted: Option<jiff::Timestamp>,
+) -> Option<jiff::Timestamp> {
     match (window, fault) {
         (Window::BeforeFault, Some(_)) => first_submitted,
         (Window::DuringFault, Some(w)) => Some(w.injected_at),
@@ -151,8 +151,8 @@ pub fn window_start(
 pub fn window_end(
     window: Window,
     fault: Option<FaultWindow>,
-    last_completed: Option<DateTime<Utc>>,
-) -> Option<DateTime<Utc>> {
+    last_completed: Option<jiff::Timestamp>,
+) -> Option<jiff::Timestamp> {
     match (window, fault) {
         (Window::BeforeFault, Some(w)) => Some(w.injected_at),
         (Window::DuringFault, Some(w)) => w.recovered_at.or(last_completed),
@@ -168,12 +168,12 @@ pub fn window_end(
 /// minutes and then caught up in a burst". Those two produce the same count and
 /// the same rate; only this tells them apart.
 pub fn longest_silence_ms(
-    served_at: &[DateTime<Utc>],
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
+    served_at: &[jiff::Timestamp],
+    start: Option<jiff::Timestamp>,
+    end: Option<jiff::Timestamp>,
 ) -> Option<u64> {
     let (start, end) = (start?, end?);
-    let mut marks: Vec<DateTime<Utc>> = served_at
+    let mut marks: Vec<jiff::Timestamp> = served_at
         .iter()
         .copied()
         .filter(|at| *at >= start && *at <= end)
@@ -184,7 +184,7 @@ pub fn longest_silence_ms(
     Some(
         marks
             .windows(2)
-            .map(|pair| (pair[1] - pair[0]).num_milliseconds().max(0) as u64)
+            .map(|pair| (pair[1] - pair[0]).as_millis().max(0) as u64)
             .max()
             .unwrap_or(0),
     )
@@ -199,12 +199,11 @@ pub fn longest_silence_ms(
 pub fn window_secs(
     window: Window,
     fault: Option<FaultWindow>,
-    first_submitted: Option<DateTime<Utc>>,
-    last_completed: Option<DateTime<Utc>>,
+    first_submitted: Option<jiff::Timestamp>,
+    last_completed: Option<jiff::Timestamp>,
 ) -> f64 {
-    let seconds = |from: DateTime<Utc>, to: DateTime<Utc>| {
-        (to - from).num_milliseconds().max(0) as f64 / 1000.0
-    };
+    let seconds =
+        |from: jiff::Timestamp, to: jiff::Timestamp| (to - from).as_millis().max(0) as f64 / 1000.0;
     match (window, fault) {
         (Window::BeforeFault, Some(w)) => first_submitted
             .map(|first| seconds(first, w.injected_at))

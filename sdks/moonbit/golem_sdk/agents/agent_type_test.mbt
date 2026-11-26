@@ -187,7 +187,8 @@ test "router metadata is preserved exactly" {
     ],
     file_response_headers: [],
     openapi_provider_method: Some("provider text"),
-    phantom_id_binding: None,
+    agent_id_binding: None,
+    create_route: None,
   }
   let def : AgentTypeDef = {
     type_name: "Router",
@@ -241,6 +242,27 @@ test "router metadata is preserved exactly" {
     agent_type.methods[0].http_endpoint[1].http_method,
     Method(Custom("ANY")),
   )
+  for
+    binding in [
+      @common.AgentIdBinding::Path({ name: "id", }),
+      @common.AgentIdBinding::Query({ name: "id", }),
+    ] {
+    let selected = {
+      ..mount,
+      phantom_agent: false,
+      agent_id_binding: Some(binding),
+      create_route: Some([Segment(Literal("new")), SystemVariable(AGENT_TYPE)]),
+      static_bindings: [],
+      openapi_provider_method: None,
+    }
+    let selected_def = {
+      ..def,
+      kind: REGULAR,
+      methods: [],
+      http_mount: Some(selected),
+    }
+    assert_eq(selected_def.to_agent_type().http_mount, Some(selected))
+  }
 }
 
 ///|

@@ -13,17 +13,16 @@
 // limitations under the License.
 
 use super::{
-    CardAlgebraError, CardParseError, CardVerb, DateTime, DurableWorkerCtx, PermissionPattern,
+    CardAlgebraError, CardParseError, CardVerb, DurableWorkerCtx, PermissionPattern,
     PolymorphicPermissionPattern, RenderedPermissionFields, ResolvedPermissionCard, StoredCard,
-    TimeDelta, Utc, WorkerCtx, parse_permission_fields, parse_polymorphic_permission_fields,
-    permissions_types,
+    WorkerCtx, parse_permission_fields, parse_polymorphic_permission_fields, permissions_types,
 };
 
-impl From<DateTime<Utc>> for permissions_types::Timestamp {
-    fn from(timestamp: DateTime<Utc>) -> Self {
+impl From<jiff::Timestamp> for permissions_types::Timestamp {
+    fn from(timestamp: jiff::Timestamp) -> Self {
         Self {
-            seconds: timestamp.timestamp(),
-            nanoseconds: timestamp.timestamp_subsec_nanos(),
+            seconds: timestamp.as_nanosecond().div_euclid(1_000_000_000) as i64,
+            nanoseconds: timestamp.as_nanosecond().rem_euclid(1_000_000_000) as u32,
         }
     }
 }
@@ -218,6 +217,23 @@ pub(super) fn card_verb_name(verb: CardVerb) -> &'static str {
 pub(super) fn permission_error_from_algebra(
     error: CardAlgebraError,
 ) -> permissions_types::PermissionError {
+    let message = error.to_string();
+    permission_error_with_message(error, message)
+}
+
+/// Maps a failed wallet derivation. Its message also says what the request must restate,
+/// because a wallet derivation inherits nothing from the wallet card.
+pub(super) fn wallet_permission_error_from_algebra(
+    error: CardAlgebraError,
+) -> permissions_types::PermissionError {
+    let message = error.wallet_derivation_message();
+    permission_error_with_message(error, message)
+}
+
+fn permission_error_with_message(
+    error: CardAlgebraError,
+    message: String,
+) -> permissions_types::PermissionError {
     match error {
         CardAlgebraError::InvalidOwnerPath(owner) => {
             permissions_types::PermissionError::InvalidOwner(owner)
@@ -228,19 +244,17 @@ pub(super) fn permission_error_from_algebra(
         CardAlgebraError::ToolPattern(message) => {
             permissions_types::PermissionError::InvalidPattern(message)
         }
-        CardAlgebraError::LowerBoundTooBroad { grant } => {
-            permissions_types::PermissionError::LowerBoundTooBroad(
-                grant
-                    .render()
-                    .unwrap_or_else(|_| "lower-bound grant is too broad".to_string()),
-            )
+        CardAlgebraError::LowerBoundTooBroad { .. }
+        | CardAlgebraError::LowerDenialNotKept { .. } => {
+            permissions_types::PermissionError::LowerBoundTooBroad(message)
         }
-        CardAlgebraError::UpperBoundTooBroad { grant } => {
-            permissions_types::PermissionError::UpperBoundTooBroad(
-                grant
-                    .and_then(|grant| grant.render().ok())
-                    .unwrap_or_else(|| "upper-bound grant is too broad".to_string()),
-            )
+        CardAlgebraError::UpperDenialNotKept { .. }
+        | CardAlgebraError::UpperCeilingNotKept { .. }
+        | CardAlgebraError::UpperBoundTooBroad { .. } => {
+            permissions_types::PermissionError::UpperBoundTooBroad(message)
+        }
+        CardAlgebraError::NoWalletCardFits { combined, .. } => {
+            permission_error_with_message(*combined, message)
         }
     }
 }
@@ -255,7 +269,7 @@ pub(super) fn invalid_lifespan_error(
 
 pub(super) fn parse_lifespan(
     lifespan: Option<&permissions_types::Duration>,
-) -> Result<Option<TimeDelta>, permissions_types::PermissionError> {
+) -> Result<Option<jiff::SignedDuration>, permissions_types::PermissionError> {
     let Some(lifespan) = lifespan else {
         return Ok(None);
     };
@@ -267,14 +281,14 @@ pub(super) fn parse_lifespan(
 
     let duration = golem_schema::schema::canonical::duration::from_text(&lifespan.iso_8601)
         .map_err(invalid_lifespan_error)?;
-    Ok(Some(TimeDelta::nanoseconds(duration.nanoseconds)))
+    Ok(Some(jiff::SignedDuration::from_nanos(duration.nanoseconds)))
 }
 
 pub(super) fn derive_expires_at(
-    now: DateTime<Utc>,
+    now: jiff::Timestamp,
     lifespan: Option<&permissions_types::Duration>,
-    parent_expires_at: Option<DateTime<Utc>>,
-) -> Result<Option<DateTime<Utc>>, permissions_types::PermissionError> {
+    parent_expires_at: Option<jiff::Timestamp>,
+) -> Result<Option<jiff::Timestamp>, permissions_types::PermissionError> {
     if parent_expires_at.is_some_and(|expires_at| expires_at <= now) {
         return Err(permissions_types::PermissionError::CardExpired(
             "cannot derive from an expired parent card".to_string(),
@@ -292,8 +306,8 @@ pub(super) fn derive_expires_at(
         };
     };
     let expires_at = now
-        .checked_add_signed(lifespan)
-        .ok_or_else(|| invalid_lifespan_error("resulting expiry is out of range"))?;
+        .checked_add(lifespan)
+        .map_err(|_| invalid_lifespan_error("resulting expiry is out of range"))?;
 
     if parent_expires_at.is_some_and(|parent_expires_at| expires_at > parent_expires_at) {
         return Err(permissions_types::PermissionError::CardExpired(

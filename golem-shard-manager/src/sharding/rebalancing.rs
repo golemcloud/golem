@@ -198,7 +198,7 @@ mod tests {
 
     use super::Rebalance;
     use crate::sharding::model::{ExecutorAddr, ExecutorId, ShardLeaseState};
-    use chrono::{DateTime, Utc};
+    use jiff::Timestamp;
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
     use uuid::Uuid;
@@ -223,8 +223,8 @@ mod tests {
         }
     }
 
-    fn now() -> DateTime<Utc> {
-        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    fn now() -> Timestamp {
+        Timestamp::new(1_700_000_000, 0).unwrap()
     }
 
     fn shard_ids(ids: Vec<i64>) -> Vec<ShardId> {

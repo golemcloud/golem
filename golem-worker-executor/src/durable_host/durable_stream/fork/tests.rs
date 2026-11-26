@@ -28,7 +28,9 @@ use golem_common::base_model::durable_stream::{
     StreamSessionRecord, StreamSourceUnavailableRecord,
 };
 use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
+use golem_common::model::InvocationRequestOperation;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::StoredAgentInvocationPayload;
 use test_r::test;
 use uuid::Uuid;
 
@@ -797,6 +799,8 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
                 Box::new(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: session.idempotency_key,
+                    acceptance: crate::services::worker_fork::lineage::tests::prepared(&session)
+                        .acceptance(),
                     attachment_id: AttachmentId::primary(
                         target.environment_id,
                         &target.agent_id,
@@ -847,6 +851,7 @@ async fn revert_epoch_fences_a_deleted_session_prepared_again_under_the_same_key
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: identity.invocation.idempotency_key,
+            acceptance: prepared(&identity.invocation).acceptance(),
             attachment_id: AttachmentId::primary(
                 owner.environment_id,
                 &owner.agent_id,
@@ -939,7 +944,6 @@ async fn fork_cut_validation_rejects_a_malformed_request_hash() {
 async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
     use crate::durable_host::durable_stream::tests::TestOplog;
     use crate::services::worker_fork::lineage::tests::prepared;
-    use golem_common::model::AgentInvocationPayload;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::OplogPayload;
     use std::sync::Arc;
@@ -967,7 +971,8 @@ async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
     let pending = OplogEntry::pending_agent_invocation(
         None,
         identity.invocation.idempotency_key,
-        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+        Box::new(InvocationRequestOperation::SaveSnapshot),
+        OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
             caller: golem_common::model::caller::Caller::anonymous(),
         })),
         TraceId::generate(),

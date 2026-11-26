@@ -14,23 +14,29 @@
 
 use crate::declare_structs;
 use crate::model::account::AccountId;
-use chrono::DateTime;
-use chrono::Utc;
+use jiff::Timestamp;
 use std::fmt::Debug;
 
-declare_structs! {
+crate::declare_datetime_struct! {
+    crate::base_model::reports::AccountSummaryReport,
+    [],
+    [],
+    [],
     pub struct AccountSummaryReport {
         pub id: AccountId,
         pub name: String,
         pub email: String,
         pub components_count: u64,
         pub workers_count: u64,
-        pub created_at: DateTime<Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
     }
+}
+declare_structs! {
 
     pub struct AccountCountsReport {
         pub total_accounts: u64,
         pub total_active_accounts: u64,
         pub total_deleted_accounts: u64
     }
+
 }

@@ -226,12 +226,12 @@ export interface MethodOnlyAgentClientDefinition<Methods extends MethodsRecord> 
   /**
    * Address the existing durable agent with this ID; its type comes from the ID's type tag.
    * Never creates the agent: an ID whose tag names no deployed agent type, or an unknown agent,
-   * rejects with a `not-found` {@link import('./client').RemoteCallError}.
+   * throws a `not-found` {@link import('./client').RemoteCallError}.
    */
   getById(
     agentId: AgentId,
     options?: import('./client').RemoteClientOptions,
-  ): Promise<import('./client').RemoteClient<Methods>>;
+  ): import('./client').RemoteClient<Methods>;
 }
 
 export interface FullAgentClientDefinition<

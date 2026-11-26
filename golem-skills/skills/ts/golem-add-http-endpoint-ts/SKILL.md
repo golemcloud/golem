@@ -49,11 +49,28 @@ export const TaskAgent = defineAgent({
 
 Rules:
 - Path must start with `/`
-- Every `id` field must appear as a `{variable}` in the mount path (enforced at compile time)
-- Every ordinary `{variable}` must match an `id` field name; system variables and an explicit `phantomId` path selector are excluded
+- On a key mount, every `id` field must appear as a `{variable}` in the mount path (enforced at compile time)
+- On a key mount, every ordinary `{variable}` must match an `id` field name; system variables are excluded
 - Catch-all `{*rest}` variables are **not** allowed in mount paths
 
-The mount path template is template-literal typed: an ordinary `{var}` that does not match an id field (or an id field with no matching `{var}`) is a `tsc` error, not just a runtime failure. System variables and the explicit phantom path selector do not count as id fields. Passing a dynamically built (non-literal) `string` widens to `string` and defers to the runtime checks.
+The key mount path template is template-literal typed: an ordinary `{var}` that does not match an id field (or an id field with no matching `{var}`) is a `tsc` error, not just a runtime failure. System variables do not count as id fields. Passing a dynamically built (non-literal) `string` widens to `string` and defers to the runtime checks.
+
+## Required Agent ID Mounts and Creation
+
+Use an ID mount to address an existing durable, non-router agent without constructor inputs in the URL:
+
+```typescript
+http: http.mount('/tasks/{instance}', {
+  agentId: http.agentId.path('instance'),
+  create: '/tasks/create',
+}),
+```
+
+For query addressing, use `http.mount('/tasks', { agentId: http.agentId.query('instance'), create: '/tasks/create' })`. The ID is required; there is no optional binding or keyed fallback. ID mounts cannot bind constructor fields or combine with `phantomAgent` or ephemeral mode. The query ID name is reserved from explicit and implicit method query bindings and protocol controls.
+
+`create` declares a full exact POST path, not a mount suffix, and requires an ID mount. Only literals and system variables are allowed in this path. Send a JSON object with one field per user-supplied constructor parameter, as an endpoint body has one field per method parameter, for example `{"name": "first"}`; an optional parameter may be left out. Other fields, such as `env`, `config` or `keyed`, are rejected with `400`. The new agent has no key. Route authentication does not grant configuration authority. Use authorized operator REST creation or SDK creation for overrides. Creation inherits mount authentication/CORS, waits for the constructor, and returns `201 Created` with `agentId`/`agentFingerprint` JSON and an ID-mounted `Location`. Current HTTP callers have no caller scope, even with authentication, so `Idempotency-Key` is ignored; retries create new unkeyed agents.
+
+ID selection never creates an agent. File serving supports both key and ID mounts but is lookup-only: missing keys and unknown, deleted, wrong-type or wrong-environment IDs return terminal `404`, without creation or handler fallback. Missing files on an existing target retain normal mapping fallback.
 
 ## Endpoint Declaration
 
@@ -121,7 +138,7 @@ http: http.post('/events', {
 
 ## Phantom Agents
 
-With no explicit `phantomId` selector, set `phantomAgent: true` on the mount to select a fresh phantom identity for each HTTP request. An explicit path or query selector takes precedence over this policy. Requests can run on separate instances. Identity and lifecycle mode are independent: the default mode is durable; add `mode: 'ephemeral'` to `defineAgent` for ephemeral execution (which also defaults to fresh phantom selection when no selector is present).
+On a key mount, set `phantomAgent: true` to select a fresh unkeyed identity for each HTTP request. Requests can run on separate instances. Identity and lifecycle mode are independent: the default mode is durable; add `mode: 'ephemeral'` to `defineAgent` for ephemeral per-request execution. Neither policy can be combined with an ID mount.
 
 ```typescript
 export const GatewayAgent = defineAgent({

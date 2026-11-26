@@ -122,7 +122,10 @@ func TestServerInputTerminalWinsSourceFailure(t *testing.T) {
 		{"kind": "failed", "error": map[string]any{"kind": "interrupted", "message": "protocol failure"}},
 	} {
 		c := &sessionConn{}
-		s := &session{conn: c, channels: map[uint32]string{1: "in"}, directions: map[string]string{"in": "input"}, unacked: 5}
+		s := &session{
+			conn: c, channels: map[uint32]string{1: "in"}, directions: map[string]string{"in": "input"}, unacked: 5,
+			result: make(chan sessionResult, 1), done: make(chan struct{}), endLife: func() {},
+		}
 		var stopped string
 		in := &inputStream{
 			s: s, next: 1, pending: &pendingInput{count: 1, bytes: 5}, wake: make(chan struct{}, 1),
@@ -149,10 +152,20 @@ func TestServerInputTerminalWinsSourceFailure(t *testing.T) {
 		if details, ok := outcome["details"].(string); ok && stopped != details {
 			t.Fatalf("consumer cancellation lost its details: %q", stopped)
 		}
+		// A failed input end fails the call; a consumer cancellation does not.
+		var rejected *StreamItemError
+		if failed := outcome["kind"] == "failed"; failed != (s.over && errors.As(s.err, &rejected)) {
+			t.Fatalf("outcome %v: the call failed with %v", outcome, s.err)
+		}
 		// The source may finish concurrently with the cancellation. It must not
 		// replace the consumer's terminal with a producer failure.
-		if in.reserve(&pendingInput{terminal: true, failure: errors.New("late failure")}) || len(c.queue) != 0 {
+		if in.reserve(&pendingInput{terminal: true, failure: errors.New("late failure")}) {
 			t.Fatal("source failure won after consumer cancellation")
+		}
+		for _, frame := range c.queue {
+			if !frame.close {
+				t.Fatalf("the client queued %+v after the server ended the input", frame)
+			}
 		}
 	}
 }

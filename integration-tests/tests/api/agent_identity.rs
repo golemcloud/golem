@@ -17,7 +17,7 @@
 //! expected fingerprints, the type tag of agent IDs, and the authorization of the management
 //! endpoints of one agent.
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{InvokeAgentRequest, invoke_agent_response};
 use golem_client::api::{
@@ -46,7 +46,9 @@ use pretty_assertions::assert_eq;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
+use tokio::time::sleep;
 use uuid::Uuid;
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -838,6 +840,7 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
 ) -> anyhow::Result<()> {
     let (user, component) = counters(deps).await?;
     let client = agent_client(&user).await;
+    let workers = worker_client(&user).await;
     let registry = user.registry_service_client().await;
     let environment = component.environment_id.0;
 
@@ -873,6 +876,27 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
         )
         .await?;
 
+    let routing_table = deps.shard_manager().get_routing_table().await?;
+    let before_id = AgentId(before.agent_id);
+    let executor = *routing_table
+        .lookup(&before_id)
+        .ok_or_else(|| anyhow!("No executor owns the pre-deployment agent {before_id}"))?;
+    let mut candidates = 0..10_000;
+    let mut next_key = || -> anyhow::Result<_> {
+        for candidate in candidates.by_ref() {
+            let key = agent_key!("SnapshotCounter", format!("after-redeploy-{candidate}"));
+            let id = keyed_agent_id(&component, first_type, &key)?.agent_id;
+            let owner = routing_table
+                .lookup(&id)
+                .ok_or_else(|| anyhow!("No executor owns candidate agent {id}"))?;
+            if *owner == executor {
+                return Ok((key, id));
+            }
+        }
+        Err(anyhow!("Exhausted candidate keys for executor {executor}"))
+    };
+    let (after_key, after_id) = next_key()?;
+
     user.update_component(&component.id, "it_agent_counters_v2_release")
         .await?;
     let second_revision = user
@@ -885,7 +909,83 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
         .type_id;
     assert_eq!(second_type, first_type);
 
-    let after_key = agent_key!("SnapshotCounter", "after-redeploy");
+    // A new probe key cannot reuse an agent created on the previous revision. Matching the
+    // warmed executor matters because current component metadata is cached per executor.
+    let mut attempts = 0;
+    let mut last_probe = None;
+    let mut last_version = None;
+    let readiness = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let (probe_key, probe_id) = next_key()?;
+            attempts += 1;
+            last_probe = Some(probe_id);
+            let probe = client
+                .upsert_agent(
+                    &environment,
+                    "SnapshotCounter",
+                    &AgentKeyRequest {
+                        parameters: parameters(&probe_key)?,
+                    },
+                )
+                .await?;
+            let result = client
+                .invoke_agent(
+                    &environment,
+                    "SnapshotCounter",
+                    None,
+                    &invocation(Some(probe.agent_id), None, "component_version", None)?,
+                )
+                .await;
+            let cleanup = workers
+                .delete_worker(
+                    &environment,
+                    &probe.agent_id,
+                    Some(&probe.agent_fingerprint),
+                )
+                .await;
+            let result = match (result, cleanup) {
+                (Ok(result), Ok(_)) => result,
+                (Err(invocation), Err(cleanup)) => anyhow::bail!(
+                    "Probe invocation failed: {invocation}; probe cleanup failed: {cleanup}"
+                ),
+                (Err(error), _) => return Err(error.into()),
+                (_, Err(error)) => return Err(error.into()),
+            };
+            assert_eq!(probe.agent_id, probe_id.0);
+            last_version = returned(&result);
+            tracing::debug!(
+                %executor,
+                %probe_id,
+                attempts,
+                version = ?last_version,
+                "Observed deployment readiness probe"
+            );
+            match last_version {
+                Some(SchemaValue::U32(2)) => {
+                    let current_routing = deps.shard_manager().get_routing_table().await?;
+                    for id in [before_id, after_id, probe_id] {
+                        anyhow::ensure!(
+                            current_routing.lookup(&id) == Some(&executor),
+                            "Agent {id} moved away from executor {executor} during readiness"
+                        );
+                    }
+                    return Ok::<(), anyhow::Error>(());
+                }
+                Some(SchemaValue::U32(1)) => sleep(Duration::from_millis(100)).await,
+                ref unexpected => anyhow::bail!("Unexpected probe version: {unexpected:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Err(anyhow!("Deployment readiness timed out after 30 seconds")));
+    readiness.with_context(|| {
+        format!(
+            "Waiting for SnapshotCounter version 2 on executor {executor}: \
+             attempts={attempts}, last_probe={last_probe:?}, last_version={last_version:?}"
+        )
+    })?;
+
+    tracing::debug!(%after_id, "Creating agent after deployment readiness");
     let after = client
         .upsert_agent(
             &environment,
@@ -925,6 +1025,15 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
         )
         .await?;
     assert_eq!(returned(&count), Some(SchemaValue::U32(1)));
+    let retained_version = client
+        .invoke_agent(
+            &environment,
+            "SnapshotCounter",
+            None,
+            &invocation(Some(before.agent_id), None, "component_version", None)?,
+        )
+        .await?;
+    assert_eq!(returned(&retained_version), Some(SchemaValue::U32(1)));
     Ok(())
 }
 
@@ -1000,6 +1109,7 @@ async fn management_statuses(
                         None,
                         None,
                         None,
+                        None,
                     )
                     .await,
             ),
@@ -1008,7 +1118,7 @@ async fn management_statuses(
             "get_oplog_entry",
             status(
                 &client
-                    .get_oplog_entry(&environment, &agent, 1, None, None)
+                    .get_oplog_entry(&environment, &agent, 1, None, None, None)
                     .await,
             ),
         ),
@@ -1067,14 +1177,6 @@ async fn management_statuses(
                             oplog_index_cutoff: 1,
                         },
                     )
-                    .await,
-            ),
-        ),
-        (
-            "cancel_invocation",
-            status(
-                &client
-                    .cancel_invocation(&environment, &agent, &Uuid::new_v4().to_string(), None)
                     .await,
             ),
         ),

@@ -89,6 +89,14 @@ pub enum ComponentError {
     #[error("Multiple agent types with the same name: {0}")]
     DuplicateAgentTypeName(AgentTypeName),
     #[error(
+        "Method '{method}' of agent type '{agent_type}' has a name longer than {} bytes",
+        golem_common::model::MAX_INVOCATION_OPERATION_BYTES
+    )]
+    AgentMethodNameTooLong {
+        agent_type: AgentTypeName,
+        method: String,
+    },
+    #[error(
         "Agent type '{0}' is referenced in provision config but not declared in the component's agent types"
     )]
     UndeclaredAgentTypeInProvisionConfig(AgentTypeName),
@@ -230,6 +238,7 @@ impl SafeDisplay for ComponentError {
             Self::ComponentByNameNotFound(_) => self.to_string(),
             Self::AgentTypeForNameNotFound(_) => self.to_string(),
             Self::DuplicateAgentTypeName(_) => self.to_string(),
+            Self::AgentMethodNameTooLong { .. } => self.to_string(),
             Self::UndeclaredAgentTypeInProvisionConfig(_) => self.to_string(),
             Self::MissingAgentTypeProvisionConfig(_) => self.to_string(),
             Self::MissingToolName => self.to_string(),

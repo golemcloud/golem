@@ -56,10 +56,13 @@ describe('the 2.0 snapshot envelope', () => {
 
   it('is a version-3 binary with no principal, and it loads back', async () => {
     const { sdk, loaded } = await setup();
-    await sdk.loadSnapshot.load({
-      payload: new Uint8Array([3, ...new TextEncoder().encode('{"count":4}')]),
-      mimeType: 'application/octet-stream',
-    }, idInput);
+    await sdk.loadSnapshot.load(
+      {
+        payload: new Uint8Array([3, ...new TextEncoder().encode('{"count":4}')]),
+        mimeType: 'application/octet-stream',
+      },
+      idInput,
+    );
     const saved = await sdk.saveSnapshot.save();
     expect(saved.payload[0]).toBe(3);
     expect(new TextDecoder().decode(saved.payload.slice(1))).toBe('{"count":4}');
@@ -95,10 +98,13 @@ describe('each 1.6 envelope version still loads and drops its principal', () => 
   it('reads binary v1 (no principal) and binary v2 (principal JSON)', async () => {
     const { sdk, loaded } = await setup();
     const state = new TextEncoder().encode('{"count":1}');
-    await sdk.loadSnapshot.load({
-      payload: new Uint8Array([1, ...state]),
-      mimeType: 'application/octet-stream',
-    }, idInput);
+    await sdk.loadSnapshot.load(
+      {
+        payload: new Uint8Array([1, ...state]),
+        mimeType: 'application/octet-stream',
+      },
+      idInput,
+    );
     expect(new TextDecoder().decode(loaded[0])).toBe('{"count":1}');
 
     const { sdk: second, loaded: secondLoaded } = await setup();
@@ -106,10 +112,13 @@ describe('each 1.6 envelope version still loads and drops its principal', () => 
     const header = new Uint8Array(5);
     header[0] = 2;
     new DataView(header.buffer).setUint32(1, principalJson.length, false);
-    await second.loadSnapshot.load({
-      payload: new Uint8Array([...header, ...principalJson, ...state]),
-      mimeType: 'application/octet-stream',
-    }, idInput);
+    await second.loadSnapshot.load(
+      {
+        payload: new Uint8Array([...header, ...principalJson, ...state]),
+        mimeType: 'application/octet-stream',
+      },
+      idInput,
+    );
     expect(new TextDecoder().decode(secondLoaded[0])).toBe('{"count":1}');
   });
 
@@ -120,10 +129,13 @@ describe('each 1.6 envelope version still loads and drops its principal', () => 
     header[0] = 2;
     new DataView(header.buffer).setUint32(1, bad.length, false);
     await expect(
-      sdk.loadSnapshot.load({
-        payload: new Uint8Array([...header, ...bad, 1]),
-        mimeType: 'application/octet-stream',
-      }, idInput),
+      sdk.loadSnapshot.load(
+        {
+          payload: new Uint8Array([...header, ...bad, 1]),
+          mimeType: 'application/octet-stream',
+        },
+        idInput,
+      ),
     ).rejects.toBeDefined();
   });
 });

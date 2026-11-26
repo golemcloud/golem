@@ -41,6 +41,7 @@ use crate::model::tool_release::ResolvedToolGrants;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentPlanAmbientToolEntry;
@@ -328,6 +329,7 @@ pub struct ApplicationContext {
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     pub(crate) publisher_package: Option<golem_package::PackageIdentity>,
     pub(crate) installed_components: BTreeMap<ComponentName, golem_package::InstalledComponent>,
+    pub(crate) installed_package_calls: BTreeMap<String, BTreeSet<AgentTypeName>>,
     _package_dir: Option<crate::package::UnpackRoot>,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
@@ -354,6 +356,7 @@ impl ApplicationContext {
             ),
             publisher_package: None,
             installed_components: BTreeMap::new(),
+            installed_package_calls: BTreeMap::new(),
             _package_dir: None,
             builtin_local_url: "http://localhost:9881".parse().unwrap(),
             tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
@@ -472,6 +475,7 @@ impl ApplicationContext {
         config_dir: &Path,
     ) -> anyhow::Result<Option<ApplicationContext>> {
         let mut source_mode = source_mode;
+        let mut package_agent_defaults = BTreeMap::new();
         let (publisher_package, expanded, package_dir) = match &mut source_mode {
             ApplicationSourceMode::Preloaded(loaded) => {
                 let (publisher_package, pins, lock) = package_pins(loaded)?;
@@ -486,25 +490,44 @@ impl ApplicationContext {
                     let mut expanded =
                         golem_package::expand(&pins, &lock, dir.path(), &mut effects).await?;
                     for installed in expanded.components.values_mut() {
-                        // The lock is a local locator, not the source label sent to the registry.
-                        let source = fs::absolute_lexical_path_from_base_dir(
-                            Path::new(&installed.package_metadata.source),
-                            &loaded.app_root_dir,
-                        );
-                        installed.package_metadata.source =
-                            match source.strip_prefix(&loaded.app_root_dir) {
-                                Ok(relative) => fs::path_to_unix_str(relative)?,
-                                Err(_) => fs::file_name_to_str(&source)?.to_owned(),
-                            };
+                        if let golem_package::PackageSource::File(path) =
+                            golem_package::PackageSource::parse(&installed.package_metadata.source)
+                        {
+                            // Do not send absolute local paths to the registry.
+                            let source = fs::absolute_lexical_path_from_base_dir(
+                                Path::new(path),
+                                &loaded.app_root_dir,
+                            );
+                            installed.package_metadata.source =
+                                match source.strip_prefix(&loaded.app_root_dir) {
+                                    Ok(relative) => fs::path_to_unix_str(relative)?,
+                                    Err(_) => fs::file_name_to_str(&source)?.to_owned(),
+                                };
+                        }
                     }
-                    loaded
-                        .raw_apps
-                        .push(package_manifest(dir.path(), &expanded.declarations)?);
-                    (publisher_package, expanded.components, Some(dir))
+                    let mut package_app = package_manifest(dir.path(), &expanded.declarations)?;
+                    for app in &loaded.raw_apps {
+                        for (name, agent) in &app.application.agents {
+                            if agent.package.is_some()
+                                && let Some(defaults) =
+                                    package_app.application.agents.shift_remove(name)
+                            {
+                                package_agent_defaults.insert(
+                                    name.clone(),
+                                    WithSource::new(package_app.source.clone(), defaults),
+                                );
+                            }
+                        }
+                    }
+                    loaded.raw_apps.push(package_app);
+                    (publisher_package, expanded, Some(dir))
                 }
             }
             _ => (None, Default::default(), None),
         };
+        if let ApplicationSourceMode::Preloaded(loaded) = &source_mode {
+            validate_agent_package_selectors(&loaded.raw_apps, &expanded.agent_packages)?;
+        }
         let Some(app_and_calling_working_dir) = load_app(
             application_name,
             environments,
@@ -524,7 +547,9 @@ impl ApplicationContext {
             }),
         )?;
         ctx.publisher_package = publisher_package;
-        ctx.installed_components = expanded;
+        ctx.installed_components = expanded.components;
+        ctx.installed_package_calls = expanded.calls;
+        ctx.application.package_agent_defaults = package_agent_defaults;
         ctx._package_dir = package_dir;
 
         if ctx.config.offline {
@@ -573,6 +598,7 @@ impl ApplicationContext {
                 component_metadata,
                 publisher_package: None,
                 installed_components: BTreeMap::new(),
+                installed_package_calls: BTreeMap::new(),
                 _package_dir: None,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),
@@ -1038,6 +1064,24 @@ fn package_manifest(
     })
 }
 
+fn validate_agent_package_selectors(
+    apps: &[app_raw::ApplicationWithSource],
+    agent_packages: &BTreeMap<AgentTypeName, String>,
+) -> anyhow::Result<()> {
+    for app in apps {
+        for (name, agent) in &app.application.agents {
+            if let Some(package) = &agent.package {
+                anyhow::ensure!(
+                    agent_packages.get(name) == Some(package),
+                    "Agent type {name} in {} is not exported by installed package {package:?}",
+                    app.source.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn package_pins(
     loaded: &LoadedRawApps,
 ) -> anyhow::Result<(
@@ -1280,12 +1324,43 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn agent_package_selector_requires_the_published_type_in_that_package() {
+        use super::{AgentTypeName, BTreeMap, app_raw, validate_agent_package_selectors};
+
+        let packages = BTreeMap::from([(AgentTypeName("SupportCall".into()), "support".into())]);
+        for (agent, package, valid) in [
+            ("SupportCall", "support", true),
+            ("SupportCall", "unknown", false),
+            ("RenamedSupport", "support", false),
+        ] {
+            let app = app_raw::ApplicationWithSource {
+                source: "golem.yaml".into(),
+                application: app_raw::Application::from_yaml_str(&format!(
+                    "agents:\n  {agent}:\n    package: {package}\n"
+                ))
+                .unwrap(),
+            };
+            let result = validate_agent_package_selectors(&[app], &packages);
+            if valid {
+                result.unwrap();
+            } else {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains(agent) && error.contains(package), "{error}");
+            }
+        }
+    }
+
+    #[test]
     async fn installed_declarations_resolve_like_local_declarations() {
         use crate::model::app::ComponentPresetSelector;
         use crate::model::app_raw::ApplicationWithSource;
+        use golem_common::model::agent::{AgentMode, Snapshotting};
+        use golem_common::schema::agent::{
+            AgentConstructorSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
+        };
         use golem_package::*;
         use serde_json::json;
-        use std::collections::BTreeMap;
+        use std::collections::{BTreeMap, BTreeSet};
         use std::fs;
 
         let app = tempfile::tempdir().unwrap();
@@ -1299,16 +1374,34 @@ mod tests {
         )
         .digest;
         let component_name = "sample:shared".parse().unwrap();
-        let agent_name = "SampleAgent".parse().unwrap();
+        let agent_name: super::AgentTypeName = "SampleAgent".parse().unwrap();
         let tool_name = "example".parse().unwrap();
         let middleware_name = "policy".parse().unwrap();
         let spec = PackageConfig {
             application: "publisher".into(),
-            package: PackageIdentity { name: "sample".into(), version: "1.0.0".into() },
+            package: PackageIdentity { name: "sample".into(), version: "1.0.0".into(), calls: BTreeSet::new() },
             components: BTreeMap::from([(component_name, PackageComponent {
                 wasm: wasm.clone(),
                 metadata: golem_common::model::agent::extraction::ExtractedComponentMetadata {
-                    agent_types: vec![],
+                    agent_types: vec![AgentTypeSchema {
+                        kind: AgentTypeKind::Regular,
+                        type_name: agent_name.clone(),
+                        description: String::new(),
+                        source_language: "rust".into(),
+                        schema: golem_common::schema::SchemaGraph::empty(),
+                        constructor: AgentConstructorSchema {
+                            name: None,
+                            description: String::new(),
+                            prompt_hint: None,
+                            input_schema: InputSchema::parameters(vec![]),
+                        },
+                        methods: vec![],
+                        dependencies: vec![],
+                        mode: AgentMode::Ephemeral,
+                        http_mount: None,
+                        snapshotting: Snapshotting::Disabled(golem_schema::Empty {}),
+                        config: vec![],
+                    }],
                     tools: vec![],
                     tool_middlewares: vec![],
                 },

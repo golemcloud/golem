@@ -30,7 +30,7 @@ pub const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The componentize-py revision that this assembler links. It must equal the
 /// revision of the workspace's `componentize-py` dependency.
-pub const COMPONENTIZE_PY_REVISION: &str = "189e903b00ca43500f95e2d32eaf44496a7a3640";
+pub const COMPONENTIZE_PY_REVISION: &str = "58d479e5993b744314ec51a77a20e3b487c69aac";
 
 const PACKAGE: &str = "golem/";
 const PREPARED: &str = "golem/_prepared/";

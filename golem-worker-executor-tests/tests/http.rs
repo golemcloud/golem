@@ -1277,7 +1277,7 @@ struct DiscardedChunkEntries {
 /// `CompletionDiscarded` marker referencing it — never a delivered read, a
 /// `Cancelled` terminal, or an orphaned `Start` — and each run's marker must
 /// settle before its `consume-body` parent terminal, which must land before
-/// the run's `AgentInvocationFinished`.
+/// the run's `AgentInvocationSettled`.
 fn assert_discarded_body_chunk_entries(
     oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
     expected_runs: usize,
@@ -1403,10 +1403,20 @@ fn assert_discarded_body_chunk_entries(
                     "missing AgentInvocationFinished after the chunk read at {chunk_start_index}"
                 )
             });
+        let settled_index = oplog
+            .iter()
+            .find_map(|e| {
+                (e.oplog_index > finished_index
+                    && matches!(e.entry, PublicOplogEntry::AgentInvocationSettled(_)))
+                .then_some(e.oplog_index)
+            })
+            .unwrap_or_else(|| {
+                panic!("missing AgentInvocationSettled after the chunk read at {chunk_start_index}")
+            });
         assert!(
-            parent_end_index < finished_index,
+            parent_end_index < settled_index,
             "the consume-body parent End at {parent_end_index} must land before the \
-             invocation's AgentInvocationFinished at {finished_index}"
+             invocation's AgentInvocationSettled at {settled_index}"
         );
 
         runs.push(DiscardedChunkEntries {
@@ -1921,7 +1931,7 @@ async fn outgoing_http_missing_consume_scope_refuses_full_duplex_body_cycle(
 /// window, and releases the producer only after the guest confirmed the drop:
 /// the delivery fails, the child records a `CompletionDiscarded` marker, no
 /// bytes reach the guest, and the parent still settles before
-/// `AgentInvocationFinished`. After an executor restart the recorded run
+/// `AgentInvocationSettled`. After an executor restart the recorded run
 /// replays (the replay-discarded chunk parks instead of being re-delivered)
 /// and a second gated live run lands on top with the same durable shape.
 #[test]
@@ -1932,8 +1942,6 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
     _tracing: &Tracing,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::oplog::OplogIndex;
-
     const GATED_CHUNK: &[u8] = b"gated-first-chunk";
 
     let context = TestContext::new(last_unique_id);
@@ -2045,7 +2053,7 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
     assert_eq!(result, "cancelled-after-signal(200, 200) done=200");
 
     {
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let oplog = settled_oplog(&executor, &worker_id).await?;
         assert_discarded_body_chunk_entries(&oplog, 1, GATED_CHUNK);
     }
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -2085,7 +2093,7 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
     // The replayed first run kept its durable shape (no re-delivery, no new
     // entries for it) and the second live run recorded the identical shape.
     {
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let oplog = settled_oplog(&executor, &worker_id).await?;
         let runs = assert_discarded_body_chunk_entries(&oplog, 2, GATED_CHUNK);
         assert!(
             runs[0].finished_index < runs[1].chunk_start_index,
@@ -2101,6 +2109,32 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
     http_server.abort();
 
     Ok(())
+}
+
+/// The oplog of `worker_id` once every invocation with a recorded result settled. An invocation
+/// can settle after its caller got the result.
+pub(crate) async fn settled_oplog(
+    executor: &(impl TestDsl + Sync),
+    worker_id: &golem_common::model::OwnedAgentId,
+) -> anyhow::Result<Vec<golem_common::model::oplog::PublicOplogEntryWithIndex>> {
+    timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+            let finished = oplog
+                .iter()
+                .filter(|e| matches!(e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count();
+            let settled = oplog
+                .iter()
+                .filter(|e| matches!(e.entry, PublicOplogEntry::AgentInvocationSettled(_)))
+                .count();
+            if finished == settled {
+                return Ok(oplog);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?
 }
 
 fn completion_delivered_index(
@@ -3600,7 +3634,40 @@ async fn ignored_trailers_replay(
         .into_typed::<String>()?;
     assert_eq!(result, "status=200;x-resp-test=;body=0-body");
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    // The invocation can settle after its caller got the result, so wait for the settlement.
+    let invocation_id = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+                golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(m)
+                    if m.method_name.replace('-', "_") == method =>
+                {
+                    Some(m.invocation_id)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("the method invocation started");
+    let settled = |oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+        oplog.iter().position(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationSettled(params)
+                    if params.invocation_id == invocation_id)
+        })
+    };
+    let (oplog, settled) = timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if let Some(settled) = settled(&oplog) {
+                return Ok::<_, anyhow::Error>((oplog, settled));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
     let parents = partition_starts(&oplog, "http::types::response::consume-body");
     assert_eq!(parents.counts(), (0, 1, 0), "{parents:?}");
     let chunks = partition_starts(&oplog, "http::types::response::consume-body-chunk");
@@ -3647,9 +3714,8 @@ async fn ignored_trailers_replay(
         })
         .unwrap();
     assert!(
-        oplog[end + 1..]
-            .iter()
-            .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        end < settled,
+        "the parent End at {end} is recorded before the invocation settles at {settled}"
     );
     drop(executor);
 
@@ -3955,12 +4021,13 @@ async fn outgoing_http_commits_random_key_before_dispatch(
 }
 
 /// A guest task `spawn`ed during an invocation that performs its durable HTTP call only after
-/// the export has returned must be drained before the invocation completes: the durable
-/// `Start`/`End` entries of the spawned task's `http::client::send` land *before* the
-/// `AgentInvocationFinished` entry, and the recorded run replays successfully after a restart.
+/// the export has returned is drained before the invocation settles: the durable `Start`/`End`
+/// entries of the spawned task's `http::client::send` land *before* the invocation's
+/// `AgentInvocationSettled` entry, which follows its `AgentInvocationFinished`, and the recorded
+/// run replays successfully after a restart.
 #[test]
 #[tracing::instrument]
-async fn spawned_guest_task_durable_call_lands_before_invocation_finished(
+async fn spawned_guest_task_durable_call_lands_before_invocation_settled(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -4010,38 +4077,64 @@ async fn spawned_guest_task_durable_call_lands_before_invocation_finished(
 
     // The spawned task's durable send must be recorded *within* the method invocation: a
     // completed `Start`(http::client::send)/`End` pair between the method's
-    // `AgentInvocationStarted` and its `AgentInvocationFinished` entry (there is also an earlier
-    // agent-initialization invocation pair in the oplog, so anchor on the method's own window).
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let started_index = oplog
+    // `AgentInvocationStarted` and its `AgentInvocationSettled` entry (there is also an earlier
+    // agent-initialization invocation in the oplog, so anchor on the method's own window). The
+    // invocation can settle after its caller got the result, so wait for the settlement.
+    let (started_index, invocation_id) = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
         .iter()
         .find_map(|e| match &e.entry {
             PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
                 golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(m)
                     if m.method_name.replace('-', "_") == "get_in_spawned_task_after_return" =>
                 {
-                    Some(e.oplog_index)
+                    Some((e.oplog_index, m.invocation_id))
                 }
                 _ => None,
             },
             _ => None,
         })
         .expect("expected an AgentInvocationStarted entry for the method invocation");
+    let settled_index = |oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+        oplog.iter().find_map(|e| match &e.entry {
+            PublicOplogEntry::AgentInvocationSettled(params)
+                if params.invocation_id == invocation_id =>
+            {
+                Some(e.oplog_index)
+            }
+            _ => None,
+        })
+    };
+    let (oplog, settled_index) = timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if let Some(settled_index) = settled_index(&oplog) {
+                return Ok::<_, anyhow::Error>((oplog, settled_index));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
     let finished_index = oplog
         .iter()
-        .find_map(|e| {
-            (e.oplog_index > started_index
-                && matches!(e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-            .then_some(e.oplog_index)
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::AgentInvocationFinished(params)
+                if params.invocation_id == invocation_id =>
+            {
+                Some(e.oplog_index)
+            }
+            _ => None,
         })
         .expect("expected an AgentInvocationFinished entry for the method invocation");
+    assert!(finished_index < settled_index);
     let send_start_index = oplog
         .iter()
         .find_map(|e| match &e.entry {
             PublicOplogEntry::Start(params)
                 if params.function_name == "http::client::send"
                     && e.oplog_index > started_index
-                    && e.oplog_index < finished_index =>
+                    && e.oplog_index < settled_index =>
             {
                 Some(e.oplog_index)
             }
@@ -4061,10 +4154,11 @@ async fn spawned_guest_task_durable_call_lands_before_invocation_finished(
         })
         .expect("expected a matching End entry for the spawned task's send");
     assert!(
-        send_end_index < finished_index,
+        send_end_index < settled_index,
         "the spawned task's durable send must complete within the method invocation \
          (AgentInvocationStarted at {started_index}, Start at {send_start_index}, End at \
-         {send_end_index}, AgentInvocationFinished at {finished_index})"
+         {send_end_index}, AgentInvocationFinished at {finished_index}, AgentInvocationSettled \
+         at {settled_index})"
     );
 
     // Restart the executor to force a full oplog replay of the recorded invocation (including

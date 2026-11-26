@@ -138,10 +138,7 @@ fn header_lines(header: &OplogExportHeader) -> Vec<String> {
     };
     vec![
         format_message_highlight("OPLOG EXPORT"),
-        format!(
-            "{PAD}root:              {}",
-            format_main_id(&root.pseudonym())
-        ),
+        format!("{PAD}root:              {}", format_main_id(&root.label())),
         format!("{PAD}obfuscated:        {}", yes_no(*obfuscate)),
         format!("{PAD}kept:              {keep}"),
         format!("{PAD}filtered:          {}", yes_no(*filtered)),
@@ -410,7 +407,7 @@ fn push_node(lines: &mut Vec<String>, pad: &str, label: Option<&str>, node: &Rep
             (None, Some(token)) => head(token.to_string()),
             (None, None) => head("str".to_string()),
         },
-        ReportNode::Agent(agent) => head(format!("agent {}", agent.token)),
+        ReportNode::Agent(agent) => head(format!("agent {}", agent.label())),
         ReportNode::Redacted(redacted) => {
             head(format!("redacted ({})", serde_text(&redacted.reason)))
         }
@@ -632,10 +629,17 @@ mod tests {
             value: Some("boom".into()),
         });
         assert_eq!(text(&str_value), "\"boom\"");
+        let agent_id = golem_common::model::AgentId::from_parts(0x2a, 9);
         let agent = ReportNode::Agent(ReportAgentRef {
-            token: token("agent", 9),
+            agent_id,
+            agent_type: Some(golem_common::model::agent::AgentTypeName("Counter".into())),
         });
-        assert_eq!(text(&agent), format!("agent {}", token("agent", 9)));
+        assert_eq!(text(&agent), format!("agent Counter[{agent_id}]"));
+        let untyped = ReportNode::Agent(ReportAgentRef {
+            agent_id,
+            agent_type: None,
+        });
+        assert_eq!(text(&untyped), format!("agent {agent_id}"));
         let redacted = ReportNode::Redacted(RedactedNode {
             reason: RedactionReason::QuotaToken,
         });
@@ -779,8 +783,10 @@ mod tests {
 
     #[test]
     fn header_renders_the_root_reference_only() {
+        let agent_id = golem_common::model::AgentId::from_parts(0x2a, 0xab);
         let root = ReportAgentRef {
-            token: token("agent", 0xab),
+            agent_id,
+            agent_type: Some(golem_common::model::agent::AgentTypeName("Counter".into())),
         };
         let lines = header_lines(&OplogExportHeader {
             obfuscate: true,
@@ -793,8 +799,7 @@ mod tests {
             generated_at: "2026-01-01T00:00:00Z".into(),
         })
         .join("\n");
-        assert!(lines.contains(&root.pseudonym()));
-        assert!(!lines.contains(&root.token.0));
+        assert!(lines.contains(&format!("root:              Counter[{agent_id}]")));
         assert!(lines.contains("kept:              shape"));
         assert!(lines.contains("filtered:          yes"));
     }

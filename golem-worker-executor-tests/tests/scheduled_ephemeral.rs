@@ -18,7 +18,7 @@
 
 use crate::Tracing;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentMode, AgentTypeName, InvocationFreshnessDisposition,
@@ -45,7 +45,7 @@ use golem_worker_executor::storage::scheduler::{
 use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, callers, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::{Arc, Mutex};
@@ -67,14 +67,14 @@ const CLIENT: &str = "scheduled-ephemeral-owner";
 #[derive(Debug)]
 struct DuplicateWakes {
     inner: Arc<dyn SchedulerStorage + Send + Sync>,
-    delay: chrono::Duration,
+    delay: jiff::SignedDuration,
     duplicates: Arc<Mutex<Vec<ScheduleId>>>,
     acknowledged: Arc<Mutex<Vec<ScheduleId>>>,
 }
 
 impl DuplicateWakes {
     fn overrides(
-        delay: chrono::Duration,
+        delay: jiff::SignedDuration,
         acknowledged: Arc<Mutex<Vec<ScheduleId>>>,
     ) -> TestExecutorOverrides {
         let duplicates = Arc::new(Mutex::new(Vec::new()));
@@ -97,7 +97,7 @@ impl SchedulerStorage for DuplicateWakes {
     async fn insert(
         &self,
         id: ScheduleId,
-        due: DateTime<Utc>,
+        due: jiff::Timestamp,
         shard: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -121,7 +121,7 @@ impl SchedulerStorage for DuplicateWakes {
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         ttl: Duration,
@@ -131,7 +131,7 @@ impl SchedulerStorage for DuplicateWakes {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         self.inner.count_due(now, assignment).await
@@ -141,13 +141,19 @@ impl SchedulerStorage for DuplicateWakes {
         &self,
         id: &ScheduleId,
         owner: uuid::Uuid,
-        until: DateTime<Utc>,
+        until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
-        let acknowledged = self.inner.ack(id, owner).await?;
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let acknowledged = self.inner.ack(id, owner, now).await?;
         if acknowledged && self.duplicates.lock().unwrap().contains(id) {
             self.acknowledged.lock().unwrap().push(*id);
         }
@@ -157,11 +163,11 @@ impl SchedulerStorage for DuplicateWakes {
 
 /// Holds every scheduler claim until released, and observes acknowledgement of the invocation wake.
 #[derive(Debug)]
-struct PausedScheduler {
-    inner: Arc<dyn SchedulerStorage + Send + Sync>,
-    release: tokio_util::sync::CancellationToken,
-    invocation_wake: Mutex<Option<ScheduleId>>,
-    acknowledged: Arc<tokio::sync::Notify>,
+pub(crate) struct PausedScheduler {
+    pub(crate) inner: Arc<dyn SchedulerStorage + Send + Sync>,
+    pub(crate) release: tokio_util::sync::CancellationToken,
+    pub(crate) invocation_wake: Mutex<Option<ScheduleId>>,
+    pub(crate) acknowledged: Arc<tokio::sync::Notify>,
 }
 
 #[async_trait]
@@ -169,7 +175,7 @@ impl SchedulerStorage for PausedScheduler {
     async fn insert(
         &self,
         id: ScheduleId,
-        due: DateTime<Utc>,
+        due: jiff::Timestamp,
         shard: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -189,7 +195,7 @@ impl SchedulerStorage for PausedScheduler {
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         ttl: Duration,
@@ -200,7 +206,7 @@ impl SchedulerStorage for PausedScheduler {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         self.inner.count_due(now, assignment).await
@@ -210,13 +216,19 @@ impl SchedulerStorage for PausedScheduler {
         &self,
         id: &ScheduleId,
         owner: uuid::Uuid,
-        until: DateTime<Utc>,
+        until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
-        let acknowledged = self.inner.ack(id, owner).await?;
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let acknowledged = self.inner.ack(id, owner, now).await?;
         if acknowledged && self.invocation_wake.lock().unwrap().as_ref() == Some(id) {
             self.acknowledged.notify_one();
         }
@@ -276,11 +288,11 @@ impl Rpc for HoldFirstSchedule {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -290,7 +302,8 @@ impl Rpc for HoldFirstSchedule {
         expected_fingerprint: golem_common::model::AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: AgentInvocation,
-        scheduled_at: DateTime<Utc>,
+        scheduled_at: jiff::Timestamp,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ScheduleId, RpcError> {
         let first = {
@@ -313,6 +326,7 @@ impl Rpc for HoldFirstSchedule {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await;
@@ -327,6 +341,7 @@ impl Rpc for HoldFirstSchedule {
         &self,
         target: ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],
@@ -344,6 +359,7 @@ impl Rpc for HoldFirstSchedule {
             .create_demand(
                 target,
                 method,
+                invocation,
                 created_by,
                 caller,
                 env,
@@ -435,7 +451,7 @@ async fn schedule(
     component: &ComponentDto,
     target_name: &str,
     hold_ms: u64,
-    due: DateTime<Utc>,
+    due: jiff::Timestamp,
 ) -> anyhow::Result<()> {
     executor
         .invoke_and_await_agent(
@@ -445,8 +461,8 @@ async fn schedule(
             data_value!(
                 target_name.to_string(),
                 hold_ms,
-                due.timestamp() as u64,
-                due.timestamp_subsec_nanos()
+                due.as_second() as u64,
+                due.subsec_nanosecond() as u32
             ),
         )
         .await?;
@@ -556,8 +572,8 @@ fn shape(oplog: &[PublicOplogEntryWithIndex]) -> Shape {
     }
 }
 
-async fn sleep_until(instant: DateTime<Utc>) {
-    if let Ok(remaining) = (instant - Utc::now()).to_std() {
+async fn sleep_until(instant: jiff::Timestamp) {
+    if let Ok(remaining) = (instant - jiff::Timestamp::now()).try_into() {
         tokio::time::sleep(remaining).await;
     }
 }
@@ -605,14 +621,15 @@ async fn scheduled_ephemeral_target_runs_once_at_its_deadline_across_a_restart(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let acknowledged = Arc::new(Mutex::new(Vec::new()));
-    let overrides = DuplicateWakes::overrides(chrono::Duration::zero(), acknowledged.clone());
+    let overrides = DuplicateWakes::overrides(jiff::SignedDuration::ZERO, acknowledged.clone());
     let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
     let name = "runs-once";
-    let due = DateTime::from_timestamp_millis(Utc::now().timestamp_millis() + 12_000).unwrap();
+    let due = jiff::Timestamp::from_millisecond(jiff::Timestamp::now().as_millisecond() + 12_000)
+        .unwrap();
     schedule(&executor, &component, name, 0, due).await?;
 
     let target = ephemeral_target(&executor, &component).await?;
@@ -628,12 +645,15 @@ async fn scheduled_ephemeral_target_runs_once_at_its_deadline_across_a_restart(
 
     let executor = start_with_overrides(deps, &context, overrides).await?;
     assert_inspection_is_answered(&executor, &target).await?;
-    assert!(Utc::now() < due, "the restart must precede the deadline");
+    assert!(
+        jiff::Timestamp::now() < due,
+        "the restart must precede the deadline"
+    );
     assert_eq!(effects(&executor, &component, name).await?, (0, 0));
 
     wait_for_effects(&executor, &component, name, (1, 1)).await?;
     assert!(
-        Utc::now() >= due,
+        jiff::Timestamp::now() >= due,
         "the target must not run before its deadline"
     );
     wait_for_acknowledged_duplicate(&acknowledged).await?;
@@ -682,7 +702,7 @@ async fn cancelled_scheduled_ephemeral_target_case(
         .store()
         .await?;
     let name = "cancelled";
-    let due = Utc::now() + chrono::Duration::seconds(20);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(20);
     schedule(&executor, &component, name, 0, due).await?;
     let target = ephemeral_target(&executor, &component).await?;
     drop(executor);
@@ -703,7 +723,7 @@ async fn cancelled_scheduled_ephemeral_target_case(
             .await?;
     }
     assert!(
-        Utc::now() < due,
+        jiff::Timestamp::now() < due,
         "the cancellation must precede the deadline"
     );
     executor.resume(&target, false).await?;
@@ -721,7 +741,7 @@ async fn cancelled_scheduled_ephemeral_target_case(
     );
     assert_inspection_is_answered(&executor, &target).await?;
 
-    sleep_until(due + chrono::Duration::seconds(5)).await;
+    sleep_until(due + jiff::SignedDuration::from_secs(5)).await;
     assert_eq!(effects(&executor, &component, name).await?, (0, 0));
     let oplog = shape(&executor.get_oplog(&target, OplogIndex::INITIAL).await?);
     assert_eq!(
@@ -756,7 +776,7 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
         )
         .await?;
     let name = "cancellation-behind-start";
-    let due = Utc::now() + chrono::Duration::seconds(4);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(4);
     schedule(&executor, &component, name, 0, due).await?;
     let target = ephemeral_target(&executor, &component).await?;
     let key = scheduled_key(&executor.get_oplog(&target, OplogIndex::INITIAL).await?)
@@ -780,8 +800,15 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
         .await
         .expect("the starting target must be active")
         .primary();
-    let mut cancellation =
-        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &owner.agent_id));
+    // The client that scheduled the call, as the target recorded it.
+    let canceller = callers::agent_in(
+        owner.agent_id,
+        golem_common::model::agent::AgentTypeName("ScheduledInvocationClient".to_string()),
+        executor.get_worker_metadata(&owner).await?.fingerprint,
+        component.environment_id,
+    )
+    .immediate;
+    let mut cancellation = Box::pin(worker.cancel_scheduled_invocation(key, receipt, &canceller));
     assert!(futures::poll!(&mut cancellation).is_pending());
     drop(restart);
     assert!(
@@ -862,8 +889,8 @@ async fn lost_schedule_response_case(
     let client = agent_key!("ScheduledInvocationClient", CLIENT);
     executor.start_agent(&component.id, client.clone()).await?;
     let name = "lost-schedule-response";
-    let due = Utc::now() + chrono::Duration::seconds(15);
-    let input = data_value!(name.to_string(), 0u64, due.timestamp() as u64, 0u32);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(15);
+    let input = data_value!(name.to_string(), 0u64, due.as_second() as u64, 0u32);
     let key = IdempotencyKey::fresh();
     let invocation = {
         let executor = executor.clone();
@@ -928,7 +955,10 @@ async fn lost_schedule_response_case(
     );
     let target = ephemeral_target(&executor, &component).await?;
     assert_eq!(target.agent_id, schedules[0].0);
-    assert!(Utc::now() < due, "the repair must precede the deadline");
+    assert!(
+        jiff::Timestamp::now() < due,
+        "the repair must precede the deadline"
+    );
     assert_eq!(
         effects(&executor, &component, name).await?,
         (0, 0),
@@ -963,14 +993,15 @@ async fn scheduled_ephemeral_target_lost_after_it_began_never_runs(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let acknowledged = Arc::new(Mutex::new(Vec::new()));
-    let overrides = DuplicateWakes::overrides(chrono::Duration::seconds(10), acknowledged.clone());
+    let overrides =
+        DuplicateWakes::overrides(jiff::SignedDuration::from_secs(10), acknowledged.clone());
     let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
     let name = "lost-after-begin";
-    let due = Utc::now() + chrono::Duration::seconds(4);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(4);
     schedule(&executor, &component, name, 0, due).await?;
     let target = ephemeral_target(&executor, &component).await?;
     let mut started = executor
@@ -1031,7 +1062,7 @@ async fn deleted_scheduled_ephemeral_target_is_not_recreated_by_its_wake(
         .store()
         .await?;
     let name = "deleted";
-    let due = Utc::now();
+    let due = jiff::Timestamp::now();
     schedule(&executor, &component, name, 0, due).await?;
     let target = ephemeral_target(&executor, &component).await?;
     let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;

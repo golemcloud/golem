@@ -10,6 +10,16 @@ The currently supported databases are:
 - MySQL
 - Apache Ignite 2
 
+## Timestamp range
+
+<Callout type="warning">
+  Golem represents PostgreSQL `TIMESTAMPTZ` and MySQL `DATETIME`/`TIMESTAMP` values as
+  instants with an upper bound of `9999-12-30T22:00:00.999999999Z`. If a result contains
+  a later value, such as the `9999-12-31 23:59:59` sentinel for “never expires”, the
+  entire query fails with a response error. Golem does not omit only that value.
+  This instant limit does not apply to date-only values such as `9999-12-31`.
+</Callout>
+
 ## SQL permissions and analysis
 
 Golem analyzes each SQL statement before it sends the statement to the database. It checks every

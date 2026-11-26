@@ -110,11 +110,12 @@ pub(super) fn input_poll(
         }
         ensure!(!matches!(entry.entry, PublicOplogEntry::Cancelled(_)));
     }
+    // A reconnect after a lost connection adds two connects and a multi-poll.
     ensure!(
-        polls.len() == 3,
-        "two completed connects and one multi-poll: {polls:?}"
+        polls.len() == 3 || polls.len() == 6,
+        "two completed connects and one multi-poll per connection pair: {polls:?}"
     );
-    for (ordinal, index) in polls.iter().enumerate() {
+    for (ordinal, index) in polls.iter().take(3).enumerate() {
         let entry = method
             .iter()
             .find(|entry| entry.oplog_index == *index)

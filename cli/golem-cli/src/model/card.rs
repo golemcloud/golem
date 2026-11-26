@@ -187,8 +187,8 @@ fn card_managed_by(card: &StoredCard) -> String {
 
 fn card_created_at(card: &StoredCard) -> String {
     match card {
-        StoredCard::Concrete(card) => card.created_at.to_rfc3339(),
-        StoredCard::Polymorphic(card) => card.created_at.to_rfc3339(),
+        StoredCard::Concrete(card) => card.created_at.to_string(),
+        StoredCard::Polymorphic(card) => card.created_at.to_string(),
     }
 }
 
@@ -196,11 +196,11 @@ fn card_expires_at(card: &StoredCard) -> String {
     match card {
         StoredCard::Concrete(card) => card
             .expires_at
-            .map(|expires_at| expires_at.to_rfc3339())
+            .map(|expires_at| expires_at.to_string())
             .unwrap_or_else(|| "never".to_string()),
         StoredCard::Polymorphic(card) => card
             .expires_at
-            .map(|expires_at| expires_at.to_rfc3339())
+            .map(|expires_at| expires_at.to_string())
             .unwrap_or_else(|| "never".to_string()),
     }
 }

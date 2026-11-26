@@ -510,7 +510,9 @@ async fn agent_list_pages_cross_the_components_of_an_application() {
         .map(|n| format!(r#"RichTypesAgent("list-{n}")"#))
         .chain((1..=4).map(|n| format!(r#"ExternalDurableStreams("list-{n}")"#)));
     for agent in agents {
-        let output = ctx.cli([cmd::AGENT, cmd::NEW, agent.as_str()]).await;
+        let output = ctx
+            .cli([cmd::AGENT, "create", agent.as_str(), "--keyed"])
+            .await;
         assert!(output.success_or_dump());
     }
 
@@ -581,8 +583,23 @@ async fn agent_list_pages_cross_the_components_of_an_application() {
     assert_eq!(sorted, listed);
     assert_eq!(listed.len(), 7, "{listed:?}");
 
-    // A cursor with an empty scan part starts at the beginning of its component.
-    let second = list(&["--page", "--scan-cursor", &format!("{SECOND}/")]).await;
+    let component = ctx
+        .cli([cmd::COMPONENT, cmd::GET, SECOND, flag::FORMAT, "json"])
+        .await;
+    assert!(component.success_or_dump());
+    let component_id = serde_json::from_value::<golem_common::model::component::ComponentId>(
+        component.stdout_json::<Value>()[0]["componentId"].clone(),
+    )
+    .unwrap();
+    let mut start = golem_cli::model::agent::AgentListCursor::default();
+    start.insert(
+        component_id,
+        &golem_common::model::agent::AgentTypeName("ExternalDurableStreams".into()),
+        golem_common::model::ScanCursor::new(String::new()),
+    );
+    let cursor = start.encode();
+    // An empty scan starts at the beginning of its component and agent type.
+    let second = list(&["--page", "--scan-cursor", &cursor]).await;
     let mut second_keys = keys(&second);
     second_keys.sort();
     let expected = listed
@@ -591,15 +608,24 @@ async fn agent_list_pages_cross_the_components_of_an_application() {
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(second_keys, expected);
-    assert!(second.get("cursor").is_none(), "{second}");
+    assert!(second["cursor"].is_null(), "{second}");
 
     // A cursor of a component that is not selected is refused. The CLI wraps the error message
     // at the width of the terminal, so the check joins its lines.
     for (selection, component) in [
-        (vec![flag::COMPONENT_NAME, FIRST], SECOND),
-        (vec![], "golem-it:missing"),
+        (vec![flag::COMPONENT_NAME, FIRST], component_id),
+        (
+            vec![],
+            golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+        ),
     ] {
-        let cursor = format!("{component}/");
+        let mut start = golem_cli::model::agent::AgentListCursor::default();
+        start.insert(
+            component,
+            &golem_common::model::agent::AgentTypeName("ExternalDurableStreams".into()),
+            golem_common::model::ScanCursor::new(String::new()),
+        );
+        let cursor = start.encode();
         let mut command = vec![cmd::AGENT, cmd::LIST, "--page", "--scan-cursor", &cursor];
         command.extend(selection);
         let output = ctx.cli(command).await;
@@ -608,8 +634,9 @@ async fn agent_list_pages_cross_the_components_of_an_application() {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        let refusal =
-            format!("The page cursor is for the component {component}, which is not selected");
+        let refusal = format!(
+            "The page cursor is for component {component} and agent type ExternalDurableStreams, which is not selected"
+        );
         assert!(stderr.contains(&refusal), "{cursor}: {stderr}");
     }
 }

@@ -392,12 +392,38 @@ pub const AGENT_REVERT: &str = "Examples:
 
   # The two flags are mutually exclusive";
 
-pub const AGENT_CANCEL_INVOCATION: &str = "Examples:
-  # Cancel a still-enqueued invocation by its idempotency key
-  golem-cli agent cancel-invocation 'CounterAgent(\"my-counter\")' my-key-123
+pub const INVOCATION_GET: &str = "Examples:
+  # Show an invocation by the idempotency key it was made with
+  golem-cli invocation get --agent 'CounterAgent(\"my-counter\")' --idempotency-key my-key-123
+
+  # Show an invocation by its ID, as printed by `invocation list`
+  golem-cli invocation get '<AGENT ID>.<UUID>'
+
+  # The same key used for two methods: choose one
+  golem-cli invocation get --agent 'CounterAgent(\"my-counter\")' --idempotency-key my-key-123 --method increment";
+
+pub const INVOCATION_LIST: &str = "Examples:
+  # List the invocations of an agent, newest change first
+  golem-cli invocation list --agent 'CounterAgent(\"my-counter\")'
+
+  # Only pending and scheduled invocations of one method
+  golem-cli invocation list --agent 'CounterAgent(\"my-counter\")' --operation increment --status pending --status scheduled
+
+  # Invocations that changed in a time range, 20 per page
+  golem-cli invocation list --agent 'CounterAgent(\"my-counter\")' --since 2026-01-01T00:00:00Z --until 2026-01-02T00:00:00Z --page-size 20
+
+  # The next page, with the cursor printed by the previous one
+  golem-cli invocation list --agent 'CounterAgent(\"my-counter\")' --cursor <CURSOR>";
+
+pub const INVOCATION_CANCEL: &str = "Examples:
+  # Cancel a still-pending invocation by its idempotency key
+  golem-cli invocation cancel --agent 'CounterAgent(\"my-counter\")' --idempotency-key my-key-123
 
   # Address an agent in a non-default environment
-  golem-cli agent cancel-invocation 'staging/CounterAgent(\"my-counter\")' my-key-123";
+  golem-cli invocation cancel --agent 'staging/CounterAgent(\"my-counter\")' --idempotency-key my-key-123
+
+  # Cancel by invocation ID
+  golem-cli invocation cancel '<component UUID>/CounterAgent(\"my-counter\").<UUID>'";
 
 pub const AGENT_FILES: &str = "Examples:
   # List the agent's root filesystem
@@ -498,7 +524,10 @@ pub const COMPONENT_MANIFEST_TRACE: &str = "Examples:
   # Show component manifest properties together with which manifest file/line
   # each value originates from (useful for debugging multi-file manifests)
   golem-cli component manifest-trace
-  golem-cli component manifest-trace my-component";
+  golem-cli component manifest-trace my-component
+
+  # Build the component first, so that the trace includes its agent types
+  golem-cli component manifest-trace my-component --build";
 
 // Environment commands -----------------------------------------------------------------------------
 

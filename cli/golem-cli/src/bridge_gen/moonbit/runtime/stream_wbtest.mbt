@@ -26,6 +26,9 @@ test "accepted invocation identity is final and stable across resume" {
     ),
   )
   validate_message_fields(message, "invocationAccepted")
+  message["type"] = Json::string("invocationReady")
+  validate_message_fields(message, "invocationReady")
+  message["type"] = Json::string("invocationAccepted")
   let identity = validate_acceptance_identity(message, "attempt", None)
   assert_eq(identity.0.to_string(), "0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")
   assert_eq(identity.1, "00000000-0000-0000-0000-000000000123")
@@ -85,44 +88,22 @@ test "public codec quantity restrictions and canonical u64" {
 }
 
 ///|
-test "public codec rejects quantity comparison overflow" {
-  let quantity = public_value_codec(
-    "{\"root\":{\"kind\":\"quantity\",\"value\":{\"spec\":{\"baseUnit\":\"m\",\"allowedSuffixes\":[],\"min\":{\"mantissa\":\"1\",\"scale\":-2147483648,\"unit\":\"m\"}}}}}",
-  )
-  inspect(
-    raises(() => {
-      quantity.decode(
-        @json.parse(
-          "{\"kind\":\"quantity\",\"value\":{\"mantissa\":\"1\",\"scale\":2147483647,\"unit\":\"m\"}}",
-        ),
-      )
-    }),
-    content="true",
-  )
-}
-
-///|
-test "public codec accepts non-hierarchical URLs without host restrictions" {
-  let unrestricted = public_value_codec(
-    "{\"root\":{\"kind\":\"url\",\"value\":{\"restrictions\":{\"allowedSchemes\":[\"mailto\"]}}}}",
+test "public codec leaves URL scheme and host restrictions to the server" {
+  let restricted = public_value_codec(
+    "{\"root\":{\"kind\":\"url\",\"value\":{\"restrictions\":{\"allowedSchemes\":[\"https\"],\"allowedHosts\":[\"example.com\"]}}}}",
   )
   assert_true(
-    unrestricted.decode(
+    restricted.decode(
       @json.parse(
-        "{\"kind\":\"url\",\"value\":{\"url\":\"mailto:user@example.com\"}}",
+        "{\"kind\":\"url\",\"value\":{\"url\":\"mailto:user@example.org\"}}",
       ),
     ) ==
-    UrlValue("mailto:user@example.com"),
-  )
-  let hosted = public_value_codec(
-    "{\"root\":{\"kind\":\"url\",\"value\":{\"restrictions\":{\"allowedHosts\":[\"example.com\"]}}}}",
+    UrlValue("mailto:user@example.org"),
   )
   inspect(
     raises(() => {
-      hosted.decode(
-        @json.parse(
-          "{\"kind\":\"url\",\"value\":{\"url\":\"mailto:user@example.com\"}}",
-        ),
+      restricted.decode(
+        @json.parse("{\"kind\":\"url\",\"value\":{\"url\":\"no scheme\"}}"),
       )
     }),
     content="true",

@@ -90,6 +90,7 @@ pub(crate) struct NoEvictionSource;
 
 #[cfg(test)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EvictionSource for NoEvictionSource {
     async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
         0

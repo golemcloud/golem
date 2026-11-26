@@ -277,7 +277,7 @@ fn bench_capability_traversal(c: &mut Criterion) {
             secret_id: uuid::Uuid::nil(),
             config_key: None,
             version: 0,
-            resolved_at: chrono::DateTime::UNIX_EPOCH,
+            resolved_at: jiff::Timestamp::UNIX_EPOCH,
             category: None,
         }));
         group.bench_function(format!("no_match/{size}"), |b| {

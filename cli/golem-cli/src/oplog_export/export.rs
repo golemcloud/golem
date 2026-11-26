@@ -28,10 +28,12 @@ use crate::oplog_export::model::{
     StartUnknownRef,
 };
 use crate::oplog_export::obfuscator::{
-    KeepFlags, ObfuscationContext, TokenKey, agent_reference, render_entry, render_omitted,
+    KeepFlags, ObfuscationContext, OwnAgent, TokenKey, own_agent_reference, render_entry,
+    render_omitted,
 };
 use async_trait::async_trait;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::oplog::public_oplog_entry::CreateParams;
 use golem_common::model::oplog::{
     OmittedOplogEntry, OplogCursor, OplogScan, OplogScanAllowance, PublicOplogEntry,
     PublicOplogEntryWithIndex, PublicOplogPageEntry,
@@ -180,16 +182,21 @@ pub struct OplogExportSession<R: OplogReads> {
 }
 
 impl<R: OplogReads> OplogExportSession<R> {
-    /// Reads the `Create` entry of the agent and pins the root to its `instance_id`.
+    /// Reads the `Create` entry of the agent and pins the root to its `instance_id`. The root
+    /// reference holds the agent ID and the agent type name of the `Create` entry.
     pub async fn pin(
         reads: R,
         key: &'static TokenKey,
         options: OplogExportOptions,
     ) -> anyhow::Result<Self> {
-        let ctx = ObfuscationContext::new(key, options.keep);
-        let (fingerprint, agent_id, last_index) =
-            read_create(&reads, options.max_entry_bytes).await?;
-        let root = agent_reference(&ctx, &agent_id);
+        let (create, last_index) = read_create(&reads, options.max_entry_bytes).await?;
+        let own_agent = OwnAgent {
+            agent_id: create.agent_id,
+            agent_type: create.agent_type_name,
+        };
+        let ctx = ObfuscationContext::new(key, options.keep, own_agent);
+        let fingerprint = create.instance_id;
+        let root = own_agent_reference(&ctx);
         Ok(Self {
             reads,
             ctx,
@@ -227,8 +234,8 @@ impl<R: OplogReads> OplogExportSession<R> {
     /// Fails with [`OplogExportError::RootChanged`] when the `Create` entry has another
     /// `instance_id` than at the pin. A failed read fails too.
     pub async fn check_root(&self) -> anyhow::Result<()> {
-        let (fingerprint, _, _) = read_create(&self.reads, self.options.max_entry_bytes).await?;
-        self.check_fingerprint(fingerprint)?;
+        let (create, _) = read_create(&self.reads, self.options.max_entry_bytes).await?;
+        self.check_fingerprint(create.instance_id)?;
         Ok(())
     }
 
@@ -401,7 +408,7 @@ impl<R: OplogReads> OplogExportSession<R> {
 async fn read_create<R: OplogReads>(
     reads: &R,
     max_entry_bytes: u64,
-) -> anyhow::Result<(Uuid, golem_common::model::AgentId, u64)> {
+) -> anyhow::Result<(Box<CreateParams>, u64)> {
     let page = reads.read_page(Some(1), 1, None, None).await?;
     let last_index = page.last_index;
     let entry = match page.entries.into_iter().next() {
@@ -422,7 +429,7 @@ async fn read_create<R: OplogReads>(
     };
     match entry.entry {
         PublicOplogEntry::Create(create) if entry.oplog_index.as_u64() == 1 => {
-            Ok((create.instance_id, create.agent_id, last_index))
+            Ok((Box::new(create), last_index))
         }
         _ => Err(OplogExportError::CreateMissing.into()),
     }

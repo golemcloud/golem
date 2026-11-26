@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::entity::OwnerRuntime;
 impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Replays a call: drive the cursor until the call resolves, decode its response, then close the
     /// durable scope / commit via `end_durable_function`.
@@ -315,9 +316,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     return park_undelivered_forever().await;
                 }
                 if let Some(activity) = drop_activity {
-                    if store.with(|mut access| {
-                        get_ctx(access.data_mut()).rejects_live_continuation_at_replay_tail()
-                    }) {
+                    let (rejected, primary) = store.with(|mut access| {
+                        let ctx = get_ctx(access.data_mut());
+                        (
+                            ctx.rejects_live_continuation_at_replay_tail(),
+                            ctx.runtime == OwnerRuntime::Agent,
+                        )
+                    });
+                    if rejected {
                         self.state = pending_call.accept_terminal().into_session();
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
                             self.start_idx,
@@ -329,8 +335,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         ));
                     }
                     // Do not acquire a live-call permit while later invocations must still
-                    // replay; that permit would hold their settlement open.
+                    // replay, or for an invocation the recorded history closed; that permit
+                    // would hold their settlement open.
                     replay_state.await_natural_tail_end(Some(activity)).await?;
+                    if primary {
+                        replay_state.await_driving_invocation(activity).await;
+                    }
                 }
                 self.prepare_incomplete_live_repair_at(
                     &mut AccessorContext::new(store, get_ctx),

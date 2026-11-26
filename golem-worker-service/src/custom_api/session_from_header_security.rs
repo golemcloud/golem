@@ -16,9 +16,9 @@ use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::model::OidcSession;
 use crate::custom_api::route_resolver::ResolvedRouteEntry;
 use crate::custom_api::{ResponseBody, RichRequest, RichRouteSecurity, RouteExecutionResult};
-use chrono::{DateTime, TimeDelta, Utc};
 use golem_service_base::custom_api::SessionFromHeaderRouteSecurity;
 use http::StatusCode;
+use jiff::{SignedDuration, Timestamp};
 use openidconnect::{
     EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, Scope, StandardClaims, SubjectIdentifier,
 };
@@ -78,9 +78,9 @@ struct EasyOidcSession {
     pub scopes: HashSet<Scope>,
 
     #[serde(default = "EasyOidcSession::default_issued_at")]
-    pub issued_at: DateTime<Utc>,
+    pub issued_at: Timestamp,
     #[serde(default = "EasyOidcSession::default_expires_at")]
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
 }
 
 impl EasyOidcSession {
@@ -96,12 +96,14 @@ impl EasyOidcSession {
         HashSet::from_iter(vec![Scope::new("openid".to_string())])
     }
 
-    fn default_issued_at() -> DateTime<Utc> {
-        Utc::now()
+    fn default_issued_at() -> Timestamp {
+        Timestamp::now()
     }
 
-    fn default_expires_at() -> DateTime<Utc> {
-        Utc::now().checked_add_signed(TimeDelta::hours(8)).unwrap()
+    fn default_expires_at() -> Timestamp {
+        Timestamp::now()
+            .checked_add(SignedDuration::from_hours(8))
+            .unwrap()
     }
 }
 
@@ -120,8 +122,10 @@ impl From<EasyOidcSession> for OidcSession {
             claims: IdTokenClaims::new(
                 value.issuer,
                 Vec::new(),
-                Utc::now(),
-                value.issued_at,
+                std::time::SystemTime::now().into(),
+                std::time::SystemTime::try_from(value.issued_at)
+                    .expect("session issue time is in range")
+                    .into(),
                 StandardClaims::new(SubjectIdentifier::new(value.subject)),
                 EmptyAdditionalClaims {},
             ),

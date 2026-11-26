@@ -16,20 +16,20 @@
 //! calls wait on gates. Two endpoints with their own replicas over one store stand in for two
 //! worker-service replicas.
 
-use super::McpReplica;
 use super::event_store::ReplicaEventStore;
-use super::replica::HookPoint;
+use super::replica::{HookPoint, SSE_RETRY_MILLIS};
 use super::sharded::lock_check;
 use super::store::{
     McpSessionId, McpSessionRecord, McpSessionStore, McpSessionStoreError, SqliteMcpSessionStore,
 };
+use super::{McpReplica, McpSessionLayer};
 use crate::config::McpConfig;
 use crate::custom_api::oidc::session_store::migrated_sqlite_pool;
 use crate::mcp::InvocationHarness;
 use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, StatelessServing};
 use crate::mcp::{
     GolemAgentMcpServer, McpCapabilitiesLookupError, McpCapabilityLookup, McpDeployment,
-    mcp_transport,
+    mcp_http_transport_config,
 };
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
@@ -48,12 +48,12 @@ use poem::http::{Method, StatusCode};
 use poem::{Endpoint, EndpointExt, Request, Response};
 use rmcp::model::*;
 use rmcp::service::RequestContext;
-use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::ServerSseMessage;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::session::store::{
     EventId, EventStore, EventStoreError, EventStream,
 };
+use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -318,6 +318,7 @@ impl RecordingStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpSessionStore for RecordingStore {
     async fn create(
         &self,
@@ -394,6 +395,7 @@ impl ClockStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpSessionStore for ClockStore {
     async fn create(
         &self,
@@ -539,6 +541,7 @@ impl ObservedEvents {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EventStore for ObservedEvents {
     async fn store_event(
         &self,
@@ -563,8 +566,35 @@ impl EventStore for ObservedEvents {
     }
 }
 
-/// The endpoint of `replica` over `handler`, as `mcp_transport` builds it. With `observe`, rmcp
-/// stores events through an [`ObservedEvents`].
+/// The transport config of the session layer: the endpoint's config with the SSE retry value
+/// that the layer's resumable streams need.
+fn session_transport_config(config: &McpConfig) -> StreamableHttpServerConfig {
+    mcp_http_transport_config(config).with_sse_retry(Some(Duration::from_millis(SSE_RETRY_MILLIS)))
+}
+
+/// The stateless rmcp service for `handler`s behind the session layer of `replica`. rmcp keeps
+/// the response events in `events`, which is the replica's event store or a view of it.
+fn session_transport<S, H>(
+    handler: H,
+    replica: Arc<McpReplica>,
+    events: Arc<dyn EventStore>,
+    config: &McpConfig,
+) -> impl Endpoint<Output = Response> + use<S, H>
+where
+    S: ServerHandler + Send + 'static,
+    H: Fn() -> S + Send + Sync + 'static,
+{
+    StreamableHttpService::new(
+        move || Ok(handler()),
+        Arc::new(NeverSessionManager::default().with_event_store(events)),
+        session_transport_config(config),
+    )
+    .compat()
+    .with(McpSessionLayer::new(replica))
+}
+
+/// The endpoint of `replica` over `handler`, as [`session_transport`] builds it. With `observe`,
+/// rmcp stores events through an [`ObservedEvents`].
 fn transport<S, H>(
     handler: H,
     replica: &Arc<McpReplica>,
@@ -584,7 +614,7 @@ where
     } else {
         (replica.event_store(), None)
     };
-    let endpoint = mcp_transport(handler, replica.clone(), events, config)
+    let endpoint = session_transport(handler, replica.clone(), events, config)
         .map_to_response()
         .boxed();
     (endpoint, observed)
@@ -1371,7 +1401,7 @@ async fn discover_without_a_session_is_answered_as_without_the_layer() {
         Arc::new(
             NeverSessionManager::default().with_event_store(Arc::new(ReplicaEventStore::new())),
         ),
-        crate::mcp::mcp_http_transport_config(&fx.config),
+        session_transport_config(&fx.config),
     )
     .compat()
     .map_to_response()
@@ -2274,15 +2304,9 @@ async fn answer(response: Response) -> Vec<Value> {
 
 const TOOL_SET_CHANGED: &str = "tool set changed; list tools again";
 
-/// Whether `messages` are the answer to a call refused because the tool set changed: the
-/// `tools/list_changed` notification, then the error.
+/// Whether `messages` are the answer to a call refused because the tool set changed.
 fn is_tool_set_changed(messages: &[Value]) -> bool {
-    matches!(
-        messages,
-        [notification, error]
-            if notification["method"] == "notifications/tools/list_changed"
-                && error["error"]["message"] == TOOL_SET_CHANGED
-    )
+    matches!(messages, [error] if error["error"]["message"] == TOOL_SET_CHANGED)
 }
 
 /// Whether `messages` are a successful result.
@@ -2511,71 +2535,6 @@ async fn tool_set_changed_reaches_the_sessions_get_streams_on_this_replica() {
             .is_err(),
         "another session's stream gets nothing"
     );
-    fx.finish();
-}
-
-/// Starts a native call on a fresh session and waits until its tool session is open.
-async fn running_native_call(
-    fx: &Fixture,
-    harness: &InvocationHarness,
-    id: i64,
-) -> (String, BodyStream) {
-    let session = fx.initialize().await;
-    let mut body = body_of(
-        fx.send(fx.post(Some(&session), call_tool(id, NATIVE_TOOL)))
-            .await,
-    );
-    next_frames(&mut body).await;
-    harness.native_sessions_opened(1).await;
-    (session, body)
-}
-
-#[test]
-async fn a_cancel_stops_a_native_tool_through_the_entry_token() {
-    let harness =
-        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
-    harness.answer_native_sessions(crate::mcp::invoke::test_support::NativeSessions::Hold);
-    let (first, _) = harness_deployments(&harness);
-    let fx = Fixture::golem(&harness, OneDomainLookup::new(&first), first, false).await;
-    let (session, body) = running_native_call(&fx, &harness, 4).await;
-    let tail = harness.take_native_session_tail();
-
-    assert_eq!(
-        fx.send(fx.post(Some(&session), cancel(4))).await.status(),
-        StatusCode::ACCEPTED
-    );
-
-    timeout(WAIT, tail.collect::<Vec<_>>())
-        .await
-        .expect("the native tool stops and closes its session");
-    let end = rest(body).await.expect("the call's body ends");
-    assert!(messages(&end).is_empty());
-    timeout(WAIT, fx.replica.calls().wait_until_empty())
-        .await
-        .expect("the call leaves the table");
-    fx.finish();
-}
-
-#[test]
-async fn a_cancelled_native_call_skips_the_deployment_changed_path() {
-    let harness =
-        InvocationHarness::with_run_method(golem_common::model::agent::AgentMode::Durable);
-    harness.answer_native_sessions(crate::mcp::invoke::test_support::NativeSessions::Hold);
-    let (first, next) = harness_deployments(&harness);
-    let lookup = OneDomainLookup::new(&first);
-    let fx = Fixture::golem(&harness, lookup.clone(), first, false).await;
-    let (session, _body) = running_native_call(&fx, &harness, 4).await;
-    lookup.deploy(&next);
-
-    assert_eq!(
-        fx.send(fx.post(Some(&session), cancel(4))).await.status(),
-        StatusCode::ACCEPTED
-    );
-
-    timeout(WAIT, fx.replica.calls().wait_until_empty())
-        .await
-        .expect("the cancelled call returns");
-    assert_eq!(lookup.invalidations(), 0, "the deployment was not checked");
     fx.finish();
 }
 

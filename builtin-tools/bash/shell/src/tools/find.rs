@@ -416,9 +416,9 @@ fn timestamp(time: std::io::Result<SystemTime>) -> Option<Ts> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(unix),
-    allow(dead_code, reason = "only unix exposes devices, FIFOs and sockets")
+#[allow(
+    dead_code,
+    reason = "not all platforms expose devices, FIFOs and sockets"
 )]
 enum Kind {
     File,
@@ -510,13 +510,13 @@ impl Stat {
     }
 }
 
+#[cfg(unix)]
 mod platform {
     use super::{Kind, Ts};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
     use std::path::Path;
 
-    #[cfg(unix)]
     pub(super) fn special(file_type: std::fs::FileType) -> Kind {
-        use std::os::unix::fs::FileTypeExt;
         if file_type.is_block_device() {
             Kind::Block
         } else if file_type.is_char_device() {
@@ -530,14 +530,41 @@ mod platform {
         }
     }
 
-    #[cfg(not(unix))]
+    pub(super) fn kind(_: &Path, _: bool) -> Kind {
+        Kind::Unknown
+    }
+
+    /// Status-change time and permission bits, where the platform exposes them.
+    pub(super) fn extra(
+        meta: &std::fs::Metadata,
+        _: &Path,
+        _: bool,
+        _: bool,
+    ) -> (Option<Ts>, Option<u32>) {
+        let ctime = i128::from(meta.ctime()) * super::NANOS + i128::from(meta.ctime_nsec());
+        (Some(ctime), Some(meta.mode()))
+    }
+
+    /// Identity of a directory for `-L` loop detection.
+    pub(super) fn identity(path: &Path) -> Option<(u64, u64)> {
+        std::fs::metadata(path)
+            .ok()
+            .map(|meta| (meta.dev(), meta.ino()))
+    }
+}
+
+#[cfg(target_os = "wasi")]
+mod platform {
+    use super::{Kind, Ts};
+    use std::os::fd::AsRawFd;
+    use std::path::Path;
+
     pub(super) fn special(_: std::fs::FileType) -> Kind {
         Kind::Unknown
     }
 
     /// The kind of a file std cannot name (std keeps WASI's device types unstable): from the C
     /// library's stat, which answers for the virtual `/dev` (see `devices`).
-    #[cfg(target_os = "wasi")]
     pub(super) fn kind(path: &Path, follow: bool) -> Kind {
         match raw_stat(path, follow).map(|stat| stat.st_mode & libc::S_IFMT) {
             Some(libc::S_IFCHR) => Kind::Char,
@@ -548,25 +575,7 @@ mod platform {
         }
     }
 
-    #[cfg(not(target_os = "wasi"))]
-    pub(super) fn kind(_: &Path, _: bool) -> Kind {
-        Kind::Unknown
-    }
-
     /// Status-change time and permission bits, where the platform exposes them.
-    #[cfg(unix)]
-    pub(super) fn extra(
-        meta: &std::fs::Metadata,
-        _: &Path,
-        _: bool,
-        _: bool,
-    ) -> (Option<Ts>, Option<u32>) {
-        use std::os::unix::fs::MetadataExt;
-        let ctime = i128::from(meta.ctime()) * super::NANOS + i128::from(meta.ctime_nsec());
-        (Some(ctime), Some(meta.mode()))
-    }
-
-    #[cfg(target_os = "wasi")]
     pub(super) fn extra(
         _: &std::fs::Metadata,
         path: &Path,
@@ -586,29 +595,9 @@ mod platform {
         )
     }
 
-    #[cfg(not(any(unix, target_os = "wasi")))]
-    pub(super) fn extra(
-        _: &std::fs::Metadata,
-        _: &Path,
-        _: bool,
-        _: bool,
-    ) -> (Option<Ts>, Option<u32>) {
-        (None, None)
-    }
-
     /// Identity of a directory for `-L` loop detection.
-    #[cfg(unix)]
-    pub(super) fn identity(path: &Path) -> Option<(u64, u64)> {
-        use std::os::unix::fs::MetadataExt;
-        std::fs::metadata(path)
-            .ok()
-            .map(|meta| (meta.dev(), meta.ino()))
-    }
-
-    #[cfg(target_os = "wasi")]
     #[allow(unsafe_code, reason = "fstat of a descriptor the File owns")]
     pub(super) fn identity(path: &Path) -> Option<(u64, u64)> {
-        use std::os::fd::AsRawFd;
         // A path's own identity on WASI is that of its last component, even a symbolic link
         // stat follows: the directory it names is opened, and its descriptor tells.
         let directory = std::fs::File::open(path).ok()?;
@@ -619,13 +608,7 @@ mod platform {
         (status == 0).then_some((stat.st_dev, stat.st_ino))
     }
 
-    #[cfg(not(any(unix, target_os = "wasi")))]
-    pub(super) fn identity(_: &Path) -> Option<(u64, u64)> {
-        None
-    }
-
     /// wasi-libc's stat exposes the WASI link and status-change fields std keeps unstable.
-    #[cfg(target_os = "wasi")]
     fn raw_stat(path: &Path, follow: bool) -> Option<libc::stat> {
         let path = std::ffi::CString::new(path.to_str()?).ok()?;
         // SAFETY: `libc::stat` is plain old data; an all-zero value is a valid instance.
@@ -640,6 +623,33 @@ mod platform {
             }
         };
         (status == 0).then_some(stat)
+    }
+}
+
+#[cfg(not(any(unix, target_os = "wasi")))]
+mod platform {
+    use super::{Kind, Ts};
+    use std::path::Path;
+
+    pub(super) fn special(_: std::fs::FileType) -> Kind {
+        Kind::Unknown
+    }
+
+    pub(super) fn kind(_: &Path, _: bool) -> Kind {
+        Kind::Unknown
+    }
+
+    pub(super) fn extra(
+        _: &std::fs::Metadata,
+        _: &Path,
+        _: bool,
+        _: bool,
+    ) -> (Option<Ts>, Option<u32>) {
+        (None, None)
+    }
+
+    pub(super) fn identity(_: &Path) -> Option<(u64, u64)> {
+        None
     }
 }
 
@@ -1134,6 +1144,7 @@ impl Parser<'_> {
             .ok_or_else(|| fail(format!("invalid argument `{value}' to `{predicate}'")))?;
         let origin = if self.day_start {
             start_of_tomorrow(self.now)
+                .ok_or_else(|| fail("current time is outside the supported datetime range"))?
         } else {
             self.now
         };
@@ -1765,32 +1776,23 @@ fn pad(value: &str, spec: &Spec) -> String {
     }
 }
 
-type LocalTime = chrono::DateTime<chrono::FixedOffset>;
+type LocalTime = jiff::ZonedDateTime;
 
-fn local_time(ns: Ts) -> LocalTime {
-    use chrono::TimeZone;
-    let seconds = i64::try_from(ns.div_euclid(NANOS)).unwrap_or(0);
-    let nanos = u32::try_from(ns.rem_euclid(NANOS)).unwrap_or(0);
-    chrono::Local
-        .timestamp_opt(seconds, nanos)
-        .single()
-        .map(|time| time.fixed_offset())
-        .or_else(|| {
-            chrono::Utc
-                .timestamp_opt(seconds, nanos)
-                .single()
-                .map(|time| time.fixed_offset())
-        })
-        .unwrap_or_default()
+fn local_time(ns: Ts) -> Option<LocalTime> {
+    jiff::Timestamp::from_nanosecond(ns)
+        .ok()
+        .map(|time| time.to_zoned_datetime(jiff::tz::TimeZone::system()))
 }
 
 /// Midnight at the end of the current local day, GNU's `-daystart` origin.
-fn start_of_tomorrow(now: Ts) -> Ts {
-    use chrono::Timelike;
-    let time = local_time(now);
-    let elapsed = i128::from(time.num_seconds_from_midnight()) * NANOS
-        + i128::from(time.nanosecond() % 1_000_000_000);
-    now - elapsed + 86_400 * NANOS
+fn start_of_tomorrow(now: Ts) -> Option<Ts> {
+    let time = local_time(now)?;
+    let elapsed = (i128::from(time.hour()) * 3600
+        + i128::from(time.minute()) * 60
+        + i128::from(time.second()))
+        * NANOS
+        + i128::from(time.subsec_nanosecond());
+    Some(now - elapsed + 86_400 * NANOS)
 }
 
 /// GNU's date grammar for `-newerXt`, through uutils' `parse_datetime`: ISO forms, `@EPOCH`,
@@ -1828,24 +1830,30 @@ const MONTHS: [&str; 12] = [
     "December",
 ];
 
-/// Render one time directive as GNU find does in the C locale.
+/// Render one time directive as GNU find does in the C locale. Calendar fields outside the
+/// supported datetime range are marked unavailable with `-`.
 fn format_time(ns: Ts, directive: char) -> String {
-    use chrono::{Datelike, Timelike};
     let fraction = format!("{:09}0", ns.rem_euclid(NANOS));
     let seconds = ns.div_euclid(NANOS);
-    if directive == '@' {
-        return format!("{seconds}.{fraction}");
+    match directive {
+        '@' => return format!("{seconds}.{fraction}"),
+        's' => return seconds.to_string(),
+        'n' => return "\n".to_string(),
+        't' => return "\t".to_string(),
+        _ => {}
     }
-    let time = local_time(ns);
-    let weekday = time.weekday().num_days_from_sunday() as usize;
-    let month = time.month0() as usize;
+    let Some(time) = local_time(ns) else {
+        return "-".to_string();
+    };
+    let weekday = time.weekday().to_sunday_zero_offset() as usize;
+    let month = (time.month() - 1) as usize;
     let hour12 = match time.hour() % 12 {
         0 => 12,
         hour => hour,
     };
     let meridiem = if time.hour() < 12 { "AM" } else { "PM" };
-    let yday = time.ordinal0();
-    let offset = time.offset().local_minus_utc();
+    let yday = time.day_of_year() - 1;
+    let offset = time.offset().seconds();
     let zone = format!(
         "{}{:02}{:02}",
         if offset < 0 { '-' } else { '+' },
@@ -1876,8 +1884,8 @@ fn format_time(ns: Ts, directive: char) -> String {
         ),
         'e' => format!("{:>2}", time.day()),
         'F' => format!("{}-{:02}-{:02}", time.year(), time.month(), time.day()),
-        'g' => format!("{:02}", time.iso_week().year().rem_euclid(100)),
-        'G' => time.iso_week().year().to_string(),
+        'g' => format!("{:02}", time.date().iso_week_date().year().rem_euclid(100)),
+        'G' => time.date().iso_week_date().year().to_string(),
         'H' => format!("{:02}", time.hour()),
         'I' => format!("{hour12:02}"),
         'j' => format!("{:03}", yday + 1),
@@ -1885,7 +1893,6 @@ fn format_time(ns: Ts, directive: char) -> String {
         'l' => format!("{hour12:>2}"),
         'm' => format!("{:02}", time.month()),
         'M' => format!("{:02}", time.minute()),
-        'n' => "\n".to_string(),
         'p' => meridiem.to_string(),
         'r' => format!(
             "{hour12:02}:{:02}:{:02} {meridiem}",
@@ -1893,25 +1900,23 @@ fn format_time(ns: Ts, directive: char) -> String {
             time.second()
         ),
         'R' => format!("{:02}:{:02}", time.hour(), time.minute()),
-        's' => seconds.to_string(),
         'S' => format!("{:02}.{fraction}", time.second()),
-        't' => "\t".to_string(),
         'T' | 'X' => format!(
             "{:02}:{:02}:{:02}.{fraction}",
             time.hour(),
             time.minute(),
             time.second()
         ),
-        'u' => time.weekday().number_from_monday().to_string(),
+        'u' => time.weekday().to_monday_one_offset().to_string(),
         'U' => format!(
             "{:02}",
-            (yday + 7 - time.weekday().num_days_from_sunday()) / 7
+            (yday + 7 - i16::from(time.weekday().to_sunday_zero_offset())) / 7
         ),
-        'V' => format!("{:02}", time.iso_week().week()),
-        'w' => time.weekday().num_days_from_sunday().to_string(),
+        'V' => format!("{:02}", time.date().iso_week_date().week()),
+        'w' => time.weekday().to_sunday_zero_offset().to_string(),
         'W' => format!(
             "{:02}",
-            (yday + 7 - time.weekday().num_days_from_monday()) / 7
+            (yday + 7 - i16::from(time.weekday().to_monday_zero_offset())) / 7
         ),
         'y' => format!("{:02}", time.year().rem_euclid(100)),
         'Y' => time.year().to_string(),
@@ -2906,6 +2911,53 @@ mod tests {
     }
 
     #[test]
+    fn printf_marks_out_of_range_calendar_times_unavailable() {
+        let mut warnings = Vec::new();
+        let format = parse_format("%t|%TY|%T@|%Ts|%Tn%Tt", &mut warnings).unwrap();
+        assert!(warnings.is_empty());
+        for seconds in [253_402_300_799i128, -377_705_023_202] {
+            let ns = seconds * NANOS + 123_456_789;
+            let entry = Entry {
+                display: "file".into(),
+                fs: PathBuf::from("file"),
+                depth: 0,
+                start: 0,
+                stat: Stat {
+                    kind: Kind::File,
+                    size: 0,
+                    mtime: ns,
+                    atime: ns,
+                    ctime: ns,
+                    mode: None,
+                },
+                followed: false,
+            };
+            assert_eq!(
+                String::from_utf8(render(&format, &entry, ".")).unwrap(),
+                format!("-|-|{seconds}.1234567890|{seconds}|\n\t")
+            );
+            assert!(start_of_tomorrow(ns).is_none());
+        }
+        for time in [jiff::Timestamp::MIN, jiff::Timestamp::MAX] {
+            assert_ne!(format_time(time.as_nanosecond(), 'Y'), "-");
+        }
+    }
+
+    #[test]
+    fn daystart_rejects_out_of_range_current_time() {
+        let args = ["-daystart", "-mtime", "0"].map(str::to_string);
+        let resolve = |path: &str| PathBuf::from(path);
+        let usage = parse(&args, &resolve, 253_402_300_799 * NANOS)
+            .err()
+            .expect("an unrepresentable day-start origin must be rejected");
+        assert_eq!(
+            usage.lines,
+            ["current time is outside the supported datetime range"]
+        );
+        assert!(parse(&args, &resolve, 0).is_ok());
+    }
+
+    #[test]
     fn size_and_age_rounding() {
         assert!(compare(1025_u64.div_ceil(1024), Cmp::Equal, 2));
         assert!(compare(0_u64.div_ceil(1024 * 1024), Cmp::Less, 1));
@@ -2937,19 +2989,18 @@ mod tests {
 
     #[test]
     fn newer_dates_use_gnu_grammar() {
-        use chrono::TimeZone;
-        let june = chrono::Local
-            .with_ymd_and_hms(2020, 6, 1, 0, 0, 0)
-            .single()
+        let june = jiff::civil::date(2020, 6, 1)
+            .at(0, 0, 0, 0)
+            .to_zoned_datetime(jiff::tz::TimeZone::system())
             .unwrap()
-            .timestamp_nanos_opt()
-            .unwrap();
+            .timestamp()
+            .as_nanosecond();
         for text in ["2020-06-01", "Jun 1 2020", "20200601", "1 June 2020 00:00"] {
-            assert_eq!(parse_date(text), Some(i128::from(june)), "{text}");
+            assert_eq!(parse_date(text), Some(june), "{text}");
         }
         assert_eq!(
             parse_date("2020-06-01 12:00:00"),
-            Some(i128::from(june) + 12 * 3600 * NANOS)
+            Some(june + 12 * 3600 * NANOS)
         );
         assert_eq!(parse_date("@1590969600"), Some(1_590_969_600 * NANOS));
         // 12:00 at UTC+2 is 10:00 UTC.

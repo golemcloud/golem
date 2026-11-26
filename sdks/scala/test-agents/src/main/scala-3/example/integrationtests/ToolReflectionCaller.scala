@@ -211,7 +211,10 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
     } yield (reflected, reflectedMethod, upserted)
 
     def await[A](result: Future[Either[GolemReflectError, A]]): Future[A] =
-      result.flatMap {
+      result.flatMap(ready)
+
+    def ready[A](result: Either[GolemReflectError, A]): Future[A] =
+      result match {
         case Left(error)  => Future.failed(new RuntimeException(s"error:$error"))
         case Right(value) => Future.successful(value)
       }
@@ -224,8 +227,8 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
           upsertedId <- await(upserted.agentId())
           _          <- if (upsertedId == id) Future.unit
                else Future.failed(new RuntimeException(s"error:upsert gave $upsertedId, not $id"))
-          fullyBound     <- await(full.getById(id))
-          methodBound    <- await(methodOnly.getById(id))
+          fullyBound     <- ready(full.getById(id))
+          methodBound    <- ready(methodOnly.getById(id))
           reflectedCall  <- reflectedMethod.invokeJson(Json.Object())
           fullCall       <- fullyBound.method(who).invoke(())
           methodOnlyCall <- methodBound.method(who).invoke(())
@@ -408,7 +411,7 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
           dynamic   <- first match {
                        case Left(error)       => Future.successful(Left(error))
                        case Right(invocation) =>
-                         DynamicAgentClient.getById(invocation.metadata.agentId).flatMap {
+                         DynamicAgentClient.getById(invocation.metadata.agentId) match {
                            case Left(error)   => Future.successful(Left(error))
                            case Right(client) => client.method("current").invokeValue(empty)
                          }

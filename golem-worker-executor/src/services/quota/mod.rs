@@ -14,7 +14,7 @@
 
 use super::golem_config::QuotaServiceConfig;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::{
     EnforcementAction, LeaseEpoch, ResourceDefinitionId, ResourceLimit, ResourceName,
@@ -62,7 +62,7 @@ pub struct LeaseInterest {
     /// Credit value at `last_credit_value_at`
     pub last_credit_value: i64,
     /// When `last_credit_value` was last updated
-    pub last_credit_value_at: DateTime<Utc>,
+    pub last_credit_value_at: jiff::Timestamp,
     /// Credits earned per millisecond while waiting
     pub credit_rate: f64,
     /// Maximum credit that can accumulate
@@ -73,8 +73,8 @@ pub struct LeaseInterest {
 
 impl LeaseInterest {
     pub fn current_credit(&self) -> i64 {
-        let elapsed_ms = (Utc::now() - self.last_credit_value_at)
-            .num_milliseconds()
+        let elapsed_ms = (jiff::Timestamp::now() - self.last_credit_value_at)
+            .as_millis()
             .max(0) as f64;
         let accrued =
             (elapsed_ms * self.credit_rate).clamp(i64::MIN as f64, i64::MAX as f64) as i64;
@@ -86,7 +86,7 @@ impl LeaseInterest {
     fn debit(&mut self, amount: u64) {
         let amount_i64 = amount.min(i64::MAX as u64) as i64;
         self.last_credit_value = self.current_credit().saturating_sub(amount_i64);
-        self.last_credit_value_at = Utc::now();
+        self.last_credit_value_at = jiff::Timestamp::now();
     }
 
     fn credit_back(&mut self, amount: u64) {
@@ -95,7 +95,7 @@ impl LeaseInterest {
             .current_credit()
             .saturating_add(amount_i64)
             .min(self.max_credit);
-        self.last_credit_value_at = Utc::now();
+        self.last_credit_value_at = jiff::Timestamp::now();
     }
 
     /// Split off a child `LeaseInterest` with `child_expected_use` units.
@@ -118,7 +118,7 @@ impl LeaseInterest {
         }
 
         let parent_expected_use = self.expected_use - child_expected_use;
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         let current = self.current_credit();
 
         // Proportional credit split: child gets its share, parent keeps the rest.
@@ -166,7 +166,7 @@ impl LeaseInterest {
             ));
         }
 
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         let merged_expected_use = self.expected_use.saturating_add(other.expected_use);
         let merged_credit = self.current_credit().saturating_add(other.current_credit());
 
@@ -206,7 +206,7 @@ pub trait QuotaService: Send + Sync {
         resource_name: ResourceName,
         expected_use: u64,
         previous_credit: i64,
-        previous_credit_at: Option<DateTime<Utc>>,
+        previous_credit_at: Option<jiff::Timestamp>,
     ) -> LeaseInterest;
 
     /// Try to reserve `amount` units from the local allocation.
@@ -256,6 +256,7 @@ impl LazyQuotaService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl QuotaService for LazyQuotaService {
     async fn initialize(&self, endpoint: ExecutorEndpoint) {
         let make_inner = self
@@ -274,7 +275,7 @@ impl QuotaService for LazyQuotaService {
         resource_name: ResourceName,
         expected_use: u64,
         previous_credit: i64,
-        previous_credit_at: Option<DateTime<Utc>>,
+        previous_credit_at: Option<jiff::Timestamp>,
     ) -> LeaseInterest {
         let lock = self.inner.read().await;
         lock.as_ref()
@@ -324,7 +325,7 @@ enum WaiterOutcome {
 struct Waiter {
     amount: u64,
     last_credit_value: i64,
-    last_credit_value_at: DateTime<Utc>,
+    last_credit_value_at: jiff::Timestamp,
     credit_rate: f64,
     max_credit: i64,
     tx: oneshot::Sender<WaiterOutcome>,
@@ -348,8 +349,8 @@ impl Waiter {
 
     /// Current credit, recomputed from the waiter's accumulated state.
     fn current_credit(&self) -> i64 {
-        let elapsed_ms = (Utc::now() - self.last_credit_value_at)
-            .num_milliseconds()
+        let elapsed_ms = (jiff::Timestamp::now() - self.last_credit_value_at)
+            .as_millis()
             .max(0) as f64;
         let accrued = (elapsed_ms * self.credit_rate) as i64;
         (self.last_credit_value + accrued).min(self.max_credit)
@@ -370,7 +371,7 @@ impl Waiter {
         Self {
             amount,
             last_credit_value: credit,
-            last_credit_value_at: Utc::now(),
+            last_credit_value_at: jiff::Timestamp::now(),
             credit_rate: 0.0,
             max_credit: i64::MAX,
             tx,
@@ -415,7 +416,7 @@ struct BoundedLease {
     resource_definition_id: ResourceDefinitionId,
     epoch: LeaseEpoch,
     remaining: u64,
-    expires_at: DateTime<Utc>,
+    expires_at: jiff::Timestamp,
     resource_limit: ResourceLimit,
     enforcement_action: EnforcementAction,
     total_available_amount: u64,
@@ -424,7 +425,7 @@ struct BoundedLease {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct UnlimitedLease {
-    expires_at: DateTime<Utc>,
+    expires_at: jiff::Timestamp,
 }
 
 pub struct GrpcQuotaService {
@@ -803,7 +804,8 @@ impl GrpcQuotaService {
                 let slot = slot_mutex.inner.lock().await;
                 match &slot.lease {
                     TrackedLease::Bounded(b) => {
-                        if (b.expires_at - Utc::now()).to_std().unwrap_or_default()
+                        if Duration::try_from(b.expires_at - jiff::Timestamp::now())
+                            .unwrap_or_default()
                             >= self.renewal_threshold
                         {
                             continue; // Plenty of time left — skip until closer to expiry.
@@ -811,7 +813,8 @@ impl GrpcQuotaService {
                         bounded_to_renew.push((key.clone(), slot_mutex.clone()));
                     }
                     TrackedLease::Unlimited(u) => {
-                        if (u.expires_at - Utc::now()).to_std().unwrap_or_default()
+                        if Duration::try_from(u.expires_at - jiff::Timestamp::now())
+                            .unwrap_or_default()
                             >= self.renewal_threshold
                         {
                             continue;
@@ -899,7 +902,7 @@ impl GrpcQuotaService {
                                         error = %err,
                                         "Failed to renew bounded quota lease in batch"
                                     );
-                                    if Utc::now() >= expires_at {
+                                    if jiff::Timestamp::now() >= expires_at {
                                         slot.lease = TrackedLease::Lost;
                                     }
                                 }
@@ -929,7 +932,7 @@ impl GrpcQuotaService {
                         }
                         Err(err) => {
                             tracing::error!(error = %err, "Failed to renew unlimited quota lease");
-                            if Utc::now() >= expires_at {
+                            if jiff::Timestamp::now() >= expires_at {
                                 slot.lease = TrackedLease::Lost;
                             }
                         }
@@ -1012,6 +1015,7 @@ impl GrpcQuotaService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl QuotaService for GrpcQuotaService {
     async fn acquire(
         &self,
@@ -1019,7 +1023,7 @@ impl QuotaService for GrpcQuotaService {
         resource_name: ResourceName,
         expected_use: u64,
         previous_credit: i64,
-        previous_credit_at: Option<DateTime<Utc>>,
+        previous_credit_at: Option<jiff::Timestamp>,
     ) -> LeaseInterest {
         debug!("acquiring lease for {}/{}", environment_id, resource_name);
 
@@ -1032,7 +1036,7 @@ impl QuotaService for GrpcQuotaService {
             resource_name: key.1.clone(),
             expected_use,
             last_credit_value: previous_credit.min(max_credit),
-            last_credit_value_at: previous_credit_at.unwrap_or_else(Utc::now),
+            last_credit_value_at: previous_credit_at.unwrap_or_else(jiff::Timestamp::now),
             credit_rate,
             max_credit,
             _token: arc,
@@ -1168,6 +1172,7 @@ impl QuotaService for GrpcQuotaService {
 pub struct UnlimitedQuotaService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl QuotaService for UnlimitedQuotaService {
     async fn acquire(
         &self,
@@ -1175,7 +1180,7 @@ impl QuotaService for UnlimitedQuotaService {
         resource_name: ResourceName,
         expected_use: u64,
         previous_credit: i64,
-        previous_credit_at: Option<DateTime<Utc>>,
+        previous_credit_at: Option<jiff::Timestamp>,
     ) -> LeaseInterest {
         let max_credit = max_credit_for(expected_use);
         LeaseInterest {
@@ -1183,7 +1188,7 @@ impl QuotaService for UnlimitedQuotaService {
             resource_name,
             expected_use,
             last_credit_value: previous_credit.min(max_credit),
-            last_credit_value_at: previous_credit_at.unwrap_or_else(Utc::now),
+            last_credit_value_at: previous_credit_at.unwrap_or_else(jiff::Timestamp::now),
             credit_rate: expected_use as f64 * CREDIT_RATE_FACTOR,
             max_credit,
             _token: Arc::new(()),

@@ -282,11 +282,15 @@ export function schemaType(
   return { body, metadata };
 }
 
+export type PublicAgentTarget =
+  | { kind: 'key'; constructorParameters: PublicValue }
+  | { kind: 'id'; agentId: AgentId; expectedFingerprint?: AgentFingerprint };
+
 export interface StreamingInvocationDescriptor {
   application: string;
   environment: string;
   agentType: string;
-  constructorParameters: PublicValue;
+  target: PublicAgentTarget;
   config: Array<{ path: string[]; value: PublicValue }>;
   method: string;
   idempotencyKey?: string;
@@ -511,6 +515,16 @@ export class GolemServiceError extends Error {
   }
 }
 
+/** A keyed create found a current agent with the same key. */
+export class GolemConflictError extends GolemServiceError {
+  readonly _tag = 'GolemConflictError';
+
+  constructor(params: ConstructorParameters<typeof GolemServiceError>[0]) {
+    super(params);
+    Object.defineProperty(this, 'name', { value: 'GolemConflictError', configurable: true });
+  }
+}
+
 function formatGolemServiceErrorMessage(params: {
   operation: GolemServiceOperation;
   status: number;
@@ -616,7 +630,9 @@ async function throwGolemServiceError(
   response: Response,
 ): Promise<never> {
   const bodyText = await response.text().catch(() => undefined);
-  throw new GolemServiceError({
+  const ErrorType =
+    operation === 'createAgent' && response.status === 409 ? GolemConflictError : GolemServiceError;
+  throw new ErrorType({
     operation,
     status: response.status,
     statusText: response.statusText,
@@ -907,7 +923,7 @@ async function agentTypeUrl(
 
 /**
  * Creates an agent and resolves after its initialization. A keyed create rejects with a 409
- * {@link GolemServiceError} when the keyed agent of the parameters exists.
+ * {@link GolemConflictError} when the keyed agent of the parameters exists.
  */
 export async function createAgent(
   server: GolemServer,
@@ -1948,34 +1964,34 @@ class PublicValueValidator {
         this.add(1);
         return payload;
       case 's8':
-        this.integer(body, payload, -128, 127, 1, 'signed');
+        this.integer(payload, -128, 127, 1);
         return payload;
       case 's16':
-        this.integer(body, payload, -32768, 32767, 2, 'signed');
+        this.integer(payload, -32768, 32767, 2);
         return payload;
       case 's32':
-        this.integer(body, payload, -2147483648, 2147483647, 4, 'signed');
+        this.integer(payload, -2147483648, 2147483647, 4);
         return payload;
       case 'u8':
-        this.integer(body, payload, 0, 255, 1, 'unsigned');
+        this.integer(payload, 0, 255, 1);
         return payload;
       case 'u16':
-        this.integer(body, payload, 0, 65535, 2, 'unsigned');
+        this.integer(payload, 0, 65535, 2);
         return payload;
       case 'u32':
-        this.integer(body, payload, 0, 4294967295, 4, 'unsigned');
+        this.integer(payload, 0, 4294967295, 4);
         return payload;
       case 's64':
-        this.decimalInteger(body, payload, true);
+        this.decimalInteger(payload, true);
         return payload;
       case 'u64':
-        this.decimalInteger(body, payload, false);
+        this.decimalInteger(payload, false);
         return payload;
       case 'f32':
-        this.float(body, payload, true);
+        this.float(payload, true);
         return;
       case 'f64':
-        this.float(body, payload, false);
+        this.float(payload, false);
         return;
       case 'char': {
         if (typeof payload !== 'string' || [...payload].length !== 1)
@@ -2103,24 +2119,15 @@ class PublicValueValidator {
         return;
       }
       case 'text':
-        this.text(body.restrictions, payload);
+        this.text(payload);
         return;
       case 'binary':
-        this.binary(body.restrictions, payload);
+        this.binary(payload);
         return;
       case 'path': {
         const input = publicObject(payload, 'path payload');
         publicExactMembers(input, new Set(['path']), 'path payload');
         const path = publicString(input.path, 'path');
-        if (path.length === 0) this.fail('validation-error', 'path must be non-empty');
-        const parts = path.split('/');
-        const name = parts[parts.length - 1] ?? path;
-        const index = name.lastIndexOf('.');
-        if (index >= 0 && index < name.length - 1 && body.spec.allowedExtensions) {
-          const extension = name.slice(index + 1);
-          if (!body.spec.allowedExtensions.includes(extension))
-            this.fail('validation-error', 'path extension is not allowed');
-        }
         this.string(path);
         return;
       }
@@ -2128,7 +2135,7 @@ class PublicValueValidator {
         {
           const input = publicObject(payload, 'URL payload');
           publicExactMembers(input, new Set(['url']), 'URL payload');
-          this.url(body.restrictions, input.url);
+          this.url(input.url);
         }
         return;
       case 'uuid': {
@@ -2266,38 +2273,25 @@ class PublicValueValidator {
     values.forEach((item) => this.value(type, item, depth + 1));
   }
 
-  private integer(
-    body: { restrictions?: NumericRestrictions },
-    value: unknown,
-    min: number,
-    max: number,
-    width: number,
-    family: 'signed' | 'unsigned',
-  ): void {
+  private integer(value: unknown, min: number, max: number, width: number): void {
     if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max)
       this.fail('validation-error', 'integer is out of range');
-    this.numeric(body.restrictions, family, BigInt(value));
     this.add(width);
   }
 
-  private decimalInteger(
-    body: { restrictions?: NumericRestrictions },
-    value: unknown,
-    signed: boolean,
-  ): void {
+  private decimalInteger(value: unknown, signed: boolean): void {
     if (typeof value !== 'string')
       this.fail('malformed-message', '64-bit integer payload must be a decimal string');
-    const parsed = publicDecimal(
+    publicDecimal(
       value,
       signed,
       signed ? -(1n << 63n) : 0n,
       signed ? (1n << 63n) - 1n : (1n << 64n) - 1n,
     );
-    this.numeric(body.restrictions, signed ? 'signed' : 'unsigned', parsed);
     this.add(8);
   }
 
-  private float(body: { restrictions?: NumericRestrictions }, value: unknown, f32: boolean): void {
+  private float(value: unknown, f32: boolean): void {
     let number: number;
     if (typeof value === 'number') {
       number = value;
@@ -2319,64 +2313,20 @@ class PublicValueValidator {
             ? Number.POSITIVE_INFINITY
             : Number.NEGATIVE_INFINITY;
     }
-    if (Number.isFinite(number)) this.numeric(body.restrictions, 'float', number);
-    else if (body.restrictions?.min || body.restrictions?.max)
-      this.fail('validation-error', 'exceptional float does not satisfy numeric restrictions');
     this.add(f32 ? 4 : 8);
   }
 
-  private numeric(
-    restrictions: NumericRestrictions | undefined,
-    family: 'signed' | 'unsigned' | 'float',
-    value: bigint | number,
-  ): void {
-    if (!restrictions) return;
-    const compare = (bound: NumericBound): number => {
-      if (family === 'float') {
-        if (bound.tag !== 'float-bits')
-          this.fail('validation-error', 'numeric bound family does not match schema');
-        const bytes = Buffer.allocUnsafe(8);
-        bytes.writeBigUInt64BE(BigInt.asUintN(64, bound.val));
-        const decoded = bytes.readDoubleBE();
-        return (value as number) < decoded ? -1 : (value as number) > decoded ? 1 : 0;
-      }
-      if (bound.tag !== family)
-        this.fail('validation-error', 'numeric bound family does not match schema');
-      return (value as bigint) < bound.val ? -1 : (value as bigint) > bound.val ? 1 : 0;
-    };
-    if (restrictions.min && compare(restrictions.min) < 0)
-      this.fail('validation-error', 'number is below schema minimum');
-    if (restrictions.max && compare(restrictions.max) > 0)
-      this.fail('validation-error', 'number is above schema maximum');
-  }
-
-  private text(restrictions: TextRestrictions, value: unknown): void {
+  private text(value: unknown): void {
     const input = publicObject(value, 'text');
     publicExactOptionalMembers(input, new Set(['text']), new Set(['language']), 'text');
     const text = publicString(input.text, 'text body');
     const language =
       input.language === undefined ? undefined : publicString(input.language, 'language');
-    if (language !== undefined && !/^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/u.test(language))
-      this.fail('validation-error', 'invalid BCP-47 language tag');
-    if (
-      language !== undefined &&
-      restrictions.languages &&
-      restrictions.languages.length > 0 &&
-      !restrictions.languages.includes(language)
-    )
-      this.fail('validation-error', 'text language is not allowed');
-    const length = [...text].length;
-    if (restrictions.minLength !== undefined && length < restrictions.minLength)
-      this.fail('validation-error', 'text is shorter than schema minimum');
-    if (restrictions.maxLength !== undefined && length > restrictions.maxLength)
-      this.fail('validation-error', 'text is longer than schema maximum');
-    if (restrictions.regex !== undefined && !new RegExp(restrictions.regex, 'u').test(text))
-      this.fail('validation-error', 'text does not match schema regex');
     this.string(text);
     if (language !== undefined) this.string(language);
   }
 
-  private binary(restrictions: BinaryRestrictions, value: unknown): void {
+  private binary(value: unknown): void {
     const input = publicObject(value, 'binary');
     publicExactOptionalMembers(input, new Set(['bytes']), new Set(['mimeType']), 'binary');
     const bytes = publicArray(input.bytes, 'binary bytes');
@@ -2390,49 +2340,26 @@ class PublicValueValidator {
       input.mimeType === undefined ? undefined : publicString(input.mimeType, 'MIME type');
     if (mime !== undefined && !/^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u.test(mime))
       this.fail('validation-error', 'invalid MIME type');
-    if (
-      mime !== undefined &&
-      restrictions.mimeTypes &&
-      restrictions.mimeTypes.length > 0 &&
-      !restrictions.mimeTypes.includes(mime)
-    )
-      this.fail('validation-error', 'binary MIME type is not allowed');
-    if (restrictions.minBytes !== undefined && bytes.length < restrictions.minBytes)
-      this.fail('validation-error', 'binary is shorter than schema minimum');
-    if (restrictions.maxBytes !== undefined && bytes.length > restrictions.maxBytes)
-      this.fail('validation-error', 'binary is longer than schema maximum');
     this.add(bytes.length);
     if (mime !== undefined) this.string(mime);
   }
 
-  private url(restrictions: UrlRestrictions, value: unknown): void {
+  private url(value: unknown): void {
     const raw = publicString(value, 'URL');
     if (raw.length === 0 || /[\u0000-\u0020\u007f]/u.test(raw))
       this.fail('validation-error', 'invalid URL');
-    let parsed: URL;
     try {
-      parsed = new URL(raw);
+      new URL(raw);
     } catch {
       this.fail('validation-error', 'invalid URL');
     }
-    const scheme = parsed.protocol.slice(0, -1);
-    if (restrictions.allowedSchemes?.every((item) => item.toLowerCase() !== scheme.toLowerCase()))
-      this.fail('validation-error', 'URL scheme is not allowed');
-    if (
-      restrictions.allowedHosts &&
-      (parsed.hostname.length === 0 ||
-        restrictions.allowedHosts.every(
-          (item) => item.toLowerCase() !== parsed.hostname.toLowerCase(),
-        ))
-    )
-      this.fail('validation-error', 'URL host is not allowed');
     this.string(raw);
   }
 
   private quantity(spec: QuantitySpec, value: unknown): void {
     const input = publicObject(value, 'quantity');
     publicExactMembers(input, new Set(['mantissa', 'scale', 'unit']), 'quantity');
-    const mantissa = publicDecimal(input.mantissa, true, -(1n << 63n), (1n << 63n) - 1n);
+    publicDecimal(input.mantissa, true, -(1n << 63n), (1n << 63n) - 1n);
     if (
       typeof input.scale !== 'number' ||
       !Number.isInteger(input.scale) ||
@@ -2443,11 +2370,6 @@ class PublicValueValidator {
     const unit = publicString(input.unit, 'quantity unit');
     const allowed = spec.allowedSuffixes.length === 0 ? [spec.baseUnit] : spec.allowedSuffixes;
     if (!allowed.includes(unit)) this.fail('validation-error', 'quantity unit is not allowed');
-    const current: QuantityValue = { mantissa, scale: input.scale, unit };
-    if (spec.min && !publicQuantityLe(spec.min, current))
-      this.fail('validation-error', 'quantity is below schema minimum');
-    if (spec.max && !publicQuantityLe(current, spec.max))
-      this.fail('validation-error', 'quantity is above schema maximum');
     this.add(12);
     this.string(unit);
   }
@@ -3140,27 +3062,6 @@ function publicDecimal(value: unknown, signed: boolean, min: bigint, max: bigint
   return parsed;
 }
 
-function publicQuantityLe(left: QuantityValue, right: QuantityValue): boolean {
-  const common = Math.max(left.scale, right.scale);
-  const leftShift = common - left.scale;
-  const rightShift = common - right.scale;
-  if (leftShift > 38 || rightShift > 38)
-    throw new StreamingProtocolError(
-      'validation-error',
-      'Public value codec: quantity comparison overflows',
-    );
-  const leftValue = left.mantissa * 10n ** BigInt(leftShift);
-  const rightValue = right.mantissa * 10n ** BigInt(rightShift);
-  const min = -(1n << 127n);
-  const max = (1n << 127n) - 1n;
-  if (leftValue < min || leftValue > max || rightValue < min || rightValue > max)
-    throw new StreamingProtocolError(
-      'validation-error',
-      'Public value codec: quantity comparison overflows',
-    );
-  return leftValue <= rightValue;
-}
-
 function validPublicDatetime(value: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/u.exec(value);
   if (!match) return false;
@@ -3479,6 +3380,25 @@ function streamOutcome(value: unknown): StreamOutcome {
   return outcome as StreamOutcome;
 }
 
+/**
+ * The error of an input that the server ended. A failed input end is at an item that the
+ * caller sent, so the call fails with it; a consumer cancellation only stops the input.
+ */
+function inputEndFailure(
+  outcome: StreamOutcome,
+  sequence: string,
+): StreamingProtocolError | undefined {
+  if (outcome.kind !== 'failed') return undefined;
+  const detail =
+    'message' in outcome.error ? outcome.error.message : `input stream ${outcome.error.kind}`;
+  return new StreamingProtocolError(
+    outcome.error.kind,
+    `the server ended the input at item ${sequence}: ${detail}`,
+    undefined,
+    outcome,
+  );
+}
+
 /** Validates a v1 terminal frame without applying attachment state. */
 export function decodeStreamSessionEnd(value: unknown): {
   version: 1;
@@ -3772,6 +3692,7 @@ class OutputStream<T> implements AgentStream<T> {
 class StreamingSession {
   private socket?: WebSocket;
   private accepted = false;
+  private executionReady = false;
   private everAccepted = false;
   private pendingResume = false;
   private resumeOperation: 'resume' | 'takeover' = 'resume';
@@ -3912,7 +3833,7 @@ class StreamingSession {
         application: this.descriptor.application,
         environment: this.descriptor.environment,
         agentType: this.descriptor.agentType,
-        constructorParameters: this.descriptor.constructorParameters,
+        target: this.descriptor.target,
         method: this.descriptor.method,
       },
       config: this.descriptor.config,
@@ -4209,9 +4130,13 @@ class StreamingSession {
         'message received after invocation finish',
       );
     switch (message.type) {
-      case 'invocationAccepted': {
-        if (this.accepted)
+      case 'invocationAccepted':
+      case 'invocationReady': {
+        const ready = message.type === 'invocationReady';
+        if (this.accepted && !ready)
           throw new StreamingProtocolError('protocol-error', 'duplicate invocation acceptance');
+        if (ready && (!this.accepted || this.executionReady))
+          throw new StreamingProtocolError('protocol-error', 'unexpected invocation readiness');
         object(message, [
           'version',
           'type',
@@ -4244,10 +4169,11 @@ class StreamingSession {
             'accepted invocation identity changed',
           );
         validateOpaqueToken(message.sessionToken, 'session token');
-        this.install(message.mappings, true);
+        this.install(message.mappings, ready || message.mappings.length !== 0);
         this.acceptedInvocation = { agentId, idempotencyKey: message.idempotencyKey };
         this.sessionToken = message.sessionToken;
         this.accepted = true;
+        this.executionReady = ready || message.mappings.length !== 0;
         this.everAccepted = true;
         this.pendingResume = false;
         this.acceptedAt = Date.now();
@@ -4353,6 +4279,11 @@ class StreamingSession {
         const terminal = decodeStreamSessionEnd(message);
         if (terminal.direction === 'input') {
           this.cancelChannel(terminal.channel);
+          const failure = inputEndFailure(terminal.outcome, terminal.sequence);
+          if (failure) {
+            this.fail(failure);
+            this.socket?.close(1000);
+          }
           break;
         }
         const output = this.outputByChannel(message.channel);
@@ -4506,6 +4437,7 @@ class StreamingSession {
   }
 
   private install(mappings: any[], complete = false): void {
+    let serverFailure: StreamingProtocolError | undefined;
     if (!Array.isArray(mappings) || mappings.length > 4096)
       throw new StreamingProtocolError('malformed-message', 'invalid stream mappings');
     const messageChannels = new Set<number>();
@@ -4519,6 +4451,7 @@ class StreamingSession {
       input?: InputState;
       highWater?: bigint;
       terminal?: boolean;
+      endedByServer?: boolean;
     }> = [];
     for (const mapping of mappings) {
       object(
@@ -4575,6 +4508,7 @@ class StreamingSession {
       let input: InputState | undefined;
       let highWater: bigint | undefined;
       let terminal: boolean | undefined;
+      let endedByServer = false;
       if (mapping.direction === 'input') {
         const provisionalInput =
           mapping.provisionalRef === undefined
@@ -4594,12 +4528,24 @@ class StreamingSession {
           )
         )
           throw new StreamingProtocolError('stream-conflict', 'input stream was rebound');
-        object(mapping.inputHighWater, ['sequence', 'terminal']);
+        object(mapping.inputHighWater, ['sequence', 'terminal'], ['outcome']);
         highWater = decimal(mapping.inputHighWater.sequence, 'sequence');
         terminal = mapping.inputHighWater.terminal;
         if (typeof terminal !== 'boolean')
           throw new StreamingProtocolError('stream-conflict', 'invalid input high-water');
-        this.validateInputReconcile(input, highWater, terminal);
+        if (mapping.inputHighWater.outcome !== undefined) {
+          if (!terminal)
+            throw new StreamingProtocolError(
+              'stream-conflict',
+              'open input high-water has an outcome',
+            );
+          serverFailure ??= inputEndFailure(
+            streamOutcome(mapping.inputHighWater.outcome),
+            mapping.inputHighWater.sequence,
+          );
+          // The server ended the input, so local items it did not accept are discarded.
+          endedByServer = true;
+        } else this.validateInputReconcile(input, highWater, terminal);
       } else if (mapping.provisionalRef !== undefined) {
         throw new StreamingProtocolError('stream-conflict', 'output mapping has provisional input');
       }
@@ -4611,6 +4557,7 @@ class StreamingSession {
         input,
         highWater,
         terminal,
+        endedByServer,
       });
     }
     if (new Set([...this.stableMappings.keys(), ...messageTokens]).size > 4096)
@@ -4662,12 +4609,21 @@ class StreamingSession {
         const input = mapping.input as InputState;
         this.inputTokens.set(mapping.token, input);
         input.channel = mapping.channel;
+        if (mapping.endedByServer) {
+          this.stopInput(input);
+          continue;
+        }
         this.reconcileInput(input, mapping.highWater as bigint, mapping.terminal as boolean);
         if (input.pending) this.socket?.send(input.pending.render(mapping.channel));
         else pumps.add(input);
       }
     }
     pumps.forEach((input) => void this.pump(input));
+    // The server ended an input at an item that the caller sent before this connection.
+    if (serverFailure) {
+      this.fail(serverFailure);
+      this.socket?.close(1000);
+    }
   }
 
   private async pump(input: InputState): Promise<void> {
@@ -5148,6 +5104,7 @@ class StreamingSession {
         });
       }
       this.accepted = false;
+      this.executionReady = false;
       await this.connectRetry();
     } catch (error) {
       this.fail(error);
@@ -5170,6 +5127,9 @@ class StreamingSession {
         'invalid-channel',
         'cancellation referenced an unknown input',
       );
+    this.stopInput(input);
+  }
+  private stopInput(input: InputState): void {
     input.terminal = true;
     this.clearBufferedInput(input);
     this.clearPendingInput(input);

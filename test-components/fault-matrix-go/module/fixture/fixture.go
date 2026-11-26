@@ -4,10 +4,12 @@
 package fixture
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
 )
 
 type ID struct{ Name string }
@@ -154,3 +156,36 @@ func init() {
 		return golem.Must(output.Collect())
 	})
 }
+
+// FaultMatrix is the tool of the fixture contract: its produce command writes the records of
+// produce to stdout, each as 4 big-endian bytes.
+type FaultMatrix struct{}
+
+var Tool = tool.DefineTool[FaultMatrix]("fault-matrix", tool.Spec{Version: "1.0.0"})
+
+type ToolProduceArgs struct {
+	Run        uint32
+	Count      uint32
+	PauseAfter uint32
+	Gate       Gate
+}
+
+var toolProduce = Tool.OutputCommand[ToolProduceArgs, uint32]("produce", func(a *ToolProduceArgs, s *tool.CommandSpec) {
+	s.Positional(&a.Run)
+	s.Positional(&a.Count)
+	s.Positional(&a.PauseAfter)
+	s.Positional(&a.Gate)
+	s.Stdout().Required()
+})
+
+var _ = toolProduce.Handle(func(ctx *tool.OutputContext, a ToolProduceArgs) (uint32, error) {
+	for seq := uint32(1); seq <= a.Count; seq++ {
+		if seq == a.PauseAfter+1 {
+			golem.PromiseByID[[]byte](a.Gate.promiseID()).MustAwait()
+		}
+		if _, err := ctx.Stdout().Write(binary.BigEndian.AppendUint32(nil, record(a.Run, seq))); err != nil {
+			return seq - 1, nil
+		}
+	}
+	return a.Count, nil
+})

@@ -152,3 +152,80 @@ impl ReplayableStream for TempFileUpload {
         Ok(len)
     }
 }
+
+/// A JSON payload that the response writes with serde, not through `serde_json::Value`.
+///
+/// `poem_openapi::payload::Json` turns the value into a `serde_json::Value` first, with
+/// `ToJSON::to_json`. That step rounds numbers and fails on deep nesting. This type writes the
+/// bytes straight from the value, so a field that holds raw JSON text reaches the client
+/// unchanged. The OpenAPI description is the same as the one of `Json<T>`.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SerdeJson<T>(pub T);
+
+impl<T: poem_openapi::types::ToJSON + serde::Serialize> poem::IntoResponse for SerdeJson<T> {
+    fn into_response(self) -> poem::Response {
+        match serde_json::to_vec(&self.0) {
+            Ok(body) => poem::Response::builder()
+                .content_type("application/json; charset=utf-8")
+                .body(body),
+            Err(error) => poem::Response::builder()
+                .status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+                .content_type("text/plain; charset=utf-8")
+                .body(format!("Failed to write the JSON response: {error}")),
+        }
+    }
+}
+
+impl<T: poem_openapi::types::ToJSON + serde::Serialize> poem_openapi::ApiResponse for SerdeJson<T> {
+    fn meta() -> poem_openapi::registry::MetaResponses {
+        <poem_openapi::payload::Json<T> as poem_openapi::ApiResponse>::meta()
+    }
+
+    fn register(registry: &mut poem_openapi::registry::Registry) {
+        T::register(registry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SerdeJson;
+    use golem_common::model::Timestamp;
+    use golem_common::model::caller::{Pair, PublicClaims, PublicPrincipal, PublicUserPrincipal};
+    use poem::IntoResponse;
+    use test_r::test;
+
+    /// The claim sets that a `serde_json::Value` cannot keep.
+    fn claim_sets() -> Vec<String> {
+        vec![
+            r#"{"sub":"bob","n":1e400}"#.to_string(),
+            format!(
+                r#"{{"sub":"bob","deep":{}1{}}}"#,
+                "[".repeat(130),
+                "]".repeat(130)
+            ),
+            r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#
+            .to_string(),
+        r#"{"zeta":1,"alpha":2,"sub":"bob"}"#.to_string(),
+        ]
+    }
+
+    #[test]
+    async fn serde_json_response_keeps_the_original_claims_text() {
+        for claims in claim_sets() {
+            let principal = PublicPrincipal::User(PublicUserPrincipal {
+                pair: Pair::new("https://idp.example/", "bob"),
+                authenticated_at: Timestamp::from(1_000),
+                claims: Some(PublicClaims::from_json(claims.clone()).unwrap()),
+            });
+            let response = SerdeJson(principal).into_response();
+            assert_eq!(
+                response.content_type(),
+                Some("application/json; charset=utf-8")
+            );
+            let body = response.into_body().into_string().await.unwrap();
+            let expected = format!(r#""claims":{claims}"#);
+            assert!(body.contains(&expected), "{expected} is not in {body}");
+        }
+    }
+}

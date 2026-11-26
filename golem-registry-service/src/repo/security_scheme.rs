@@ -104,6 +104,7 @@ impl<Repo: SecuritySchemeRepo> LoggedSecuritySchemeRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<Repo> {
     async fn get_http_routing_epoch_for_scheme(
         &self,
@@ -284,6 +285,7 @@ impl DbSecuritySchemeRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
     async fn get_http_routing_epoch_for_scheme(
         &self,

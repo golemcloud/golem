@@ -205,8 +205,8 @@ fn capture_remainder(remainder: &mut u128, capture: bool) -> u64 {
 
 impl AtomicResourceEntry {
     pub(super) fn secs_since_last_refresh(&self) -> i64 {
-        Utc::now()
-            .timestamp()
+        jiff::Timestamp::now()
+            .as_second()
             .saturating_sub(self.last_refresh_secs.load(Ordering::Acquire))
     }
 

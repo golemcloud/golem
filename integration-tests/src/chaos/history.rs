@@ -30,7 +30,7 @@
 //! carries the doubt through as a range instead of a number.
 
 use crate::chaos::errors::ErrorClass;
-use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -242,7 +242,7 @@ impl std::fmt::Display for Outcome {
 pub struct AttemptRecord {
     /// 1-based, so `attempt: 2` reads as "the retry".
     pub attempt: u32,
-    pub started_at: DateTime<Utc>,
+    pub started_at: jiff::Timestamp,
     pub duration_ms: u64,
     /// Value the agent returned, when this attempt succeeded and the method
     /// returns one. `Some` here *is* the record of a successful completion.
@@ -275,9 +275,9 @@ pub struct OperationRecord {
     /// genuinely the *same* operation to the platform — a fresh key per attempt
     /// would silently turn a duplicate-execution bug into a clean run.
     pub idempotency_key: String,
-    pub submitted_at: DateTime<Utc>,
+    pub submitted_at: jiff::Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<jiff::Timestamp>,
     /// Total attempts, including the first. `> 1` means the bounded same-key
     /// retry fired, which makes this operation worth a closer look.
     pub attempts: u32,
@@ -404,16 +404,16 @@ pub struct FireRecord {
     /// The registering invocation's idempotency key.
     pub token: String,
     /// When the action was due, as the driver asked for it.
-    pub scheduled_at: DateTime<Utc>,
+    pub scheduled_at: jiff::Timestamp,
     /// When the platform ran it, as the executor's clock saw it.
-    pub observed_at: DateTime<Utc>,
+    pub observed_at: jiff::Timestamp,
 }
 
 impl FireRecord {
     /// How far past its due time the action ran. Negative means clock skew
     /// between the driver and the executor, not an action that fired early.
     pub fn delay_ms(&self) -> i64 {
-        (self.observed_at - self.scheduled_at).num_milliseconds()
+        (self.observed_at - self.scheduled_at).as_millis() as i64
     }
 }
 
@@ -481,9 +481,9 @@ pub struct WakeupRecord {
     /// wakeup. This is what pairs a completion to the wakeup it caused.
     pub token: String,
     /// When the waiter armed the promise.
-    pub armed_at: DateTime<Utc>,
+    pub armed_at: jiff::Timestamp,
     /// When the platform resumed the waiter.
-    pub woken_at: DateTime<Utc>,
+    pub woken_at: jiff::Timestamp,
 }
 
 impl WakeupRecord {
@@ -494,7 +494,7 @@ impl WakeupRecord {
     /// delay itself — it also contains the round's deliberate dwell — but it is
     /// what lets a reader tell a slow wakeup from a skewed clock.
     pub fn parked_ms(&self) -> i64 {
-        (self.woken_at - self.armed_at).num_milliseconds()
+        (self.woken_at - self.armed_at).as_millis() as i64
     }
 }
 
@@ -638,8 +638,8 @@ mod tests {
             agent: "counter-0".to_string(),
             method: "increment".to_string(),
             idempotency_key: format!("chaos-s12-durable-counter-0-{op_id}"),
-            submitted_at: Utc::now(),
-            completed_at: Some(Utc::now()),
+            submitted_at: jiff::Timestamp::now(),
+            completed_at: Some(jiff::Timestamp::now()),
             attempts: 1,
             outcome,
             duration_ms: 5,

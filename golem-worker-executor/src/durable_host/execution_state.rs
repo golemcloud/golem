@@ -30,7 +30,6 @@ use super::{InvocationStrictness, authority_snapshot_is_current_at};
 use crate::model::InvocationContext;
 use crate::services::card_interest::CardInterestContribution;
 use crate::worker::owner_lane::OwnerInvocationId;
-use chrono::{DateTime, Utc};
 use golem_common::model::OwnedInvocationId;
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, EffectiveSurface, ScopeCard, StoredCard};
@@ -54,9 +53,13 @@ pub struct InvocationAuthority {
     interest: Option<Arc<CardInterestContribution>>,
     /// The surface that authorizes the invocation's host calls.
     surface: EffectiveSurface,
+    /// Once the final outcome is reached while the admitted scope card stays, the surface with
+    /// that card, which authorizes the calls made before the final outcome (see
+    /// [`AuthorityView`]).
+    admitted_surface: Option<EffectiveSurface>,
     synchronization: Synchronization,
     /// The earliest expiry among the cards `surface` was derived from.
-    next_expiration: Option<DateTime<Utc>>,
+    next_expiration: Option<jiff::Timestamp>,
 }
 
 /// Whether the scope card the invocation was admitted with bounds its calls.
@@ -89,6 +92,100 @@ impl ScopeBinding {
             Self::Unscoped | Self::Bound(_) => Self::Unscoped,
             Self::FinalOutcome { .. } => Self::FinalOutcome { admitted: None },
         }
+    }
+
+    /// The card that the final outcome hides: the admitted card once the final outcome is
+    /// reached.
+    fn hidden_card(&self) -> Option<&ScopeCard> {
+        match self {
+            Self::FinalOutcome { admitted } => admitted.as_ref(),
+            Self::Unscoped | Self::Bound(_) => None,
+        }
+    }
+}
+
+/// The authority of an invocation as the running host code sees it.
+///
+/// The invocation's final outcome hides its scope card from the calls the invocation makes after
+/// it. A call made before it keeps the card while its own code continues after the final
+/// outcome, so its decisions do not depend on when that code runs: the scope card and the
+/// effective surface it reads are then the ones with the admitted card. Every other read is the
+/// invocation's own.
+#[derive(Clone, Copy)]
+pub struct AuthorityView<'a> {
+    authority: &'a InvocationAuthority,
+    issued_before_final_outcome: bool,
+}
+
+impl<'a> AuthorityView<'a> {
+    pub fn new(authority: &'a InvocationAuthority, issued_before_final_outcome: bool) -> Self {
+        Self {
+            authority,
+            issued_before_final_outcome,
+        }
+    }
+
+    fn sees_hidden_card(&self) -> bool {
+        self.issued_before_final_outcome && self.authority.scope.hidden_card().is_some()
+    }
+
+    /// The scope card that bounds the calls of the running host code.
+    pub fn bound_scope_card(&self) -> Option<&'a ScopeCard> {
+        if self.sees_hidden_card() {
+            self.authority.scope.hidden_card()
+        } else {
+            self.authority.bound_scope_card()
+        }
+    }
+
+    /// The surface that authorizes the calls of the running host code.
+    pub fn effective_surface(&self) -> &'a EffectiveSurface {
+        match &self.authority.admitted_surface {
+            Some(admitted) if self.sees_hidden_card() => admitted,
+            _ => &self.authority.surface,
+        }
+    }
+
+    /// The scope card that the invocation's final outcome hides from the running host code: the
+    /// admitted card, for code of a call made after the final outcome. That code may neither
+    /// lend the card nor derive from it.
+    pub fn cut_off_scope_card(&self) -> Option<&'a ScopeCard> {
+        if self.issued_before_final_outcome {
+            None
+        } else {
+            self.authority.scope.hidden_card()
+        }
+    }
+
+    /// The scope card installed for the invocation, whether or not this view hides it.
+    pub fn admitted_scope_card(&self) -> Option<&'a ScopeCard> {
+        self.authority.admitted_scope_card()
+    }
+
+    pub fn scope_root_cards(&self) -> &'a BTreeMap<CardId, StoredCard> {
+        self.authority.scope_root_cards()
+    }
+
+    pub fn scope_interest(&self) -> Option<&'a Arc<CardInterestContribution>> {
+        self.authority.scope_interest()
+    }
+
+    pub fn next_expiration(&self) -> Option<jiff::Timestamp> {
+        self.authority.next_expiration()
+    }
+
+    pub fn synchronized_generation(&self) -> u64 {
+        self.authority.synchronized_generation()
+    }
+
+    pub fn is_current_at(
+        &self,
+        authority_open: bool,
+        published_generation: u64,
+        now: jiff::Timestamp,
+    ) -> bool {
+        self.authority
+            .is_current_at(authority_open, published_generation, now)
     }
 }
 
@@ -139,11 +236,7 @@ impl InvocationAuthority {
         self.interest.as_ref()
     }
 
-    pub fn effective_surface(&self) -> &EffectiveSurface {
-        &self.surface
-    }
-
-    pub fn next_expiration(&self) -> Option<DateTime<Utc>> {
+    pub fn next_expiration(&self) -> Option<jiff::Timestamp> {
         self.next_expiration
     }
 
@@ -163,7 +256,7 @@ impl InvocationAuthority {
         &self,
         authority_open: bool,
         published_generation: u64,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> bool {
         authority_snapshot_is_current_at(
             matches!(self.synchronization, Synchronization::Synchronized { .. }),
@@ -175,12 +268,28 @@ impl InvocationAuthority {
         )
     }
 
+    /// The scope card that the reached final outcome hides from the invocation's later calls.
+    pub fn hidden_scope_card(&self) -> Option<&ScopeCard> {
+        self.scope.hidden_card()
+    }
+
+    /// Whether the invocation reached its final outcome.
+    pub fn final_outcome_reached(&self) -> bool {
+        matches!(self.scope, ScopeBinding::FinalOutcome { .. })
+    }
+
     /// Replaces the surface with one the caller derived for the invocation.
     pub fn replace_surface(&mut self, surface: EffectiveSurface) {
         self.surface = surface;
     }
 
-    pub fn set_next_expiration(&mut self, next_expiration: Option<DateTime<Utc>>) {
+    /// Replaces the surface with the card that the reached final outcome hides, which the caller
+    /// derived for the calls the invocation made before its final outcome.
+    pub fn replace_admitted_surface(&mut self, admitted_surface: Option<EffectiveSurface>) {
+        self.admitted_surface = admitted_surface;
+    }
+
+    pub fn set_next_expiration(&mut self, next_expiration: Option<jiff::Timestamp>) {
         self.next_expiration = next_expiration;
     }
 
@@ -222,6 +331,7 @@ impl InvocationAuthority {
         self.scope = self.scope.without_card();
         if card_removed {
             self.root_cards.clear();
+            self.admitted_surface = None;
         }
         self.interest = None;
         ScopeRemoval {
@@ -241,6 +351,7 @@ impl InvocationAuthority {
         if card_removed {
             self.scope = self.scope.without_card();
             self.root_cards.clear();
+            self.admitted_surface = None;
         }
         let handles = self
             .handles
@@ -279,13 +390,18 @@ impl InvocationAuthority {
         self.handles.remove(&rep);
     }
 
-    /// Releases the scope card once the invocation's guest call ends or its failure gives up.
+    /// Hides the scope card from the invocation's later calls once its export returns, its guest
+    /// call ends or its failure gives up. The surface was derived with the card: it stays as the
+    /// surface of the calls made before, until the caller derives both surfaces again.
     pub fn reach_final_outcome(&mut self) {
         self.scope = match std::mem::take(&mut self.scope) {
             ScopeBinding::Unscoped => ScopeBinding::FinalOutcome { admitted: None },
-            ScopeBinding::Bound(card) => ScopeBinding::FinalOutcome {
-                admitted: Some(card),
-            },
+            ScopeBinding::Bound(card) => {
+                self.admitted_surface = Some(self.surface.clone());
+                ScopeBinding::FinalOutcome {
+                    admitted: Some(card),
+                }
+            }
             reached @ ScopeBinding::FinalOutcome { .. } => reached,
         };
     }
@@ -296,6 +412,7 @@ impl InvocationAuthority {
         self.scope = match std::mem::take(&mut self.scope) {
             ScopeBinding::FinalOutcome { admitted } => {
                 self.invalidate();
+                self.admitted_surface = None;
                 admitted.map_or(ScopeBinding::Unscoped, ScopeBinding::Bound)
             }
             unchanged => unchanged,
@@ -310,6 +427,9 @@ pub struct InvocationExecutionState {
     /// The caller of the running export call. The executor reads it through
     /// `invocation_caller`, which falls back to the agent itself in both roles.
     pub caller: Option<Caller>,
+    /// The tool that the running middleware layer wraps: the last layer of its call's plan.
+    /// The layer's own calls carry its identity. It goes with the caller.
+    pub middleware_wrapped_tool: Option<Box<golem_common::model::tool::CompiledToolBinding>>,
     /// The ID of the running export call, when it is an invocation with an invocation ID.
     pub invocation_id: Option<OwnedInvocationId>,
     /// The spans of the invocation's invocation context.
@@ -355,6 +475,7 @@ impl Default for InvocationExecutionState {
         Self {
             start_index: None,
             caller: None,
+            middleware_wrapped_tool: None,
             invocation_id: None,
             invocation_context,
             current_span_id,
@@ -606,7 +727,7 @@ mod tests {
         invocations.begin(invocation());
         let authority = &invocations.get(None).authority;
         assert!(authority.bound_scope_card().is_none());
-        assert!(!authority.is_current_at(true, 4, Utc::now()));
+        assert!(!authority.is_current_at(true, 4, jiff::Timestamp::now()));
     }
 
     #[test]
@@ -625,10 +746,86 @@ mod tests {
         let authority = &invocations.get(None).authority;
         assert_eq!(authority.bound_scope_card(), Some(&card));
         assert!(
-            !authority.is_current_at(true, 4, Utc::now()),
+            !authority.is_current_at(true, 4, jiff::Timestamp::now()),
             "the surface was derived without the card"
         );
         assert_eq!(authority.synchronized_generation(), 4);
+    }
+
+    fn surface_from(card_id: u128) -> EffectiveSurface {
+        EffectiveSurface {
+            source_card_ids: vec![CardId(uuid::Uuid::from_u128(card_id))],
+            ..EffectiveSurface::default()
+        }
+    }
+
+    #[test]
+    fn the_final_outcome_hides_the_scope_card_only_from_later_calls() {
+        let card = scope_card(vec![CardId(uuid::Uuid::from_u128(1))]);
+        let with_card = surface_from(100);
+        let without_card = surface_from(1);
+        let mut authority = InvocationAuthority::default();
+        let _ = authority.install_scope(Some(card.clone()), Vec::new(), None);
+        authority.hold_scope_handle(7, vec![CardId(uuid::Uuid::from_u128(1))]);
+        authority.replace_surface(with_card.clone());
+
+        authority.reach_final_outcome();
+        assert!(authority.final_outcome_reached());
+        assert_eq!(authority.hidden_scope_card(), Some(&card));
+        let later = AuthorityView::new(&authority, false);
+        let earlier = AuthorityView::new(&authority, true);
+        assert_eq!(later.bound_scope_card(), None);
+        assert_eq!(earlier.bound_scope_card(), Some(&card));
+        assert_eq!(later.cut_off_scope_card(), Some(&card));
+        assert_eq!(earlier.cut_off_scope_card(), None);
+        assert_eq!(
+            later.admitted_scope_card(),
+            Some(&card),
+            "the card stays installed"
+        );
+        assert_eq!(
+            earlier.effective_surface(),
+            &with_card,
+            "before the surfaces are derived again, earlier calls keep the surface with the card"
+        );
+        assert!(
+            authority.handles.contains_key(&7),
+            "a handle held before the final outcome stays"
+        );
+
+        authority.replace_surface(without_card.clone());
+        authority.replace_admitted_surface(Some(with_card.clone()));
+        assert_eq!(
+            AuthorityView::new(&authority, false).effective_surface(),
+            &without_card
+        );
+        assert_eq!(
+            AuthorityView::new(&authority, true).effective_surface(),
+            &with_card
+        );
+
+        let _ = authority.clear_scope();
+        let earlier = AuthorityView::new(&authority, true);
+        assert_eq!(earlier.bound_scope_card(), None);
+        assert_eq!(earlier.effective_surface(), &without_card);
+    }
+
+    #[test]
+    fn an_earlier_call_sees_the_current_scope_before_the_final_outcome() {
+        let card = scope_card(vec![CardId(uuid::Uuid::from_u128(1))]);
+        let mut authority = InvocationAuthority::default();
+        let _ = authority.install_scope(Some(card.clone()), Vec::new(), None);
+        authority.replace_surface(surface_from(100));
+        authority.replace_admitted_surface(Some(surface_from(2)));
+
+        let earlier = AuthorityView::new(&authority, true);
+        assert_eq!(earlier.bound_scope_card(), Some(&card));
+        assert_eq!(earlier.effective_surface(), &surface_from(100));
+        assert_eq!(
+            AuthorityView::new(&authority, false).cut_off_scope_card(),
+            None,
+            "nothing is cut off before the final outcome"
+        );
     }
 
     #[test]

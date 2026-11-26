@@ -20,7 +20,7 @@ use crate::base_model::environment::EnvironmentId;
 use crate::base_model::security_scheme::SecuritySchemeName;
 use crate::base_model::tool::ToolName;
 use crate::{declare_revision, declare_structs, newtype_uuid};
-use chrono::DateTime;
+use jiff::Timestamp;
 use std::collections::BTreeMap;
 
 newtype_uuid!(McpDeploymentId);
@@ -53,7 +53,13 @@ declare_structs! {
         pub agents: Option<BTreeMap<AgentTypeName, McpDeploymentAgentOptions>>,
         pub tools: Option<BTreeMap<ToolName, McpDeploymentToolOptions>>,
     }
+}
 
+crate::declare_datetime_struct! {
+    crate::base_model::mcp_deployment::McpDeployment,
+    [],
+    [],
+    [],
     pub struct McpDeployment {
         pub id: McpDeploymentId,
         pub revision: McpDeploymentRevision,
@@ -62,6 +68,6 @@ declare_structs! {
         pub hash: diff::Hash,
         pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
         pub tools: BTreeMap<ToolName, McpDeploymentToolOptions>,
-        pub created_at: DateTime<chrono::Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
     }
 }

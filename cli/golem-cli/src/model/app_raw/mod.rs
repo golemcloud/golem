@@ -1170,6 +1170,8 @@ impl ComponentPreset {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Agent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]

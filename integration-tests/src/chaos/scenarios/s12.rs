@@ -46,7 +46,7 @@ use crate::chaos::summary::{
 };
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
-use chrono::Utc;
+
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::time::Duration;
@@ -70,7 +70,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let workload_config = config.require_workload()?;
     let history = OperationHistory::new(ScenarioCode::S12.as_str());
     let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S12);
@@ -149,12 +149,12 @@ pub async fn run(
         "S12: baseline phase, running mixed workload for {:?}",
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let handle = workload::start(ctx.clone(), workload_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     // ── Signal: ready for the fault ─────────────────────────────────────────
@@ -177,7 +177,7 @@ pub async fn run(
     info!("S12: baseline complete ({baseline_operations} confirmed ops), signalling readiness");
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: ScenarioCode::S12.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         // S12 kills whichever shard-manager pod Chaos Mesh picks: there is one,
         // and which one it is carries no information.
@@ -228,7 +228,7 @@ pub async fn run(
         config.phases.recovery()
     );
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     tokio::time::sleep(config.phases.recovery()).await;
 
     // Stopping waits for in-flight operations to record themselves rather than
@@ -238,7 +238,7 @@ pub async fn run(
     handle.stop().await;
 
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
 

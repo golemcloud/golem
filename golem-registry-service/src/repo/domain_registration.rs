@@ -89,6 +89,7 @@ impl<Repo: DomainRegistrationRepo> LoggedDomainRegistrationRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegistrationRepo<Repo> {
     async fn create(
         &self,
@@ -188,6 +189,7 @@ impl<DBP: Pool> DbDomainRegistrationRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
     async fn create(
         &self,
