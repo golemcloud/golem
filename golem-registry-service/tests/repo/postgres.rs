@@ -535,6 +535,11 @@ async fn test_agent_secret_owner_constraints(#[dimension(postgres_variant)] deps
 }
 
 #[test]
+async fn test_agent_secret_principal_destinations(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_agent_secret_principal_destinations(deps).await;
+}
+
+#[test]
 async fn test_agent_secret_revision_destinations(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_agent_secret_revision_destinations(deps).await;
 }

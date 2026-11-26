@@ -765,7 +765,7 @@ async fn agent_secret_grpc_revision_modes_and_environment_catalog() {
                 principal_path.clone(),
                 SchemaGraph::anonymous(SchemaType::string()),
                 Some(SchemaValue::String("private".to_string())),
-                vec![b.clone()],
+                vec![],
                 account_id,
             ))
             .await
@@ -805,7 +805,7 @@ async fn agent_secret_grpc_revision_modes_and_environment_catalog() {
             .unwrap()
             .unwrap();
         assert_eq!(read.owner, owner);
-        assert_eq!(read.destinations, vec![b.clone()]);
+        assert!(read.destinations.is_empty());
         assert_eq!(
             read.secret_value,
             Some(SchemaValue::String("private".to_string()))

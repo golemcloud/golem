@@ -39,6 +39,8 @@ pub enum AgentSecretRepoError {
     SecretViolatesUniqueness,
     #[error("Concurrent modification")]
     ConcurrentModification,
+    #[error("Only environment-owned secrets can store destinations")]
+    DestinationsRequireEnvironmentOwner,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -136,6 +138,7 @@ impl TryFrom<&AgentSecretOwnerColumns> for AgentSecretOwner {
     }
 }
 
+/// Revision destinations apply only to environment-owned secrets; other owners store an empty list.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentSecretDestinations {
     Copy,

@@ -2540,6 +2540,11 @@ fn agent_secret_creation(
     owner: AgentSecretOwner,
     path: &str,
 ) -> AgentSecretCreationRecord {
+    let destinations = if owner == AgentSecretOwner::Environment {
+        vec!["https://a.example.com".parse().unwrap()]
+    } else {
+        vec![]
+    };
     AgentSecretCreationRecord::new(
         AgentSecretId::new(),
         EnvironmentId(context.env.revision.environment_id),
@@ -2547,7 +2552,7 @@ fn agent_secret_creation(
         CanonicalAgentSecretPath(vec![path.to_string()]),
         SchemaGraph::anonymous(SchemaType::string()),
         Some(SchemaValue::String("original".to_string())),
-        vec!["https://a.example.com".parse().unwrap()],
+        destinations,
         AccountId(context.owner.revision.account_id),
     )
 }
@@ -2556,12 +2561,16 @@ pub async fn test_agent_secret_owner_constraints(deps: &Deps) {
     let context = create_test_agent_secret(deps).await;
     let id = context.id.0;
     // Copy valid non-owner fields so each insert isolates one owner-field constraint.
-    let invalid = [
-        "'agent', $2, $2, 7, 't'",
-        "'environment', $2, NULL, NULL, NULL",
-        "'agent', $2, NULL, 7, NULL",
+    let cases = [
+        ("'agent', $2, $2, 7, 't'", false),
+        ("'environment', $2, NULL, NULL, NULL", false),
+        ("'agent', $2, NULL, 7, NULL", false),
+        ("'environment', NULL, NULL, NULL, NULL", true),
+        ("'agent', $2, $2, 7, NULL", true),
+        ("'tool', NULL, NULL, NULL, 't'", true),
     ];
-    for fields in invalid {
+    for (fields, valid) in cases {
+        let inserted_id = AgentId::from_parts(7, new_repo_uuid().as_u64_pair().1.into()).0;
         let sql = format!(
             "INSERT INTO agent_secrets (agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, owner_kind, agent_id, agent_fingerprint, agent_type, tool_name) SELECT $2, environment_id, $3, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, {fields} FROM agent_secrets WHERE agent_secret_id = $1"
         );
@@ -2571,23 +2580,27 @@ pub async fn test_agent_secret_owner_constraints(deps: &Deps) {
                 .execute(
                     sqlx::query(&sql)
                         .bind(id)
-                        .bind(AgentId::from_parts(7, 1).0)
+                        .bind(inserted_id)
                         .bind(sqlx::types::Json(vec!["invalid-owner"])),
                 )
                 .await
-                .map(|_| ()),
+                .map(|result| result.rows_affected()),
             TestDb::Sqlite(pool) => pool
                 .with_rw("test", "invalid_secret_owner")
                 .execute(
                     sqlx::query(&sql)
                         .bind(id)
-                        .bind(AgentId::from_parts(7, 1).0)
+                        .bind(inserted_id)
                         .bind(sqlx::types::Json(vec!["invalid-owner"])),
                 )
                 .await
-                .map(|_| ()),
+                .map(|result| result.rows_affected()),
         };
-        assert!(result.is_err());
+        if valid {
+            assert_eq!(result.unwrap(), 1, "owner fields {fields}");
+        } else {
+            assert!(result.is_err(), "owner fields {fields}: {result:?}");
+        }
     }
     // The DB cannot verify the tag embedded in an issued ID; row decoding must do so.
     let sql = "UPDATE agent_secrets SET owner_kind = 'agent', agent_id = $2, agent_fingerprint = $2, agent_type = 8 WHERE agent_secret_id = $1";
@@ -2606,6 +2619,96 @@ pub async fn test_agent_secret_owner_constraints(deps: &Deps) {
             .unwrap(),
     };
     assert!(deps.agent_secret_repo.get_by_id(id).await.is_err());
+}
+
+pub async fn test_agent_secret_principal_destinations(deps: &Deps) {
+    use golem_registry_service::repo::model::agent_secrets::{
+        AgentSecretDestinations, AgentSecretRepoError,
+    };
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+
+    let context = create_test_agent_secret(deps).await;
+    let notifier = deps.test_registry_change_notifier();
+    for owner in [
+        AgentSecretOwner::Agent {
+            agent_id: AgentId::from_parts(7, 1),
+            fingerprint: AgentFingerprint(new_repo_uuid()),
+        },
+        AgentSecretOwner::Tool {
+            tool_name: ToolName::try_from("t").unwrap(),
+        },
+    ] {
+        let creation = agent_secret_creation(&context, owner, "stripe");
+        let id = AgentSecretId(creation.revision.agent_secret_id);
+        let nonempty = AgentSecretDestinations::Set(vec!["https://a.example.com".parse().unwrap()]);
+        let mut invalid = creation.clone();
+        invalid.revision.destinations = nonempty.clone();
+        assert!(matches!(
+            deps.agent_secret_repo.create(invalid).await,
+            Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner)
+        ));
+        assert!(
+            deps.agent_secret_repo
+                .get_by_id(id.0)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let created = deps
+            .agent_secret_repo
+            .create(creation)
+            .await
+            .unwrap()
+            .signal_new_events_available(notifier.as_ref());
+        let empty = AgentSecretDestinations::Set(vec![]);
+        assert_eq!(created.revision.destinations, empty);
+        let mut revision = created.revision.clone();
+        revision.revision_id += 1;
+        revision.destinations = nonempty.clone();
+        assert!(matches!(
+            deps.agent_secret_repo.update(revision.clone()).await,
+            Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner)
+        ));
+        let unchanged = deps
+            .agent_secret_repo
+            .get_by_id(id.0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.agent_secret.revision, created.revision);
+
+        for destinations in [empty.clone(), AgentSecretDestinations::Copy] {
+            revision.destinations = destinations;
+            let updated = deps
+                .agent_secret_repo
+                .update(revision.clone())
+                .await
+                .unwrap()
+                .signal_new_events_available(notifier.as_ref());
+            assert_eq!(updated.revision.destinations, empty);
+            revision.revision_id += 1;
+        }
+        let deletion = AgentSecretRevisionRecord::delete(
+            id,
+            (revision.revision_id - 1).try_into().unwrap(),
+            AccountId(context.owner.revision.account_id),
+        )
+        .unwrap();
+        let mut invalid_deletion = deletion.clone();
+        invalid_deletion.destinations = nonempty;
+        assert!(matches!(
+            deps.agent_secret_repo.delete(invalid_deletion).await,
+            Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner)
+        ));
+        let deleted = deps
+            .agent_secret_repo
+            .delete(deletion)
+            .await
+            .unwrap()
+            .signal_new_events_available(notifier.as_ref());
+        assert_eq!(deleted.revision.destinations, empty);
+    }
 }
 
 pub async fn test_agent_secret_revision_destinations(deps: &Deps) {
@@ -2730,7 +2833,19 @@ pub async fn test_agent_secret_revision_destinations(deps: &Deps) {
             )
             .await
             .unwrap();
-        assert!(old.is_some() == (mode == AgentSecretReadMode::Historical));
+        if mode == AgentSecretReadMode::Historical {
+            let old = old.unwrap();
+            assert_eq!(
+                old.revision.agent_secret_revision_data.value().secret_value,
+                Some(SchemaValue::String("original".to_string()))
+            );
+            assert_eq!(
+                old.revision.destinations,
+                AgentSecretDestinations::Set(vec!["https://a.example.com".parse().unwrap()])
+            );
+        } else {
+            assert!(old.is_none());
+        }
     }
     let sql = "SELECT destinations FROM agent_secret_revisions WHERE agent_secret_id = $1 AND revision_id = $2";
     let (destinations,): (sqlx::types::Json<Vec<String>>,) = match &deps.test_db {
@@ -2883,14 +2998,20 @@ pub async fn test_agent_secret_environment_restore(deps: &Deps) {
     use golem_registry_service::repo::model::agent_secrets::AgentSecretDestinations;
     let context = create_test_agent_secret(deps).await;
     let owners = [
-        AgentSecretOwner::Environment,
-        AgentSecretOwner::Agent {
-            agent_id: AgentId::from_parts(7, 1),
-            fingerprint: AgentFingerprint(new_repo_uuid()),
-        },
+        (
+            AgentSecretOwner::Environment,
+            vec!["https://a.example.com".parse().unwrap()],
+        ),
+        (
+            AgentSecretOwner::Agent {
+                agent_id: AgentId::from_parts(7, 1),
+                fingerprint: AgentFingerprint(new_repo_uuid()),
+            },
+            vec![],
+        ),
     ];
     let mut ids = vec![];
-    for owner in &owners {
+    for (owner, _) in &owners {
         let creation = agent_secret_creation(&context, owner.clone(), "stripe");
         ids.push(AgentSecretId(creation.revision.agent_secret_id));
         let _ = deps.agent_secret_repo.create(creation).await.unwrap();
@@ -2921,7 +3042,7 @@ pub async fn test_agent_secret_environment_restore(deps: &Deps) {
                     .unwrap(),
             };
         }
-        for (owner, id) in owners.iter().zip(&ids) {
+        for ((owner, destinations), id) in owners.iter().zip(&ids) {
             for mode in [AgentSecretReadMode::Live, AgentSecretReadMode::Historical] {
                 let found = deps
                     .agent_secret_repo
@@ -2945,11 +3066,9 @@ pub async fn test_agent_secret_environment_restore(deps: &Deps) {
                             .secret_value
                             == Some(SchemaValue::String("original".to_string()))
                     );
-                    assert!(
-                        found.revision.destinations
-                            == AgentSecretDestinations::Set(vec![
-                                "https://a.example.com".parse().unwrap()
-                            ])
+                    assert_eq!(
+                        found.revision.destinations,
+                        AgentSecretDestinations::Set(destinations.clone())
                     );
                 } else {
                     assert!(found.is_none());

@@ -244,6 +244,20 @@ impl DbAgentSecretRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         revision: AgentSecretRevisionRecord,
     ) -> Result<AgentSecretRevisionRecord, AgentSecretRepoError> {
+        if matches!(&revision.destinations, AgentSecretDestinations::Set(destinations) if !destinations.is_empty())
+        {
+            let (owner_kind,): (String,) = tx
+                .fetch_one_as(
+                    sqlx::query_as(
+                        "SELECT owner_kind FROM agent_secrets WHERE agent_secret_id = $1",
+                    )
+                    .bind(revision.agent_secret_id),
+                )
+                .await?;
+            if owner_kind != "environment" {
+                return Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner);
+            }
+        }
         let destinations = if revision.audit.deleted {
             AgentSecretDestinations::Set(vec![])
         } else {
@@ -294,6 +308,11 @@ impl DbAgentSecretRepo<PostgresPool> {
         record: AgentSecretCreationRecord,
     ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
         let owner = AgentSecretOwner::try_from(&record.owner)?;
+        if owner != AgentSecretOwner::Environment
+            && matches!(&record.revision.destinations, AgentSecretDestinations::Set(destinations) if !destinations.is_empty())
+        {
+            return Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner);
+        }
         let agent_secret_record: AgentSecretRecord = tx
             .fetch_one_as(
                 sqlx::query_as(indoc! {r#"

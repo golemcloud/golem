@@ -33,6 +33,7 @@ use golem_common::schema::schema_value::SchemaValue;
 pub struct AgentSecret {
     pub id: AgentSecretId,
     pub owner: AgentSecretOwner,
+    /// Applies only to environment-owned secrets; agent- and tool-owned revisions store no destinations.
     pub destinations: Vec<SecretDestination>,
     pub environment_id: EnvironmentId,
     pub path: CanonicalAgentSecretPath,

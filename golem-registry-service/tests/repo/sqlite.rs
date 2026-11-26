@@ -305,6 +305,11 @@ async fn test_agent_secret_owner_constraints(deps: &Deps) {
 }
 
 #[test]
+async fn test_agent_secret_principal_destinations(deps: &Deps) {
+    crate::repo::common::test_agent_secret_principal_destinations(deps).await;
+}
+
+#[test]
 async fn test_agent_secret_revision_destinations(deps: &Deps) {
     crate::repo::common::test_agent_secret_revision_destinations(deps).await;
 }
