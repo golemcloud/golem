@@ -623,12 +623,15 @@ impl DbPlanStorageRepo<PostgresPool> {
 
     /// Checks the subtree under `subtree_root` with the given assignment and definition
     /// replacements applied. Must run after the guards that protect the subtree.
-    async fn check_subtree_in_tx(
+    async fn check_subtree_in_tx<E>(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         subtree_root: Uuid,
         assignment: Option<(Uuid, Uuid)>,
         definition: Option<(Uuid, &PlanPolicy)>,
-    ) -> Result<(), AttemptError> {
+    ) -> Result<(), E>
+    where
+        E: From<RepoError> + From<PlanStorageRepoError>,
+    {
         let mut ancestors: Vec<TreeRow> = tx
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -836,8 +839,13 @@ impl DbPlanStorageRepo<PostgresPool> {
                         return Err(AttemptError::Retry);
                     }
                     for member in &members {
-                        Self::check_subtree_in_tx(tx, *member, None, Some((plan_id, &policy)))
-                            .await?;
+                        Self::check_subtree_in_tx::<AttemptError>(
+                            tx,
+                            *member,
+                            None,
+                            Some((plan_id, &policy)),
+                        )
+                        .await?;
                     }
                     let record: PlanDefinitionRecord = tx
                         .fetch_optional_as(
@@ -978,78 +986,98 @@ impl DbPlanStorageRepo<PostgresPool> {
                     if current.as_ref().map(|current| current.plan_id) != old_plan {
                         return Err(AttemptError::Retry);
                     }
-                    let destination = Self::definition_in(tx, plan_id)
-                        .await?
-                        .ok_or(PlanStorageRepoError::PlanNotFound)?;
-                    if destination.owner_account_id != parent_id {
-                        return Err(PlanStorageRepoError::ForeignCatalog.into());
-                    }
-                    if !destination.selectable {
-                        return Err(PlanStorageRepoError::NotSelectable.into());
-                    }
-                    Self::check_subtree_in_tx(tx, account_id, Some((account_id, plan_id)), None)
-                        .await?;
-
-                    let now = SqlDateTime::now();
-                    let record: PlanAssignmentRecord = match expected_revision {
-                        None => {
-                            tx.fetch_one_as(
-                                sqlx::query_as(&format!(
-                                    "INSERT INTO account_plan_assignments ({ASSIGNMENT_COLUMNS}) \
-                                     VALUES ($1, $2, $3, 0, $4, $5) RETURNING {ASSIGNMENT_COLUMNS}"
-                                ))
-                                .bind(account_id)
-                                .bind(parent_id)
-                                .bind(plan_id)
-                                .bind(now.clone())
-                                .bind(actor),
-                            )
-                            .await
-                            .map_err(|err| {
-                                if err.is_unique_violation() {
-                                    AttemptError::Fail(PlanStorageRepoError::ConcurrentModification)
-                                } else {
-                                    err.into()
-                                }
-                            })?
-                        }
-                        Some(expected) => tx
-                            .fetch_optional_as(
-                                sqlx::query_as(&format!(
-                                    "UPDATE account_plan_assignments \
-                                     SET plan_id = $1, revision = $2, updated_at = $3, modified_by = $4 \
-                                     WHERE account_id = $5 AND revision = $6 \
-                                     RETURNING {ASSIGNMENT_COLUMNS}"
-                                ))
-                                .bind(plan_id)
-                                .bind(expected + 1)
-                                .bind(now.clone())
-                                .bind(actor)
-                                .bind(account_id)
-                                .bind(expected),
-                            )
-                            .await?
-                            .ok_or(PlanStorageRepoError::ConcurrentModification)?,
-                    };
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            INSERT INTO account_plan_assignment_revisions
-                                (account_id, revision, plan_id, plan_revision, created_at, created_by)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        "#})
-                        .bind(account_id)
-                        .bind(record.revision)
-                        .bind(plan_id)
-                        .bind(destination.current_revision)
-                        .bind(now)
-                        .bind(actor),
-                    )
-                    .await?;
-                    Ok(record)
+                    Self::assign_in_tx(tx, account_id, parent_id, expected_revision, plan_id, actor)
+                        .await
                 }
                 .boxed()
             })
             .await
+    }
+
+    /// Writes a checked assignment and its immutable revision in the caller's transaction. The
+    /// definition must exist, be owned by `parent_id` and be selectable, and the subtree of the
+    /// account must stay compatible. `expected_revision` is `None` for a first assignment. The
+    /// caller owns the transaction and must already hold the guards of an assignment: shared
+    /// guards on the ancestors, an exclusive guard on the account and shared guards on the old
+    /// and destination definitions. This method takes no guard, commits nothing and appends no
+    /// journal event.
+    pub async fn assign_in_tx<E>(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+        parent_id: Uuid,
+        expected_revision: Option<i64>,
+        plan_id: Uuid,
+        actor: Uuid,
+    ) -> Result<PlanAssignmentRecord, E>
+    where
+        E: From<RepoError> + From<PlanStorageRepoError>,
+    {
+        let destination = Self::definition_in(tx, plan_id)
+            .await?
+            .ok_or(PlanStorageRepoError::PlanNotFound)?;
+        if destination.owner_account_id != parent_id {
+            return Err(PlanStorageRepoError::ForeignCatalog.into());
+        }
+        if !destination.selectable {
+            return Err(PlanStorageRepoError::NotSelectable.into());
+        }
+        Self::check_subtree_in_tx::<E>(tx, account_id, Some((account_id, plan_id)), None).await?;
+
+        let now = SqlDateTime::now();
+        let record: PlanAssignmentRecord = match expected_revision {
+            None => tx
+                .fetch_one_as(
+                    sqlx::query_as(&format!(
+                        "INSERT INTO account_plan_assignments ({ASSIGNMENT_COLUMNS}) \
+                         VALUES ($1, $2, $3, 0, $4, $5) RETURNING {ASSIGNMENT_COLUMNS}"
+                    ))
+                    .bind(account_id)
+                    .bind(parent_id)
+                    .bind(plan_id)
+                    .bind(now.clone())
+                    .bind(actor),
+                )
+                .await
+                .map_err(|err| -> E {
+                    if err.is_unique_violation() {
+                        PlanStorageRepoError::ConcurrentModification.into()
+                    } else {
+                        err.into()
+                    }
+                })?,
+            Some(expected) => tx
+                .fetch_optional_as(
+                    sqlx::query_as(&format!(
+                        "UPDATE account_plan_assignments \
+                         SET plan_id = $1, revision = $2, updated_at = $3, modified_by = $4 \
+                         WHERE account_id = $5 AND revision = $6 \
+                         RETURNING {ASSIGNMENT_COLUMNS}"
+                    ))
+                    .bind(plan_id)
+                    .bind(expected + 1)
+                    .bind(now.clone())
+                    .bind(actor)
+                    .bind(account_id)
+                    .bind(expected),
+                )
+                .await?
+                .ok_or(PlanStorageRepoError::ConcurrentModification)?,
+        };
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO account_plan_assignment_revisions
+                    (account_id, revision, plan_id, plan_revision, created_at, created_by)
+                VALUES ($1, $2, $3, $4, $5, $6)
+            "#})
+            .bind(account_id)
+            .bind(record.revision)
+            .bind(plan_id)
+            .bind(destination.current_revision)
+            .bind(now)
+            .bind(actor),
+        )
+        .await?;
+        Ok(record)
     }
 }
 

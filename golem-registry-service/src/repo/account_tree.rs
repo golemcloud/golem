@@ -498,42 +498,67 @@ impl DbAccountTreeRepo<PostgresPool> {
             .add_all(GuardClass::Account, ancestry, GuardMode::Shared)
             .add(GuardClass::Account, account_id, GuardMode::Exclusive);
         let timeout = self.guard_timeout;
-        let segment = segment.as_str().to_string();
+        let segment = segment.clone();
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create_child", |tx| {
                 async move {
                     DbGuards::<PostgresPool>::acquire_in_tx(tx, &guards, timeout).await?;
-                    let parent = Self::get_in_tx(tx, parent_id)
-                        .await?
-                        .ok_or(AccountTreeRepoError::ParentNotFound)?;
-                    if usize::try_from(parent.depth).unwrap_or(usize::MAX) >= AccountPath::MAX_DEPTH
-                    {
-                        return Err(AccountTreeRepoError::TooDeep.into());
-                    }
-                    let record = new_node(
+                    Self::create_child_in_tx(
+                        tx,
                         account_id,
-                        Some(parent_id),
-                        segment,
-                        parent.depth + 1,
+                        parent_id,
+                        &segment,
                         display_name,
                         actor,
-                    );
-                    // The parent foreign key also refuses a parent purged since the read above.
-                    let record = Self::insert_node_in_tx(tx, &record).await.map_err(|err| {
-                        if err.is_unique_violation() {
-                            AccountTreeRepoError::SiblingConflict
-                        } else if err.is_foreign_key_violation() {
-                            AccountTreeRepoError::ParentNotFound
-                        } else {
-                            err.into()
-                        }
-                    })?;
-                    Self::insert_revision_in_tx(tx, &record).await?;
-                    Ok(record)
+                    )
+                    .await
                 }
                 .boxed()
             })
             .await
+    }
+
+    /// Writes a child node and its first revision in the caller's transaction. The caller owns
+    /// the transaction and must already hold the guards of a child creation: shared guards on
+    /// the parent and its ancestors and an exclusive guard on the new account. This method
+    /// takes no guard, commits nothing and appends no journal event.
+    pub async fn create_child_in_tx<E>(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+        parent_id: Uuid,
+        segment: &AccountSegment,
+        display_name: Option<String>,
+        actor: Uuid,
+    ) -> Result<AccountNodeRecord, E>
+    where
+        E: From<RepoError> + From<AccountTreeRepoError>,
+    {
+        let parent = Self::get_in_tx(tx, parent_id)
+            .await?
+            .ok_or(AccountTreeRepoError::ParentNotFound)?;
+        if usize::try_from(parent.depth).unwrap_or(usize::MAX) >= AccountPath::MAX_DEPTH {
+            return Err(AccountTreeRepoError::TooDeep.into());
+        }
+        let record = new_node(
+            account_id,
+            Some(parent_id),
+            segment.as_str().to_string(),
+            parent.depth + 1,
+            display_name,
+            actor,
+        );
+        // The parent foreign key also refuses a parent purged since the read above.
+        let record = Self::insert_node_in_tx(tx, &record).await.map_err(|err| {
+            if err.is_unique_violation() {
+                AccountTreeRepoError::SiblingConflict
+            } else if err.is_foreign_key_violation() {
+                AccountTreeRepoError::ParentNotFound
+            } else {
+                err.into()
+            }
+        })?;
+        Self::insert_revision_in_tx(tx, &record).await?;
+        Ok(record)
     }
 
     async fn update_attempt(
