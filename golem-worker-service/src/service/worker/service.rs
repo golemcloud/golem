@@ -79,7 +79,7 @@ use golem_common::model::invocation_session_public::{
     InvocationSelector, JsonMethodInput, PublicAgentTarget, PublicConfigEntry, PublicErrorCode,
     PublicNativeToolTarget, PublicTypedValue,
 };
-use golem_common::model::oplog::{OplogCursor, OplogCursorRefused, OplogRange, OplogSearchResume};
+use golem_common::model::oplog::{OplogCursor, OplogRange};
 use golem_common::model::oplog::{OplogIndex, OplogScanAllowance, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName, ToolSource};
 use golem_common::model::{
@@ -400,48 +400,6 @@ impl AgentPermission {
             }
         }
     }
-}
-
-/// How an oplog read reads its range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OplogReadKind {
-    /// A page of at most this count of entries.
-    Page(u64),
-    /// A search. Its count limits the matches, not the entries that it reads.
-    Search,
-}
-
-/// The oplog resource that a read of `range` needs. The read resumes `range` at the cursor. A
-/// cursor that the range refuses is an error. A page needs the oplog up to its last entry, or up to
-/// the end of the range when that is earlier. A search needs the oplog up to the end of the range.
-/// A search cursor that continues the scan for the component revision needs the oplog from its
-/// search start, as [`OplogRange::resume_search`] gives it. The search returns no entry before
-/// that start. Before the read, the worker service does not know the first entry of the oplog.
-/// So a range without a start needs the oplog from index 1, the first index of an oplog.
-/// `OplogRange::new` and `OplogRange::resume` keep the end of a range at or after index 1 and at
-/// or after its start. So the resumed range always has a page from index 1. A resumed range
-/// without such a page would need the whole resumed range, which never asks for less.
-fn oplog_read_resource(
-    range: OplogRange,
-    cursor: Option<&OplogCursor>,
-    kind: OplogReadKind,
-) -> Result<OplogResourcePattern, OplogCursorRefused> {
-    let read = match kind {
-        OplogReadKind::Page(count) => {
-            let resumed = cursor.map_or(Ok(range), |cursor| range.resume(cursor))?;
-            resumed
-                .page_in(OplogIndex::INITIAL, count)
-                .unwrap_or(resumed)
-        }
-        OplogReadKind::Search => match cursor.map(|cursor| range.resume_search(cursor)) {
-            None => range,
-            Some(resume) => match resume? {
-                OplogSearchResume::Scan { range, .. } => range,
-                OplogSearchResume::Read(rest) => rest,
-            },
-        },
-    };
-    Ok(oplog_resource_in(read, OplogIndex::INITIAL))
 }
 
 /// The oplog resource of the page that the executor returned for a read of at most `count` entries
@@ -1496,14 +1454,25 @@ impl WorkerService {
         claims: ClaimVisibility,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
-        let resource = oplog_read_resource(range, cursor.as_ref(), OplogReadKind::Page(count))
-            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+        let start = cursor
+            .as_ref()
+            .map(|cursor| cursor.next_oplog_index)
+            .unwrap_or_else(|| range.first_index_in(OplogIndex::INITIAL).into());
+        let end = start
+            .checked_add(count.saturating_sub(1))
+            .map(|end| match range.to_indices().1 {
+                Some(to) => end.min(to),
+                None => end,
+            });
         let agent = self
             .managed_agent(
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Oplog(resource)],
+                &[AgentPermission::Oplog(OplogResourcePattern::range(
+                    Some(start),
+                    end,
+                ))],
             )
             .await?;
 
@@ -1569,8 +1538,8 @@ impl WorkerService {
             .await
     }
 
-    /// Searches the oplog entries of `range`. The oplog read check covers the range that the search
-    /// reads. `claims` reaches the executor only after the oplog read check.
+    /// Searches the oplog entries of `range`. `claims` reaches the executor only after the oplog
+    /// read check.
     #[allow(clippy::too_many_arguments)]
     pub async fn search_oplog(
         &self,
@@ -1583,13 +1552,11 @@ impl WorkerService {
         claims: ClaimVisibility,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
-        let resource = oplog_read_resource(range, cursor.as_ref(), OplogReadKind::Search)
-            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
         self.managed_agent(
             agent_id,
             expected_fingerprint,
             &auth_ctx,
-            &[AgentPermission::Oplog(resource)],
+            &[AgentPermission::Oplog(OplogResourcePattern::Any)],
         )
         .await?;
 
@@ -7522,18 +7489,6 @@ mod tests {
                 auth_ctx.clone(),
             )
         };
-        let search_oplog = |to: Option<u64>| {
-            harness.worker_service.search_oplog(
-                &owned,
-                range(to),
-                None,
-                50,
-                "error".to_string(),
-                None,
-                ClaimVisibility::Hidden,
-                auth_ctx.clone(),
-            )
-        };
 
         get_oplog(Some(7)).await.unwrap();
         assert!(
@@ -7541,205 +7496,6 @@ mod tests {
             "a page of 50 entries from index 5 reads past the permitted index 7"
         );
         assert!(get_oplog(Some(8)).await.is_err());
-        search_oplog(Some(7)).await.unwrap();
-        assert!(
-            search_oplog(None).await.is_err(),
-            "a search from index 5 without an end reads past the permitted index 7"
-        );
-        assert!(search_oplog(Some(8)).await.is_err());
-
-        // A cursor before the start of the range is an invalid request, also where the
-        // permission covers the index of the cursor. A page and a search both refuse it.
-        let narrow =
-            OplogRange::new(Some(OplogIndex::from_u64(6)), Some(OplogIndex::from_u64(7))).unwrap();
-        let cursor_before_the_range = OplogCursor {
-            next_oplog_index: 5,
-            current_component_revision: 0,
-            query_hash: String::new(),
-            scan_to: None,
-        };
-        let page_before_the_range = harness
-            .worker_service
-            .get_oplog(
-                &owned,
-                narrow,
-                Some(cursor_before_the_range.clone()),
-                50,
-                None,
-                None,
-                ClaimVisibility::Hidden,
-                auth_ctx.clone(),
-            )
-            .await;
-        let search_before_the_range = harness
-            .worker_service
-            .search_oplog(
-                &owned,
-                narrow,
-                Some(OplogCursor {
-                    query_hash: OplogCursor::query_hash(Some("error")),
-                    ..cursor_before_the_range
-                }),
-                50,
-                "error".to_string(),
-                None,
-                ClaimVisibility::Hidden,
-                auth_ctx.clone(),
-            )
-            .await;
-        [page_before_the_range, search_before_the_range]
-            .into_iter()
-            .for_each(|refused| {
-                assert!(
-                    matches!(
-                        refused,
-                        Err(WorkerServiceError::GolemError(
-                            WorkerExecutorError::InvalidRequest { .. }
-                        ))
-                    ),
-                    "{refused:?}"
-                )
-            });
-
-        // With a permission from 5 to 54, a page of 50 entries from 5 is in the permission. A
-        // search from 5 needs the oplog to its end, so the same permission refuses it.
-        let page_sized = auth_ctx_with_permissions(vec![oplog_target(
-            &agent_id,
-            OplogResourcePattern::range(Some(5), Some(54)),
-        )]);
-        harness
-            .worker_service
-            .get_oplog(
-                &owned,
-                range(None),
-                None,
-                50,
-                None,
-                None,
-                ClaimVisibility::Hidden,
-                page_sized.clone(),
-            )
-            .await
-            .unwrap();
-        let search_past_the_page = harness
-            .worker_service
-            .search_oplog(
-                &owned,
-                range(None),
-                None,
-                50,
-                "error".to_string(),
-                None,
-                ClaimVisibility::Hidden,
-                page_sized,
-            )
-            .await;
-        assert!(
-            search_past_the_page.is_err(),
-            "a search from index 5 without an end reads past the permitted index 54"
-        );
-    }
-
-    #[test]
-    fn an_oplog_read_needs_the_oplog_from_its_start_to_its_page_end_or_range_end() {
-        let index = OplogIndex::from_u64;
-        let range = |from: Option<u64>, to: Option<u64>| {
-            OplogRange::new(from.map(index), to.map(index)).unwrap()
-        };
-        let cursor = |next: u64| OplogCursor {
-            next_oplog_index: next,
-            current_component_revision: 0,
-            query_hash: String::new(),
-            scan_to: None,
-        };
-        let scan_cursor = |next: u64, scan_to: u64| OplogCursor {
-            scan_to: Some(scan_to),
-            ..cursor(next)
-        };
-        let pattern =
-            |start: u64, end: Option<u64>| Ok(OplogResourcePattern::range(Some(start), end));
-        let outside = |next: u64| Err(index(next));
-        let page = super::OplogReadKind::Page;
-        let search = super::OplogReadKind::Search;
-        [
-            // Pages: from the start, or the cursor, to the last entry of the page or the range.
-            ((range(None, None), None, page(50)), pattern(1, Some(50))),
-            ((range(None, Some(9)), None, page(50)), pattern(1, Some(9))),
-            ((range(Some(5), None), None, page(3)), pattern(5, Some(7))),
-            (
-                (range(Some(5), Some(6)), None, page(3)),
-                pattern(5, Some(6)),
-            ),
-            (
-                (range(Some(5), Some(9)), Some(cursor(8)), page(3)),
-                pattern(8, Some(9)),
-            ),
-            (
-                (range(None, None), Some(cursor(8)), page(3)),
-                pattern(8, Some(10)),
-            ),
-            (
-                (range(Some(5), None), Some(cursor(u64::MAX)), page(3)),
-                pattern(u64::MAX, None),
-            ),
-            // A cursor outside the range came from a read of another range.
-            (
-                (range(Some(5), Some(9)), Some(cursor(u64::MAX)), page(3)),
-                outside(u64::MAX),
-            ),
-            (
-                (range(Some(5), Some(9)), Some(cursor(4)), page(3)),
-                outside(4),
-            ),
-            ((range(None, None), Some(cursor(0)), page(3)), outside(0)),
-            // Searches: from the start, or the cursor, to the end of the range. A search of the
-            // whole oplog needs the oplog from index 1, which a permission without a start or
-            // with the start 1 gives.
-            ((range(None, None), None, search), pattern(1, None)),
-            (
-                (range(None, None), Some(cursor(8)), search),
-                pattern(8, None),
-            ),
-            ((range(Some(5), None), None, search), pattern(5, None)),
-            ((range(None, Some(9)), None, search), pattern(1, Some(9))),
-            (
-                (range(Some(5), Some(9)), Some(cursor(8)), search),
-                pattern(8, Some(9)),
-            ),
-            ((range(Some(5), None), Some(cursor(2)), search), outside(2)),
-            // A search cursor of the scan for the component revision needs the oplog from its
-            // search start, with and without a start of the range.
-            (
-                (range(None, None), Some(scan_cursor(3, 10)), search),
-                pattern(10, None),
-            ),
-            (
-                (range(None, Some(20)), Some(scan_cursor(3, 10)), search),
-                pattern(10, Some(20)),
-            ),
-            (
-                (range(Some(10), Some(20)), Some(scan_cursor(3, 10)), search),
-                pattern(10, Some(20)),
-            ),
-            (
-                (range(Some(11), None), Some(scan_cursor(3, 10)), search),
-                outside(3),
-            ),
-            // A page refuses such a cursor.
-            (
-                (range(Some(10), Some(20)), Some(scan_cursor(3, 10)), page(3)),
-                outside(3),
-            ),
-        ]
-        .into_iter()
-        .for_each(|((range, cursor, kind), expected)| {
-            assert_eq!(
-                super::oplog_read_resource(range, cursor.as_ref(), kind)
-                    .map_err(|error| error.next()),
-                expected,
-                "{range:?}, {cursor:?}, {kind:?}"
-            )
-        });
     }
 
     #[test]
