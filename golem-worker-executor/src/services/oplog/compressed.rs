@@ -112,12 +112,26 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             .await
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.stream(owned_agent_id, agent_mode)
+            .assert_owning_epoch(expected_epoch)
+            .await
+    }
+
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()> {
-        self.stream(owned_agent_id, agent_mode).delete().await
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.stream(owned_agent_id, agent_mode)
+            .delete(expected_epoch)
+            .await
     }
 
     async fn read_source(

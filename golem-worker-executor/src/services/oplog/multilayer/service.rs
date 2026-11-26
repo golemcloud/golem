@@ -560,9 +560,19 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         expected_epoch: ShardEpoch,
     ) -> Result<(), OplogError> {
-        self.primary
-            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
-            .await
+        match agent_mode {
+            AgentMode::Durable => {
+                self.primary
+                    .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+                    .await
+            }
+            AgentMode::Ephemeral => {
+                self.lower
+                    .first()
+                    .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+                    .await
+            }
+        }
     }
 
     async fn delete(
@@ -574,20 +584,45 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
-        if let Err(error) = self
-            .primary
-            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
-            .await
-        {
+        let deleted = match agent_mode {
+            AgentMode::Durable => {
+                self.primary
+                    .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+                    .await
+            }
+            AgentMode::Ephemeral => {
+                self.lower
+                    .first()
+                    .delete(owned_agent_id, agent_mode, expected_epoch)
+                    .await
+            }
+        };
+        if let Err(error) = deleted {
             crate::metrics::oplog::record_archive_maintenance_failure("delete");
-            warn!(agent_id = %owned_agent_id, error = %error, "Failed to delete primary oplog storage; deletion remains fenced for retry");
+            warn!(agent_id = %owned_agent_id, error = %error, "Failed to delete owning oplog storage; deletion remains fenced for retry");
             return Err(error);
         }
+        if agent_mode == AgentMode::Ephemeral {
+            // Ephemeral writers claim the first lower layer, not the unused primary namespace.
+            // Clean the primary only after the authoritative deletion passes its epoch check.
+            if let Err(error) = self
+                .primary
+                .delete(lifecycle, owned_agent_id, agent_mode, None)
+                .await
+            {
+                crate::metrics::oplog::record_archive_maintenance_failure("delete");
+                warn!(agent_id = %owned_agent_id, error = %error, "Failed to clean primary oplog storage; deletion remains fenced for retry");
+                return Err(error);
+            }
+        }
         for (level, layer) in self.lower.iter().enumerate() {
-            if let Err(error) = layer.delete(owned_agent_id, agent_mode).await {
+            if agent_mode == AgentMode::Ephemeral && level == 0 {
+                continue;
+            }
+            if let Err(error) = layer.delete(owned_agent_id, agent_mode, None).await {
                 crate::metrics::oplog::record_archive_maintenance_failure("delete");
                 warn!(agent_id = %owned_agent_id, level, error = %error, "Failed to delete archived oplog storage; deletion remains fenced for retry");
-                return Err(OplogError::Maintenance(error.to_string()));
+                return Err(error);
             }
         }
         self.archive_failures

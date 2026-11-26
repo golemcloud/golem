@@ -631,6 +631,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 /// fields remain private and it is not a construction or lifecycle API.
 #[doc(hidden)]
 pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
+    deps: All<Ctx>,
     owner_context: ResolvedOwnerContext,
     parsed_agent_id: Option<ParsedAgentKey>,
 
@@ -834,7 +835,7 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
     type Ctx = Ctx;
 
     fn all(&self) -> &All<Self::Ctx> {
-        &self.deps
+        self.resolved.get().map_or(&self.deps, |data| &data.deps)
     }
 }
 

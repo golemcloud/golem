@@ -18,7 +18,10 @@ use crate::durable_host::durable_stream::metadata::{
 use crate::durable_host::durable_stream::{SessionControlMetadata, SessionError};
 use crate::metrics::workers::record_derived_cache_publication_failed;
 use crate::services::activity::spawn_with_activity;
-use crate::services::oplog::{OplogService, OplogServiceOps};
+use crate::services::oplog::{
+    Oplog, OplogError, OplogLifecycleGuard, OplogReadError, OplogReadSource, OplogService,
+    OplogServiceOps, RawOplogPayloadDownloadError, ScanPage, UnreadableOplog,
+};
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::worker::DERIVED_CACHE_EXPIRY;
 use crate::services::worker::DurableStreamRecoveryMetadata;
@@ -100,8 +103,278 @@ pub struct ProducerIdentityLookup {
 #[derive(Clone, Debug)]
 pub struct StreamSessionIndexService {
     kv: Arc<dyn KeyValueStorage + Send + Sync>,
-    oplog: Weak<dyn OplogService>,
+    oplog: IndexSource,
     locks: Arc<StdMutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>>,
+}
+
+#[derive(Clone, Debug)]
+enum IndexSource {
+    Service(Weak<dyn OplogService>),
+    Frozen {
+        oplog: Weak<dyn Oplog>,
+        id: OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        horizon: OplogIndex,
+    },
+}
+
+impl IndexSource {
+    fn upgrade(&self) -> Option<Arc<dyn OplogService>> {
+        match self {
+            Self::Service(service) => service.upgrade(),
+            Self::Frozen {
+                oplog,
+                id,
+                mode,
+                horizon,
+                ..
+            } => Some(Arc::new(FrozenIndexSource {
+                oplog: oplog.upgrade()?,
+                id: id.clone(),
+                mode: *mode,
+                horizon: *horizon,
+            })),
+        }
+    }
+
+    fn validate_identity(
+        &self,
+        id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<(), SessionError> {
+        if let Self::Frozen {
+            id: expected,
+            fingerprint: expected_fingerprint,
+            ..
+        } = self
+            && (id != expected || fingerprint != *expected_fingerprint)
+        {
+            return Err("frozen stream index identity mismatch".into());
+        }
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        horizon: OplogIndex,
+    ) -> Result<(), SessionError> {
+        self.validate_identity(id, fingerprint)?;
+        if let Self::Frozen {
+            mode: expected_mode,
+            horizon: maximum,
+            ..
+        } = self
+            && (mode != *expected_mode || horizon > *maximum)
+        {
+            return Err("frozen stream index mode or horizon mismatch".into());
+        }
+        Ok(())
+    }
+}
+
+/// Adapts bounded frozen reads to the existing producer projection's service interface.
+/// It exists only during a lookup; the index itself retains a weak open handle.
+#[derive(Debug)]
+struct FrozenIndexSource {
+    oplog: Arc<dyn Oplog>,
+    id: OwnedAgentId,
+    mode: AgentMode,
+    horizon: OplogIndex,
+}
+
+impl FrozenIndexSource {
+    fn validate(&self, id: &OwnedAgentId, mode: AgentMode) -> Result<(), UnreadableOplog> {
+        if id != &self.id || mode != self.mode {
+            return Err(UnreadableOplog::new(
+                &id.agent_id,
+                OplogReadError::source_failure(
+                    OplogReadSource::Other("frozen stream index"),
+                    "frozen stream source identity mismatch",
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl OplogService for FrozenIndexSource {
+    async fn lock_lifecycle(&self, _id: &golem_common::model::AgentId) -> OplogLifecycleGuard {
+        panic!("frozen stream source has no lifecycle operations")
+    }
+    fn set_stream_session_index(&self, _index: Arc<StreamSessionIndexService>) {
+        panic!("frozen stream source cannot install an index")
+    }
+    fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>> {
+        None
+    }
+    async fn staged_exists(
+        &self,
+        _id: &OwnedAgentId,
+        _mode: AgentMode,
+        _stage: Uuid,
+    ) -> Result<bool, String> {
+        Err("frozen stream source has no staged oplogs".into())
+    }
+    async fn create(
+        &self,
+        _lifecycle: &mut OplogLifecycleGuard,
+        _id: &OwnedAgentId,
+        _mode: AgentMode,
+        _entry: OplogEntry,
+        _metadata: golem_common::model::AgentMetadata,
+        _status: golem_common::read_only_lock::arc_swap::ReadOnlyView<
+            golem_common::model::AgentStatusRecord,
+        >,
+        _execution: golem_common::read_only_lock::std::ReadOnlyLock<crate::model::ExecutionStatus>,
+        _epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<Arc<dyn Oplog>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        Err(
+            golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                "frozen stream source is read-only",
+            ),
+        )
+    }
+    async fn create_fresh(
+        &self,
+        lifecycle: &mut OplogLifecycleGuard,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        entry: OplogEntry,
+        metadata: golem_common::model::AgentMetadata,
+        status: golem_common::read_only_lock::arc_swap::ReadOnlyView<
+            golem_common::model::AgentStatusRecord,
+        >,
+        execution: golem_common::read_only_lock::std::ReadOnlyLock<crate::model::ExecutionStatus>,
+        epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<Arc<dyn Oplog>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        self.create(
+            lifecycle, id, mode, entry, metadata, status, execution, epoch,
+        )
+        .await
+    }
+    async fn open(
+        &self,
+        _lifecycle: &mut OplogLifecycleGuard,
+        _id: &OwnedAgentId,
+        _mode: AgentMode,
+        _last: Option<OplogIndex>,
+        _metadata: golem_common::model::AgentMetadata,
+        _status: golem_common::read_only_lock::arc_swap::ReadOnlyView<
+            golem_common::model::AgentStatusRecord,
+        >,
+        _execution: golem_common::read_only_lock::std::ReadOnlyLock<crate::model::ExecutionStatus>,
+        _epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<Arc<dyn Oplog>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        Err(
+            golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                "frozen stream source cannot open oplogs",
+            ),
+        )
+    }
+    async fn get_last_index(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.validate(id, mode)?;
+        Ok(self.horizon)
+    }
+    async fn delete(
+        &self,
+        _lifecycle: &mut OplogLifecycleGuard,
+        _id: &OwnedAgentId,
+        _mode: AgentMode,
+        _epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        panic!("frozen stream source cannot delete oplogs")
+    }
+    async fn assert_owning_epoch(
+        &self,
+        _id: &OwnedAgentId,
+        _mode: AgentMode,
+        _epoch: golem_common::model::ShardEpoch,
+    ) -> Result<(), OplogError> {
+        panic!("frozen stream source has no writer epoch")
+    }
+    async fn read_exact(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        start: OplogIndex,
+        count: u64,
+    ) -> Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        self.validate(id, mode)?;
+        if count > 0
+            && start
+                .as_u64()
+                .checked_add(count - 1)
+                .is_none_or(|end| end > self.horizon.as_u64())
+        {
+            return Err(UnreadableOplog::new(
+                &id.agent_id,
+                OplogReadError::InvalidRange { start, count },
+            ));
+        }
+        self.oplog.read_exact(start, count).await
+    }
+    async fn exists(&self, id: &OwnedAgentId, mode: AgentMode) -> Result<bool, UnreadableOplog> {
+        self.validate(id, mode)?;
+        Ok(true)
+    }
+    async fn scan_for_type(
+        &self,
+        _environment: &golem_common::model::environment::EnvironmentId,
+        _type_id: golem_common::model::type_id::TypeId,
+        _modes: Option<AgentMode>,
+        _cursor: golem_common::model::ScanCursor,
+        _count: u64,
+    ) -> Result<ScanPage, golem_service_base::error::worker_executor::WorkerExecutorError> {
+        Err(
+            golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                "frozen stream source cannot scan agents",
+            ),
+        )
+    }
+    async fn upload_raw_payload(
+        &self,
+        _id: &OwnedAgentId,
+        _mode: AgentMode,
+        _data: Vec<u8>,
+    ) -> Result<golem_common::model::oplog::RawOplogPayload, String> {
+        Err("frozen stream source is read-only".into())
+    }
+    async fn download_raw_payload(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        payload: golem_common::model::oplog::PayloadId,
+        hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.validate(id, mode).map_err(|error| error.to_string())?;
+        self.oplog.download_raw_payload(payload, hash).await
+    }
+    async fn download_raw_payload_classified(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        payload: golem_common::model::oplog::PayloadId,
+        hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.validate(id, mode).map_err(|error| {
+            RawOplogPayloadDownloadError::Backend(anyhow::anyhow!(error.to_string()))
+        })?;
+        self.oplog
+            .download_raw_payload_classified(payload, hash)
+            .await
+    }
 }
 
 struct IndexLock {
@@ -487,6 +760,7 @@ impl StreamSessionIndexService {
         reader: LocalStreamReaderId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, SessionError> {
+        self.oplog.validate_identity(id, fingerprint)?;
         let namespace = Self::namespace(id, fingerprint);
         loop {
             let expected = self
@@ -596,7 +870,27 @@ impl StreamSessionIndexService {
     pub fn new(kv: Arc<dyn KeyValueStorage + Send + Sync>, oplog: Weak<dyn OplogService>) -> Self {
         Self {
             kv,
-            oplog,
+            oplog: IndexSource::Service(oplog),
+            locks: Arc::new(StdMutex::new(HashMap::new())),
+        }
+    }
+
+    pub(crate) fn new_frozen(
+        oplog: Weak<dyn Oplog>,
+        id: OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        horizon: OplogIndex,
+    ) -> Self {
+        Self {
+            kv: Arc::new(InMemoryKeyValueStorage::new()),
+            oplog: IndexSource::Frozen {
+                oplog,
+                id,
+                mode,
+                fingerprint,
+                horizon,
+            },
             locks: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
@@ -727,6 +1021,7 @@ impl StreamSessionIndexService {
         id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> Result<(), SessionError> {
+        self.oplog.validate_identity(id, fingerprint)?;
         let this = self.clone();
         let id = id.clone();
         join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
@@ -822,6 +1117,7 @@ impl StreamSessionIndexService {
         fingerprint: AgentFingerprint,
         horizon: OplogIndex,
     ) -> Result<(), SessionError> {
+        self.oplog.validate(id, mode, fingerprint, horizon)?;
         let lock = self.index_lock(id);
         let _guard = lock.inner.lock().await;
         let namespace = Self::namespace(id, fingerprint);
@@ -924,14 +1220,22 @@ impl StreamSessionIndexService {
                     .await?
                 };
                 if rebuild {
-                    metadata.stream_fork_lineage = StreamForkLineage::load_from_service(
-                        oplog.as_ref(),
-                        id,
-                        mode,
-                        fingerprint,
-                        horizon,
-                    )
-                    .await?;
+                    metadata.stream_fork_lineage = if let IndexSource::Frozen { oplog, .. } =
+                        &self.oplog
+                    {
+                        let open = oplog.upgrade().ok_or("frozen oplog is unavailable")?;
+                        StreamForkLineage::load_at_horizon(open.as_ref(), id, fingerprint, horizon)
+                            .await?
+                    } else {
+                        StreamForkLineage::load_from_service(
+                            oplog.as_ref(),
+                            id,
+                            mode,
+                            fingerprint,
+                            horizon,
+                        )
+                        .await?
+                    };
                 }
                 metadata.lineage_discovered_through = horizon;
             }
@@ -1426,7 +1730,11 @@ impl StreamSessionIndexService {
     ) -> Result<(), SessionError> {
         let scratch: Arc<dyn KeyValueStorage + Send + Sync> =
             Arc::new(InMemoryKeyValueStorage::new());
-        let scratch_service = Self::new(scratch.clone(), self.oplog.clone());
+        let scratch_service = Self {
+            kv: scratch.clone(),
+            oplog: self.oplog.clone(),
+            locks: Arc::new(StdMutex::new(HashMap::new())),
+        };
         Box::pin(scratch_service.catch_up_inner(id, mode, fingerprint, horizon)).await?;
 
         let scratch_keys = scratch

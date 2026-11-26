@@ -61,11 +61,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         if result == Some(false) {
             if self.oplog.fence().is_none()
-                && self.agent_mode() == AgentMode::Durable
                 && let Some(seal) = self
                     .oplog_service()
                     .seal_service()
-                    .filter(|seal| seal.enabled())
+                    .filter(|seal| seal.can_seal_mode(self.agent_mode()))
                 && let Some(epoch) = self.oplog.shard_epoch()
                 && self.shard_service().current_assignment()?.lease.is_some()
             {

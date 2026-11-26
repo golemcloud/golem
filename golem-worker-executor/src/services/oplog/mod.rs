@@ -87,7 +87,7 @@ mod owned_starts;
 mod payload;
 mod scan;
 pub(crate) mod seal;
-mod sealed_reader;
+pub(crate) mod sealed_reader;
 
 pub use seal::SealService;
 
@@ -374,8 +374,9 @@ pub trait OplogService: Debug + Send + Sync {
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
     /// executor recorded it: otherwise nothing is deleted and the delete is refused with
-    /// [`OplogError::Fenced`], as a write at that epoch would be. `None` is an ephemeral oplog,
-    /// deleted unconditionally: nothing fences it or the archive layers behind it.
+    /// [`OplogError::Fenced`], as a write at that epoch would be. The owning layer is the primary
+    /// for a durable oplog and the first lower layer for a multilayer ephemeral oplog. `None`
+    /// deletes unconditionally, regardless of agent mode.
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -1058,11 +1059,8 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.enqueue_add_pair(start, make_second).await
     }
 
-    /// The shard epoch this oplog's primary writes assert, or `None` without a primary oplog. An
-    /// ephemeral oplog has none: its archive layers assert the epoch it was opened with, and a
-    /// refusal there is reported by [`Self::fence`].
-    ///
-    /// Only the primary oplog knows it, so a wrapper answers from the oplog it wraps.
+    /// The opening shard epoch asserted by the primary (durable) or first archive (ephemeral).
+    /// Read-only sealed handles have no writing epoch. Wrappers delegate to their inner oplog.
     fn shard_epoch(&self) -> Option<ShardEpoch> {
         self.inner().and_then(|inner| inner.shard_epoch())
     }

@@ -448,11 +448,31 @@ impl FencedIndexedStream {
         Ok(remaining)
     }
 
-    /// Deletes the key and its recorded generation, whatever epoch recorded it. For deleting the
-    /// agent, which runs after the fenced delete of its primary oplog.
-    pub async fn delete(&self) -> Result<(), OplogArchiveError> {
+    /// Confirms ownership with the same monotonic claim as an open, without reading entries.
+    pub async fn assert_owning_epoch(&self, expected_epoch: ShardEpoch) -> Result<(), OplogError> {
+        let outcome = retry_storage_op(&self.retry_config, "set_key_epoch", &self.key, || {
+            self.indexed_storage.set_key_epoch(
+                epoch_record_service(&self.namespace),
+                "set_key_epoch",
+                self.namespace.clone(),
+                &self.key,
+                expected_epoch,
+                &[],
+                false,
+            )
+        })
+        .await;
+        record_epoch_verdict("archive_record", &outcome);
+        outcome
+            .map(|_| ())
+            .map_err(|error| self.write_error("assert ownership of", error))
+    }
+
+    /// Deletes the key and its generation in one step, only at the exact expected epoch when
+    /// supplied. Does not claim an absent generation before deleting it.
+    pub async fn delete(&self, expected_epoch: Option<ShardEpoch>) -> Result<(), OplogError> {
         let labels = self.labels;
-        retry_storage_op(
+        let outcome = retry_storage_op(
             &self.retry_config,
             &format!("{}_delete", labels.op),
             &self.key,
@@ -462,13 +482,16 @@ impl FencedIndexedStream {
                 let key = self.key.clone();
                 async move {
                     is.with(labels.svc, "delete")
-                        .delete_with_epoch(ns, &key, None, false)
+                        .delete_with_epoch(ns, &key, expected_epoch, false)
                         .await
                 }
             },
         )
-        .await
-        .map_err(|error| self.read_error("delete", error))
+        .await;
+        if expected_epoch.is_some() {
+            record_epoch_verdict("archive_delete", &outcome);
+        }
+        outcome.map_err(|error| self.write_error("delete", error))
     }
 
     /// Describes a failed read, keeping whether a later read can pass.

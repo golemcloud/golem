@@ -941,7 +941,7 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
         durable_entries(&second, &owned_agent_id, 2).await,
     );
     first
-        .delete(&owned_agent_id, AgentMode::Durable)
+        .delete(&owned_agent_id, AgentMode::Durable, None)
         .await
         .unwrap();
     let after_delete = (

@@ -1080,7 +1080,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         metadata: GetOrCreateWorkerResult,
     ) -> Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError> {
-        let deps = &self.deps;
         let owned_agent_id = self.owned_agent_id.clone();
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
@@ -1094,6 +1093,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             reconstructed_ephemeral,
             newly_created,
         } = metadata;
+        let mut acquisition_deps = self.deps.clone();
+        if let Some(frozen) = crate::services::oplog::downcast_oplog::<
+            crate::services::oplog::sealed_reader::SealedOplog,
+        >(&oplog)
+        {
+            let service = acquisition_deps
+                .worker_service()
+                .with_stream_session_index(frozen.stream_session_index())?;
+            acquisition_deps = acquisition_deps.with_worker_service(service);
+        }
+        let deps = &acquisition_deps;
         // An unpublished local creation has never admitted a guest invocation. Retrying that
         // same creation is not reconstruction of a previously running ephemeral agent.
         let reconstructed_ephemeral =
@@ -1253,6 +1263,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .register_owner_oplog(oplog.clone());
 
         let worker = ResolvedWorkerData {
+            deps: all_deps,
             parsed_agent_id: owner_context.agent().cloned(),
             owner_context,
             tasks: oplog

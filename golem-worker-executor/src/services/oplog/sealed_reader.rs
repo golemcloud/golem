@@ -24,6 +24,9 @@ use golem_service_base::storage::blob::{
 use std::collections::BTreeMap;
 use std::path::Path;
 
+mod handle;
+pub(crate) use handle::SealedOplog;
+
 /// Reads the physically present suffix ending at the requested end. A range beyond the end of
 /// history has no such suffix. The exact reader still validates every entry inside the suffix.
 pub(crate) async fn read_sealed_source(

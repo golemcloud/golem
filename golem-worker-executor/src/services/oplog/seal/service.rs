@@ -97,6 +97,14 @@ impl SealService {
         self.indexed.supports_release() && self.config.blob_storage_layers > 0
     }
 
+    pub(crate) fn can_seal_mode(&self, mode: AgentMode) -> bool {
+        self.enabled()
+            && (mode == AgentMode::Durable
+                || self.config.indexed_storage_layers.saturating_sub(1)
+                    + self.config.blob_storage_layers
+                    > 1)
+    }
+
     pub(crate) fn deadline(&self, id: &OwnedAgentId, epoch: ShardEpoch) -> Option<SystemTime> {
         self.shard
             .lease_valid_until(&id.agent_id, epoch, self.config.skew_margin)
@@ -262,6 +270,25 @@ impl SealService {
         ))))
     }
 
+    pub(crate) async fn pending_promise(
+        &self,
+        environment_id: EnvironmentId,
+        promise_id: &PromiseId,
+    ) -> Result<bool, WorkerExecutorError> {
+        if !self.enabled() {
+            return Ok(false);
+        }
+        Ok(self
+            .record(&OwnedAgentId::new(environment_id, &promise_id.agent_id))
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .is_some_and(|record| {
+                record.agent_mode == AgentMode::Ephemeral
+                    && record.fingerprint == promise_id.fingerprint
+                    && record.pending_promises.contains(&promise_id.oplog_idx)
+            }))
+    }
+
     pub(crate) async fn completed_promise(
         &self,
         environment_id: EnvironmentId,
@@ -374,6 +401,31 @@ impl SealService {
         }
     }
 
+    /// Claims the first archive layer and removes an absent agent's claim in the same transaction.
+    /// The caller holds the agent's lifecycle guard across the operation and its record lookup.
+    pub(crate) async fn claim_ephemeral(
+        &self,
+        id: &OwnedAgentId,
+        epoch: ShardEpoch,
+    ) -> Result<bool, WorkerExecutorError> {
+        let namespaces = self.presence_namespaces(id);
+        let state = self.indexed_state(id, AgentMode::Ephemeral, &SealManifest::new())?;
+        let key = id.storage_key();
+        retry_storage_op_fenceable(&self.indexed_retry, "ephemeral_claim", &key, || {
+            self.indexed.set_key_epoch(
+                "oplog_seal",
+                "claim_ephemeral",
+                state.fence_namespace(),
+                &key,
+                epoch,
+                &namespaces,
+                true,
+            )
+        })
+        .await
+        .map_err(|error| Self::indexed_error(id, error))
+    }
+
     /// The claim and presence answer share the backend transaction. A release that wins first
     /// therefore sends this open to unseal instead of letting it recreate an empty primary.
     pub(crate) async fn claim(
@@ -484,6 +536,9 @@ impl SealService {
         metadata: AgentMetadata,
         epoch: ShardEpoch,
     ) -> Result<Option<PendingSeal>, WorkerExecutorError> {
+        if !self.can_seal_mode(metadata.agent_mode) {
+            return Ok(None);
+        }
         let id = metadata.owned_agent_id();
         let Some(deadline) = self.deadline(&id, epoch) else {
             return Ok(None);
@@ -560,7 +615,9 @@ impl SealService {
             metadata,
             manifest,
             completed_promises,
-            pending_promises: BTreeSet::new(),
+            pending_promises: previous
+                .as_ref()
+                .map_or_else(BTreeSet::new, |record| record.pending_promises.clone()),
             rejected_periodic_snapshots: previous
                 .map_or_else(BTreeSet::new, |record| record.rejected_periodic_snapshots),
         };
@@ -575,9 +632,6 @@ impl SealService {
             let Some(base) = key.strip_suffix(":completed") else {
                 continue;
             };
-            if !keys.contains(base) {
-                continue;
-            }
             let Some(index) = base
                 .rsplit(':')
                 .next()
@@ -585,6 +639,13 @@ impl SealService {
             else {
                 continue;
             };
+            if !keys.contains(base)
+                && !record
+                    .pending_promises
+                    .contains(&OplogIndex::from_u64(index))
+            {
+                continue;
+            }
             if let RedisPromiseState::Complete(payload) =
                 decode(bytes).map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
             {
@@ -593,6 +654,26 @@ impl SealService {
                     .entry(OplogIndex::from_u64(index))
                     .or_insert(payload);
             }
+        }
+        if record.agent_mode == AgentMode::Ephemeral {
+            for (key, _) in &fields {
+                if key.ends_with(":completed") {
+                    continue;
+                }
+                if let Some(index) = key
+                    .rsplit(':')
+                    .next()
+                    .and_then(|index| index.parse::<u64>().ok())
+                {
+                    let index = OplogIndex::from_u64(index);
+                    if !record.completed_promises.contains_key(&index) {
+                        record.pending_promises.insert(index);
+                    }
+                }
+            }
+            record
+                .pending_promises
+                .retain(|index| !record.completed_promises.contains_key(index));
         }
         let rejected_snapshot_copy = self
             .kv
@@ -710,7 +791,11 @@ impl SealService {
         let record = &pending.record;
         let id = record.metadata.owned_agent_id();
         let namespace = promise_namespace_of(&id, record.fingerprint);
-        for index in record.completed_promises.keys() {
+        for index in record
+            .completed_promises
+            .keys()
+            .chain(record.pending_promises.iter())
+        {
             let key = PromiseId {
                 agent_id: id.agent_id,
                 fingerprint: record.fingerprint,
@@ -722,11 +807,13 @@ impl SealService {
                 .del(namespace.clone(), &key)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
-            self.kv
-                .with("oplog_seal", "remove_promise_result")
-                .del(namespace.clone(), &format!("{key}:completed"))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+            if record.completed_promises.contains_key(index) {
+                self.kv
+                    .with("oplog_seal", "remove_promise_result")
+                    .del(namespace.clone(), &format!("{key}:completed"))
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+            }
         }
         let fields = self
             .kv
@@ -738,6 +825,15 @@ impl SealService {
         for (key, _) in &fields {
             if let Some(base) = key.strip_suffix(":completed")
                 && !keys.contains(base)
+                && !base
+                    .rsplit(':')
+                    .next()
+                    .and_then(|index| index.parse::<u64>().ok())
+                    .is_some_and(|index| {
+                        record
+                            .pending_promises
+                            .contains(&OplogIndex::from_u64(index))
+                    })
             {
                 self.kv
                     .with("oplog_seal", "remove_orphan_promise")

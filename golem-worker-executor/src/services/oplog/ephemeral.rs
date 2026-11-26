@@ -64,6 +64,7 @@ pub struct EphemeralOplog {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     fingerprint: AgentFingerprint,
+    shard_epoch: Option<ShardEpoch>,
     primary_service: Arc<dyn OplogService>,
     jobs: UnboundedSender<EphemeralJob>,
     closed: OplogCloseCompletion,
@@ -327,6 +328,7 @@ impl EphemeralOplog {
         transfer_fiber: TransferFiber,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Self {
         let target = lower.first().clone();
         // A layer that refused its opening record, or this oplog's first entry, has latched
@@ -555,6 +557,7 @@ impl EphemeralOplog {
             owned_agent_id,
             agent_mode,
             fingerprint,
+            shard_epoch,
             primary_service,
             jobs,
             closed,
@@ -1391,6 +1394,10 @@ impl Oplog for EphemeralOplog {
                 md5_hash,
             )
             .await
+    }
+
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.shard_epoch
     }
 
     fn fence(&self) -> Option<OplogFence> {

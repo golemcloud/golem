@@ -203,6 +203,17 @@ pub type OnStale<'a> = &'a (dyn Fn(&OwnedAgentId, AgentFingerprint) + Send + Syn
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
 pub trait WorkerService: Send + Sync {
+    /// Clones this service with an acquisition-local stream index for frozen history.
+    /// The replacement must not be installed in the shared oplog service.
+    fn with_stream_session_index(
+        &self,
+        _index: Arc<StreamSessionIndexService>,
+    ) -> Result<Arc<dyn WorkerService>, WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "acquisition-local stream metadata is unavailable",
+        ))
+    }
+
     /// Loads the worker's initial metadata and last known cached status.
     ///
     /// `Ok(None)` means the worker has no oplog (it does not exist). Oplog storage failures follow

@@ -143,16 +143,29 @@ impl OplogArchiveService for BlobOplogArchiveService {
             .await
     }
 
-    /// Removes the manifest with its recorded generation, then every object of the agent. Runs
-    /// after the fenced delete of the agent's primary oplog, as for the compressed levels. The
-    /// manifest goes first, so a failure in between leaves objects nothing lists, not a manifest
-    /// listing objects that are gone.
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.manifest(owned_agent_id, agent_mode)
+            .assert_owning_epoch(expected_epoch)
+            .await
+    }
+
+    /// Removes the manifest with its recorded generation, then every object of the agent. The
+    /// manifest goes first, so a refusal leaves the objects alone and a failure in between leaves
+    /// objects nothing lists, not a manifest listing objects that are gone.
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()> {
-        self.manifest(owned_agent_id, agent_mode).delete().await?;
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.manifest(owned_agent_id, agent_mode)
+            .delete(expected_epoch)
+            .await?;
         self.blob_storage
             .with("blob_oplog", "delete")
             .delete_dir(
@@ -165,13 +178,10 @@ impl OplogArchiveService for BlobOplogArchiveService {
             .await
             .map(|_| ())
             .map_err(|error| {
-                OplogArchiveError::of_blob(
-                    &error,
-                    format!(
-                        "failed to drop compressed oplog for worker {} in blob storage: {error}",
-                        owned_agent_id.agent_id
-                    ),
-                )
+                OplogError::Maintenance(format!(
+                    "failed to drop compressed oplog for worker {} in blob storage: {error}",
+                    owned_agent_id.agent_id
+                ))
             })
     }
 

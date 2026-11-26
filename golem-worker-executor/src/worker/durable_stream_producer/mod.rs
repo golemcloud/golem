@@ -374,7 +374,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .limits
             .live_stream_event_broadcast_capacity
             .get();
-        let service = self.worker_service();
+        let service = data.deps.worker_service();
         let mode = data.initial_worker_metadata.agent_mode;
         let tasks = data.tasks.clone();
         let published_horizon = Self::durable_stream_published_horizon_for(data);

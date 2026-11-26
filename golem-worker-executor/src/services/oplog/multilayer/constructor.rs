@@ -146,6 +146,62 @@ impl OplogConstructor for CreateOplogConstructor {
                 .map_err(WorkerExecutorError::from)
             }
             AgentMode::Ephemeral => {
+                lifecycle.assert_agent(&self.owned_agent_id.agent_id);
+                if self.initial_entry.is_none()
+                    && let Some(seal) = self.service.seal_service()
+                    && seal.enabled()
+                {
+                    let mut state = match seal.state(&self.owned_agent_id).await {
+                        Ok(state) => state,
+                        Err(error) => {
+                            return failed(close, WorkerExecutorError::runtime(error.to_string()));
+                        }
+                    };
+                    // Frozen observations never claim. A resident owning open still claims
+                    // before reading any layer, and rechecks authority if release won the race.
+                    if matches!(state, super::super::seal::AgentSealState::Present)
+                        && let Some(epoch) = self.shard_epoch
+                    {
+                        let present = match seal.claim_ephemeral(&self.owned_agent_id, epoch).await
+                        {
+                            Ok(present) => present,
+                            // A bare higher fence does not prove presence. A stale observation
+                            // must still use frozen history when the agent is sealed.
+                            Err(WorkerExecutorError::OplogFenced { .. }) => false,
+                            Err(error) => return failed(close, error),
+                        };
+                        if !present {
+                            state = match seal.state(&self.owned_agent_id).await {
+                                Ok(state) => state,
+                                Err(error) => {
+                                    return failed(
+                                        close,
+                                        WorkerExecutorError::runtime(error.to_string()),
+                                    );
+                                }
+                            };
+                        }
+                    }
+                    match state {
+                        super::super::seal::AgentSealState::Sealed(record) => {
+                            return Ok(super::super::sealed_reader::SealedOplog::new(
+                                self.owned_agent_id,
+                                record,
+                                seal.blobs.clone(),
+                                self.primary,
+                                self.shard_epoch,
+                                close,
+                            ));
+                        }
+                        super::super::seal::AgentSealState::Absent => {
+                            return failed(
+                                close,
+                                WorkerExecutorError::worker_not_found(self.owned_agent_id.agent_id),
+                            );
+                        }
+                        super::super::seal::AgentSealState::Present => {}
+                    }
+                }
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
                 let lower = EphemeralOplog::build_lower_layers(
@@ -236,6 +292,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         transfer_fiber,
                         self.service,
                         close,
+                        self.shard_epoch,
                     )
                     .await,
                 ))

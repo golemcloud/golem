@@ -17,6 +17,15 @@ use super::*;
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
+    fn with_stream_session_index(
+        &self,
+        index: Arc<StreamSessionIndexService>,
+    ) -> Result<Arc<dyn WorkerService>, WorkerExecutorError> {
+        let mut service = self.clone();
+        service.stream_session_index = index;
+        Ok(Arc::new(service))
+    }
+
     async fn lookup_durable_stream_producer_metadata(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -451,11 +460,11 @@ impl WorkerService for DefaultWorkerService {
         let Some(seal) = self
             .oplog_service
             .seal_service()
-            .filter(|seal| seal.enabled())
+            .filter(|seal| seal.can_seal_mode(metadata.agent_mode))
         else {
             return Ok(false);
         };
-        if metadata.agent_mode != AgentMode::Durable || seal.deadline(&id, epoch).is_none() {
+        if seal.deadline(&id, epoch).is_none() {
             return Ok(false);
         }
         let assignment = self.shard_service.current_assignment()?;

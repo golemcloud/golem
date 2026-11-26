@@ -166,14 +166,14 @@ async fn check_that_each_agent_gets_its_own_archive(storage: Arc<dyn BlobStorage
     let made = (observe_all().await, scan(&service, environment_id).await);
 
     let first_deleted = &archives[3].0;
-    service.delete(first_deleted, MODE).await.unwrap();
+    service.delete(first_deleted, MODE, None).await.unwrap();
     let after_one_delete = (observe_all().await, scan(&service, environment_id).await);
 
     futures::stream::iter(archives.iter())
         .filter(|(agent, _)| futures::future::ready(agent != first_deleted))
         .for_each(|(agent, _)| {
             let service = &service;
-            async move { service.delete(agent, MODE).await.unwrap() }
+            async move { service.delete(agent, MODE, None).await.unwrap() }
         })
         .await;
     let after_all_deletes = (observe_all().await, scan(&service, environment_id).await);
@@ -357,7 +357,7 @@ async fn chunk_paths_isolate_incarnations_and_manifest_reads_need_no_fingerprint
             .unwrap();
 
         // Retire the old manifest while leaving its objects for delayed cleanup.
-        service.manifest(&agent, mode).delete().await.unwrap();
+        service.manifest(&agent, mode).delete(None).await.unwrap();
         let new = service
             .open_fresh(&agent, mode, None, new_fingerprint)
             .await
@@ -400,7 +400,7 @@ async fn chunk_paths_isolate_incarnations_and_manifest_reads_need_no_fingerprint
                 .unwrap(),
             BTreeMap::from([(OplogIndex::INITIAL, entry)])
         );
-        service.delete(&agent, mode).await.unwrap();
+        service.delete(&agent, mode, None).await.unwrap();
         assert!(
             storage
                 .list_blobs_below("test", "test", namespace, &chunks)

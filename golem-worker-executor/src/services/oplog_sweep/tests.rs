@@ -1941,6 +1941,7 @@ async fn a_completed_pass_drops_the_agents_that_left_the_layer() {
         .delete(
             &OwnedAgentId::new(environment_id, &transient),
             AgentMode::Ephemeral,
+            None,
         )
         .await
         .unwrap();
@@ -2235,12 +2236,26 @@ impl OplogArchiveService for Miscounting {
         }))
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+            .await
+    }
+
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()> {
-        self.inner.delete(owned_agent_id, agent_mode).await
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .delete(owned_agent_id, agent_mode, expected_epoch)
+            .await
     }
 
     async fn read_source(

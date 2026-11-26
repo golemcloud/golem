@@ -356,6 +356,15 @@ pub trait PromiseWorkerAccess: Send + Sync {
         Ok(None)
     }
 
+    /// A retired ephemeral agent keeps pending promises in its immutable seal record.
+    async fn pending_promise(
+        &self,
+        _environment_id: EnvironmentId,
+        _promise_id: &PromiseId,
+    ) -> Result<bool, WorkerExecutorError> {
+        Ok(false)
+    }
+
     /// Activates the incarnation that created the given promise if it is in a state that
     /// requires activation (Interrupted, Running, Suspended, Retrying). Never creates an agent:
     /// a missing agent or another incarnation is left alone.
@@ -397,7 +406,8 @@ impl DefaultPromiseService {
         environment_id: EnvironmentId,
         promise_id: &PromiseId,
     ) -> Result<bool, WorkerExecutorError> {
-        self.key_value_storage
+        let exists = self
+            .key_value_storage
             .with("promise", "complete")
             .exists(
                 promise_namespace(environment_id, promise_id),
@@ -408,7 +418,14 @@ impl DefaultPromiseService {
                 WorkerExecutorError::runtime(format!(
                     "failed to check if promise {promise_id} exists in storage: {err}"
                 ))
-            })
+            })?;
+        if exists {
+            Ok(true)
+        } else {
+            self.worker_access
+                .pending_promise(environment_id, promise_id)
+                .await
+        }
     }
 
     async fn completed_data(
@@ -724,6 +741,17 @@ impl HasWorkerService for StatusDeps {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
+    async fn pending_promise(
+        &self,
+        environment_id: EnvironmentId,
+        promise_id: &PromiseId,
+    ) -> Result<bool, WorkerExecutorError> {
+        match self.oplog_service.seal_service() {
+            Some(seal) => seal.pending_promise(environment_id, promise_id).await,
+            None => Ok(false),
+        }
+    }
+
     async fn completed_promise(
         &self,
         environment_id: EnvironmentId,
@@ -745,6 +773,15 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         promise_id: &PromiseId,
     ) -> Result<(), WorkerExecutorError> {
         let owned_agent_id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
+        if let Some(seal) = self.oplog_service.seal_service()
+            && seal.enabled()
+            && matches!(
+                seal.state(&owned_agent_id).await.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+                oplog::seal::AgentSealState::Sealed(record) if record.agent_mode == golem_common::model::agent::AgentMode::Ephemeral
+            )
+        {
+            return Ok(());
+        }
 
         // Check if worker is active first, otherwise fall back to stored metadata. Only the
         // incarnation that created the promise is activated; a deleted or re-created agent is not.

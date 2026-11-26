@@ -426,6 +426,14 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> All<Ctx> {
+    pub(crate) fn with_worker_service(
+        mut self,
+        worker_service: Arc<dyn worker::WorkerService>,
+    ) -> Self {
+        self.worker_service = worker_service;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         active_agents: Arc<active_agents::ActiveAgents<Ctx>>,

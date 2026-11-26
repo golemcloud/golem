@@ -73,11 +73,16 @@ struct Fixture {
 
 impl Fixture {
     async fn new(indexed: Arc<dyn IndexedStorage + Send + Sync>) -> Self {
+        Self::with_mode(indexed, AgentMode::Durable).await
+    }
+
+    async fn with_mode(indexed: Arc<dyn IndexedStorage + Send + Sync>, mode: AgentMode) -> Self {
         let mut metadata = crate::services::oplog::tests::make_agent_metadata(
             AgentId::from_parts(7, 2125),
             AccountId::new(),
             EnvironmentId::new(),
         );
+        metadata.agent_mode = mode;
         metadata.created_at = metadata.created_at.rounded();
         metadata.last_known_status.oplog_idx = OplogIndex::from_u64(9);
         metadata.last_known_status.last_automatic_snapshot = Some(AutomaticSnapshot {
@@ -119,21 +124,18 @@ impl Fixture {
                 .collect(),
         };
         fixture.register(6, true);
-        fixture
-            .service()
-            .claim(&fixture.id(), ShardEpoch(6))
-            .await
-            .unwrap();
+        if mode == AgentMode::Durable {
+            fixture
+                .service()
+                .claim(&fixture.id(), ShardEpoch(6))
+                .await
+                .unwrap();
+        }
         // Real archive writes create the chunk objects and their indexed manifests.
         for (level, first, last) in [(1, 1, 3), (1, 4, 6), (0, 7, 9)] {
             let archive = fixture.archive(level);
             let handle = archive
-                .open(
-                    &fixture.id(),
-                    AgentMode::Durable,
-                    None,
-                    fixture.metadata.fingerprint,
-                )
+                .open(&fixture.id(), mode, None, fixture.metadata.fingerprint)
                 .await
                 .unwrap();
             let entries: Vec<_> = fixture
@@ -142,6 +144,15 @@ impl Fixture {
                 .map(|(index, entry)| (*index, entry.clone()))
                 .collect();
             handle.append(&entries).await.unwrap();
+        }
+        if mode == AgentMode::Ephemeral {
+            assert!(
+                fixture
+                    .service()
+                    .claim_ephemeral(&fixture.id(), ShardEpoch(6))
+                    .await
+                    .unwrap()
+            );
         }
         fixture
     }
@@ -1199,7 +1210,7 @@ async fn trimmed_source_ranges_preserve_resident_suffix_semantics_after_sealing(
             seal.unseal(&f.id(), ShardEpoch(6)).await.unwrap();
             for level in 0..2 {
                 f.archive(level)
-                    .delete(&f.id(), AgentMode::Durable)
+                    .delete(&f.id(), AgentMode::Durable, None)
                     .await
                     .unwrap();
             }
@@ -1795,5 +1806,299 @@ async fn failed_stage_admission_does_not_fence_a_competing_create() {
                 2
             );
         }
+    }
+}
+
+#[test]
+async fn sealed_ephemeral_open_is_frozen_and_leaves_no_indexed_rows() {
+    use crate::services::oplog::tests::{default_execution_status, default_last_known_status};
+    use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogError};
+
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        let f = Fixture::with_mode(indexed, AgentMode::Ephemeral).await;
+        let seal = f.service();
+        let pending = seal
+            .prepare(f.metadata.clone(), ShardEpoch(6))
+            .await
+            .unwrap()
+            .unwrap();
+        seal.remove_moved_copies(&pending).await.unwrap();
+        assert!(seal.release(&pending).await.unwrap());
+        f.assert_epoch(&pending.state, None).await;
+        let service = f.oplog_service().await;
+        for epoch in [None, Some(ShardEpoch(6)), Some(ShardEpoch(7))] {
+            let oplog = service
+                .open(
+                    &mut service.lock_lifecycle(&f.id().agent_id).await,
+                    &f.id(),
+                    AgentMode::Ephemeral,
+                    None,
+                    f.metadata.clone(),
+                    default_last_known_status(),
+                    default_execution_status(AgentMode::Ephemeral),
+                    epoch,
+                )
+                .await
+                .unwrap();
+            let fence = oplog
+                .fence()
+                .expect("sealed ephemeral handle must refuse writes");
+            assert_eq!(oplog.shard_epoch(), None);
+            assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(9));
+            assert_eq!(
+                oplog.read_exact(OplogIndex::INITIAL, 9).await.unwrap(),
+                f.original
+            );
+            let raw = oplog
+                .raw_durable_stream_session_status(
+                    &golem_common::model::durable_stream::StreamSessionKey {
+                        callee_environment_id: f.id().environment_id(),
+                        callee: f.id().agent_id,
+                        callee_fingerprint: f.metadata.fingerprint,
+                        idempotency_key: golem_common::model::InvocationId::constructor(
+                            f.metadata.fingerprint,
+                        ),
+                    },
+                )
+                .await;
+            assert_eq!(raw.watermark, pending.record.last_index);
+            assert!(raw.status.unwrap().is_none());
+            assert_eq!(oplog.length().await.unwrap(), 9);
+            assert_eq!(
+                oplog.add(OplogEntry::suspend()).await,
+                Err(OplogError::Fenced(fence.clone()))
+            );
+            assert_eq!(
+                oplog.commit(CommitLevel::Always).await,
+                Err(OplogError::Fenced(fence.clone()))
+            );
+            assert!(oplog.upload_raw_payload(vec![1; 2048]).await.is_err());
+            assert_eq!(
+                oplog
+                    .enqueue_add_pair(
+                        OplogEntry::suspend(),
+                        Box::new(|_| panic!("frozen pair builder ran"))
+                    )
+                    .await,
+                Err(OplogError::Fenced(fence.clone()))
+            );
+            assert!(matches!(
+                oplog
+                    .add_start_with_indexed_reserved_raw_payload(Box::new(|_| panic!(
+                        "frozen reserved builder ran"
+                    )))
+                    .await,
+                Err(OplogError::Fenced(actual)) if actual == fence
+            ));
+            assert_eq!(
+                EphemeralOplog::try_archive_blocking(&oplog).await.unwrap(),
+                None
+            );
+            oplog.stop_and_wait().await.unwrap();
+            assert!(
+                !f.indexed
+                    .observe_agent("test", "frozen", &f.id())
+                    .await
+                    .unwrap()
+                    .has_data
+            );
+            f.assert_epoch(&pending.state, None).await;
+            assert!(f.scheduler.actions.lock().unwrap().is_empty());
+        }
+        assert!(seal.unseal(&f.id(), ShardEpoch(7)).await.is_err());
+    }
+}
+
+struct SealPromiseAccess(Arc<SealService>);
+
+// A promise that crosses the KV-to-seal transition must keep the first completion,
+// including when two independent callers complete it and cleanup is retried.
+#[test]
+async fn ephemeral_promise_competing_completions_across_seal_cleanup() {
+    use crate::services::promise::{DefaultPromiseService, PromiseService};
+
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        for completion_phase in 0..3 {
+            let f = Fixture::with_mode(indexed.clone(), AgentMode::Ephemeral).await;
+            f.put_promise(2, None).await;
+            let seal = Arc::new(f.service());
+            let access = Arc::new(SealPromiseAccess(seal.clone()));
+            let first = DefaultPromiseService::new(f.kv.clone(), access.clone());
+            let second = DefaultPromiseService::new(f.kv.clone(), access.clone());
+            let pending_handle = first
+                .poll(f.id().environment_id(), f.promise(2))
+                .await
+                .unwrap();
+            let pending = seal
+                .prepare(f.metadata.clone(), ShardEpoch(6))
+                .await
+                .unwrap()
+                .unwrap();
+            if completion_phase >= 1 {
+                seal.remove_moved_copies(&pending).await.unwrap();
+            }
+            if completion_phase >= 2 {
+                assert!(seal.release(&pending).await.unwrap());
+            }
+            let (a, b) = tokio::join!(
+                first.complete_without_wakeup(f.id().environment_id(), f.promise(2), vec![11]),
+                second.complete_without_wakeup(f.id().environment_id(), f.promise(2), vec![22]),
+            );
+            let (a, b) = (a.unwrap(), b.unwrap());
+            assert_ne!(a, b, "exactly one completion must win");
+            let expected = if a { vec![11] } else { vec![22] };
+            seal.remove_moved_copies(&pending).await.unwrap();
+            if completion_phase < 2 {
+                assert!(seal.release(&pending).await.unwrap());
+            }
+            seal.remove_moved_copies(&pending).await.unwrap();
+            let remote = DefaultPromiseService::new(f.kv.clone(), access);
+            for service in [&first, &second, &remote] {
+                assert_eq!(
+                    service
+                        .poll(f.id().environment_id(), f.promise(2))
+                        .await
+                        .unwrap()
+                        .get()
+                        .await,
+                    Some(expected.clone()),
+                );
+                assert!(
+                    !service
+                        .complete_without_wakeup(f.id().environment_id(), f.promise(2), vec![99],)
+                        .await
+                        .unwrap()
+                );
+            }
+            assert_eq!(pending_handle.get().await, Some(expected));
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::services::promise::PromiseWorkerAccess for SealPromiseAccess {
+    async fn pending_promise(
+        &self,
+        env: EnvironmentId,
+        id: &PromiseId,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.0.pending_promise(env, id).await
+    }
+    async fn completed_promise(
+        &self,
+        env: EnvironmentId,
+        id: &PromiseId,
+    ) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
+        self.0.completed_promise(env, id).await
+    }
+    async fn activate_worker_if_needed(
+        &self,
+        _env: EnvironmentId,
+        _id: &PromiseId,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+    async fn run_excluding_removal<'a>(
+        &self,
+        _id: &OwnedAgentId,
+        operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        operation.await
+    }
+}
+
+#[test]
+async fn sealed_ephemeral_pending_promise_completes_once_and_cross_agent_poll_sees_payload() {
+    use crate::services::promise::{DefaultPromiseService, PromiseService};
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        let f = Fixture::with_mode(indexed, AgentMode::Ephemeral).await;
+        f.put_promise(2, None).await;
+        f.put_promise(4, Some(vec![4, 1])).await;
+        let seal = Arc::new(f.service());
+        let pending = seal
+            .prepare(f.metadata.clone(), ShardEpoch(6))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pending.record.pending_promises,
+            BTreeSet::from([OplogIndex::from_u64(2)])
+        );
+        let access = Arc::new(SealPromiseAccess(seal.clone()));
+        let promises = DefaultPromiseService::new(f.kv.clone(), access.clone());
+        let local = promises
+            .poll(f.id().environment_id(), f.promise(2))
+            .await
+            .unwrap();
+        seal.remove_moved_copies(&pending).await.unwrap();
+        assert!(seal.release(&pending).await.unwrap());
+        assert!(
+            promises
+                .complete_without_wakeup(f.id().environment_id(), f.promise(2), vec![2, 7, 9])
+                .await
+                .unwrap()
+        );
+        // A delayed cleanup of this same snapshot must preserve the external completion.
+        seal.remove_moved_copies(&pending).await.unwrap();
+        assert_eq!(local.get().await, Some(vec![2, 7, 9]));
+        assert!(
+            !promises
+                .complete_without_wakeup(f.id().environment_id(), f.promise(2), vec![0])
+                .await
+                .unwrap()
+        );
+        let remote = DefaultPromiseService::new(f.kv.clone(), access);
+        assert_eq!(
+            remote
+                .poll(f.id().environment_id(), f.promise(2))
+                .await
+                .unwrap()
+                .get()
+                .await,
+            Some(vec![2, 7, 9])
+        );
+        assert_eq!(
+            remote
+                .poll(f.id().environment_id(), f.promise(4))
+                .await
+                .unwrap()
+                .get()
+                .await,
+            Some(vec![4, 1])
+        );
+        assert!(
+            !remote
+                .complete_without_wakeup(f.id().environment_id(), f.promise(4), vec![0])
+                .await
+                .unwrap()
+        );
+        let fields =
+            f.kv.with_entity("test", "remaining", "promise")
+                .get_all_raw(promise_namespace_of(&f.id(), f.metadata.fingerprint))
+                .await
+                .unwrap();
+        assert_eq!(
+            fields.len(),
+            1,
+            "only the external completion survives seal"
+        );
+        assert_eq!(
+            fields[0].0,
+            format!(
+                "{}:completed",
+                f.promise(2).storage_key(f.id().environment_id())
+            )
+        );
+        f.assert_epoch(&pending.state, None).await;
+        assert!(
+            !f.indexed
+                .observe_agent("test", "promise", &f.id())
+                .await
+                .unwrap()
+                .has_data
+        );
     }
 }

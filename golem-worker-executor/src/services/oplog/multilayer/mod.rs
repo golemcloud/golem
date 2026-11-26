@@ -213,13 +213,23 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>>;
 
-    /// Deletes the oplog archive for a worker completely, together with any writer generation
-    /// recorded for it.
+    /// Confirms ownership with the monotonic epoch claim an open makes, without opening a handle.
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError>;
+
+    /// Deletes the archive index and its writer generation atomically, then its backing objects.
+    /// With an expected epoch, an absent or different recorded epoch refuses the deletion with
+    /// `OplogError::Fenced`. `None` deletes unconditionally.
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()>;
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError>;
 
     /// Reads the entries physically present in this archive within the requested range.
     async fn read_source(

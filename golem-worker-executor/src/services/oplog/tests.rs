@@ -200,8 +200,23 @@ impl OplogArchiveService for RecordingArchiveService {
             calls: self.calls.clone(),
         }))
     }
-    async fn delete(&self, id: &OwnedAgentId, mode: AgentMode) -> OplogArchiveResult<()> {
-        self.inner.delete(id, mode).await
+    async fn assert_owning_epoch(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(id, mode, expected_epoch)
+            .await
+    }
+    async fn delete(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.inner.delete(id, mode, expected_epoch).await
     }
     async fn read_source(
         &self,
@@ -412,12 +427,26 @@ impl OplogArchiveService for BlockingArchiveService {
         }))
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+            .await
+    }
+
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()> {
-        self.inner.delete(owned_agent_id, agent_mode).await
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .delete(owned_agent_id, agent_mode, expected_epoch)
+            .await
     }
 
     async fn read_source(
@@ -9046,7 +9075,10 @@ async fn blob_prefix_drop_does_not_delete_the_whole_directory(_tracing: &Tracing
             1
         );
         assert!(
-            service.delete(&owned_agent_id, agent_mode).await.is_err(),
+            service
+                .delete(&owned_agent_id, agent_mode, None)
+                .await
+                .is_err(),
             "the injected recursive delete failure must remain unused by prefix cleanup"
         );
     }
@@ -9122,7 +9154,7 @@ async fn ephemeral_compressed_prefix_drop_does_not_delete_the_whole_key(_tracing
     target.drop_prefix(OplogIndex::from_u64(2)).await.unwrap();
     assert!(
         service
-            .delete(&owned_agent_id, AgentMode::Ephemeral)
+            .delete(&owned_agent_id, AgentMode::Ephemeral, None)
             .await
             .is_err(),
         "the injected whole-key delete failure must remain unused by prefix cleanup"
@@ -9173,14 +9205,14 @@ async fn archive_service_delete_failures_are_returned_for_retry(_tracing: &Traci
     indexed_storage.fail_next_delete();
     assert!(
         compressed
-            .delete(&owned_agent_id, AgentMode::Durable)
+            .delete(&owned_agent_id, AgentMode::Durable, None)
             .await
             .unwrap_err()
             .to_string()
             .contains("injected indexed delete failure")
     );
     compressed
-        .delete(&owned_agent_id, AgentMode::Durable)
+        .delete(&owned_agent_id, AgentMode::Durable, None)
         .await
         .unwrap();
 
@@ -9192,13 +9224,13 @@ async fn archive_service_delete_failures_are_returned_for_retry(_tracing: &Traci
     );
     blob_storage.fail_next_delete_dir();
     assert!(
-        blob.delete(&owned_agent_id, AgentMode::Durable)
+        blob.delete(&owned_agent_id, AgentMode::Durable, None)
             .await
             .unwrap_err()
             .to_string()
             .contains("injected blob directory delete failure")
     );
-    blob.delete(&owned_agent_id, AgentMode::Durable)
+    blob.delete(&owned_agent_id, AgentMode::Durable, None)
         .await
         .unwrap();
 }
@@ -15203,6 +15235,258 @@ fn assert_fenced_by(backend: &str, fence: Option<OplogFence>, expected: u64, act
             assert_eq!(fence.actual_epoch, actual.map(ShardEpoch), "{backend}");
         }
         None => panic!("{backend}: expected the superseded owner's oplog to be fenced"),
+    }
+}
+
+async fn archive_ownership_service(
+    storage: &Arc<dyn IndexedStorage + Send + Sync>,
+    blob_first: bool,
+) -> MultiLayerOplogService {
+    let blob = blob_store();
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            storage.clone(),
+            blob.clone(),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        storage.clone(),
+        if blob_first { 2 } else { 1 },
+        RetryConfig::default(),
+    ));
+    let blob: Arc<dyn OplogArchiveService> =
+        Arc::new(blob_level(storage, &blob, if blob_first { 1 } else { 2 }));
+    let lower = if blob_first {
+        nev![blob, compressed]
+    } else {
+        nev![compressed, blob]
+    };
+    MultiLayerOplogService::new(primary, lower, 100, 1)
+}
+
+#[test]
+async fn ephemeral_archive_ownership_needs_no_primary_epoch_or_seal_service(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        for blob_first in [false, true] {
+            let service = archive_ownership_service(&storage, blob_first).await;
+            let id = archiving_agent("ephemeral-lower-ownership");
+            let mode = AgentMode::Ephemeral;
+            assert!(service.seal_service().is_none());
+            for layer in &service.lower {
+                layer
+                    .open(&id, mode, Some(ShardEpoch(5)), archive_fingerprint())
+                    .await
+                    .unwrap()
+                    .append(&[(OplogIndex::INITIAL, OplogEntry::suspend().rounded())])
+                    .await
+                    .unwrap();
+            }
+            service
+                .assert_owning_epoch(&id, mode, ShardEpoch(5))
+                .await
+                .unwrap();
+
+            // Neither opening the lower layers nor asserting ownership may claim the primary.
+            let mut lifecycle = service.lock_lifecycle(&id.agent_id).await;
+            match storage
+                .append(
+                    "test",
+                    "primary_epoch_absent",
+                    "oplog",
+                    IndexedStorageNamespace::OpLog {
+                        owned_agent_id: id.clone(),
+                        agent_mode: mode,
+                    },
+                    &id.storage_key(),
+                    1,
+                    vec![1],
+                    Some(ShardEpoch(5)),
+                    None,
+                )
+                .await
+            {
+                Err(IndexedStorageError::Fenced {
+                    expected: ShardEpoch(5),
+                    actual: None,
+                    ..
+                }) => {}
+                other => panic!("{backend}: expected no primary epoch, got {other:?}"),
+            }
+            service
+                .delete(&mut lifecycle, &id, mode, Some(ShardEpoch(5)))
+                .await
+                .unwrap();
+            for layer in &service.lower {
+                assert!(!layer.exists(&id, mode).await.unwrap(), "{backend}");
+            }
+            // Deleting a completely absent key remains idempotent.
+            service
+                .delete(&mut lifecycle, &id, mode, Some(ShardEpoch(5)))
+                .await
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+async fn ephemeral_delete_rechecks_the_first_lower_epoch_before_any_cleanup(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        for blob_first in [false, true] {
+            let service = archive_ownership_service(&storage, blob_first).await;
+            let id = archiving_agent("ephemeral-lower-superseded");
+            let mode = AgentMode::Ephemeral;
+            let entries = vec![(OplogIndex::INITIAL, OplogEntry::suspend().rounded())];
+            for layer in &service.lower {
+                layer
+                    .open(&id, mode, Some(ShardEpoch(5)), archive_fingerprint())
+                    .await
+                    .unwrap()
+                    .append(&entries)
+                    .await
+                    .unwrap();
+            }
+            service
+                .assert_owning_epoch(&id, mode, ShardEpoch(5))
+                .await
+                .unwrap();
+            // Only the actual owning layer moves on after the deletion's initial check.
+            service
+                .lower
+                .first()
+                .assert_owning_epoch(&id, mode, ShardEpoch(6))
+                .await
+                .unwrap();
+            match service.assert_owning_epoch(&id, mode, ShardEpoch(5)).await {
+                Err(OplogError::Fenced(fence)) => {
+                    assert_fenced_by(backend, Some(fence), 5, Some(6))
+                }
+                other => panic!("{backend}: expected a lower-layer fence, got {other:?}"),
+            }
+            match service
+                .delete(
+                    &mut service.lock_lifecycle(&id.agent_id).await,
+                    &id,
+                    mode,
+                    Some(ShardEpoch(5)),
+                )
+                .await
+            {
+                Err(OplogError::Fenced(fence)) => {
+                    assert_fenced_by(backend, Some(fence), 5, Some(6))
+                }
+                other => panic!("{backend}: expected an atomic deletion fence, got {other:?}"),
+            }
+            for layer in &service.lower {
+                // Read through a fresh handle: a surviving manifest must still have its objects.
+                assert_eq!(
+                    layer
+                        .read_source(&id, mode, OplogIndex::INITIAL, 1)
+                        .await
+                        .unwrap(),
+                    entries.clone().into_iter().collect(),
+                    "{backend}: a fenced delete changed archive data (blob_first={blob_first})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+async fn ephemeral_delete_with_a_missing_lower_epoch_is_fenced_unless_unconditional(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        for blob_first in [false, true] {
+            let service = archive_ownership_service(&storage, blob_first).await;
+            let id = archiving_agent("ephemeral-lower-missing-epoch");
+            let mode = AgentMode::Ephemeral;
+            let entries = vec![(OplogIndex::INITIAL, OplogEntry::suspend().rounded())];
+            for layer in &service.lower {
+                layer
+                    .open(&id, mode, None, archive_fingerprint())
+                    .await
+                    .unwrap()
+                    .append(&entries)
+                    .await
+                    .unwrap();
+            }
+            let mut lifecycle = service.lock_lifecycle(&id.agent_id).await;
+            match service
+                .delete(&mut lifecycle, &id, mode, Some(ShardEpoch(5)))
+                .await
+            {
+                Err(OplogError::Fenced(fence)) => assert_fenced_by(backend, Some(fence), 5, None),
+                other => panic!("{backend}: expected an absent-epoch fence, got {other:?}"),
+            }
+            for layer in &service.lower {
+                assert_eq!(
+                    layer
+                        .read_source(&id, mode, OplogIndex::INITIAL, 1)
+                        .await
+                        .unwrap(),
+                    entries.clone().into_iter().collect(),
+                    "{backend}: a refused delete removed unfenced archive data"
+                );
+            }
+            service
+                .delete(&mut lifecycle, &id, mode, None)
+                .await
+                .unwrap();
+            for layer in &service.lower {
+                assert!(!layer.exists(&id, mode).await.unwrap(), "{backend}");
+            }
+        }
+    }
+}
+
+#[test]
+async fn durable_archive_ownership_stays_with_primary_when_a_lower_epoch_is_higher(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        let service = archive_ownership_service(&storage, false).await;
+        let id = archiving_agent("durable-primary-ownership");
+        let mode = AgentMode::Durable;
+        for layer in &service.lower {
+            layer
+                .open(&id, mode, Some(ShardEpoch(6)), archive_fingerprint())
+                .await
+                .unwrap()
+                .append(&[(OplogIndex::INITIAL, OplogEntry::suspend().rounded())])
+                .await
+                .unwrap();
+        }
+        service
+            .primary
+            .assert_owning_epoch(&id, mode, ShardEpoch(5))
+            .await
+            .unwrap();
+        service
+            .assert_owning_epoch(&id, mode, ShardEpoch(5))
+            .await
+            .unwrap();
+        service
+            .delete(
+                &mut service.lock_lifecycle(&id.agent_id).await,
+                &id,
+                mode,
+                Some(ShardEpoch(5)),
+            )
+            .await
+            .unwrap();
+        for layer in &service.lower {
+            assert!(!layer.exists(&id, mode).await.unwrap(), "{backend}");
+        }
     }
 }
 
