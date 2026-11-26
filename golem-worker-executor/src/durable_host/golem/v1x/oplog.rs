@@ -316,7 +316,9 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
                         next_oplog_index: entry.next_oplog_index,
                         query: None,
                         page_size: entry.page_size,
-                        current_component_revision: entry.continued(),
+                        current_component_revision: entry
+                            .initialized
+                            .then_some(entry.current_component_revision),
                     };
                     if let Some(denial) = agent_operation_denial(denied) {
                         break 'response begun.start_live_denied(self, request, denial).await?;
@@ -509,7 +511,9 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                         next_oplog_index: entry.next_oplog_index,
                         query: Some(entry.query.clone()),
                         page_size: entry.page_size,
-                        current_component_revision: entry.continued(),
+                        current_component_revision: entry
+                            .initialized
+                            .then_some(entry.current_component_revision),
                     };
                     if let Some(denial) = agent_operation_denial(denied) {
                         break 'response begun.start_live_denied(self, request, denial).await?;
