@@ -1769,7 +1769,11 @@
       "properties": {
         "preinitializeJs": {
           "type": "string",
-          "description": "Path to the input WASM component to pre-initialize"
+          "description": "Path to the prebuilt QuickJS WASM template"
+        },
+        "module": {
+          "type": "string",
+          "description": "Path to the JS module passed to the template's initializer"
         },
         "into": {
           "type": "string",
@@ -1778,6 +1782,7 @@
       },
       "required": [
         "preinitializeJs",
+        "module",
         "into"
       ]
     },

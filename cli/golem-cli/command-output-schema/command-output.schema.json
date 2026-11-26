@@ -6500,9 +6500,10 @@
     },
     "PreinitializeJs": {
       "type": "object",
-      "required": ["preinitializeJs", "into"],
+      "required": ["preinitializeJs", "module", "into"],
       "properties": {
         "preinitializeJs": { "type": "string" },
+        "module": { "type": "string" },
         "into": { "type": "string" }
       },
       "additionalProperties": false

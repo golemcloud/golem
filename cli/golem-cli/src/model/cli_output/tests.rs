@@ -7079,14 +7079,17 @@ fn arb_manifest_build_command() -> BoxedStrategy<crate::model::app_raw::BuildCom
                 )
             }
         ),
-        (arb_small_string(), arb_small_string()).prop_map(|(preinitialize_js, into)| {
-            crate::model::app_raw::BuildCommand::PreinitializeJs(
-                crate::model::app_raw::PreinitializeJs {
-                    preinitialize_js,
-                    into,
-                },
-            )
-        }),
+        (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+            |(preinitialize_js, module, into)| {
+                crate::model::app_raw::BuildCommand::PreinitializeJs(
+                    crate::model::app_raw::PreinitializeJs {
+                        preinitialize_js,
+                        module,
+                        into,
+                    },
+                )
+            }
+        ),
     ]
     .boxed()
 }
