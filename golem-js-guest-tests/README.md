@@ -81,7 +81,9 @@ The compilation-cache tests compare cold, warm and uncached snapshots byte for
 byte. A JS edit must report a native compilation cache hit and discover the edited
 description. Parallel applications must match their uncached snapshots. Different
 engine settings must miss, and truncated entries must recompile successfully.
-Twenty distinct guest components check cache size against the 512 MiB limit.
+Sparse cache entries force the cache above the 512 MiB limit and check eviction
+to the 80% target, retention of recently used modules and their stats, and protection
+of in-progress writes. An unavailable cache must produce the same Wasm as an uncached build.
 The cache contains native code, never initialized stores, instances or JS state.
 Golem trims oversized caches after builds, in addition to Wasmtime's background
 eviction. Parallel builds can temporarily exceed the limit. The cache lives at

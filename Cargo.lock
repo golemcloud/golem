@@ -4326,7 +4326,6 @@ dependencies = [
  "test-r",
  "tokio",
  "walkdir",
- "wasm-encoder 0.251.0",
  "wasm-rquickjs",
  "wasmtime",
 ]
@@ -4737,6 +4736,7 @@ name = "golem-size-analysis"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "camino",
  "clap",
  "flate2",
  "hex",
@@ -4744,9 +4744,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "test-r",
  "twiggy-ir",
  "twiggy-parser",
+ "wasm-rquickjs",
  "wasmparser 0.251.0",
  "wasmprinter 0.251.0",
  "wat",

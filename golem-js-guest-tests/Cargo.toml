@@ -26,6 +26,5 @@ tempfile = { workspace = true }
 test-r = { workspace = true }
 tokio = { workspace = true }
 walkdir = { workspace = true }
-wasm-encoder = { workspace = true }
 wasm-rquickjs = { workspace = true }
 wasmtime = { workspace = true }

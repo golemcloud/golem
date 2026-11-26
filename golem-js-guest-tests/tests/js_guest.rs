@@ -135,6 +135,22 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
     assert_eq!(std::fs::read(&cold)?, std::fs::read(&warm)?);
     assert_eq!(std::fs::read(&cold)?, std::fs::read(&uncached)?);
 
+    let blocked = dir.join("not-a-directory");
+    std::fs::write(&blocked, "occupied")?;
+    let fallback = dir.join("fallback.wasm");
+    assert!(
+        preinitialize_js(
+            &guest,
+            &fallback,
+            source.clone(),
+            Some(blocked.as_std_path())
+        )
+        .await?
+        .compilation_cache
+        .is_none()
+    );
+    assert_eq!(std::fs::read(&fallback)?, std::fs::read(&uncached)?);
+
     let stats = preinitialize_js(
         &guest,
         &edited_cached,
@@ -220,48 +236,63 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
 }
 
 #[test]
-#[timeout("600s")]
-async fn compilation_cache_stays_bounded_after_twenty_guests() -> anyhow::Result<()> {
-    use wasm_encoder::ComponentSection;
+#[timeout("120s")]
+async fn compilation_cache_evicts_cold_entries_together() -> anyhow::Result<()> {
+    use std::fs::{File, FileTimes};
+    use std::time::{Duration, SystemTime};
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let template = std::fs::read(root.join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"))?;
+    let guest = Utf8PathBuf::from_path_buf(
+        root.join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
+    )
+    .unwrap();
     let source = std::fs::read_to_string(bundle("ts")?)?;
     let directory = tempfile::tempdir()?;
     let directory = Utf8Path::from_path(directory.path()).unwrap();
     let cache = directory.join("native-cache");
-    let input = directory.join("template.wasm");
     let output = directory.join("output.wasm");
-    for i in 0..20u8 {
-        let mut guest = template.clone();
-        wasm_encoder::CustomSection {
-            name: "cache-case".into(),
-            data: vec![i].into(),
+    std::fs::create_dir(&cache)?;
+    let now = SystemTime::now();
+    for (name, module_age, stats_age) in [("hot", 40, 0), ("cold", 20, 10), ("recent", 1, 1)] {
+        for (suffix, length, age) in [
+            ("", 180 * 1024 * 1024, module_age),
+            (".stats", 1, stats_age),
+        ] {
+            let file = File::create(cache.join(format!("{name}{suffix}")))?;
+            file.set_len(length)?;
+            file.set_times(FileTimes::new().set_modified(now - Duration::from_secs(age * 86400)))?;
         }
-        .append_to_component(&mut guest);
-        std::fs::write(&input, guest)?;
-        let stats = preinitialize_js(&input, &output, source.clone(), Some(cache.as_std_path()))
-            .await?
-            .compilation_cache
-            .unwrap();
-        assert!(stats.misses > 0, "each distinct guest must compile");
-        let size: u64 = walkdir::WalkDir::new(&cache)
-            .into_iter()
-            .map(|entry| {
-                let entry = entry?;
-                Ok::<_, anyhow::Error>(if entry.file_type().is_file() {
-                    entry.metadata()?.len()
-                } else {
-                    0
-                })
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .into_iter()
-            .sum();
-        assert!(
-            size <= JS_COMPILATION_CACHE_MAX_BYTES,
-            "cache grew to {size} bytes after guest {i}"
-        );
     }
+    for name in ["entry.wip-123", ".cleanup.wip-123", "maintenance.lock"] {
+        std::fs::write(cache.join(name), "in progress")?;
+    }
+    preinitialize_js(&guest, &output, source, Some(cache.as_std_path())).await?;
+    for name in [
+        "hot",
+        "hot.stats",
+        "recent",
+        "recent.stats",
+        "entry.wip-123",
+        ".cleanup.wip-123",
+        "maintenance.lock",
+    ] {
+        assert!(cache.join(name).exists(), "must retain {name}");
+    }
+    assert!(!cache.join("cold").exists());
+    assert!(!cache.join("cold.stats").exists());
+    let size: u64 = walkdir::WalkDir::new(&cache)
+        .into_iter()
+        .map(|entry| {
+            let entry = entry?;
+            Ok::<_, anyhow::Error>(if entry.file_type().is_file() {
+                entry.metadata()?.len()
+            } else {
+                0
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .sum();
+    assert!(size <= JS_COMPILATION_CACHE_MAX_BYTES * 4 / 5);
     Ok(())
 }
