@@ -586,22 +586,34 @@ mod tests {
         let env = EnvironmentName("env".to_string());
         let agent = AgentTypeName("agent".to_string());
 
+        let admin_id = AccountId(Uuid::new_v4());
         for (account_id, email, expected_env) in [
             (alice_id, "alice@test.com", alice_env),
             (bob_id, "bob@test.com", bob_env),
             (alice_id, "alice@test.com", alice_env),
             (bob_id, "bob@test.com", bob_env),
         ] {
-            let auth = AuthCtx::agent_with_effective_surface(
-                account_id,
-                golem_common::model::account::AccountEmail::new(email),
-                Default::default(),
-            );
-            let resolved = cache
-                .resolve(&app, &env, &agent, None, &auth)
-                .await
-                .unwrap();
-            assert_eq!(resolved.environment_id, expected_env);
+            for auth in [
+                AuthCtx::agent_with_effective_surface(
+                    account_id,
+                    golem_common::model::account::AccountEmail::new(email),
+                    Default::default(),
+                ),
+                AuthCtx::admin_impersonation(
+                    admin_id,
+                    account_id,
+                    golem_common::model::account::AccountEmail::new(email),
+                    Default::default(),
+                    golem_common::model::plan::PlanId(Uuid::nil()),
+                    Default::default(),
+                ),
+            ] {
+                let resolved = cache
+                    .resolve(&app, &env, &agent, None, &auth)
+                    .await
+                    .unwrap();
+                assert_eq!(resolved.environment_id, expected_env);
+            }
         }
     }
 
@@ -620,23 +632,35 @@ mod tests {
         let env = EnvironmentName("env".to_string());
         let agent = AgentTypeName("agent".to_string());
 
+        let admin_id = AccountId(Uuid::new_v4());
         for (account_id, email, expected_env) in [
             (alice_id, "alice@test.com", alice_env),
             (bob_id, "bob@test.com", bob_env),
             (alice_id, "alice@test.com", alice_env),
             (bob_id, "bob@test.com", bob_env),
         ] {
-            let auth = AuthCtx::agent_with_effective_surface(
-                account_id,
-                golem_common::model::account::AccountEmail::new(email),
-                Default::default(),
-            );
-            let resolved = cache
-                .resolve_pinned(&app, &env, &agent, revision, None, &auth)
-                .await
-                .unwrap();
-            assert_eq!(resolved.environment_id, expected_env);
-            assert_eq!(resolved.deployment_revision, revision);
+            for auth in [
+                AuthCtx::agent_with_effective_surface(
+                    account_id,
+                    golem_common::model::account::AccountEmail::new(email),
+                    Default::default(),
+                ),
+                AuthCtx::admin_impersonation(
+                    admin_id,
+                    account_id,
+                    golem_common::model::account::AccountEmail::new(email),
+                    Default::default(),
+                    golem_common::model::plan::PlanId(Uuid::nil()),
+                    Default::default(),
+                ),
+            ] {
+                let resolved = cache
+                    .resolve_pinned(&app, &env, &agent, revision, None, &auth)
+                    .await
+                    .unwrap();
+                assert_eq!(resolved.environment_id, expected_env);
+                assert_eq!(resolved.deployment_revision, revision);
+            }
         }
     }
 
