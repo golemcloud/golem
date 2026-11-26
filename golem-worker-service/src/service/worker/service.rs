@@ -515,6 +515,28 @@ impl AgentAccess {
         }
     }
 
+    /// A creation of the agent, which a caller that may invoke `resource` on it may make.
+    fn create_agent(resource: AgentResourcePattern) -> Self {
+        Self::new(
+            CatalogOperation::CreateAgent,
+            Resource::None,
+            [AgentPermission::Agent(AgentVerb::Invoke, resource)],
+        )
+    }
+
+    /// A methodless upsert: `invoke` on any one method of the selected agent, or of the keyed
+    /// agent if it does not exist yet. Today's check is `invoke : *`.
+    fn upsert_agent() -> Self {
+        Self::new(
+            CatalogOperation::UpsertAgent,
+            Resource::AnyOneMethod,
+            [AgentPermission::Agent(
+                AgentVerb::Invoke,
+                AgentResourcePattern::Any,
+            )],
+        )
+    }
+
     /// An invocation in `mode`: a lookup views the agent, a method call invokes it, and a start
     /// without a method creates it.
     fn invocation(mode: i32, method_name: Option<&String>) -> Self {
@@ -1257,8 +1279,8 @@ impl WorkerService {
     }
 
     /// Creates the agent of `target`, which `component` implements, or joins it when
-    /// `ignore_already_existing` is set. The caller needs to be allowed to invoke `resource`
-    /// on the agent.
+    /// `ignore_already_existing` is set. `access` is what the request decides: a creation, or a
+    /// methodless upsert.
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
@@ -1271,19 +1293,10 @@ impl WorkerService {
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
-        resource: AgentResourcePattern,
+        access: AgentAccess,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
-        self.authorize_routed(
-            &auth_ctx,
-            component,
-            target,
-            &AgentAccess::new(
-                CatalogOperation::CreateAgent,
-                Resource::None,
-                [AgentPermission::Agent(AgentVerb::Invoke, resource)],
-            ),
-        )
-        .await?;
+        self.authorize_routed(&auth_ctx, component, target, &access)
+            .await?;
 
         let (agent_id, fingerprint) = self
             .worker_client
@@ -1392,7 +1405,7 @@ impl WorkerService {
                 invocation_context,
                 caller,
                 idempotency_key,
-                resource,
+                AgentAccess::create_agent(resource),
             )
             .await
         }
@@ -4104,7 +4117,7 @@ impl WorkerService {
                 None,
                 caller.into(),
                 Some(request_key.owner_key("create")),
-                AgentResourcePattern::Any,
+                AgentAccess::create_agent(AgentResourcePattern::Any),
             )
             .await?;
 
@@ -4146,7 +4159,7 @@ impl WorkerService {
                 None,
                 caller,
                 None,
-                AgentResourcePattern::Any,
+                AgentAccess::upsert_agent(),
             )
             .await?;
 
