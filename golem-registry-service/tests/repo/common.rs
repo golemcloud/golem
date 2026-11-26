@@ -677,6 +677,69 @@ pub async fn test_an_api_token_revoke_writes_one_audit_record(deps: &Deps) {
     assert!(records.len() == 1, "{records:?}");
 }
 
+/// A revoke whose audit record cannot be written is not a refusal: it answers that the audit is
+/// unavailable, and the token stays.
+pub async fn test_an_api_token_revoke_whose_record_cannot_be_written_is_unavailable(deps: &Deps) {
+    use golem_common::model::card::owner::AccountOwnerPattern;
+    use golem_common::model::card::{
+        AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, EffectiveSurface,
+        GrantSurface, PermissionTarget,
+    };
+    use golem_registry_service::repo::token::{DbTokenRepo, TokenRepo};
+    use golem_registry_service::services::token::{TokenError, TokenService};
+
+    let account = deps.create_account().await;
+    let account_id = AccountId(account.revision.account_id);
+    let token_repo: Arc<dyn TokenRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbTokenRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbTokenRepo::new(pool.clone())),
+    };
+    let tokens = TokenService::new(
+        token_repo.clone(),
+        deps.account_service(),
+        deps.test_registry_change_notifier(),
+        crate::repo::failing_decisions(),
+    );
+    let token = tokens
+        .create(
+            account_id,
+            Utc::now() + chrono::Duration::days(1),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    // A caller that may view and revoke the account's tokens.
+    let token_grant = |verb| {
+        PermissionTarget::AccountToken(ClassPermissionTarget {
+            verb: Some(verb),
+            owner: AccountOwnerPattern::Account {
+                account: AccountEmail::new(account.revision.email.clone()),
+            },
+            resource: AccountTokenResourcePattern::Any,
+        })
+    };
+    let auth = AuthCtx::agent_with_effective_surface(
+        AccountId::new(),
+        AccountEmail::new("revoker@example.com"),
+        EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![
+                    token_grant(AccountTokenVerb::View),
+                    token_grant(AccountTokenVerb::Delete),
+                ],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        },
+    );
+
+    let error = tokens.delete(token.id, &auth).await.unwrap_err();
+
+    let_assert!(TokenError::Unauthorized(AuthorizationError::AuditUnavailable(_)) = error);
+    assert!(token_repo.get_by_id(token.id.0).await.unwrap().is_some());
+}
+
 /// One request makes one decision and writes one audit record: the creation of an account.
 pub async fn test_an_account_create_writes_one_audit_record(deps: &Deps) {
     use golem_common::model::account::AccountCreation;

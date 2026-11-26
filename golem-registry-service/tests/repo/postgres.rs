@@ -357,6 +357,16 @@ async fn test_an_api_token_revoke_writes_one_audit_record(
 }
 
 #[test]
+async fn test_an_api_token_revoke_whose_record_cannot_be_written_is_unavailable(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_an_api_token_revoke_whose_record_cannot_be_written_is_unavailable(
+        deps,
+    )
+    .await;
+}
+
+#[test]
 async fn test_an_account_create_writes_one_audit_record(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
