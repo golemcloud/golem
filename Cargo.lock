@@ -4589,9 +4589,11 @@ dependencies = [
  "async-fs",
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-runtime",
  "aws-sdk-s3",
  "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "axum",
  "base64 0.22.1",
  "bigdecimal",
@@ -4616,9 +4618,12 @@ dependencies = [
  "http-body-util",
  "humantime-serde",
  "hyper",
+ "hyper-rustls",
  "hyper-util",
+ "if-addrs",
  "include_dir",
  "indexmap 2.14.2",
+ "ipnet",
  "jiff 1.0.3",
  "lazy_static",
  "libsqlite3-sys",
@@ -5881,6 +5886,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "if_chain"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6065,6 +6080,7 @@ dependencies = [
  "anyhow",
  "assert2",
  "async-trait",
+ "aws-sdk-s3",
  "axum",
  "backtrace-on-stack-overflow",
  "base64 0.22.1",

@@ -958,6 +958,7 @@ exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-
 exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-service --test "*" -- --nocapture --report-time %{JUNIT_OPTS}
 exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-shard-manager --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-test-framework --test signal_unreaped_child -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test volume-client -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group6]
