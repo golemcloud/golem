@@ -2339,8 +2339,9 @@ mod tests {
 
     #[test]
     async fn an_oplog_export_of_a_growing_oplog_ends_at_the_end_of_the_oplog_at_its_first_page() {
-        // The oplog ends at index 4 at the first read, and grows by 2 entries on each read. A page
-        // holds at most 2 entries, so a read that follows the end of the oplog never ends.
+        // The oplog ends at index 6 at the first read, and grows by 2 entries on each read. A page
+        // holds at most 2 entries, so a read that follows the end of the oplog never ends. The
+        // export reads 3 pages, so the second and the third page read the closed range.
         let reads = std::sync::atomic::AtomicU64::new(0);
         let writer = OplogJsonlWriter::new(
             Vec::new(),
@@ -2352,7 +2353,7 @@ mod tests {
             OplogRange::ALL,
             |range: OplogRange, cursor: Option<OplogCursor>| {
                 let read = reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let oplog_last = 4 + 2 * read;
+                let oplog_last = 6 + 2 * read;
                 let from = cursor.map_or(1, |cursor| cursor.next_oplog_index);
                 let range_last = range
                     .last_index_in(OplogIndex::from_u64(oplog_last))
@@ -2374,8 +2375,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(count, 4);
-        assert_eq!(String::from_utf8(written).unwrap().lines().count(), 4);
+        assert_eq!(count, 6);
+        assert_eq!(String::from_utf8(written).unwrap().lines().count(), 6);
     }
 
     #[test]
