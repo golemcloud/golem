@@ -17,6 +17,7 @@ use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::mcp::CompiledMcp;
 use crate::model::agent_secret::AgentSecret;
 use crate::model::auth::AuthCtx;
+use crate::model::auth::audit::{AuditRecord, AuditSink, AuditSinkError};
 use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
 use crate::model::mcp_import::McpImportObservation;
@@ -55,6 +56,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetGolemIssuerRequest, ResolveAgentTypeNameRequest, get_golem_issuer_response,
     resolve_agent_type_name_response,
 };
+use golem_api_grpc::proto::golem::registry::v1::{RecordAuditRequest, record_audit_response};
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
@@ -560,6 +562,37 @@ impl GrpcRegistryService {
         Self {
             client,
             config: config.clone(),
+        }
+    }
+}
+
+/// The audit sink of a service without a database: it sends each record to the registry, which
+/// stores it in its staging table. A record sent again after a lost answer is stored once.
+#[async_trait]
+impl AuditSink for GrpcRegistryService {
+    async fn record(&self, record: AuditRecord) -> Result<(), AuditSinkError> {
+        let request = RecordAuditRequest {
+            record: serde_json::to_string(&record)
+                .map_err(|error| AuditSinkError::Unavailable(error.to_string()))?,
+        };
+        let response = self
+            .client
+            .call("record_audit", move |client| {
+                Box::pin(client.record_audit(request.clone()))
+            })
+            .await
+            .map_err(|error| {
+                AuditSinkError::Unavailable(RegistryServiceError::from(error).to_string())
+            })?
+            .into_inner();
+        match response.result {
+            Some(record_audit_response::Result::Success(_)) => Ok(()),
+            Some(record_audit_response::Result::Error(error)) => Err(AuditSinkError::Unavailable(
+                RegistryServiceError::from(error).to_string(),
+            )),
+            None => Err(AuditSinkError::Unavailable(
+                RegistryServiceError::empty_response().to_string(),
+            )),
         }
     }
 }

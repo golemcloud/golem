@@ -22,7 +22,7 @@ use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
-use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::config::{AuditConfig, BlobStorageConfig};
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::http_server::HttpServerConfig;
@@ -78,6 +78,8 @@ pub struct WorkerServiceConfig {
     /// (`/v1/components/:component_id/workers/:agent_name/connect`).
     #[serde(default)]
     pub connect_websocket: WebSocketTransportLimits,
+    #[serde(default)]
+    pub audit: AuditConfig,
 }
 
 impl WorkerServiceConfig {
@@ -242,6 +244,8 @@ impl SafeDisplay for WorkerServiceConfig {
             "connect WebSocket limits: {:?}",
             self.connect_websocket
         );
+        let _ = writeln!(&mut result, "audit:");
+        let _ = writeln!(&mut result, "{}", self.audit.to_safe_string_indented());
 
         result
     }
@@ -279,6 +283,7 @@ impl Default for WorkerServiceConfig {
             http_server: HttpServerConfig::default(),
             body_limits: RequestBodyLimits::default(),
             connect_websocket: WebSocketTransportLimits::default(),
+            audit: AuditConfig::default(),
         }
     }
 }

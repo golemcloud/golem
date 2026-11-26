@@ -104,6 +104,8 @@ use golem_common::schema::{
 };
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::audit::DecisionAudit;
+use golem_service_base::model::auth::surface::Surface;
 use golem_service_base::model::auth::{
     AuthCtx, AuthorizationError, Authorizer, CompatibilityAuthorizer, decide_with_todays_checks,
 };
@@ -862,6 +864,17 @@ impl ManagedAgent {
     }
 }
 
+/// Why a request asks whether its caller may see the agents of a type.
+#[derive(Clone, Copy, Debug)]
+enum TypeQuestion {
+    /// The request lists agents. The listing decides itself, so its decision has its audit
+    /// record, allowed or denied.
+    Listing(Surface),
+    /// A lookup before another operation, which decides and records itself. The lookup writes
+    /// nothing; its caller records the refusal that answers the request, and only that one.
+    Lookup(Surface),
+}
+
 pub struct WorkerService {
     component_service: Arc<dyn ComponentService>,
     _auth_service: Arc<dyn AuthService>,
@@ -870,6 +883,7 @@ pub struct WorkerService {
     agent_resolution_cache: Arc<AgentResolutionCache>,
     agent_types: Arc<AgentTypeResolver>,
     golem_issuer: GolemIssuer,
+    audit: DecisionAudit,
     /// The decision requests that this service made. Only its unit tests count them; production
     /// builds do not compile this field.
     #[cfg(test)]
@@ -950,6 +964,7 @@ impl WorkerService {
         agent_resolution_cache: Arc<AgentResolutionCache>,
         agent_types: Arc<AgentTypeResolver>,
         golem_issuer: GolemIssuer,
+        audit: DecisionAudit,
     ) -> Self {
         Self {
             component_service,
@@ -959,6 +974,7 @@ impl WorkerService {
             agent_resolution_cache,
             agent_types,
             golem_issuer,
+            audit,
             #[cfg(test)]
             decisions: Arc::default(),
         }
@@ -971,24 +987,67 @@ impl WorkerService {
         auth: &AuthCtx,
         component: &Component,
         agent_type: &AgentTypeName,
-    ) -> bool {
+        question: TypeQuestion,
+    ) -> WorkerResult<bool> {
         if auth.is_system() {
-            return true;
+            return Ok(true);
         }
-        let Ok(listing) = list_agents(component) else {
-            return false;
+        let Ok(operation) = list_agents(component) else {
+            return Ok(false);
         };
-        let authorizer =
-            CompatibilityAuthorizer::new(auth.clone(), Vec::new()).with_type_checks([(
-                agent_type.clone(),
-                vec![agent_type_check(component, agent_type)],
-            )]);
-        let request = self.entry_request(auth, listing);
-        authorizer
-            .scope(&request)
-            .await
-            .agent_types
-            .contains(agent_type)
+        let check = agent_type_check(component, agent_type);
+        match question {
+            TypeQuestion::Listing(surface) => {
+                match self
+                    .decide_with(
+                        &self.audit,
+                        auth,
+                        self.entry_request(auth, operation),
+                        vec![vec![check].into()],
+                        surface,
+                    )
+                    .await
+                {
+                    Ok(_) => Ok(true),
+                    Err(error @ AuthorizationError::AuditUnavailable(_)) => Err(error.into()),
+                    Err(_) => Ok(false),
+                }
+            }
+            TypeQuestion::Lookup(_) => {
+                let authorizer = CompatibilityAuthorizer::new(auth.clone(), Vec::new())
+                    .with_type_checks([(agent_type.clone(), vec![check])]);
+                let request = self.entry_request(auth, operation);
+                Ok(authorizer
+                    .scope(&request)
+                    .await
+                    .agent_types
+                    .contains(agent_type))
+            }
+        }
+    }
+
+    /// Records the refused lookup of `agent_type`, which `component` implements, when that
+    /// refusal is the request's answer: the same type-wide check, decided with an audit that
+    /// records denials only. A lost record does not change the answer.
+    async fn record_type_refusal(
+        &self,
+        auth: &AuthCtx,
+        component: &Component,
+        agent_type: &AgentTypeName,
+        surface: Surface,
+    ) {
+        let Ok(operation) = list_agents(component) else {
+            return;
+        };
+        let _ = self
+            .decide_with(
+                &self.audit.denials_only(),
+                auth,
+                self.entry_request(auth, operation),
+                vec![vec![agent_type_check(component, agent_type)].into()],
+                surface,
+            )
+            .await;
     }
 
     /// The caller of a request that an account token authenticated: the account in both roles.
@@ -1013,22 +1072,53 @@ impl WorkerService {
         access: &AgentAccess,
         operation: Operation,
         checks: Vec<PartChecks>,
+        surface: Surface,
     ) -> Result<Grantors, AuthorizationError> {
-        let request =
-            access.decision_request(operation, |operation| self.entry_request(auth, operation));
+        self.decide_with(
+            &self.audit,
+            auth,
+            self.access_request(auth, access, operation),
+            checks,
+            surface,
+        )
+        .await
+    }
+
+    /// The decision request of `operation` of `access`: for the caller that the access names, else
+    /// for the account of `auth`.
+    fn access_request(
+        &self,
+        auth: &AuthCtx,
+        access: &AgentAccess,
+        operation: Operation,
+    ) -> AuthorizationRequest {
+        access.decision_request(operation, |operation| self.entry_request(auth, operation))
+    }
+
+    /// Decides `request` from today's checks, with the records written as `audit` says.
+    async fn decide_with(
+        &self,
+        audit: &DecisionAudit,
+        auth: &AuthCtx,
+        request: AuthorizationRequest,
+        checks: Vec<PartChecks>,
+        surface: Surface,
+    ) -> Result<Grantors, AuthorizationError> {
         #[cfg(test)]
         self.decisions
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        decide_with_todays_checks(auth, request, checks).await
+        decide_with_todays_checks(auth, request, checks, audit, surface).await
     }
 
-    /// Decides `access` on one agent. An owner without an agent type has no decision target, so
-    /// it keeps today's checks.
+    /// Decides `access` on one agent, with the records written as `audit` says. An owner without
+    /// an agent type has no decision target, so it keeps today's checks.
     async fn decide_on_agent(
         &self,
+        audit: &DecisionAudit,
         auth: &AuthCtx,
         agent: DecidedAgent<'_>,
         access: &AgentAccess,
+        surface: Surface,
     ) -> Result<(), AuthorizationError> {
         let todays_checks = || {
             access.permissions.iter().try_for_each(|permission| {
@@ -1049,7 +1139,13 @@ impl WorkerService {
         };
         match access.decision(target, &agent.owner) {
             Ok((operation, checks)) => self
-                .decide(auth, access, operation, checks)
+                .decide_with(
+                    audit,
+                    auth,
+                    self.access_request(auth, access, operation),
+                    checks,
+                    surface,
+                )
                 .await
                 .map(|_| ()),
             Err(error) => {
@@ -1069,10 +1165,13 @@ impl WorkerService {
         agent: &ManagedAgent,
         auth_ctx: &AuthCtx,
         access: &AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<()> {
-        self.decide_on_agent(auth_ctx, agent.decided(), access)
+        self.decide_on_agent(&self.audit, auth_ctx, agent.decided(), access, surface)
             .await
-            .map_err(|_| WorkerServiceError::AgentAccessDenied(agent.agent_id.agent_id))
+            .map_err(|error| {
+                error.hide_denial(|| WorkerServiceError::AgentAccessDenied(agent.agent_id.agent_id))
+            })
     }
 
     /// Decides `access` on the agent of a request that names it by its key or creates it, against
@@ -1083,6 +1182,7 @@ impl WorkerService {
         component: &Component,
         target: &RoutedTarget,
         access: &AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<()> {
         let agent = DecidedAgent {
             environment_id: component.environment_id,
@@ -1091,7 +1191,7 @@ impl WorkerService {
             fingerprint: None,
             owner: agent_owner(component, target.agent_id, target.agent_type.clone()),
         };
-        self.decide_on_agent(auth_ctx, agent, access)
+        self.decide_on_agent(&self.audit, auth_ctx, agent, access, surface)
             .await
             .map_err(AuthServiceError::Unauthorized)?;
         Ok(())
@@ -1108,6 +1208,7 @@ impl WorkerService {
         tool_name: &str,
         command_path: &[String],
         access: &AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<()> {
         let owner = agent_owner(component, owner_agent, None);
         let checks = access
@@ -1130,7 +1231,7 @@ impl WorkerService {
             });
         let result = match operation {
             Ok(operation) if !access.is_lookup() => self
-                .decide(auth_ctx, access, operation, vec![checks.into()])
+                .decide(auth_ctx, access, operation, vec![checks.into()], surface)
                 .await
                 .map(|_| ()),
             other => {
@@ -1157,6 +1258,7 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
         access: &AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<ManagedAgent> {
         match self
             .worker_client
@@ -1180,13 +1282,15 @@ impl WorkerService {
                 if expected_fingerprint
                     .is_some_and(|expected| expected != agent.metadata.fingerprint)
                 {
-                    self.authorize_managed(&agent, auth_ctx, access).await?;
+                    self.authorize_managed(&agent, auth_ctx, access, surface)
+                        .await?;
                     return Err(WorkerServiceError::AgentNotFound(agent_id.agent_id));
                 }
                 Ok(agent)
             }
             Err(error) if is_agent_not_found(&error) => {
-                self.authorize_missing(agent_id, auth_ctx, access).await?;
+                self.authorize_missing(agent_id, auth_ctx, access, surface)
+                    .await?;
                 Err(WorkerServiceError::AgentNotFound(agent_id.agent_id))
             }
             Err(error) => Err(error),
@@ -1200,11 +1304,13 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
         access: &AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<ManagedAgent> {
         let agent = self
-            .read_agent(agent_id, expected_fingerprint, auth_ctx, access)
+            .read_agent(agent_id, expected_fingerprint, auth_ctx, access, surface)
             .await?;
-        self.authorize_managed(&agent, auth_ctx, access).await?;
+        self.authorize_managed(&agent, auth_ctx, access, surface)
+            .await?;
         Ok(agent)
     }
 
@@ -1213,6 +1319,7 @@ impl WorkerService {
         agent_id: &OwnedAgentId,
         auth_ctx: &AuthCtx,
         access: &AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<()> {
         if auth_ctx.is_system() {
             return Ok(());
@@ -1251,19 +1358,23 @@ impl WorkerService {
             fingerprint: None,
             owner: agent_owner(&component, agent_id.agent_id, Some(tagged.name.clone())),
         };
-        self.decide_on_agent(auth_ctx, agent, access)
+        // The agent does not exist: an allowed caller learns only that, so the decision records
+        // a denial but no allowed read or control.
+        self.decide_on_agent(&self.audit.denials_only(), auth_ctx, agent, access, surface)
             .await
-            .map_err(|_| denied())
+            .map_err(|error| error.hide_denial(denied))
     }
 
     /// The agent type of the environment's current deployment that has the name, with the
     /// component revision that implements it. A caller without the permission to view the
-    /// type's agents gets not found, as from the registry's lookup by names.
+    /// type's agents gets not found, as from the registry's lookup by names, and the refusal
+    /// gets its audit record.
     pub async fn deployed_agent_type(
         &self,
         environment_id: EnvironmentId,
         agent_type_name: &AgentTypeName,
         auth_ctx: &AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<(Arc<RegisteredAgentType>, Component)> {
         let not_found = || {
             WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(format!(
@@ -1286,9 +1397,16 @@ impl WorkerService {
             return Err(not_found());
         }
         if !self
-            .may_list_agent_type(auth_ctx, &component, agent_type_name)
-            .await
+            .may_list_agent_type(
+                auth_ctx,
+                &component,
+                agent_type_name,
+                TypeQuestion::Lookup(surface),
+            )
+            .await?
         {
+            self.record_type_refusal(auth_ctx, &component, agent_type_name, surface)
+                .await;
             return Err(not_found());
         }
         Ok((registered, component))
@@ -1296,13 +1414,46 @@ impl WorkerService {
 
     /// Authorizes the retained namespace before scanning agents, without requiring its
     /// current implementer. Every returned agent still needs its recorded owner's permission.
+    /// A lookup that the caller may make on no registration is not found, and its first refusal
+    /// is the answer that gets a record.
     async fn retained_agent_types(
         &self,
         environment_id: EnvironmentId,
         name: &AgentTypeName,
         auth: &AuthCtx,
+        question: TypeQuestion,
     ) -> WorkerResult<Vec<(RegisteredAgentType, Component)>> {
+        let (allowed, refused) = self
+            .split_retained_agent_types(environment_id, name, auth, question)
+            .await?;
+        if allowed.is_empty() {
+            if let (TypeQuestion::Lookup(surface), Some((_, component))) =
+                (question, refused.first())
+            {
+                self.record_type_refusal(auth, component, name, surface)
+                    .await;
+            }
+            return Err(
+                RegistryServiceError::NotFound(format!("Agent type {name} not found")).into(),
+            );
+        }
+        Ok(allowed)
+    }
+
+    /// The retained registrations of the type that the caller may see, and the ones it may not
+    /// see. A lookup records no refusal here: its caller records the one that answers it.
+    async fn split_retained_agent_types(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+        auth: &AuthCtx,
+        question: TypeQuestion,
+    ) -> WorkerResult<(
+        Vec<(RegisteredAgentType, Component)>,
+        Vec<(RegisteredAgentType, Component)>,
+    )> {
         let mut allowed = Vec::new();
+        let mut refused = Vec::new();
         for registered in self.agent_types.retained(environment_id, name).await? {
             let component = self
                 .component_service
@@ -1311,16 +1462,16 @@ impl WorkerService {
                     registered.implemented_by.component_revision,
                 )
                 .await?;
-            if self.may_list_agent_type(auth, &component, name).await {
+            if self
+                .may_list_agent_type(auth, &component, name, question)
+                .await?
+            {
                 allowed.push((registered, component));
+            } else {
+                refused.push((registered, component));
             }
         }
-        if allowed.is_empty() {
-            return Err(
-                RegistryServiceError::NotFound(format!("Agent type {name} not found")).into(),
-            );
-        }
-        Ok(allowed)
+        Ok((allowed, refused))
     }
 
     /// The fingerprint of the incarnation a streaming invocation reaches. An expected
@@ -1392,8 +1543,9 @@ impl WorkerService {
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         access: AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
-        self.authorize_routed(&auth_ctx, component, target, &access)
+        self.authorize_routed(&auth_ctx, component, target, &access, surface)
             .await?;
 
         let (agent_id, fingerprint) = self
@@ -1436,6 +1588,7 @@ impl WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         invocation: Option<InvocationStart>,
+        surface: Surface,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
         let component = self
             .component_service
@@ -1471,6 +1624,7 @@ impl WorkerService {
                     Resource::None,
                     [AgentPermission::Agent(AgentVerb::Invoke, resource.clone())],
                 ),
+                surface,
             )
             .await?;
         if prepare {
@@ -1490,6 +1644,7 @@ impl WorkerService {
                 idempotency_key,
                 freshness_disposition,
                 invocation,
+                surface,
             )
             .await
         } else {
@@ -1504,6 +1659,7 @@ impl WorkerService {
                 caller,
                 idempotency_key,
                 AgentAccess::create_agent(resource),
+                surface,
             )
             .await
         }
@@ -1525,6 +1681,7 @@ impl WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         invocation: Option<InvocationStart>,
+        surface: Surface,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
         if invocation
             .as_ref()
@@ -1539,6 +1696,7 @@ impl WorkerService {
             component,
             target,
             &AgentAccess::invoke(&method_name),
+            surface,
         )
         .await?;
 
@@ -1568,6 +1726,7 @@ impl WorkerService {
         agent_id: &OwnedAgentId,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<ConnectWorkerStream> {
         let agent = self
             .managed_agent(
@@ -1579,6 +1738,7 @@ impl WorkerService {
                     AgentVerb::View,
                     AgentResourcePattern::Empty,
                 ),
+                surface,
             )
             .await?;
         let account_id = agent.component.account_id;
@@ -1610,6 +1770,7 @@ impl WorkerService {
         agent_id: &OwnedAgentId,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<()> {
         // Deleting an agent that does not exist is an error, and that answer has to survive
         // the routing layer's retries. A retried delete cannot tell "I already deleted it"
@@ -1625,6 +1786,7 @@ impl WorkerService {
                     AgentVerb::Delete,
                     AgentResourcePattern::Empty,
                 ),
+                surface,
             )
             .await?;
 
@@ -1646,6 +1808,7 @@ impl WorkerService {
         promise_id: PromiseId,
         data: Vec<u8>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<bool> {
         let agent_id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
         self.managed_agent(
@@ -1656,6 +1819,7 @@ impl WorkerService {
                 promise_id.clone(),
                 AgentPermission::Agent(AgentVerb::Invoke, AgentResourcePattern::Any),
             ),
+            surface,
         )
         .await?;
 
@@ -1673,6 +1837,7 @@ impl WorkerService {
         recover_immediately: bool,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<()> {
         let agent = self
             .managed_agent(
@@ -1684,6 +1849,7 @@ impl WorkerService {
                     AgentVerb::Interrupt,
                     AgentResourcePattern::Empty,
                 ),
+                surface,
             )
             .await?;
 
@@ -1705,6 +1871,7 @@ impl WorkerService {
         agent_id: &OwnedAgentId,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<AgentMetadataDto> {
         let agent = self
             .managed_agent(
@@ -1716,6 +1883,7 @@ impl WorkerService {
                     AgentVerb::View,
                     AgentResourcePattern::Empty,
                 ),
+                surface,
             )
             .await?;
         Ok(agent.metadata)
@@ -1733,9 +1901,15 @@ impl WorkerService {
         count: u64,
         precise: bool,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
         let registered = self
-            .retained_agent_types(environment_id, agent_type_name, &auth_ctx)
+            .retained_agent_types(
+                environment_id,
+                agent_type_name,
+                &auth_ctx,
+                TypeQuestion::Listing(surface),
+            )
             .await?;
 
         let (cursor, agents) = self
@@ -1801,6 +1975,7 @@ impl WorkerService {
         force: bool,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<()> {
         let agent = self
             .managed_agent(
@@ -1812,6 +1987,7 @@ impl WorkerService {
                     AgentVerb::Resume,
                     AgentResourcePattern::Empty,
                 ),
+                surface,
             )
             .await?;
 
@@ -1840,6 +2016,7 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         requester: Option<Caller>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<OplogIndex> {
         let agent = self
             .managed_agent(
@@ -1847,6 +2024,7 @@ impl WorkerService {
                 expected_fingerprint,
                 &auth_ctx,
                 &AgentAccess::update_revision(requester.clone()),
+                surface,
             )
             .await?;
 
@@ -1878,6 +2056,7 @@ impl WorkerService {
         range: Option<OplogRangeRead>,
         claims: ClaimVisibility,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let start = cursor
             .as_ref()
@@ -1901,6 +2080,7 @@ impl WorkerService {
                     end,
                 ))],
             ),
+            surface,
         )
         .await?;
 
@@ -1930,6 +2110,7 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         claims: ClaimVisibility,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError> {
         self.managed_agent(
             agent_id,
@@ -1943,6 +2124,7 @@ impl WorkerService {
                     Some(oplog_index.into()),
                 ))],
             ),
+            surface,
         )
         .await?;
 
@@ -1969,6 +2151,7 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         claims: ClaimVisibility,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         self.managed_agent(
             agent_id,
@@ -1979,6 +2162,7 @@ impl WorkerService {
                 Resource::None,
                 [AgentPermission::Oplog(OplogResourcePattern::Any)],
             ),
+            surface,
         )
         .await?;
 
@@ -2001,6 +2185,7 @@ impl WorkerService {
         path: CanonicalFilePath,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
         let agent = self
             .managed_agent(
@@ -2015,6 +2200,7 @@ impl WorkerService {
                         AgentPermission::filesystem(FilesystemVerb::List, &path)?,
                     ],
                 ),
+                surface,
             )
             .await?;
 
@@ -2034,6 +2220,7 @@ impl WorkerService {
         agent_id: &OwnedAgentId,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<Vec<StoredCard>> {
         let agent = self
             .managed_agent(
@@ -2045,6 +2232,7 @@ impl WorkerService {
                     AgentVerb::View,
                     AgentResourcePattern::Empty,
                 ),
+                surface,
             )
             .await?;
 
@@ -2070,6 +2258,7 @@ impl WorkerService {
         selection: FileByteSelection,
         environment_id: EnvironmentId,
         account_id: AccountId,
+        surface: Surface,
     ) -> WorkerResult<FileReadResponse> {
         validate_file_read_path(path)?;
         let path =
@@ -2121,6 +2310,7 @@ impl WorkerService {
                     Resource::Path(path.as_abs_str().to_string()),
                     [AgentPermission::filesystem(FilesystemVerb::Read, &path)?],
                 ),
+                surface,
             )
             .await
             .map_err(|error| {
@@ -2167,6 +2357,7 @@ impl WorkerService {
         path: CanonicalFilePath,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let agent = self
             .managed_agent(
@@ -2178,6 +2369,7 @@ impl WorkerService {
                     Resource::Path(path.as_abs_str().to_string()),
                     [AgentPermission::filesystem(FilesystemVerb::Read, &path)?],
                 ),
+                surface,
             )
             .await?;
 
@@ -2242,6 +2434,7 @@ impl WorkerService {
         verb: AgentVerb,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<AgentFingerprint> {
         let operation = if verb == AgentVerb::DeactivatePlugin {
             CatalogOperation::DeactivateProcessor
@@ -2255,14 +2448,20 @@ impl WorkerService {
                 expected_fingerprint,
                 auth_ctx,
                 &access(AgentResourcePattern::Any),
+                surface,
             )
             .await?;
         let plugin_name = Self::agent_plugin_name(&agent, plugin_priority);
         let plugin_name = match plugin_name {
             Ok(plugin_name) => plugin_name,
             Err(error) => {
-                self.authorize_managed(&agent, auth_ctx, &access(AgentResourcePattern::Any))
-                    .await?;
+                self.authorize_managed(
+                    &agent,
+                    auth_ctx,
+                    &access(AgentResourcePattern::Any),
+                    surface,
+                )
+                .await?;
                 return Err(error);
             }
         };
@@ -2272,6 +2471,7 @@ impl WorkerService {
             &access(AgentResourcePattern::PluginName(AgentPluginName(
                 plugin_name,
             ))),
+            surface,
         )
         .await?;
         Ok(agent.metadata.fingerprint)
@@ -2283,6 +2483,7 @@ impl WorkerService {
         plugin_priority: PluginPriority,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<()> {
         let fingerprint = self
             .plugin_agent(
@@ -2291,6 +2492,7 @@ impl WorkerService {
                 AgentVerb::ActivatePlugin,
                 expected_fingerprint,
                 &auth_ctx,
+                surface,
             )
             .await?;
 
@@ -2311,6 +2513,7 @@ impl WorkerService {
         plugin_priority: PluginPriority,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<()> {
         let fingerprint = self
             .plugin_agent(
@@ -2319,6 +2522,7 @@ impl WorkerService {
                 AgentVerb::DeactivatePlugin,
                 expected_fingerprint,
                 &auth_ctx,
+                surface,
             )
             .await?;
 
@@ -2344,6 +2548,7 @@ impl WorkerService {
         caller: Option<Caller>,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<AgentId> {
         let agent = self
             .managed_agent(
@@ -2351,6 +2556,7 @@ impl WorkerService {
                 expected_fingerprint,
                 &auth_ctx,
                 &AgentAccess::fork(caller.clone()),
+                surface,
             )
             .await?;
 
@@ -2389,9 +2595,17 @@ impl WorkerService {
         target: RevertWorkerTarget,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<()> {
-        self.revert_worker_prepared(agent_id, target, None, expected_fingerprint, auth_ctx)
-            .await
+        self.revert_worker_prepared(
+            agent_id,
+            target,
+            None,
+            expected_fingerprint,
+            auth_ctx,
+            surface,
+        )
+        .await
     }
 
     pub async fn revert_worker_prepared(
@@ -2401,6 +2615,7 @@ impl WorkerService {
         prepared_revert: Option<ResolvedRevert>,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<()> {
         let agent = self
             .read_agent(
@@ -2412,6 +2627,7 @@ impl WorkerService {
                     AgentVerb::Revert,
                     AgentResourcePattern::Any,
                 ),
+                surface,
             )
             .await?;
 
@@ -2449,6 +2665,7 @@ impl WorkerService {
                                 AgentVerb::Revert,
                                 AgentResourcePattern::Any,
                             ),
+                            surface,
                         )
                         .await?;
                         return Err(error);
@@ -2471,6 +2688,7 @@ impl WorkerService {
                 AgentVerb::Revert,
                 AgentResourcePattern::OplogIndex(last_oplog_index.into()),
             ),
+            surface,
         )
         .await?;
 
@@ -2494,6 +2712,7 @@ impl WorkerService {
         idempotency_key: &IdempotencyKey,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<bool> {
         let accepted_id = parse_final_invocation_id(&idempotency_key.value)?;
         let invocation_id = AgentInvocationIdPattern::Uuid(accepted_id.0);
@@ -2510,6 +2729,7 @@ impl WorkerService {
                         AgentResourcePattern::InvocationId(invocation_id),
                     ),
                 ),
+                surface,
             )
             .await?;
 
@@ -2610,6 +2830,7 @@ impl WorkerService {
         expected_consumer_fingerprint: AgentFingerprint,
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<bool> {
         self.managed_agent(
             &OwnedAgentId::new(producer_environment_id, producer_agent_id),
@@ -2619,6 +2840,7 @@ impl WorkerService {
                 AgentVerb::Invoke,
                 AgentResourcePattern::Any,
             )]),
+            surface,
         )
         .await?;
         self.worker_client
@@ -2643,6 +2865,7 @@ impl WorkerService {
         expected_consumer_fingerprint: Option<AgentFingerprint>,
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<Vec<u8>> {
         let read: golem_common::model::durable_stream::DurableStreamReadRequest =
             golem_common::serialization::deserialize(&payload)
@@ -2657,6 +2880,7 @@ impl WorkerService {
                         AgentVerb::View,
                         AgentResourcePattern::Any,
                     )]),
+                    surface,
                 )
                 .await?;
             }
@@ -2719,6 +2943,7 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
         access: AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<(RoutedTarget, Component)> {
         match (target, constructor) {
             (AgentTarget::Key(key), None) => {
@@ -2741,7 +2966,7 @@ impl WorkerService {
                     &component,
                     &ParsedAgentKey::from(key),
                 )?;
-                self.authorize_routed(auth_ctx, &component, &target, &access)
+                self.authorize_routed(auth_ctx, &component, &target, &access, surface)
                     .await?;
                 Ok((target, component))
             }
@@ -2755,7 +2980,7 @@ impl WorkerService {
                     .creating_component(environment_id, component_id)
                     .await?;
                 let target = RoutedTarget::unkeyed(agent_id, &component, &constructor)?;
-                self.authorize_routed(auth_ctx, &component, &target, &access)
+                self.authorize_routed(auth_ctx, &component, &target, &access, surface)
                     .await?;
                 Ok((target, component))
             }
@@ -2766,6 +2991,7 @@ impl WorkerService {
                         expected_fingerprint,
                         auth_ctx,
                         &access,
+                        surface,
                     )
                     .await?;
                 Ok((agent.routed(), agent.component))
@@ -2879,6 +3105,7 @@ impl WorkerService {
         request_key: &InvocationRequestKey,
         operation: &str,
         auth_ctx: &AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<(RoutedTarget, Component, InvocationFreshnessDisposition)> {
         let (registered, component) = self
             .implementing_component(component_id, agent_type)
@@ -2952,6 +3179,7 @@ impl WorkerService {
             &component,
             &target,
             &AgentAccess::invoke(operation),
+            surface,
         )
         .await?;
         Ok((target, component, freshness_disposition))
@@ -2978,6 +3206,7 @@ impl WorkerService {
         caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
+        surface: Surface,
     ) -> WorkerResult<AgentInvocationOutput> {
         let (target, component) = self
             .resolve_requested_target(
@@ -2989,6 +3218,7 @@ impl WorkerService {
                 expected_fingerprint,
                 &auth_ctx,
                 AgentAccess::invocation(mode, method_name.as_ref(), request_key_text(&request_key)),
+                surface,
             )
             .await?;
         let freshness_disposition = if trusted_internal_caller {
@@ -3029,6 +3259,7 @@ impl WorkerService {
         &self,
         mut start: InvocationStart,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<AgentInvocationOutput> {
         let environment_id = start_environment_id(&start)?;
         let AgentTarget::Id(agent_id) = start_target(&start)? else {
@@ -3053,6 +3284,7 @@ impl WorkerService {
                     invocation_id,
                     AgentPermission::Agent(AgentVerb::View, AgentResourcePattern::Any),
                 ),
+                surface,
             )
             .await?;
         agent.routed().apply(&mut start);
@@ -3072,6 +3304,7 @@ impl WorkerService {
         tail: InvocationRequestStream,
         trusted_internal_caller: bool,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<InvocationResponseStream> {
         let environment_id = start_environment_id(&start)?;
         let observation_only =
@@ -3141,6 +3374,7 @@ impl WorkerService {
                 &tool.tool_name,
                 &command_path,
                 &access,
+                surface,
             )
             .await?;
             if let Some(tool) = start.external_tool.as_mut() {
@@ -3163,6 +3397,7 @@ impl WorkerService {
                 expected_fingerprint,
                 &auth_ctx,
                 access,
+                surface,
             )
             .await?
         };
@@ -3341,6 +3576,7 @@ impl WorkerService {
             PublicStreamReference,
             Option<&SchemaType>,
         ) -> Result<SchemaValueStream, PublicSchemaValueError>,
+        surface: Surface,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
         let app_name = ApplicationName::try_from(start.selector.application)
             .map_err(WorkerServiceError::TypeChecker)?;
@@ -3420,6 +3656,7 @@ impl WorkerService {
                     &component,
                     &target,
                     &AgentAccess::invoke(&method_name),
+                    surface,
                 )
                 .await?;
                 (target, component, None)
@@ -3442,6 +3679,7 @@ impl WorkerService {
                         expected_fingerprint,
                         &auth,
                         AgentAccess::invoke(&method_name),
+                        surface,
                     )
                     .await?;
                 if target.agent_type.as_ref() != Some(&agent_type_name) {
@@ -3554,11 +3792,12 @@ impl WorkerService {
         mut resume: ResumeAttach,
         tail: InvocationRequestStream,
         auth: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<InvocationResponseStream> {
         let caller: golem_api_grpc::proto::golem::component::Caller =
             self.rest_caller(&auth).into();
         resume.caller = Some(caller);
-        self.resume_agent_session(resume, tail, auth).await
+        self.resume_agent_session(resume, tail, auth, surface).await
     }
 
     pub(crate) async fn selected_public_method_schema(
@@ -3612,6 +3851,7 @@ impl WorkerService {
         resume: PublicAgentSessionResume,
         tail: InvocationRequestStream,
         auth: AuthCtx,
+        surface: Surface,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
         let app_name = ApplicationName::try_from(resume.session.application.clone())
             .map_err(WorkerServiceError::TypeChecker)?;
@@ -3622,7 +3862,9 @@ impl WorkerService {
             method: method_name,
         } = &resume.identity.target
         else {
-            return self.resume_public_tool_session_v1(resume, tail, auth).await;
+            return self
+                .resume_public_tool_session_v1(resume, tail, auth, surface)
+                .await;
         };
         let agent_type_name = AgentTypeName(agent_type.clone());
         let resolved = self
@@ -3674,6 +3916,7 @@ impl WorkerService {
                     AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
                 )],
             ),
+            surface,
         )
         .await?;
         let output_schema = None;
@@ -3730,6 +3973,7 @@ impl WorkerService {
         tail: InvocationRequestStream,
         auth: AuthCtx,
         validate_identity: impl FnOnce(&SessionAgentIdentity) -> Result<(), PublicSchemaValueError>,
+        surface: Surface,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
         let caller = self.rest_caller(&auth);
         let request_key = InvocationRequestKey::external(
@@ -3743,6 +3987,7 @@ impl WorkerService {
             caller,
             request_key,
             validate_identity,
+            surface,
         )
         .await
     }
@@ -3755,6 +4000,7 @@ impl WorkerService {
         caller: Caller,
         request_key: InvocationRequestKey,
         validate_identity: impl FnOnce(&SessionAgentIdentity) -> Result<(), PublicSchemaValueError>,
+        surface: Surface,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
         let app_name = ApplicationName::try_from(start.application)
             .map_err(WorkerServiceError::TypeChecker)?;
@@ -3778,6 +4024,7 @@ impl WorkerService {
                 false,
                 AgentVerb::Invoke,
                 &auth,
+                surface,
             )
             .await?;
         if component.application_name != app_name || component.environment_name != env_name {
@@ -3882,6 +4129,7 @@ impl WorkerService {
         resume: PublicAgentSessionResume,
         tail: InvocationRequestStream,
         auth: AuthCtx,
+        surface: Surface,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
         let app_name = ApplicationName::try_from(resume.session.application.clone())
             .map_err(WorkerServiceError::TypeChecker)?;
@@ -3929,6 +4177,7 @@ impl WorkerService {
                 AgentVerb::Invoke,
                 AgentResourcePattern::Any,
             )]),
+            surface,
         )
         .await?;
         let caller: golem_api_grpc::proto::golem::component::Caller =
@@ -3978,6 +4227,7 @@ impl WorkerService {
         mut resume: ResumeAttach,
         tail: InvocationRequestStream,
         auth: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<InvocationResponseStream> {
         let agent_id: AgentId = resume
             .agent_id
@@ -4001,6 +4251,7 @@ impl WorkerService {
                 AgentVerb::Invoke,
                 AgentResourcePattern::Any,
             )]),
+            surface,
         )
         .await?;
         resume.auth_ctx = Some(auth.into());
@@ -4114,6 +4365,7 @@ impl WorkerService {
         request: CreateAgentRequest,
         idempotency_key: Option<IdempotencyKey>,
         caller: Caller,
+        surface: Surface,
     ) -> WorkerResult<AgentReference> {
         if request.keyed {
             return Err(WorkerServiceError::TypeChecker(
@@ -4135,6 +4387,7 @@ impl WorkerService {
             idempotency_key,
             AuthCtx::System,
             caller,
+            surface,
         )
         .await
     }
@@ -4151,9 +4404,10 @@ impl WorkerService {
         request: CreateAgentRequest,
         idempotency_key: Option<IdempotencyKey>,
         auth: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<AgentReference> {
         let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
+            .deployed_agent_type(environment_id, agent_type_name, &auth, surface)
             .await?;
         let caller = self.rest_caller(&auth);
         self.create_resolved_agent(
@@ -4163,6 +4417,7 @@ impl WorkerService {
             idempotency_key,
             auth,
             caller,
+            surface,
         )
         .await
     }
@@ -4175,6 +4430,7 @@ impl WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         auth: AuthCtx,
         caller: Caller,
+        surface: Surface,
     ) -> WorkerResult<AgentReference> {
         let environment_id = component.environment_id;
         if registered.agent_type.mode == AgentMode::Ephemeral {
@@ -4213,6 +4469,7 @@ impl WorkerService {
                 caller.into(),
                 Some(request_key.owner_key("create")),
                 AgentAccess::create_agent(AgentResourcePattern::Any),
+                surface,
             )
             .await?;
 
@@ -4229,9 +4486,10 @@ impl WorkerService {
         agent_type_name: &AgentTypeName,
         request: AgentKeyRequest,
         auth: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<AgentReference> {
         let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
+            .deployed_agent_type(environment_id, agent_type_name, &auth, surface)
             .await?;
         if registered.agent_type.mode == AgentMode::Ephemeral {
             return Err(WorkerServiceError::TypeChecker(
@@ -4255,6 +4513,7 @@ impl WorkerService {
                 caller,
                 None,
                 AgentAccess::upsert_agent(),
+                surface,
             )
             .await?;
 
@@ -4272,9 +4531,15 @@ impl WorkerService {
         agent_type_name: &AgentTypeName,
         request: AgentKeyRequest,
         auth: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<AgentReference> {
         let mut retained = self
-            .retained_agent_types(environment_id, agent_type_name, &auth)
+            .retained_agent_types(
+                environment_id,
+                agent_type_name,
+                &auth,
+                TypeQuestion::Lookup(surface),
+            )
             .await?;
         let (registered, component) = match self
             .agent_types
@@ -4313,6 +4578,7 @@ impl WorkerService {
                     AgentVerb::View,
                     AgentResourcePattern::Empty,
                 ),
+                surface,
             )
             .await?;
         if agent.metadata.canonical_key.as_deref() != Some(key.to_string().as_str()) {
@@ -4344,6 +4610,7 @@ impl WorkerService {
         lookup: bool,
         verb: AgentVerb,
         auth: &AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<(
         RoutedTarget,
         Component,
@@ -4365,6 +4632,7 @@ impl WorkerService {
                             tool_name,
                             command_path,
                         ),
+                        surface,
                     )
                     .await?;
                 if !lookup && agent.metadata.owner_kind != OwnerKind::ComponentAgent {
@@ -4427,8 +4695,7 @@ impl WorkerService {
                         CatalogOperation::InvokeTool,
                         Resource::None,
                         [AgentPermission::Agent(verb, AgentResourcePattern::Any)],
-                    ),
-                )
+                    ), surface,)
                 .await?;
                 Ok((target, component, None, true, command_path))
             }
@@ -4445,6 +4712,7 @@ impl WorkerService {
         request: NativeToolInvocationRequest,
         idempotency_key: Option<IdempotencyKey>,
         auth: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<NativeToolInvocationResponse> {
         let lookup = matches!(request.mode, NativeToolInvocationMode::Lookup);
         if lookup
@@ -4501,6 +4769,7 @@ impl WorkerService {
                 lookup,
                 agent_verb_for_invocation_mode(proto_mode),
                 &auth,
+                surface,
             )
             .await?;
 
@@ -4597,6 +4866,7 @@ impl WorkerService {
         environment_id: EnvironmentId,
         request: NativeToolDescribeRequest,
         auth: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<NativeToolDefinition> {
         let (component, owner) = match (request.agent_id, request.component_id) {
             (Some(agent_id), None) => {
@@ -4610,6 +4880,7 @@ impl WorkerService {
                             AgentVerb::View,
                             AgentResourcePattern::Any,
                         ),
+                        surface,
                     )
                     .await?;
                 let agent_type_name =
@@ -4731,6 +5002,7 @@ impl WorkerService {
         request: AgentInvocationRequest,
         idempotency_key: Option<IdempotencyKey>,
         auth: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<AgentInvocationResult> {
         let method_name = request.method.clone();
         let proto_mode = match request.mode {
@@ -4748,8 +5020,13 @@ impl WorkerService {
         let (target, component, freshness_disposition) =
             match (request.agent_id, request.parameters) {
                 (Some(agent_id), None) => {
-                    let retained = self
-                        .retained_agent_types(environment_id, agent_type_name, &auth)
+                    let (retained, refused) = self
+                        .split_retained_agent_types(
+                            environment_id,
+                            agent_type_name,
+                            &auth,
+                            TypeQuestion::Lookup(surface),
+                        )
                         .await
                         .map_err(|error| match error {
                             WorkerServiceError::RegistryServiceError(
@@ -4757,10 +5034,25 @@ impl WorkerService {
                             ) => WorkerServiceError::AgentNotFound(agent_id),
                             other => other,
                         })?;
-                    if !retained
-                        .iter()
-                        .any(|(registered, _)| agent_id.type_id() == Some(registered.type_id))
-                    {
+                    let of_the_agent = |(registered, _): &&(RegisteredAgentType, Component)| {
+                        agent_id.type_id() == Some(registered.type_id)
+                    };
+                    if !retained.iter().any(|entry| of_the_agent(&entry)) {
+                        // The refusal that answers the request gets its record: the refusal of the
+                        // agent's own registration, else the first one when none is allowed. A
+                        // refusal of another registration is not the answer, so it writes nothing.
+                        let answer = refused
+                            .iter()
+                            .find(of_the_agent)
+                            .or(if retained.is_empty() {
+                                refused.first()
+                            } else {
+                                None
+                            });
+                        if let Some((_, component)) = answer {
+                            self.record_type_refusal(&auth, component, agent_type_name, surface)
+                                .await;
+                        }
                         return Err(WorkerServiceError::AgentNotFound(agent_id));
                     }
                     let agent = self
@@ -4769,6 +5061,7 @@ impl WorkerService {
                             expected_fingerprint,
                             &auth,
                             &access,
+                            surface,
                         )
                         .await?;
                     if agent.metadata.agent_type_name.as_ref() != Some(agent_type_name) {
@@ -4782,7 +5075,7 @@ impl WorkerService {
                 }
                 (None, Some(parameters)) => {
                     let (registered, component) = self
-                        .deployed_agent_type(environment_id, agent_type_name, &auth)
+                        .deployed_agent_type(environment_id, agent_type_name, &auth, surface)
                         .await?;
                     let constructor = Self::rest_constructor(&registered, parameters)?;
                     let (target, freshness_disposition) = Self::invocation_target(
@@ -4793,7 +5086,7 @@ impl WorkerService {
                         &request_key,
                         &method_name,
                     )?;
-                    self.authorize_routed(&auth, &component, &target, &access)
+                    self.authorize_routed(&auth, &component, &target, &access, surface)
                         .await?;
                     let freshness_disposition = if expected_fingerprint.is_some() {
                         InvocationFreshnessDisposition::MayExist
@@ -4988,6 +5281,7 @@ pub use invocations::InvocationListQuery;
 #[cfg(test)]
 mod tests {
     use golem_common::model::caller::ClaimVisibility;
+    use golem_service_base::model::auth::surface::Surface;
 
     fn test_golem_issuer() -> GolemIssuer {
         "https://golem.test".parse().unwrap()
@@ -5163,6 +5457,8 @@ mod tests {
     struct TestRegistryService {
         resolved: ResolvedAgentType,
         removed: bool,
+        /// More retained registrations of the type, after the resolved one.
+        older: Vec<RegisteredAgentType>,
     }
 
     #[async_trait]
@@ -5349,8 +5645,9 @@ mod tests {
             let registered = &self.resolved.registered_agent_type;
             Ok((environment_id == self.resolved.environment_id
                 && *name == registered.agent_type.type_name)
-                .then(|| registered.clone())
+                .then(|| std::iter::once(registered.clone()).chain(self.older.iter().cloned()))
                 .into_iter()
+                .flatten()
                 .collect())
         }
 
@@ -6430,6 +6727,7 @@ mod tests {
             *worker_client.metadata_environment_id.lock().unwrap() = Some(environment_id);
             let registry = Arc::new(TestRegistryService {
                 removed: false,
+                older: Vec::new(),
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -6480,6 +6778,7 @@ mod tests {
                     agent_resolution_cache,
                     agent_types,
                     test_golem_issuer(),
+                    crate::service::worker::test_audit::test_audit(),
                 ),
                 worker_client,
                 agent_type_name,
@@ -6538,6 +6837,7 @@ mod tests {
             *worker_client.metadata_environment_id.lock().unwrap() = Some(environment_id);
             let registry = Arc::new(TestRegistryService {
                 removed: false,
+                older: Vec::new(),
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -6577,6 +6877,7 @@ mod tests {
                     agent_resolution_cache,
                     agent_types,
                     test_golem_issuer(),
+                    crate::service::worker::test_audit::test_audit(),
                 ),
                 worker_client,
                 agent_type_name,
@@ -6645,6 +6946,7 @@ mod tests {
                     request,
                     idempotency_key,
                     auth,
+                    Surface::Rest,
                 )
                 .await
         }
@@ -6914,6 +7216,7 @@ mod tests {
             .unwrap();
         harness.worker_service.agent_types = agent_type_resolver(Arc::new(TestRegistryService {
             removed: true,
+            older: Vec::new(),
             resolved: ResolvedAgentType {
                 registered_agent_type: RegisteredAgentType {
                     type_id: harness.type_id,
@@ -6940,6 +7243,7 @@ mod tests {
                     parameters: empty_json_tuple(),
                 },
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -6965,6 +7269,7 @@ mod tests {
                 10,
                 false,
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -6986,6 +7291,7 @@ mod tests {
                 request,
                 None,
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await;
         assert!(
@@ -7001,6 +7307,7 @@ mod tests {
                         parameters: empty_json_tuple()
                     },
                     AuthCtx::system(),
+                    Surface::Rest,
                 )
                 .await
                 .is_err(),
@@ -7060,6 +7367,7 @@ mod tests {
                     10,
                     false,
                     AuthCtx::system(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap();
@@ -7174,6 +7482,7 @@ mod tests {
                     Some(key.clone()),
                     InvocationFreshnessDisposition::MayExist,
                     None,
+                    Surface::Rest,
                 )
                 .await;
             if allowed {
@@ -7218,6 +7527,7 @@ mod tests {
                     input: Some(SchemaValue::Record { fields: vec![] }.try_into().unwrap()),
                     ..Default::default()
                 }),
+                Surface::Rest,
             )
             .await;
         assert!(
@@ -7272,6 +7582,7 @@ mod tests {
                 key,
                 InvocationFreshnessDisposition::MayExist,
                 None,
+                Surface::Rest,
             )
         };
 
@@ -7327,6 +7638,7 @@ mod tests {
                 &IdempotencyKey::from("raw-request-key"),
                 None,
                 AuthCtx::System,
+                Surface::Rest,
             )
             .await;
         assert!(result.unwrap_err().to_string().contains("expected a UUID"));
@@ -7371,17 +7683,17 @@ mod tests {
 
         harness
             .worker_service
-            .delete(&owned, None, auth_ctx.clone())
+            .delete(&owned, None, auth_ctx.clone(), Surface::Rest)
             .await
             .unwrap();
         harness
             .worker_service
-            .interrupt(&owned, false, None, auth_ctx.clone())
+            .interrupt(&owned, false, None, auth_ctx.clone(), Surface::Rest)
             .await
             .unwrap();
         harness
             .worker_service
-            .resume(&owned, false, None, auth_ctx.clone())
+            .resume(&owned, false, None, auth_ctx.clone(), Surface::Rest)
             .await
             .unwrap();
         harness
@@ -7394,6 +7706,7 @@ mod tests {
                 None,
                 None,
                 auth_ctx.clone(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -7408,6 +7721,7 @@ mod tests {
                     None,
                     None,
                     auth_ctx.clone(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap(),
@@ -7424,17 +7738,18 @@ mod tests {
                 None,
                 ClaimVisibility::Hidden,
                 auth_ctx.clone(),
+                Surface::Rest,
             )
             .await
             .unwrap();
         harness
             .worker_service
-            .get_file_system_node(&owned, path.clone(), None, auth_ctx.clone())
+            .get_file_system_node(&owned, path.clone(), None, auth_ctx.clone(), Surface::Rest)
             .await
             .unwrap();
         let _contents = harness
             .worker_service
-            .get_file_contents(&owned, path, None, auth_ctx.clone())
+            .get_file_contents(&owned, path, None, auth_ctx.clone(), Surface::Rest)
             .await
             .unwrap();
         assert!(
@@ -7445,6 +7760,7 @@ mod tests {
                     &IdempotencyKey::new(invocation_id.to_string()),
                     None,
                     auth_ctx,
+                    Surface::Rest,
                 )
                 .await
                 .unwrap()
@@ -7497,6 +7813,7 @@ mod tests {
                 None,
                 ClaimVisibility::Hidden,
                 auth_ctx.clone(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -7510,6 +7827,7 @@ mod tests {
                 None,
                 ClaimVisibility::Shown,
                 auth_ctx.clone(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -7525,6 +7843,7 @@ mod tests {
                         None,
                         claims,
                         auth_ctx.clone(),
+                        Surface::Rest,
                     )
                     .await
                     .is_err(),
@@ -7569,6 +7888,7 @@ mod tests {
                     None,
                     claims,
                     allowed.clone(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap();
@@ -7582,6 +7902,7 @@ mod tests {
                     None,
                     claims,
                     allowed.clone(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap();
@@ -7599,6 +7920,7 @@ mod tests {
                         None,
                         claims,
                         denied.clone(),
+                        Surface::Rest,
                     )
                     .await
                     .is_err()
@@ -7614,6 +7936,7 @@ mod tests {
                         None,
                         claims,
                         denied.clone(),
+                        Surface::Rest,
                     )
                     .await
                     .is_err()
@@ -7660,12 +7983,18 @@ mod tests {
 
         harness
             .worker_service
-            .activate_plugin(&owned, PluginPriority(7), None, auth_ctx.clone())
+            .activate_plugin(
+                &owned,
+                PluginPriority(7),
+                None,
+                auth_ctx.clone(),
+                Surface::Rest,
+            )
             .await
             .unwrap();
         harness
             .worker_service
-            .deactivate_plugin(&owned, PluginPriority(7), None, auth_ctx)
+            .deactivate_plugin(&owned, PluginPriority(7), None, auth_ctx, Surface::Rest)
             .await
             .unwrap();
         assert_eq!(
@@ -7691,6 +8020,7 @@ mod tests {
                     PluginPriority(7),
                     None,
                     auth_ctx_with_permissions(vec![wrong_permission]),
+                    Surface::Rest,
                 )
                 .await
                 .is_err()
@@ -7732,6 +8062,7 @@ mod tests {
                 }),
                 None,
                 auth_ctx_with_permissions(vec![exact_permission.clone()]),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -7744,6 +8075,7 @@ mod tests {
                 }),
                 None,
                 auth_ctx_with_permissions(vec![exact_permission]),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -7762,6 +8094,7 @@ mod tests {
                         AgentVerb::Revert,
                         AgentResourcePattern::OplogIndex(OplogIndex::from_u64(41).into()),
                     )]),
+                    Surface::Rest,
                 )
                 .await
                 .is_err(),
@@ -7788,7 +8121,7 @@ mod tests {
 
         let missing = harness
             .worker_service
-            .revert_worker(&owned, target(), None, unauthorized.clone())
+            .revert_worker(&owned, target(), None, unauthorized.clone(), Surface::Rest)
             .await;
         assert!(
             matches!(missing, Err(WorkerServiceError::AgentAccessDenied(_))),
@@ -7805,7 +8138,7 @@ mod tests {
             .unwrap() = Some("Could not find 1000 invocations to revert".to_string());
         let existing = harness
             .worker_service
-            .revert_worker(&owned, target(), None, unauthorized)
+            .revert_worker(&owned, target(), None, unauthorized, Surface::Rest)
             .await;
         assert!(
             matches!(existing, Err(WorkerServiceError::AgentAccessDenied(_))),
@@ -7814,7 +8147,7 @@ mod tests {
 
         let authorized = harness
             .worker_service
-            .revert_worker(&owned, target(), None, AuthCtx::system())
+            .revert_worker(&owned, target(), None, AuthCtx::system(), Surface::Rest)
             .await;
         assert!(
             matches!(authorized, Err(WorkerServiceError::GolemError(_))),
@@ -7976,6 +8309,7 @@ mod tests {
                     harness.worker_service.agent_types =
                         agent_type_resolver(Arc::new(TestRegistryService {
                             removed: false,
+                            older: Vec::new(),
                             resolved: ResolvedAgentType {
                                 registered_agent_type: RegisteredAgentType {
                                     type_id: harness.type_id,
@@ -8045,6 +8379,7 @@ mod tests {
                         FileByteSelection::Full,
                         harness.environment_id,
                         AccountId::new(),
+                        Surface::Rest,
                     )
                     .await;
                 let readable = matches!(state, "existing" | "retained-owner")
@@ -8135,6 +8470,7 @@ mod tests {
             harness.create_request(false),
             None,
             Caller::anonymous(),
+            Surface::Rest,
         );
         let deploy = async {
             gate.started.acquire().await.unwrap().forget();
@@ -8204,6 +8540,7 @@ mod tests {
                 None,
                 None,
                 auth.clone(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8217,6 +8554,7 @@ mod tests {
                 Some(explicit.clone()),
                 None,
                 auth.clone(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8250,6 +8588,7 @@ mod tests {
                     None,
                     None,
                     auth.clone(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap();
@@ -8291,6 +8630,7 @@ mod tests {
                 None,
                 Some(requester.clone()),
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8318,6 +8658,7 @@ mod tests {
                 harness.create_request(true),
                 None,
                 auth.clone(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8351,6 +8692,7 @@ mod tests {
                 harness.create_request(true),
                 None,
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8386,6 +8728,7 @@ mod tests {
                     harness.create_request(keyed),
                     None,
                     AuthCtx::system(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap_err();
@@ -8416,6 +8759,7 @@ mod tests {
                         harness.create_request(false),
                         Some(key.clone()),
                         auth.clone(),
+                        Surface::Rest,
                     )
                     .await
                     .unwrap()
@@ -8442,6 +8786,7 @@ mod tests {
                         harness.create_request(false),
                         None,
                         auth.clone(),
+                        Surface::Rest,
                     )
                     .await
                     .unwrap()
@@ -8474,6 +8819,7 @@ mod tests {
                     parameters: empty_json_tuple(),
                 },
                 auth,
+                Surface::Rest,
             )
         };
         assert!(matches!(
@@ -8525,6 +8871,7 @@ mod tests {
                         harness.create_request(false),
                         Some(key),
                         auth,
+                        Surface::Rest,
                     )
                     .await
                     .unwrap()
@@ -8599,6 +8946,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 AuthCtx::system(),
                 |_, _| panic!("stream resolver called for a stream-free input"),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8724,6 +9072,7 @@ mod tests {
                     Box::pin(stream::empty()),
                     AuthCtx::system(),
                     |_, _| panic!("stream-free input"),
+                    Surface::Rest,
                 )
                 .await;
             if case == "existing" {
@@ -8789,6 +9138,7 @@ mod tests {
                     Box::pin(stream::empty()),
                     AuthCtx::system(),
                     |_, _| panic!("rejected input"),
+                    Surface::Rest,
                 )
                 .await;
             assert!(matches!(
@@ -8827,6 +9177,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 AuthCtx::system(),
                 |_, _| panic!("stream-free input"),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8847,6 +9198,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 AuthCtx::system(),
                 |_, _| panic!("stream resolver called for a rejected start"),
+                Surface::Rest,
             )
             .await;
 
@@ -8890,6 +9242,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 AuthCtx::system(),
                 |_, _| panic!("stream bindings must wait for the selected execution schema"),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8930,6 +9283,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 AuthCtx::system(),
                 |_, _| panic!("stream resolver called for a stream-free input"),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8957,6 +9311,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 AuthCtx::system(),
                 |_, _| panic!("stream resolver called for a stream-free input"),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -8997,7 +9352,13 @@ mod tests {
 
         let _responses = harness
             .worker_service
-            .invoke_agent_session(start, Box::pin(stream::empty()), true, AuthCtx::system())
+            .invoke_agent_session(
+                start,
+                Box::pin(stream::empty()),
+                true,
+                AuthCtx::system(),
+                Surface::Rest,
+            )
             .await
             .unwrap();
 
@@ -9028,7 +9389,7 @@ mod tests {
         let stale_caller = resume.caller.clone();
         let _responses = harness
             .worker_service
-            .resume_public_agent_session(resume, Box::pin(stream::empty()), auth)
+            .resume_public_agent_session(resume, Box::pin(stream::empty()), auth, Surface::Rest)
             .await
             .unwrap();
 
@@ -9069,6 +9430,7 @@ mod tests {
                 takeover.clone(),
                 Box::pin(stream::empty()),
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -9120,7 +9482,12 @@ mod tests {
 
         let _responses = harness
             .worker_service
-            .resume_agent_session(resume, Box::pin(stream::empty()), AuthCtx::system())
+            .resume_agent_session(
+                resume,
+                Box::pin(stream::empty()),
+                AuthCtx::system(),
+                Surface::Rest,
+            )
             .await
             .unwrap();
 
@@ -9145,7 +9512,12 @@ mod tests {
 
         let error = match harness
             .worker_service
-            .resume_public_agent_session(resume, Box::pin(stream::empty()), AuthCtx::system())
+            .resume_public_agent_session(
+                resume,
+                Box::pin(stream::empty()),
+                AuthCtx::system(),
+                Surface::Rest,
+            )
             .await
         {
             Err(error) => error,
@@ -9174,7 +9546,12 @@ mod tests {
 
         let error = match harness
             .worker_service
-            .resume_public_agent_session(harness.public_resume(), Box::pin(stream::empty()), auth)
+            .resume_public_agent_session(
+                harness.public_resume(),
+                Box::pin(stream::empty()),
+                auth,
+                Surface::Rest,
+            )
             .await
         {
             Err(error) => error,
@@ -9236,6 +9613,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 auth,
                 |_, _| panic!("stream resolver called before authorization"),
+                Surface::Rest,
             )
             .await
         {
@@ -9331,6 +9709,7 @@ mod tests {
                         Caller::anonymous().into(),
                         None,
                         fingerprint,
+                        Surface::Rest,
                     )
                     .await
                     .unwrap();
@@ -9393,6 +9772,7 @@ mod tests {
                 Caller::anonymous().into(),
                 None,
                 fingerprint,
+                Surface::Rest,
             )
         };
 
@@ -9447,6 +9827,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 true,
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await;
         assert!(
@@ -9465,6 +9846,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 true,
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await;
         assert!(
@@ -9535,6 +9917,7 @@ mod tests {
                     Caller::anonymous().into(),
                     None,
                     None,
+                    Surface::Rest,
                 )
                 .await;
             assert!(result.is_ok(), "unexpected result: {result:?}");
@@ -9609,6 +9992,7 @@ mod tests {
             components.get_current_by_id(a.id).await.unwrap();
             let agent_types = agent_type_resolver(Arc::new(TestRegistryService {
                 removed: false,
+                older: Vec::new(),
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -9714,6 +10098,7 @@ mod tests {
                 harness.worker_service.agent_resolution_cache.clone(),
                 agent_types,
                 test_golem_issuer(),
+                crate::service::worker::test_audit::test_audit(),
             ));
             let handler = CallAgentHandler::new(worker_service.clone());
             let mut request = RichRequest::new(
@@ -9762,6 +10147,7 @@ mod tests {
                     Caller::anonymous().into(),
                     None,
                     None,
+                    Surface::Rest,
                 )
             };
             invoke(input)
@@ -9978,6 +10364,7 @@ mod tests {
                     &request_key,
                     "run",
                     &AuthCtx::system(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap();
@@ -10011,6 +10398,7 @@ mod tests {
                     &request_key,
                     "run",
                     &AuthCtx::system(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap();
@@ -10046,6 +10434,7 @@ mod tests {
                 Box::pin(stream::empty()),
                 true,
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -10091,7 +10480,13 @@ mod tests {
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32;
         let _responses = harness
             .worker_service
-            .invoke_agent_session(start, Box::pin(stream::empty()), false, AuthCtx::system())
+            .invoke_agent_session(
+                start,
+                Box::pin(stream::empty()),
+                false,
+                AuthCtx::system(),
+                Surface::Rest,
+            )
             .await
             .unwrap();
 
@@ -10227,6 +10622,7 @@ mod tests {
                     &prepared,
                     method,
                     &AuthCtx::System,
+                    Surface::Rest,
                 )
                 .await
                 .unwrap();
@@ -10241,7 +10637,13 @@ mod tests {
             target.apply(&mut start);
             let _ = harness
                 .worker_service
-                .invoke_agent_session(start, Box::pin(stream::empty()), true, AuthCtx::System)
+                .invoke_agent_session(
+                    start,
+                    Box::pin(stream::empty()),
+                    true,
+                    AuthCtx::System,
+                    Surface::Rest,
+                )
                 .await
                 .unwrap();
             let (owner, admitted) = harness
@@ -10266,7 +10668,13 @@ mod tests {
             assert_eq!(admitted.idempotency_key, Some(raw.clone().into()));
             let _ = harness
                 .worker_service
-                .invoke_agent_session(admitted, Box::pin(stream::empty()), true, AuthCtx::System)
+                .invoke_agent_session(
+                    admitted,
+                    Box::pin(stream::empty()),
+                    true,
+                    AuthCtx::System,
+                    Surface::Rest,
+                )
                 .await
                 .unwrap();
             assert_eq!(
@@ -10306,6 +10714,7 @@ mod tests {
                     ..Default::default()
                 },
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -10373,6 +10782,7 @@ mod tests {
                     parameters: empty_json_tuple(),
                 },
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -10430,9 +10840,12 @@ mod tests {
             ] {
                 let read = harness
                     .worker_service
-                    .get_metadata(&agent, None, auth.clone())
+                    .get_metadata(&agent, None, auth.clone(), Surface::Rest)
                     .await;
-                let delete = harness.worker_service.delete(&agent, None, auth).await;
+                let delete = harness
+                    .worker_service
+                    .delete(&agent, None, auth, Surface::Rest)
+                    .await;
                 for error in [read.unwrap_err(), delete.unwrap_err()] {
                     if allowed {
                         assert!(
@@ -10455,11 +10868,16 @@ mod tests {
         for auth in [authorized, auth_ctx_with_permissions(vec![])] {
             let read = harness
                 .worker_service
-                .get_metadata(&missing_environment_agent, None, auth.clone())
+                .get_metadata(
+                    &missing_environment_agent,
+                    None,
+                    auth.clone(),
+                    Surface::Rest,
+                )
                 .await;
             let delete = harness
                 .worker_service
-                .delete(&missing_environment_agent, None, auth)
+                .delete(&missing_environment_agent, None, auth, Surface::Rest)
                 .await;
             for error in [read.unwrap_err(), delete.unwrap_err()] {
                 assert!(
@@ -10498,7 +10916,12 @@ mod tests {
 
         let err = harness
             .worker_service
-            .delete(&harness.some_agent_id(), None, AuthCtx::system())
+            .delete(
+                &harness.some_agent_id(),
+                None,
+                AuthCtx::system(),
+                Surface::Rest,
+            )
             .await
             .expect_err("deleting an agent that is not there must fail");
 
@@ -10536,7 +10959,7 @@ mod tests {
 
         harness
             .worker_service
-            .delete(&agent_id, None, AuthCtx::system())
+            .delete(&agent_id, None, AuthCtx::system(), Surface::Rest)
             .await
             .unwrap();
 
@@ -10682,7 +11105,12 @@ mod tests {
         };
         let described = harness
             .worker_service
-            .describe_tool_rest(harness.environment_id, request.clone(), AuthCtx::system())
+            .describe_tool_rest(
+                harness.environment_id,
+                request.clone(),
+                AuthCtx::system(),
+                Surface::Rest,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -10698,7 +11126,12 @@ mod tests {
         agent_request.agent_id = Some(harness.keyed_agent_id());
         let described = harness
             .worker_service
-            .describe_tool_rest(harness.environment_id, agent_request, AuthCtx::system())
+            .describe_tool_rest(
+                harness.environment_id,
+                agent_request,
+                AuthCtx::system(),
+                Surface::Rest,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -10747,7 +11180,7 @@ mod tests {
         assert!(
             harness
                 .worker_service
-                .describe_tool_rest(harness.environment_id, request.clone(), auth)
+                .describe_tool_rest(harness.environment_id, request.clone(), auth, Surface::Rest)
                 .await
                 .is_err()
         );
@@ -10762,7 +11195,12 @@ mod tests {
         assert!(
             harness
                 .worker_service
-                .describe_tool_rest(harness.environment_id, request.clone(), AuthCtx::system())
+                .describe_tool_rest(
+                    harness.environment_id,
+                    request.clone(),
+                    AuthCtx::system(),
+                    Surface::Rest
+                )
                 .await
                 .is_err()
         );
@@ -10784,7 +11222,12 @@ mod tests {
         assert!(
             harness
                 .worker_service
-                .describe_tool_rest(harness.environment_id, request, AuthCtx::system())
+                .describe_tool_rest(
+                    harness.environment_id,
+                    request,
+                    AuthCtx::system(),
+                    Surface::Rest
+                )
                 .await
                 .is_err()
         );
@@ -10831,6 +11274,7 @@ mod tests {
                 request,
                 Some(key.clone()),
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -10895,6 +11339,7 @@ mod tests {
                 request,
                 Some(IdempotencyKey::fresh()),
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -10940,6 +11385,7 @@ mod tests {
                 request,
                 Some(final_key.clone()),
                 AuthCtx::System,
+                Surface::Rest,
             )
             .await
             .unwrap();
@@ -10983,6 +11429,7 @@ mod tests {
                 request,
                 Some(RestHarness::tool_key()),
                 AuthCtx::system(),
+                Surface::Rest,
             )
             .await;
         assert!(
@@ -11024,6 +11471,7 @@ mod tests {
                     harness.tool_request(),
                     Some(RestHarness::tool_key()),
                     auth,
+                    Surface::Rest,
                 )
                 .await
                 .is_err()
@@ -11098,7 +11546,12 @@ mod tests {
 
         let got = harness
             .worker_service
-            .get_invocation(harness.environment_id, &owned, AuthCtx::system())
+            .get_invocation(
+                harness.environment_id,
+                &owned,
+                AuthCtx::system(),
+                Surface::Rest,
+            )
             .await;
         let got = got.unwrap_or_else(|error| {
             panic!("get of a completed invocation with unknown operation failed: {error}")
@@ -11145,6 +11598,567 @@ mod tests {
             );
             let typeless = super::authorize_typeless_owner_with_1_6_check(&auth, &owner, &access);
             assert_eq!(typeless.is_ok(), today.is_ok(), "{grant}");
+        }
+    }
+
+    /// The audit of the worker service's decisions.
+    mod audit {
+        use super::*;
+        use crate::service::worker::test_audit::{TestAuditSink, audit_into};
+        use golem_common::model::authority::CatalogOperation;
+        use golem_service_base::model::auth::AuthorizationError;
+        use golem_service_base::model::auth::audit::AuditOutcome;
+        use test_r::test;
+
+        /// An existing agent of the harness, and a caller whose cards allow reading its oplog
+        /// from index 5 to 7.
+        fn oplog_reader(harness: &RestHarness) -> (OwnedAgentId, AuthCtx) {
+            harness
+                .worker_client
+                .set_metadata_component_revision(ComponentRevision::INITIAL);
+            let agent_id = harness.keyed_agent_id();
+            let auth_ctx = auth_ctx_with_permissions(vec![oplog_target(
+                &agent_id,
+                OplogResourcePattern::range(Some(5), Some(7)),
+            )]);
+            (harness.owned(&agent_id), auth_ctx)
+        }
+
+        async fn read_oplog(
+            harness: &RestHarness,
+            owned: &OwnedAgentId,
+            auth_ctx: AuthCtx,
+        ) -> WorkerResult<GetOplogResponse> {
+            harness
+                .worker_service
+                .get_oplog(
+                    owned,
+                    OplogIndex::from_u64(5),
+                    None,
+                    3,
+                    None,
+                    None,
+                    ClaimVisibility::Hidden,
+                    auth_ctx,
+                    Surface::Rest,
+                )
+                .await
+        }
+
+        fn read_the_oplog(harness: &RestHarness) -> bool {
+            harness
+                .worker_client
+                .effects
+                .lock()
+                .unwrap()
+                .contains(&"get-oplog")
+        }
+
+        fn is_audit_unavailable(error: &WorkerServiceError) -> bool {
+            matches!(
+                error,
+                WorkerServiceError::AuthError(AuthServiceError::Unauthorized(
+                    AuthorizationError::AuditUnavailable(_)
+                ))
+            )
+        }
+
+        #[test]
+        async fn an_allowed_oplog_read_writes_its_record_with_its_surface() {
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+            let (owned, auth_ctx) = oplog_reader(&harness);
+
+            read_oplog(&harness, &owned, auth_ctx).await.unwrap();
+
+            let records = sink.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(
+                records[0].operation,
+                CatalogOperation::ReadAgentOplog.name()
+            );
+            assert_eq!(records[0].surface, "rest");
+            assert_eq!(records[0].outcome, AuditOutcome::Allowed);
+            assert!(read_the_oplog(&harness));
+        }
+
+        #[test]
+        async fn an_oplog_read_whose_record_cannot_be_written_is_unavailable_and_reads_nothing() {
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(TestAuditSink::failing());
+            let (owned, auth_ctx) = oplog_reader(&harness);
+
+            let error = read_oplog(&harness, &owned, auth_ctx).await.unwrap_err();
+
+            assert!(is_audit_unavailable(&error), "{error:?}");
+            assert!(!read_the_oplog(&harness));
+        }
+
+        #[test]
+        async fn a_denied_oplog_read_stays_denied_when_its_record_cannot_be_written() {
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(TestAuditSink::failing());
+            let (owned, _) = oplog_reader(&harness);
+
+            let error = read_oplog(&harness, &owned, auth_ctx_with_permissions(Vec::new()))
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(error, WorkerServiceError::AgentAccessDenied(_)),
+                "{error:?}"
+            );
+            assert!(!read_the_oplog(&harness));
+        }
+
+        #[test]
+        async fn an_interrupt_whose_record_cannot_be_written_is_unavailable_and_does_not_interrupt()
+        {
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(TestAuditSink::failing());
+            harness
+                .worker_client
+                .set_metadata_component_revision(ComponentRevision::INITIAL);
+            let agent_id = harness.keyed_agent_id();
+            let auth_ctx = auth_ctx_with_permissions(vec![agent_target(
+                &agent_id,
+                AgentVerb::Interrupt,
+                AgentResourcePattern::Empty,
+            )]);
+
+            let error = harness
+                .worker_service
+                .interrupt(
+                    &harness.owned(&agent_id),
+                    false,
+                    None,
+                    auth_ctx,
+                    Surface::Rest,
+                )
+                .await
+                .unwrap_err();
+
+            assert!(is_audit_unavailable(&error), "{error:?}");
+            assert!(
+                !harness
+                    .worker_client
+                    .effects
+                    .lock()
+                    .unwrap()
+                    .contains(&"interrupt")
+            );
+        }
+
+        fn is_type_not_found(error: &WorkerServiceError) -> bool {
+            matches!(
+                error,
+                WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(_))
+            )
+        }
+
+        #[test]
+        async fn a_refused_type_lookup_is_not_found_and_writes_one_denial() {
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+
+            let error = harness
+                .worker_service
+                .deployed_agent_type(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    &auth_ctx_with_permissions(Vec::new()),
+                    Surface::Rest,
+                )
+                .await
+                .unwrap_err();
+
+            assert!(is_type_not_found(&error), "{error:?}");
+            let records = sink.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].operation, CatalogOperation::ListAgents.name());
+            assert_eq!(
+                records[0].outcome,
+                AuditOutcome::Forbidden {
+                    missing_grant: None
+                }
+            );
+            assert_eq!(records[0].surface, "rest");
+            assert_eq!(
+                records[0].target_environment_id(),
+                Some(harness.environment_id)
+            );
+        }
+
+        #[test]
+        async fn a_refused_type_lookup_is_not_found_also_when_the_sink_fails() {
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(TestAuditSink::failing());
+
+            let error = harness
+                .worker_service
+                .deployed_agent_type(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    &auth_ctx_with_permissions(Vec::new()),
+                    Surface::Rest,
+                )
+                .await
+                .unwrap_err();
+
+            assert!(is_type_not_found(&error), "{error:?}");
+        }
+
+        /// May view every environment, so a missing agent reaches its decision.
+        fn environment_viewer() -> PermissionTarget {
+            use golem_common::model::card::owner::EnvironmentOwnerPattern;
+            use golem_common::model::card::{EnvironmentResourcePattern, EnvironmentVerb};
+            PermissionTarget::Environment(ClassPermissionTarget {
+                owner: EnvironmentOwnerPattern::AnyEnvironments,
+                verb: Some(EnvironmentVerb::View),
+                resource: EnvironmentResourcePattern::Any,
+            })
+        }
+
+        #[test]
+        async fn an_authorized_read_of_a_missing_agent_is_not_found_and_writes_no_record() {
+            for sink in [TestAuditSink::keeping(), TestAuditSink::failing()] {
+                let mut harness = RestHarness::new(AgentMode::Durable);
+                harness.worker_service.audit = audit_into(sink.clone());
+                // No metadata: the keyed agent does not exist.
+                let agent_id = harness.keyed_agent_id();
+                let auth_ctx = auth_ctx_with_permissions(vec![
+                    environment_viewer(),
+                    oplog_target(&agent_id, OplogResourcePattern::range(Some(5), Some(7))),
+                ]);
+
+                let error = read_oplog(&harness, &harness.owned(&agent_id), auth_ctx)
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(error, WorkerServiceError::AgentNotFound(_)),
+                    "{error:?}"
+                );
+                assert!(sink.records().is_empty());
+            }
+        }
+
+        #[test]
+        async fn an_unauthorized_read_of_a_missing_agent_writes_one_denial() {
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+            let agent_id = harness.keyed_agent_id();
+
+            let error = read_oplog(
+                &harness,
+                &harness.owned(&agent_id),
+                auth_ctx_with_permissions(vec![environment_viewer()]),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(
+                matches!(error, WorkerServiceError::AgentAccessDenied(_)),
+                "{error:?}"
+            );
+            let records = sink.records();
+            assert_eq!(records.len(), 1);
+            assert!(records[0].outcome != AuditOutcome::Allowed);
+        }
+
+        #[test]
+        async fn a_listing_of_agents_writes_one_record_with_its_surface() {
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+
+            harness
+                .worker_service
+                .find_metadata(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    None,
+                    None,
+                    ScanCursor::default(),
+                    10,
+                    false,
+                    scoped_invocation_auth(),
+                    Surface::Rest,
+                )
+                .await
+                .unwrap();
+
+            let records = sink.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].operation, CatalogOperation::ListAgents.name());
+            assert_eq!(records[0].surface, "rest");
+            assert_eq!(records[0].outcome, AuditOutcome::Allowed);
+        }
+
+        #[test]
+        async fn a_lookup_of_an_agent_type_before_an_invocation_writes_no_listing_record() {
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+
+            let _ = harness
+                .worker_service
+                .deployed_agent_type(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    &scoped_invocation_auth(),
+                    Surface::Rest,
+                )
+                .await
+                .unwrap();
+
+            assert!(sink.records().is_empty());
+        }
+
+        /// The agent that calls the worker service through the executor, as a request names it.
+        fn calling_agent() -> Caller {
+            use golem_common::model::caller::{AgentPrincipal, Principal};
+            Caller::entry(Principal::Agent(AgentPrincipal {
+                issuer: "golem".to_string(),
+                agent_id: Uuid::from_u128(0xa1),
+                address: AgentId::from_parts(0, 10),
+                fingerprint: AgentFingerprint(Uuid::from_u128(0xf2)),
+                agent_type: AgentTypeName("Caller".to_string()),
+                environment_id: EnvironmentId(Uuid::from_u128(1)),
+            }))
+        }
+
+        #[test]
+        async fn a_fork_or_an_update_for_a_named_calling_agent_is_recorded_for_that_agent() {
+            use golem_service_base::model::auth::audit::AuditPrincipal;
+
+            let caller = calling_agent();
+            let agent = AuditPrincipal::from(&caller.immediate);
+            for (operation, verb) in [
+                (CatalogOperation::ForkAgent, AgentVerb::Fork),
+                (
+                    CatalogOperation::UpdateAgentRevision,
+                    AgentVerb::UpdateRevision,
+                ),
+            ] {
+                let sink = TestAuditSink::keeping();
+                let mut harness = RestHarness::new(AgentMode::Durable);
+                harness.worker_service.audit = audit_into(sink.clone());
+                harness
+                    .worker_client
+                    .set_metadata_component_revision(ComponentRevision::INITIAL);
+                let agent_id = harness.keyed_agent_id();
+                let owned = harness.owned(&agent_id);
+                let auth_ctx = auth_ctx_with_permissions(vec![agent_target(
+                    &agent_id,
+                    verb,
+                    AgentResourcePattern::Empty,
+                )]);
+
+                // The record is written when the call is decided, before the executor is asked,
+                // so the answer of the executor double does not matter here.
+                if operation == CatalogOperation::ForkAgent {
+                    let _ = harness
+                        .worker_service
+                        .fork_worker(
+                            &owned,
+                            None,
+                            OplogIndex::from_u64(1),
+                            Some(caller.clone()),
+                            None,
+                            auth_ctx,
+                            Surface::Internal,
+                        )
+                        .await;
+                } else {
+                    let _ = harness
+                        .worker_service
+                        .update(
+                            &owned,
+                            AgentUpdateMode::Automatic,
+                            ComponentRevision::INITIAL,
+                            false,
+                            None,
+                            Some(caller.clone()),
+                            auth_ctx,
+                            Surface::Internal,
+                        )
+                        .await;
+                }
+
+                let records = sink.records();
+                let record = records
+                    .iter()
+                    .find(|record| record.operation == operation.name())
+                    .unwrap_or_else(|| panic!("no {operation} record in {records:?}"));
+                assert_eq!(record.outcome, AuditOutcome::Allowed, "{operation}");
+                assert_eq!(record.surface, "internal", "{operation}");
+                assert_eq!(record.caller.original, agent, "{operation}");
+                assert_eq!(record.caller.immediate, agent, "{operation}");
+                assert_eq!(record.principal, agent, "{operation}");
+            }
+        }
+
+        #[test]
+        async fn an_impersonated_read_is_recorded_for_the_admin_on_the_target_accounts_authority() {
+            use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Principal};
+            use golem_common::model::plan::PlanId;
+            use golem_service_base::model::auth::audit::AuditPrincipal;
+
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+            let (owned, _) = oplog_reader(&harness);
+            let admin = AccountId(Uuid::from_u128(0xad));
+            let target = AccountId(Uuid::from_u128(0x7a));
+            // The admin acts on the target account, whose cards allow the read.
+            let auth_ctx = AuthCtx::admin_impersonation(
+                admin,
+                target,
+                AccountEmail::new("target@golem"),
+                BTreeSet::new(),
+                PlanId(Uuid::from_u128(0x91)),
+                EffectiveSurface {
+                    source_card_ids: Vec::new(),
+                    lower: vec![GrantSurface {
+                        positive: vec![oplog_target(
+                            &owned.agent_id,
+                            OplogResourcePattern::range(Some(5), Some(7)),
+                        )],
+                        negative: Vec::new(),
+                    }],
+                    upper: Vec::new(),
+                },
+            );
+
+            read_oplog(&harness, &owned, auth_ctx).await.unwrap();
+
+            let account = |account_id| {
+                AuditPrincipal::from(&Principal::Account(AccountPrincipal {
+                    issuer: harness.worker_service.golem_issuer.to_string(),
+                    account_id,
+                    authentication: AccountAuthentication::ApiToken,
+                }))
+            };
+            let records = sink.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].outcome, AuditOutcome::Allowed);
+            assert_eq!(records[0].caller.original, account(admin));
+            assert_eq!(records[0].caller.immediate, account(admin));
+            assert_eq!(records[0].principal, account(target));
+        }
+
+        /// The other registration of the harness's agent type: an older component that
+        /// implements it, which the caller may not see.
+        fn older_type_id() -> TypeId {
+            TypeId::try_from(43u32).unwrap()
+        }
+
+        /// A harness whose agent type also has `older_type_id`'s registration, and a caller that
+        /// may see the harness's own component and invoke its keyed agent.
+        async fn harness_with_a_hidden_older_registration(
+            sink: Arc<TestAuditSink>,
+        ) -> (RestHarness, AuthCtx) {
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink);
+            harness
+                .worker_client
+                .set_metadata_component_revision(ComponentRevision::INITIAL);
+            let current = harness
+                .worker_service
+                .component_service
+                .get_revision(harness.component_id, harness.component_revision)
+                .await
+                .unwrap();
+            let mut older = current.clone();
+            older.id = ComponentId(Uuid::from_u128(0x01d));
+            older.component_name = ComponentName("older-weather-component".to_string());
+            harness.worker_service.component_service = Arc::new(StaticComponentService {
+                components: vec![current.clone(), older.clone()],
+                tool_state: None,
+                tool_queries: Mutex::new(vec![]),
+                revision_gate: Mutex::new(None),
+            });
+            let registered = |component: &Component, type_id| RegisteredAgentType {
+                type_id,
+                agent_type: current.metadata.agent_types()[0].clone(),
+                implemented_by: RegisteredAgentTypeImplementer {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                    component_name: component.component_name.0.clone(),
+                    account_id: component.account_id,
+                    account_email: component.account_email.clone(),
+                },
+            };
+            harness.worker_service.agent_types =
+                agent_type_resolver(Arc::new(TestRegistryService {
+                    removed: false,
+                    older: vec![registered(&older, older_type_id())],
+                    resolved: ResolvedAgentType {
+                        registered_agent_type: registered(&current, harness.type_id),
+                        environment_id: harness.environment_id,
+                        deployment_revision: DeploymentRevision::INITIAL,
+                        current_deployment_revision: Some(CurrentDeploymentRevision::INITIAL),
+                    },
+                }));
+            let auth = auth_ctx_with_permissions(vec![
+                super::super::agent_type_check(&current, &harness.agent_type_name),
+                agent_target(
+                    &harness.keyed_agent_id(),
+                    AgentVerb::Invoke,
+                    AgentResourcePattern::Any,
+                ),
+            ]);
+            (harness, auth)
+        }
+
+        #[test]
+        async fn an_invoke_by_agent_id_writes_no_denial_for_another_registration_of_its_type() {
+            let sink = TestAuditSink::keeping();
+            let (harness, auth) = harness_with_a_hidden_older_registration(sink.clone()).await;
+            let mut request = harness.invoke_request();
+            request.agent_id = Some(harness.keyed_agent_id());
+            request.parameters = None;
+
+            harness.invoke_rest(request, None, auth).await.unwrap();
+
+            let records = sink.records();
+            assert!(
+                records
+                    .iter()
+                    .all(|record| record.operation != CatalogOperation::ListAgents.name()),
+                "{records:?}"
+            );
+        }
+
+        #[test]
+        async fn an_invoke_by_agent_id_of_a_hidden_registration_is_not_found_and_writes_one_denial()
+        {
+            let sink = TestAuditSink::keeping();
+            let (harness, auth) = harness_with_a_hidden_older_registration(sink.clone()).await;
+            // An agent of the older registration's type, which the caller may not see.
+            let agent_id = AgentId::keyed(
+                harness.environment_id,
+                older_type_id(),
+                &harness.agent_key(),
+            );
+            let mut request = harness.invoke_request();
+            request.agent_id = Some(agent_id);
+            request.parameters = None;
+
+            let error = harness.invoke_rest(request, None, auth).await.unwrap_err();
+
+            assert!(
+                matches!(error, WorkerServiceError::AgentNotFound(id) if id == agent_id),
+                "{error:?}"
+            );
+            let records = sink.records();
+            assert_eq!(records.len(), 1, "{records:?}");
+            assert_eq!(records[0].operation, CatalogOperation::ListAgents.name());
+            assert_ne!(records[0].outcome, AuditOutcome::Allowed);
         }
     }
 
@@ -11513,6 +12527,7 @@ mod tests {
                     Box::pin(stream::empty()),
                     AuthCtx::system(),
                     |_, _| panic!("stream-free input"),
+                    Surface::Attach,
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{target}: {error:?}"));

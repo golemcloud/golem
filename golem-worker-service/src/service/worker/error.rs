@@ -25,6 +25,7 @@ use golem_common::model::filesystem::FileReadError;
 use golem_common::model::{AgentId, OwnedInvocationId};
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthorizationError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AcceptedInvocation {
@@ -96,6 +97,12 @@ impl SafeDisplay for WorkerServiceError {
             Self::AuthError(inner) => inner.to_safe_string(),
             Self::RegistryServiceError(inner) => inner.to_safe_string(),
         }
+    }
+}
+
+impl From<AuthorizationError> for WorkerServiceError {
+    fn from(error: AuthorizationError) -> Self {
+        Self::AuthError(AuthServiceError::Unauthorized(error))
     }
 }
 
@@ -224,6 +231,16 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                 Self::InternalError(worker_execution_error.into())
             }
 
+            // An allowed operation whose audit record cannot be written did not run. The
+            // executor's worker proxy reads an internal error as transient and tries the call
+            // again, so a short audit outage never becomes a final answer in the caller's oplog.
+            WorkerServiceError::AuthError(AuthServiceError::Unauthorized(
+                AuthorizationError::AuditUnavailable(_),
+            )) => Self::InternalError(WorkerExecutionError {
+                error: Some(GrpcError::Unknown(UnknownError {
+                    details: error.to_safe_string(),
+                })),
+            }),
             WorkerServiceError::AuthError(_) | WorkerServiceError::AgentAccessDenied(_) => {
                 Self::Unauthorized(ErrorBody {
                     error: error.to_safe_string(),
@@ -243,5 +260,46 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_api_grpc::proto::golem::worker::v1::UnknownError;
+    use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
+    use golem_api_grpc::proto::golem::worker::v1::agent_error::Error as GrpcAgentError;
+    use golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error as GrpcError;
+    use golem_service_base::model::auth::audit::AuditUnavailable;
+    use test_r::test;
+
+    fn over_grpc(error: AuthorizationError) -> GrpcAgentError {
+        WorkerServiceError::AuthError(AuthServiceError::Unauthorized(error)).into()
+    }
+
+    #[test]
+    fn an_unavailable_audit_is_an_internal_error_that_names_the_audit() {
+        let error = over_grpc(AuthorizationError::AuditUnavailable(AuditUnavailable {
+            retry_after: std::time::Duration::from_secs(5),
+        }));
+
+        match error {
+            GrpcAgentError::InternalError(WorkerExecutionError {
+                error: Some(GrpcError::Unknown(UnknownError { details })),
+            }) => assert!(details.contains("audit record"), "{details}"),
+            other => panic!("expected an internal error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_denial_stays_unauthorized() {
+        let error = over_grpc(AuthorizationError::SystemOnlyActionNotAllowed(
+            "test".to_string(),
+        ));
+
+        assert!(
+            matches!(error, GrpcAgentError::Unauthorized(_)),
+            "{error:?}"
+        );
     }
 }

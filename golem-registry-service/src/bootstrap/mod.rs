@@ -23,6 +23,7 @@ use crate::repo::account_resource_override::{
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::agent_secret::{AgentSecretRepo, DbAgentSecretRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
+use crate::repo::audit_staging::{AuditStagingRepo, DbAuditStagingRepo};
 use crate::repo::card::{CardRepo, DbCardRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
@@ -59,6 +60,7 @@ use crate::services::account_resource_override::AccountResourceOverrideService;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::agent_secret::AgentSecretService;
 use crate::services::application::ApplicationService;
+use crate::services::audit_sink::RegistryAuditSink;
 use crate::services::auth::AuthService;
 use crate::services::card::CardService;
 use crate::services::component::{ComponentService, ComponentWriteService};
@@ -102,6 +104,7 @@ use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+use golem_service_base::model::auth::audit::{AuditSink, DecisionAudit};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
@@ -138,6 +141,7 @@ pub struct Services {
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     /// The installation's Golem issuer: configured, stored, or generated and stored.
     pub golem_issuer: GolemIssuer,
+    pub audit_sink: Arc<dyn AuditSink>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
     pub mcp_oauth_service: Arc<McpOAuthService>,
     pub mcp_import_resolver: Arc<McpImportResolver>,
@@ -171,6 +175,7 @@ struct Repos {
     environment_tool_middleware_grant_repo: Arc<dyn EnvironmentToolMiddlewareGrantRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
     http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
+    audit_staging_repo: Arc<dyn AuditStagingRepo>,
     installation_repo: Arc<dyn InstallationRepo>,
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
     mcp_oauth_grant_repo: Arc<dyn McpOAuthGrantRepo>,
@@ -230,7 +235,12 @@ impl Services {
             config.golem_issuer.clone(),
         )
         .await?;
-        let decisions = crate::services::decision::Decisions::new(golem_issuer.clone());
+        let audit_sink: Arc<dyn AuditSink> =
+            Arc::new(RegistryAuditSink::new(repos.audit_staging_repo.clone()));
+        let decisions = crate::services::decision::Decisions::new(
+            golem_issuer.clone(),
+            DecisionAudit::new(audit_sink.clone(), config.audit.retry_after),
+        );
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
@@ -639,6 +649,7 @@ impl Services {
 
         Ok(Self {
             golem_issuer,
+            audit_sink,
             account_service,
             account_usage_service,
             account_resource_override_service,
@@ -732,6 +743,7 @@ async fn make_repos(
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
+            let audit_staging_repo = Arc::new(DbAuditStagingRepo::logged(db_pool.clone()));
             let installation_repo = Arc::new(DbInstallationRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
             let mcp_oauth_grant_repo = Arc::new(DbMcpOAuthGrantRepo::new(db_pool.clone()));
@@ -756,6 +768,7 @@ async fn make_repos(
                 environment_tool_middleware_grant_repo,
                 environment_repo,
                 http_api_deployment_repo,
+                audit_staging_repo,
                 installation_repo,
                 mcp_deployment_repo,
                 mcp_oauth_grant_repo,
@@ -813,6 +826,7 @@ async fn make_repos(
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
+            let audit_staging_repo = Arc::new(DbAuditStagingRepo::logged(db_pool.clone()));
             let installation_repo = Arc::new(DbInstallationRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
             let mcp_oauth_grant_repo = Arc::new(DbMcpOAuthGrantRepo::new(db_pool.clone()));
@@ -837,6 +851,7 @@ async fn make_repos(
                 environment_tool_middleware_grant_repo,
                 environment_repo,
                 http_api_deployment_repo,
+                audit_staging_repo,
                 installation_repo,
                 mcp_deployment_repo,
                 mcp_oauth_grant_repo,

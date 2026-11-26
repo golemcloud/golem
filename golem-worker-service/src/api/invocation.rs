@@ -24,6 +24,7 @@ use golem_common::recorded_http_api_request;
 use golem_common::schema::ExternalTypedSchemaValue;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_service_base::model::auth::surface::Surface;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi_derive::{Enum, Object, OpenApi, Union};
@@ -102,7 +103,7 @@ impl InvocationApi {
         };
         let response = self
             .worker_service
-            .list_invocations(environment_id.0, &agent_id, query, auth)
+            .list_invocations(environment_id.0, &agent_id, query, auth, Surface::Rest)
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -147,6 +148,7 @@ impl InvocationApi {
                 &idempotency_key.0,
                 operation.0,
                 auth,
+                Surface::Rest,
             )
             .instrument(record.span.clone())
             .await
@@ -176,7 +178,7 @@ impl InvocationApi {
         );
         let response = self
             .worker_service
-            .get_invocation(environment_id.0, &invocation_id, auth)
+            .get_invocation(environment_id.0, &invocation_id, auth, Surface::Rest)
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -210,7 +212,7 @@ impl InvocationApi {
         );
         let response = self
             .worker_service
-            .cancel_invocation_by_id(environment_id.0, &invocation_id, auth)
+            .cancel_invocation_by_id(environment_id.0, &invocation_id, auth, Surface::Rest)
             .instrument(record.span.clone())
             .await
             .map(Json)

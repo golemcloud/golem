@@ -88,6 +88,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     report_mcp_resource_unauthorized_response, resolve_mcp_import_response,
 };
 use golem_api_grpc::proto::golem::registry::v1::{
+    RecordAuditRequest, RecordAuditResponse, record_audit_response,
+};
+use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeNameRequest, ResolveAgentTypeNameResponse, ResolveAgentTypeNameSuccessResponse,
     resolve_agent_type_name_response,
 };
@@ -112,6 +115,7 @@ use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::audit::{AuditRecord, AuditSink};
 use golem_service_base::model::environment::EnvironmentState;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -143,6 +147,7 @@ pub struct RegistryServiceGrpcApi {
     mcp_oauth_service: Arc<McpOAuthService>,
     mcp_import_resolver: Arc<McpImportResolver>,
     golem_issuer: GolemIssuer,
+    audit_sink: Arc<dyn AuditSink>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -162,6 +167,7 @@ impl RegistryServiceGrpcApi {
         mcp_oauth_service: Arc<McpOAuthService>,
         mcp_import_resolver: Arc<McpImportResolver>,
         golem_issuer: GolemIssuer,
+        audit_sink: Arc<dyn AuditSink>,
     ) -> Self {
         Self {
             auth_service,
@@ -179,6 +185,7 @@ impl RegistryServiceGrpcApi {
             mcp_oauth_service,
             mcp_import_resolver,
             golem_issuer,
+            audit_sink,
         }
     }
 
@@ -224,6 +231,19 @@ impl RegistryServiceGrpcApi {
             }),
             oauth_grant_generation: result.oauth_grant.map(|grant| grant.generation.into()),
         })
+    }
+
+    async fn record_audit_internal(
+        &self,
+        request: RecordAuditRequest,
+    ) -> Result<EmptySuccessResponse, GrpcApiError> {
+        let record: AuditRecord = serde_json::from_str(&request.record)
+            .map_err(|error| format!("Invalid audit record: {error}"))?;
+        self.audit_sink
+            .record(record)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(EmptySuccessResponse {})
     }
 
     async fn report_mcp_resource_unauthorized_internal(
@@ -1563,6 +1583,25 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
         Ok(Response::new(AuthorizeEnvironmentResponse {
             result: Some(response),
+        }))
+    }
+
+    async fn record_audit(
+        &self,
+        request: Request<RecordAuditRequest>,
+    ) -> Result<Response<RecordAuditResponse>, Status> {
+        let record = recorded_grpc_api_request!("record_audit",);
+        let result = match self
+            .record_audit_internal(request.into_inner())
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(value) => record_audit_response::Result::Success(value),
+            Err(error) => record_audit_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(RecordAuditResponse {
+            result: Some(result),
         }))
     }
 

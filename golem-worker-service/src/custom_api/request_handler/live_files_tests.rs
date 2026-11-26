@@ -11,6 +11,7 @@ use golem_schema::http::{FileMapping, FileResponseHeader};
 use golem_service_base::custom_api::{ConstructorParameter, PathSegmentType};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use test_r::test;
 
@@ -395,6 +396,7 @@ async fn mounted_read_rejects_paths_before_normalization() {
                     FileByteSelection::Full,
                     harness.environment_id,
                     harness.account_id,
+                    Surface::HttpRoute,
                 )
                 .await,
             Err(WorkerServiceError::FileRead(FileReadError::InvalidTarget))

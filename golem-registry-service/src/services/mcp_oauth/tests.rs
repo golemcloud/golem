@@ -123,6 +123,14 @@ impl Fixture {
                         )),
                         crate::services::decision::Decisions::new(
                             "https://golem.test".parse().unwrap(),
+                            golem_service_base::model::auth::audit::DecisionAudit::new(
+                                Arc::new(crate::services::audit_sink::RegistryAuditSink::new(
+                                    Arc::new(crate::repo::audit_staging::DbAuditStagingRepo::new(
+                                        pool.clone(),
+                                    )),
+                                )),
+                                std::time::Duration::from_secs(5),
+                            ),
                         ),
                     )),
                     Arc::new(DbEnvironmentRepo::new(pool.clone())),

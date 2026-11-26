@@ -33,6 +33,7 @@ use golem_common::model::oplog::{OplogInclude, PublicOplogEntryWithIndex, Public
 use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, PromiseId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::surface::Surface;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::*;
 use golem_service_base::poem::SerdeJson;
@@ -94,7 +95,7 @@ impl WorkerApi {
 
         let response = async {
             self.worker_service
-                .delete(&agent_id, expected_fingerprint.0, auth)
+                .delete(&agent_id, expected_fingerprint.0, auth, Surface::Rest)
                 .await?;
             Ok(Json(DeleteWorkerResponse {}))
         }
@@ -138,7 +139,7 @@ impl WorkerApi {
             };
             let completed = self
                 .worker_service
-                .complete_promise(environment_id.0, promise_id, data, auth)
+                .complete_promise(environment_id.0, promise_id, data, auth, Surface::Rest)
                 .await?;
             Ok(Json(completed))
         }
@@ -181,6 +182,7 @@ impl WorkerApi {
                     recover_immediately.0.unwrap_or(false),
                     expected_fingerprint.0,
                     auth,
+                    Surface::Rest,
                 )
                 .await?;
             Ok(Json(InterruptResponse {}))
@@ -227,7 +229,7 @@ impl WorkerApi {
         let response = async {
             let mut response = self
                 .worker_service
-                .get_metadata(&agent_id, expected_fingerprint.0, auth)
+                .get_metadata(&agent_id, expected_fingerprint.0, auth, Surface::Rest)
                 .await?;
             response.redact_host_managed_values_for_external();
             Ok(Json(response))
@@ -257,7 +259,13 @@ impl WorkerApi {
 
         let response = async {
             self.worker_service
-                .resume(&agent_id, false, expected_fingerprint.0, auth)
+                .resume(
+                    &agent_id,
+                    false,
+                    expected_fingerprint.0,
+                    auth,
+                    Surface::Rest,
+                )
                 .await?;
             Ok(Json(ResumeResponse {}))
         }
@@ -297,6 +305,7 @@ impl WorkerApi {
                     // A REST request records its own caller as the requester.
                     None,
                     auth,
+                    Surface::Rest,
                 )
                 .await?;
             Ok(Json(UpdateWorkerResponse {
@@ -403,6 +412,7 @@ impl WorkerApi {
                         expected_fingerprint,
                         claims,
                         auth,
+                        Surface::Rest,
                     )
                     .await?
             }
@@ -418,6 +428,7 @@ impl WorkerApi {
                         range,
                         claims,
                         auth,
+                        Surface::Rest,
                     )
                     .await?
             }
@@ -473,6 +484,7 @@ impl WorkerApi {
                     expected_fingerprint.0,
                     ClaimVisibility::from_include(include.0),
                     auth,
+                    Surface::Rest,
                 )
                 .await?;
             entry.entry.redact_host_managed_values_for_external();
@@ -506,7 +518,7 @@ impl WorkerApi {
             let path = make_component_file_path(file_name.0)?;
             let nodes = self
                 .worker_service
-                .get_file_system_node(&agent_id, path, expected_fingerprint.0, auth)
+                .get_file_system_node(&agent_id, path, expected_fingerprint.0, auth, Surface::Rest)
                 .await?;
             Ok(Json(GetFilesResponse {
                 nodes: nodes.into_iter().map(|n| n.into()).collect(),
@@ -540,7 +552,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .get_agent_wallet(&agent_id, expected_fingerprint.0, auth)
+            .get_agent_wallet(&agent_id, expected_fingerprint.0, auth, Surface::Rest)
             .instrument(record.span.clone())
             .await
             .map_err(Into::into);
@@ -570,7 +582,7 @@ impl WorkerApi {
             let path = make_component_file_path(file_name.0)?;
             let bytes = self
                 .worker_service
-                .get_file_contents(&agent_id, path, expected_fingerprint.0, auth)
+                .get_file_contents(&agent_id, path, expected_fingerprint.0, auth, Surface::Rest)
                 .await?;
             Ok(Binary(Body::from_bytes_stream(
                 bytes.map_err(|e| std::io::Error::other(e.to_string())),
@@ -608,7 +620,13 @@ impl WorkerApi {
 
         let response = async {
             self.worker_service
-                .activate_plugin(&agent_id, plugin_priority.0, expected_fingerprint.0, auth)
+                .activate_plugin(
+                    &agent_id,
+                    plugin_priority.0,
+                    expected_fingerprint.0,
+                    auth,
+                    Surface::Rest,
+                )
                 .await?;
             Ok(Json(ActivatePluginResponse {}))
         }
@@ -644,7 +662,13 @@ impl WorkerApi {
 
         let response = async {
             self.worker_service
-                .deactivate_plugin(&agent_id, plugin_priority.0, expected_fingerprint.0, auth)
+                .deactivate_plugin(
+                    &agent_id,
+                    plugin_priority.0,
+                    expected_fingerprint.0,
+                    auth,
+                    Surface::Rest,
+                )
                 .await?;
             Ok(Json(DeactivatePluginResponse {}))
         }
@@ -676,7 +700,13 @@ impl WorkerApi {
 
         let response = async {
             self.worker_service
-                .revert_worker(&agent_id, target.0, expected_fingerprint.0, auth)
+                .revert_worker(
+                    &agent_id,
+                    target.0,
+                    expected_fingerprint.0,
+                    auth,
+                    Surface::Rest,
+                )
                 .await?;
             Ok(Json(RevertWorkerResponse {}))
         }
@@ -717,6 +747,7 @@ impl WorkerApi {
                     None,
                     expected_fingerprint.0,
                     auth,
+                    Surface::Rest,
                 )
                 .await?;
             Ok(Json(ForkWorkerResponse {
@@ -785,7 +816,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .connect(agent_id, expected_fingerprint, auth)
+            .connect(agent_id, expected_fingerprint, auth, Surface::Rest)
             .instrument(record.span.clone())
             .await
             .map_err(Into::into);

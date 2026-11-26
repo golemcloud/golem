@@ -34,6 +34,29 @@ impl Default for WorkerExecutorClientCacheConfig {
     }
 }
 
+/// The audit of authorization decisions.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuditConfig {
+    /// The `Retry-After` of a request that fails because the audit record of its allowed operation
+    /// cannot be written.
+    #[serde(with = "humantime_serde")]
+    pub retry_after: Duration,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            retry_after: Duration::from_secs(5),
+        }
+    }
+}
+
+impl SafeDisplay for AuditConfig {
+    fn to_safe_string(&self) -> String {
+        format!("retry after: {}s", self.retry_after.as_secs())
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]

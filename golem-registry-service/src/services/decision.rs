@@ -18,24 +18,31 @@ use golem_common::model::authority::{
 };
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::golem_issuer::GolemIssuer;
+use golem_service_base::model::auth::audit::DecisionAudit;
+use golem_service_base::model::auth::surface::Surface;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, decide_with_todays_checks};
 use tracing::error;
 
 /// Decides the registry's operations that the decision catalog names, from the card check that
-/// each call site makes today, so that the move to `decide` changes no answer.
+/// each call site makes today, so that the move to `decide` changes no answer. Each decision is
+/// audited; the registry decides only for its REST API.
 #[derive(Clone, Debug)]
 pub struct Decisions {
     golem_issuer: GolemIssuer,
+    audit: DecisionAudit,
 }
 
 impl Decisions {
-    pub fn new(golem_issuer: GolemIssuer) -> Self {
-        Self { golem_issuer }
+    pub fn new(golem_issuer: GolemIssuer, audit: DecisionAudit) -> Self {
+        Self {
+            golem_issuer,
+            audit,
+        }
     }
 
     /// Decides `operation` for the caller of `auth` from today's `check`. A denial is the error
     /// that today's check gives. An operation that the catalog refuses is a defect of its call
-    /// site: it is logged, and today's check answers.
+    /// site: it is logged, and today's check answers, without an audit record.
     pub async fn decide(
         &self,
         auth: &AuthCtx,
@@ -56,7 +63,14 @@ impl Decisions {
         match operation {
             Ok(operation) => {
                 let request = auth.entry_request(self.golem_issuer.to_string(), operation);
-                decide_with_todays_checks(auth, request, vec![checks.into()]).await
+                decide_with_todays_checks(
+                    auth,
+                    request,
+                    vec![checks.into()],
+                    &self.audit,
+                    Surface::Rest,
+                )
+                .await
             }
             Err(shape) => {
                 error!("Registry operation has no valid decision request: {shape}");
@@ -367,6 +381,19 @@ mod tests {
     /// A revoke is one decision with today's two checks. A caller that may not see the token
     /// gets "token not found", as for an unknown token; one that may see it but not revoke it
     /// gets a 403; one that may do both is allowed. These are today's answers.
+    /// An audit sink that stores nothing and never fails, for the decision tests.
+    struct KeepsNoRecord;
+
+    #[async_trait::async_trait]
+    impl golem_service_base::model::auth::audit::AuditSink for KeepsNoRecord {
+        async fn record(
+            &self,
+            _record: golem_service_base::model::auth::audit::AuditRecord,
+        ) -> Result<(), golem_service_base::model::auth::audit::AuditSinkError> {
+            Ok(())
+        }
+    }
+
     #[test]
     async fn a_revoke_is_one_decision_with_todays_answers() {
         use crate::services::token::{TokenError, decide_revoke};
@@ -377,7 +404,13 @@ mod tests {
         let account_id = AccountId::new();
         let email = AccountEmail::new("acme");
         let token_id = TokenId::new();
-        let decisions = super::Decisions::new("https://golem.test".parse().unwrap());
+        let decisions = super::Decisions::new(
+            "https://golem.test".parse().unwrap(),
+            golem_service_base::model::auth::audit::DecisionAudit::new(
+                std::sync::Arc::new(KeepsNoRecord),
+                std::time::Duration::from_secs(5),
+            ),
+        );
         let view = format!("account.token(acme) @ acme : view : {token_id}");
         let delete = format!("account.token(acme) @ acme : delete : {token_id}");
         let today = |auth: &AuthCtx| {

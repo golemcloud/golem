@@ -27,6 +27,7 @@ use golem_common::schema::tool::Tool;
 use golem_common::schema::{ExternalSchemaValue, ExternalTypedSchemaValue};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::WorkersMetadataRequest;
+use golem_service_base::model::auth::surface::Surface;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme};
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::{Request, RequestBody};
@@ -138,6 +139,7 @@ impl AgentsApi {
                 request.0,
                 idempotency_key.0,
                 auth,
+                Surface::Rest,
             )
             .instrument(record.span.clone())
             .await
@@ -172,7 +174,13 @@ impl AgentsApi {
 
         let response = self
             .worker_service
-            .upsert_agent_rest(environment_id.0, &agent_type_name.0, request.0, auth)
+            .upsert_agent_rest(
+                environment_id.0,
+                &agent_type_name.0,
+                request.0,
+                auth,
+                Surface::Rest,
+            )
             .instrument(record.span.clone())
             .await
             .map_err(Into::into);
@@ -205,7 +213,13 @@ impl AgentsApi {
 
         let response = self
             .worker_service
-            .lookup_agent_rest(environment_id.0, &agent_type_name.0, request.0, auth)
+            .lookup_agent_rest(
+                environment_id.0,
+                &agent_type_name.0,
+                request.0,
+                auth,
+                Surface::Rest,
+            )
             .instrument(record.span.clone())
             .await
             .map_err(Into::into);
@@ -397,6 +411,7 @@ impl AgentsApi {
                 request.0,
                 idempotency_key.0,
                 auth,
+                Surface::Rest,
             )
             .instrument(record.span.clone())
             .await
@@ -434,7 +449,13 @@ impl AgentsApi {
         let accepting = !matches!(request.mode, NativeToolInvocationMode::Lookup);
         let response = self
             .worker_service
-            .invoke_tool_rest(environment_id.0, request.0, idempotency_key.0, auth)
+            .invoke_tool_rest(
+                environment_id.0,
+                request.0,
+                idempotency_key.0,
+                auth,
+                Surface::Rest,
+            )
             .instrument(record.span.clone())
             .await
             .map_err(Into::into);
@@ -468,7 +489,7 @@ impl AgentsApi {
     ) -> Result<Json<NativeToolDefinition>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         self.worker_service
-            .describe_tool_rest(environment_id.0, request.0, auth)
+            .describe_tool_rest(environment_id.0, request.0, auth, Surface::Rest)
             .await
             .map(Json)
             .map_err(Into::into)
@@ -553,6 +574,7 @@ impl AgentsApi {
                 count.unwrap_or(50),
                 precise.unwrap_or(false),
                 auth,
+                Surface::Rest,
             )
             .await?;
         for worker in &mut workers {

@@ -111,7 +111,7 @@ impl TokenService {
             Some(token_id),
         )
         .await
-        .map_err(|_| TokenError::TokenNotFound(token_id))?;
+        .map_err(|error| error.hide_denial(|| TokenError::TokenNotFound(token_id)))?;
 
         Ok(token)
     }
@@ -167,7 +167,7 @@ impl TokenService {
             Some(token.id),
         )
         .await
-        .map_err(|_| TokenError::TokenBySecretNotFound)?;
+        .map_err(|error| error.hide_denial(|| TokenError::TokenBySecretNotFound))?;
 
         Ok(token)
     }
@@ -212,7 +212,7 @@ impl TokenService {
 
         let mut visible = Vec::with_capacity(tokens.len());
         for token in tokens {
-            if self
+            match self
                 .authorize_token(
                     auth,
                     account.id,
@@ -222,9 +222,12 @@ impl TokenService {
                     Some(token.id),
                 )
                 .await
-                .is_ok()
             {
-                visible.push(token);
+                Ok(()) => visible.push(token),
+                // A token that the caller may not view is left out; a view whose audit record
+                // cannot be written fails the listing.
+                Err(error @ AuthorizationError::AuditUnavailable(_)) => return Err(error.into()),
+                Err(_) => {}
             }
         }
         Ok(visible)
@@ -393,13 +396,15 @@ pub(crate) async fn decide_revoke(
 }
 
 /// The error of a refused revoke: a `403` when the delete check `revoke` refused, so the caller
-/// may see the token; otherwise "token not found", as for an unknown token.
+/// may see the token; otherwise "token not found", as for an unknown token. A revoke whose audit
+/// record cannot be written is not a refusal: it keeps its retryable error.
 fn revoke_refusal(
     error: AuthorizationError,
     revoke: &PermissionTarget,
     token_id: TokenId,
 ) -> TokenError {
     match &error {
+        AuthorizationError::AuditUnavailable(_) => TokenError::Unauthorized(error),
         AuthorizationError::PermissionNotAllowed(check)
         | AuthorizationError::PermissionEvaluationFailed { target: check, .. }
             if **check == *revoke =>

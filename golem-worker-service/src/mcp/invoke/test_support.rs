@@ -1362,6 +1362,7 @@ impl InvocationHarness {
                     Duration::from_secs(60),
                 )),
                 "https://golem.test".parse().unwrap(),
+                crate::service::worker::test_audit::test_audit(),
             )),
             component_id,
             environment_id,

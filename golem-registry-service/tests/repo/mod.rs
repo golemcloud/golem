@@ -25,6 +25,7 @@ use golem_registry_service::repo::account_tree::AccountTreeRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::agent_secret::AgentSecretRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
+use golem_registry_service::repo::audit_staging::{AuditStagingRepo, DbAuditStagingRepo};
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
@@ -56,14 +57,20 @@ use golem_registry_service::repo::tool_middleware_release::ToolMiddlewareRelease
 use golem_registry_service::repo::tool_release::ToolReleaseRepo;
 use golem_registry_service::services::account::AccountService;
 use golem_registry_service::services::account_usage::AccountUsageService;
+use golem_registry_service::services::audit_sink::RegistryAuditSink;
+use golem_registry_service::services::decision::Decisions;
 use golem_registry_service::services::plan::PlanService;
 use golem_registry_service::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::model::auth::audit::{
+    AuditRecord, AuditSink, AuditSinkError, DecisionAudit,
+};
 use golem_service_base::storage::blob::BlobStorage;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
 
@@ -87,6 +94,7 @@ pub struct Deps {
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub retry_policy_repo: Box<dyn RetryPolicyRepo>,
     pub installation_repo: Box<dyn InstallationRepo>,
+    pub audit_staging_repo: Box<dyn AuditStagingRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Arc<dyn EnvironmentRepo>,
     pub blob_storage: Arc<dyn BlobStorage>,
@@ -255,15 +263,31 @@ impl Deps {
         DBP: Pool + Clone + 'static,
         DbAccountRepo<DBP>: AccountRepo + 'static,
         DbPlanRepo<DBP>: PlanRepo + 'static,
+        DbAuditStagingRepo<DBP>: AuditStagingRepo + 'static,
+    {
+        self.account_service_for(pool.clone(), test_decisions(pool))
+    }
+
+    /// The account service, with `decisions` as its decision step.
+    pub fn account_service_with_decisions(&self, decisions: Decisions) -> Arc<AccountService> {
+        match &self.test_db {
+            TestDb::Postgres(pool) => self.account_service_for(pool.clone(), decisions),
+            TestDb::Sqlite(pool) => self.account_service_for(pool.clone(), decisions),
+        }
+    }
+
+    fn account_service_for<DBP>(&self, pool: DBP, decisions: Decisions) -> Arc<AccountService>
+    where
+        DBP: Pool + Clone + 'static,
+        DbAccountRepo<DBP>: AccountRepo + 'static,
+        DbPlanRepo<DBP>: PlanRepo + 'static,
     {
         Arc::new(AccountService::new(
             Arc::new(DbAccountRepo::new(pool.clone())),
             Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool)))),
             golem_common::model::plan::PlanId(self.test_plan_id()),
             self.test_registry_change_notifier(),
-            golem_registry_service::services::decision::Decisions::new(
-                "https://golem.test".parse().unwrap(),
-            ),
+            decisions,
         ))
     }
 
@@ -358,6 +382,72 @@ impl Deps {
             .await
             .unwrap();
         environment_ext(scoped, app.revision.name, app.account_id, app.account_email)
+    }
+}
+
+/// The registry's decision step, with its audit records stored in the test database.
+pub fn test_decisions<DBP>(pool: DBP) -> Decisions
+where
+    DBP: Pool + 'static,
+    DbAuditStagingRepo<DBP>: AuditStagingRepo + 'static,
+{
+    Decisions::new(
+        "https://golem.test".parse().unwrap(),
+        DecisionAudit::new(
+            Arc::new(RegistryAuditSink::new(Arc::new(DbAuditStagingRepo::new(
+                pool,
+            )))),
+            Duration::from_secs(5),
+        ),
+    )
+}
+
+/// The registry's decision step, with an audit sink that cannot store any record.
+pub fn failing_decisions() -> Decisions {
+    Decisions::new(
+        "https://golem.test".parse().unwrap(),
+        DecisionAudit::new(Arc::new(FailingAuditSink), Duration::from_secs(5)),
+    )
+}
+
+struct FailingAuditSink;
+
+/// The registry's decision step, with an audit sink that keeps its records in memory, so that a
+/// test counts the records of one request.
+pub fn recording_decisions() -> (Decisions, Arc<RecordingAuditSink>) {
+    let sink = Arc::new(RecordingAuditSink::default());
+    let decisions = Decisions::new(
+        "https://golem.test".parse().unwrap(),
+        DecisionAudit::new(sink.clone(), Duration::from_secs(5)),
+    );
+    (decisions, sink)
+}
+
+#[derive(Default)]
+pub struct RecordingAuditSink {
+    records: std::sync::Mutex<Vec<AuditRecord>>,
+}
+
+impl RecordingAuditSink {
+    pub fn records(&self) -> Vec<AuditRecord> {
+        self.records.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditSink for RecordingAuditSink {
+    async fn record(&self, record: AuditRecord) -> Result<(), AuditSinkError> {
+        self.records.lock().unwrap().push(record);
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditSink for FailingAuditSink {
+    async fn record(&self, _record: AuditRecord) -> Result<(), AuditSinkError> {
+        Err(AuditSinkError::Unavailable(
+            "the test sink stores nothing".to_string(),
+        ))
     }
 }
 

@@ -632,9 +632,11 @@ impl AgentSecretService {
             })?;
         self.authorize_secret(auth, &owner, &path, EnvironmentAgentSecretVerb::View)
             .await
-            .map_err(|_| AgentSecretError::AgentSecretByPathNotFound {
-                environment_id,
-                path: path.clone(),
+            .map_err(|error| {
+                error.hide_denial(|| AgentSecretError::AgentSecretByPathNotFound {
+                    environment_id,
+                    path: path.clone(),
+                })
             })?;
         self.agent_secret_repo
             .get_for_environment_and_path(environment_id.0, path.0.clone())
@@ -676,7 +678,7 @@ impl AgentSecretService {
 
         let mut visible = Vec::with_capacity(result.len());
         for agent_secret in result {
-            if self
+            match self
                 .authorize_secret(
                     auth,
                     &owner,
@@ -684,9 +686,12 @@ impl AgentSecretService {
                     EnvironmentAgentSecretVerb::View,
                 )
                 .await
-                .is_ok()
             {
-                visible.push(agent_secret);
+                Ok(()) => visible.push(agent_secret),
+                // A secret that the caller may not view is left out; a view whose audit record
+                // cannot be written fails the listing.
+                Err(error @ AuthorizationError::AuditUnavailable(_)) => return Err(error.into()),
+                Err(_) => {}
             }
         }
         Ok(visible)
@@ -746,7 +751,9 @@ impl AgentSecretService {
             EnvironmentAgentSecretVerb::View,
         )
         .await
-        .map_err(|_| AgentSecretError::AgentSecretNotFound(agent_secret_id))?;
+        .map_err(|error| {
+            error.hide_denial(|| AgentSecretError::AgentSecretNotFound(agent_secret_id))
+        })?;
 
         Ok((agent_secret, owner))
     }

@@ -19,6 +19,8 @@ mod error;
 mod routing_logic;
 mod service;
 mod target;
+#[cfg(test)]
+pub(crate) mod test_audit;
 mod worker_stream;
 
 pub use client::*;

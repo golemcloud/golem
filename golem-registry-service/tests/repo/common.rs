@@ -614,6 +614,240 @@ pub async fn test_installation_golem_issuer_is_stored_once(deps: &Deps) {
     assert_eq!(deps.installation_repo.get().await.unwrap(), Some(stored));
 }
 
+/// One request makes one decision and writes one audit record: the revoke of an API token.
+pub async fn test_an_api_token_revoke_writes_one_audit_record(deps: &Deps) {
+    use golem_common::model::card::owner::AccountOwnerPattern;
+    use golem_common::model::card::{
+        AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, EffectiveSurface,
+        GrantSurface, PermissionTarget,
+    };
+    use golem_registry_service::repo::token::{DbTokenRepo, TokenRepo};
+    use golem_registry_service::services::token::TokenService;
+
+    let account = deps.create_account().await;
+    let account_id = AccountId(account.revision.account_id);
+    let token_repo: Arc<dyn TokenRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbTokenRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbTokenRepo::new(pool.clone())),
+    };
+    let (decisions, sink) = crate::repo::recording_decisions();
+    let tokens = TokenService::new(
+        token_repo,
+        deps.account_service(),
+        deps.test_registry_change_notifier(),
+        decisions,
+    );
+    let token = tokens
+        .create(
+            account_id,
+            Utc::now() + chrono::Duration::days(1),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    // A caller that may view and revoke the account's tokens.
+    let token_grant = |verb| {
+        PermissionTarget::AccountToken(ClassPermissionTarget {
+            verb: Some(verb),
+            owner: AccountOwnerPattern::Account {
+                account: AccountEmail::new(account.revision.email.clone()),
+            },
+            resource: AccountTokenResourcePattern::Any,
+        })
+    };
+    let auth = AuthCtx::agent_with_effective_surface(
+        AccountId::new(),
+        AccountEmail::new("revoker@example.com"),
+        EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![
+                    token_grant(AccountTokenVerb::View),
+                    token_grant(AccountTokenVerb::Delete),
+                ],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        },
+    );
+
+    tokens.delete(token.id, &auth).await.unwrap();
+
+    let records = sink.records();
+    assert!(records.len() == 1, "{records:?}");
+}
+
+/// A revoke whose audit record cannot be written is not a refusal: it answers that the audit is
+/// unavailable, and the token stays.
+pub async fn test_an_api_token_revoke_whose_record_cannot_be_written_is_unavailable(deps: &Deps) {
+    use golem_common::model::card::owner::AccountOwnerPattern;
+    use golem_common::model::card::{
+        AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, EffectiveSurface,
+        GrantSurface, PermissionTarget,
+    };
+    use golem_registry_service::repo::token::{DbTokenRepo, TokenRepo};
+    use golem_registry_service::services::token::{TokenError, TokenService};
+
+    let account = deps.create_account().await;
+    let account_id = AccountId(account.revision.account_id);
+    let token_repo: Arc<dyn TokenRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbTokenRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbTokenRepo::new(pool.clone())),
+    };
+    let tokens = TokenService::new(
+        token_repo.clone(),
+        deps.account_service(),
+        deps.test_registry_change_notifier(),
+        crate::repo::failing_decisions(),
+    );
+    let token = tokens
+        .create(
+            account_id,
+            Utc::now() + chrono::Duration::days(1),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    // A caller that may view and revoke the account's tokens.
+    let token_grant = |verb| {
+        PermissionTarget::AccountToken(ClassPermissionTarget {
+            verb: Some(verb),
+            owner: AccountOwnerPattern::Account {
+                account: AccountEmail::new(account.revision.email.clone()),
+            },
+            resource: AccountTokenResourcePattern::Any,
+        })
+    };
+    let auth = AuthCtx::agent_with_effective_surface(
+        AccountId::new(),
+        AccountEmail::new("revoker@example.com"),
+        EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![
+                    token_grant(AccountTokenVerb::View),
+                    token_grant(AccountTokenVerb::Delete),
+                ],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        },
+    );
+
+    let error = tokens.delete(token.id, &auth).await.unwrap_err();
+
+    let_assert!(TokenError::Unauthorized(AuthorizationError::AuditUnavailable(_)) = error);
+    assert!(token_repo.get_by_id(token.id.0).await.unwrap().is_some());
+}
+
+/// One request makes one decision and writes one audit record: the creation of an account.
+pub async fn test_an_account_create_writes_one_audit_record(deps: &Deps) {
+    use golem_common::model::account::AccountCreation;
+    use golem_common::model::card::owner::EmptyOwnerPattern;
+    use golem_common::model::card::{
+        ClassPermissionTarget, EffectiveSurface, GrantSurface, PermissionTarget,
+        SystemResourcePattern, SystemVerb,
+    };
+
+    let (decisions, sink) = crate::repo::recording_decisions();
+    let accounts = deps.account_service_with_decisions(decisions);
+    // A caller that may create accounts.
+    let auth = AuthCtx::agent_with_effective_surface(
+        AccountId::new(),
+        AccountEmail::new("creator@example.com"),
+        EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![PermissionTarget::System(ClassPermissionTarget {
+                    verb: Some(SystemVerb::CreateAccount),
+                    owner: EmptyOwnerPattern,
+                    resource: SystemResourcePattern,
+                })],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        },
+    );
+
+    accounts
+        .create(
+            AccountCreation {
+                name: "Count".to_string(),
+                email: AccountEmail::new(format!("count-{}@golem", Uuid::new_v4())),
+                roles: Vec::new(),
+            },
+            &auth,
+        )
+        .await
+        .unwrap();
+
+    let records = sink.records();
+    assert!(records.len() == 1, "{records:?}");
+}
+
+/// A control whose audit record cannot be written must not run: the revoke answers that the
+/// audit is unavailable, and the card stays.
+pub async fn test_card_revoke_whose_record_cannot_be_written_is_unavailable_and_keeps_the_card(
+    deps: &Deps,
+) {
+    use golem_common::model::card::owner::AccountOwnerPattern;
+    use golem_common::model::card::{
+        CardResourcePattern, CardVerb, ClassPermissionTarget, EffectiveSurface, GrantSurface,
+        PermissionTarget,
+    };
+
+    let services =
+        environment_service_deps_with_card_decisions(deps, Some(crate::repo::failing_decisions()));
+    let account = deps.create_account().await;
+    let application = deps.create_application(account.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    let card_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(card_id, Vec::new()),
+            CardManagedByRuntimeDerived {
+                environment_id: EnvironmentId(environment.revision.environment_id),
+                ..runtime_card_provenance()
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    // A caller that may revoke the cards of the environment's owner.
+    let auth = AuthCtx::agent_with_effective_surface(
+        AccountId::new(),
+        AccountEmail::new("revoker@example.com"),
+        EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![PermissionTarget::Card(ClassPermissionTarget {
+                    verb: Some(CardVerb::Revoke),
+                    owner: AccountOwnerPattern::Account {
+                        account: AccountEmail::new(application.account_email.clone()),
+                    },
+                    resource: CardResourcePattern::Any,
+                })],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        },
+    );
+
+    let error = services
+        .card_service
+        .revoke_card(card_id, &auth)
+        .await
+        .unwrap_err();
+
+    let_assert!(CardError::Unauthorized(AuthorizationError::AuditUnavailable(_)) = error);
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    assert!(card_repo.get(card_id).await.unwrap().is_some());
+}
+
 pub async fn test_runtime_card_creation_requires_system_auth(deps: &Deps) {
     let services = environment_service_deps(deps);
     let auth = AuthCtx::agent_with_effective_surface(
@@ -2997,6 +3231,15 @@ struct EnvironmentServiceDeps {
 }
 
 fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
+    environment_service_deps_with_card_decisions(deps, None)
+}
+
+/// The services of `environment_service_deps`, with `card_decisions` as the card service's
+/// decision step when it is given.
+fn environment_service_deps_with_card_decisions(
+    deps: &Deps,
+    card_decisions: Option<golem_registry_service::services::decision::Decisions>,
+) -> EnvironmentServiceDeps {
     match &deps.test_db {
         TestDb::Postgres(pool) => {
             let notifier = deps.test_registry_change_notifier();
@@ -3006,9 +3249,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 plan_service,
                 golem_common::model::plan::PlanId(deps.test_plan_id()),
                 notifier.clone(),
-                golem_registry_service::services::decision::Decisions::new(
-                    "https://golem.test".parse().unwrap(),
-                ),
+                crate::repo::test_decisions(pool.clone()),
             ));
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
@@ -3023,9 +3264,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 account_service.clone(),
                 account_usage_service.clone(),
                 notifier.clone(),
-                golem_registry_service::services::decision::Decisions::new(
-                    "https://golem.test".parse().unwrap(),
-                ),
+                crate::repo::test_decisions(pool.clone()),
             ));
             let environment_service = EnvironmentService::new(
                 Arc::new(DbEnvironmentRepo::new(pool.clone())),
@@ -3034,9 +3273,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbPluginRepo::new(pool.clone())),
                 AccountId::SYSTEM,
                 notifier.clone(),
-                golem_registry_service::services::decision::Decisions::new(
-                    "https://golem.test".parse().unwrap(),
-                ),
+                crate::repo::test_decisions(pool.clone()),
             );
             let environment_service = Arc::new(environment_service);
             let permission_share_service = Arc::new(PermissionShareService::new(
@@ -3067,9 +3304,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 component_service.clone(),
                 environment_service.clone(),
                 notifier,
-                golem_registry_service::services::decision::Decisions::new(
-                    "https://golem.test".parse().unwrap(),
-                ),
+                card_decisions.unwrap_or_else(|| crate::repo::test_decisions(pool.clone())),
             );
 
             EnvironmentServiceDeps {
@@ -3086,9 +3321,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 plan_service,
                 golem_common::model::plan::PlanId(deps.test_plan_id()),
                 notifier.clone(),
-                golem_registry_service::services::decision::Decisions::new(
-                    "https://golem.test".parse().unwrap(),
-                ),
+                crate::repo::test_decisions(pool.clone()),
             ));
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
@@ -3103,9 +3336,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 account_service.clone(),
                 account_usage_service.clone(),
                 notifier.clone(),
-                golem_registry_service::services::decision::Decisions::new(
-                    "https://golem.test".parse().unwrap(),
-                ),
+                crate::repo::test_decisions(pool.clone()),
             ));
             let environment_service = EnvironmentService::new(
                 Arc::new(DbEnvironmentRepo::new(pool.clone())),
@@ -3114,9 +3345,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbPluginRepo::new(pool.clone())),
                 AccountId::SYSTEM,
                 notifier.clone(),
-                golem_registry_service::services::decision::Decisions::new(
-                    "https://golem.test".parse().unwrap(),
-                ),
+                crate::repo::test_decisions(pool.clone()),
             );
             let environment_service = Arc::new(environment_service);
             let permission_share_service = Arc::new(PermissionShareService::new(
@@ -3147,9 +3376,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 component_service.clone(),
                 environment_service.clone(),
                 notifier,
-                golem_registry_service::services::decision::Decisions::new(
-                    "https://golem.test".parse().unwrap(),
-                ),
+                card_decisions.unwrap_or_else(|| crate::repo::test_decisions(pool.clone())),
             );
 
             EnvironmentServiceDeps {
@@ -5131,6 +5358,7 @@ pub async fn test_owner_override_mutations_include_active_admin_grant_metadata(d
         account_roles: BTreeSet::new(),
         effective_surface,
         delegation_surface: None,
+        authenticated_by: None,
     });
     let overrides = AccountResourceOverrideService::new(
         deps.account_resource_override_repo.clone(),
@@ -15702,4 +15930,205 @@ pub async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_w
             .unwrap()
             .is_empty()
     );
+}
+
+fn audit_staging_record(
+    event: u128,
+) -> golem_registry_service::repo::audit_staging::AuditStagingRecord {
+    golem_registry_service::repo::audit_staging::AuditStagingRecord {
+        event_id: Uuid::from_u128(event),
+        recorded_at: golem_service_base::repo::SqlDateTime::now(),
+        surface: "rest".to_string(),
+        operation: "read-agent-oplog".to_string(),
+        outcome: "allowed".to_string(),
+        target_account_id: Some(Uuid::from_u128(0xacc0)),
+        target_environment_id: Some(Uuid::from_u128(0xe0)),
+        record: r#"{"version":1,"operation":"read-agent-oplog"}"#.to_string(),
+    }
+}
+
+pub async fn test_audit_staging_stores_a_record_once(deps: &Deps) {
+    let record = audit_staging_record(0xa1);
+
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+    // A sender that lost the answer sends the same event again; the table keeps one row.
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+
+    let stored = deps.audit_staging_repo.get(record.event_id).await.unwrap();
+    assert!(stored == Some(record));
+}
+
+pub async fn test_audit_staging_insert_commits_with_its_transaction(deps: &Deps) {
+    use golem_registry_service::repo::audit_staging::DbAuditStagingRepo;
+
+    let rolled_back = audit_staging_record(0xa2);
+    let committed = audit_staging_record(0xa3);
+
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            let mut tx = pool
+                .with_rw("audit_staging_test", "insert")
+                .begin()
+                .await
+                .unwrap();
+            DbAuditStagingRepo::<PostgresPool>::insert_in_tx(&mut tx, &rolled_back)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+
+            let mut tx = pool
+                .with_rw("audit_staging_test", "insert")
+                .begin()
+                .await
+                .unwrap();
+            DbAuditStagingRepo::<PostgresPool>::insert_in_tx(&mut tx, &committed)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        TestDb::Sqlite(pool) => {
+            let mut tx = pool
+                .with_rw("audit_staging_test", "insert")
+                .begin()
+                .await
+                .unwrap();
+            DbAuditStagingRepo::<SqlitePool>::insert_in_tx(&mut tx, &rolled_back)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+
+            let mut tx = pool
+                .with_rw("audit_staging_test", "insert")
+                .begin()
+                .await
+                .unwrap();
+            DbAuditStagingRepo::<SqlitePool>::insert_in_tx(&mut tx, &committed)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+    }
+
+    assert!(
+        deps.audit_staging_repo
+            .get(rolled_back.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.audit_staging_repo
+            .get(committed.event_id)
+            .await
+            .unwrap()
+            == Some(committed)
+    );
+}
+
+pub async fn test_audit_staging_fills_the_target_account_from_the_environment(deps: &Deps) {
+    let account = deps.create_account().await;
+    let application = deps.create_application(account.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    // An agent's record names its environment but no account.
+    let mut record = audit_staging_record(0xa4);
+    record.target_account_id = None;
+    record.target_environment_id = Some(environment.revision.environment_id);
+
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+
+    let stored = deps
+        .audit_staging_repo
+        .get(record.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.target_account_id == Some(application.account_id));
+    assert!(stored.target_environment_id == Some(environment.revision.environment_id));
+    assert!(stored.record == record.record);
+}
+
+pub async fn test_audit_staging_keeps_the_target_account_of_the_record(deps: &Deps) {
+    let account = deps.create_account().await;
+    let application = deps.create_application(account.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    let mut record = audit_staging_record(0xa5);
+    record.target_environment_id = Some(environment.revision.environment_id);
+
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+
+    let stored = deps
+        .audit_staging_repo
+        .get(record.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.target_account_id == record.target_account_id);
+}
+
+pub async fn test_audit_staging_stores_a_record_of_an_unknown_environment_without_an_account(
+    deps: &Deps,
+) {
+    let mut record = audit_staging_record(0xa6);
+    record.target_account_id = None;
+    record.target_environment_id = Some(Uuid::from_u128(0xe0e0));
+
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+
+    let stored = deps.audit_staging_repo.get(record.event_id).await.unwrap();
+    assert!(stored == Some(record));
+}
+
+pub async fn test_audit_staging_keeps_the_record_of_a_decision(deps: &Deps) {
+    use golem_common::model::AgentFingerprint;
+    use golem_common::model::auth::TokenId;
+    use golem_common::model::authority::{
+        AgentTarget, AuthorizationRequest, CatalogOperation, Decision, Grantors, Operation,
+        Resource, Target,
+    };
+    use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
+    use golem_registry_service::repo::audit_staging::AuditStagingRecord;
+    use golem_service_base::model::auth::audit::{AuditContext, AuditRecord};
+    use golem_service_base::model::auth::surface::Surface;
+
+    let environment_id = EnvironmentId(Uuid::from_u128(0xe7));
+    let request = AuthorizationRequest::new(
+        Caller::entry(Principal::Account(AccountPrincipal {
+            issuer: "https://golem.example".to_string(),
+            account_id: AccountId(Uuid::from_u128(0xa7)),
+            authentication: AccountAuthentication::ApiToken,
+        })),
+        Operation::single(
+            CatalogOperation::ReadAgentOplog,
+            Resource::None,
+            Target::Agent(AgentTarget {
+                environment_id,
+                agent_type: AgentTypeName("Report".to_string()),
+                agent_id: AgentId::from_parts(7, 0x71),
+                fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf7))),
+            }),
+        )
+        .unwrap(),
+    );
+    let record = AuditRecord::new(
+        &request,
+        &Decision::Allow(Grantors::default()),
+        &AuditContext::new(Surface::Rest).authenticated_by(TokenId(Uuid::from_u128(0x70))),
+    );
+
+    let row = AuditStagingRecord::from_audit_record(&record).unwrap();
+    assert!(row.event_id == record.event_id);
+    assert!(row.outcome == "allowed");
+    assert!(row.operation == "read-agent-oplog");
+    assert!(row.surface == "rest");
+    assert!(row.target_environment_id == Some(environment_id.0));
+    assert!(row.target_account_id == None);
+
+    deps.audit_staging_repo.insert(&row).await.unwrap();
+    let stored = deps
+        .audit_staging_repo
+        .get(record.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.to_audit_record().unwrap() == record);
 }

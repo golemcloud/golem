@@ -52,6 +52,7 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
+use golem_service_base::model::auth::audit::DecisionAudit;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::service::routing_table::RoutingTableService;
 use golem_service_base::storage::blob::{
@@ -116,8 +117,10 @@ impl Services {
             InvocationSessionTokenKeyring::new(&config.invocation_session_tokens)
                 .map_err(anyhow::Error::msg)?,
         );
-        let registry_service_client: Arc<dyn RegistryService> =
-            Arc::new(GrpcRegistryService::new(&config.registry_service));
+        let grpc_registry_service = Arc::new(GrpcRegistryService::new(&config.registry_service));
+        let registry_service_client: Arc<dyn RegistryService> = grpc_registry_service.clone();
+        // The worker service has no database: the registry stores its audit records.
+        let decision_audit = DecisionAudit::new(grpc_registry_service, config.audit.retry_after);
 
         let auth_service: Arc<dyn AuthService> = Arc::new(RemoteAuthService::new(
             registry_service_client.clone(),
@@ -181,6 +184,7 @@ impl Services {
             agent_resolution_cache.clone(),
             agent_types.clone(),
             golem_issuer.clone(),
+            decision_audit,
         ));
 
         let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(

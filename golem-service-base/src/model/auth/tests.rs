@@ -35,6 +35,7 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
         account_roles: roles.iter().cloned().collect(),
         effective_surface: empty_effective_surface(),
         delegation_surface: None,
+        authenticated_by: None,
     })
 }
 
@@ -167,12 +168,48 @@ fn auth_context_protobuf_preserves_delegation_surface() {
         account_roles: BTreeSet::new(),
         effective_surface: empty_effective_surface(),
         delegation_surface: Some(delegation_surface),
+        authenticated_by: None,
     });
 
     let encoded: golem_api_grpc::proto::golem::auth::AuthCtx = ctx.clone().into();
     let decoded = AuthCtx::try_from(encoded).unwrap();
 
     assert!(decoded == ctx);
+}
+
+#[test]
+fn auth_context_protobuf_preserves_the_authenticating_token() {
+    use golem_common::model::auth::TokenId;
+
+    let account_id = AccountId::new();
+    let token = TokenId::new();
+    let user = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_email: account_email(account_id),
+        account_plan_id: PlanId::new(),
+        account_roles: BTreeSet::new(),
+        effective_surface: empty_effective_surface(),
+        delegation_surface: None,
+        authenticated_by: Some(token),
+    });
+    let impersonation = AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
+        admin_account_id: AccountId::new(),
+        target_account_id: account_id,
+        target_account_email: account_email(account_id),
+        target_account_roles: BTreeSet::new(),
+        target_account_plan_id: PlanId::new(),
+        effective_surface: empty_effective_surface(),
+        delegation_surface: None,
+        authenticated_by: Some(token),
+    });
+
+    for ctx in [user, impersonation] {
+        let encoded: golem_api_grpc::proto::golem::auth::AuthCtx = ctx.clone().into();
+        let decoded = AuthCtx::try_from(encoded).unwrap();
+        assert!(decoded.authenticated_by() == Some(token));
+        assert!(decoded == ctx);
+    }
+    assert!(AuthCtx::System.authenticated_by() == None);
 }
 
 #[test]
@@ -189,6 +226,7 @@ fn user_with_effective_surface_can_authorize_permission() {
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
         delegation_surface: None,
+        authenticated_by: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
@@ -217,6 +255,7 @@ fn user_with_effective_surface_can_authorize_account_token_permission() {
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
         delegation_surface: None,
+        authenticated_by: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
@@ -240,6 +279,7 @@ fn effective_surface_account_token_grant_for_different_holder_does_not_authorize
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
         delegation_surface: None,
+        authenticated_by: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_err());
@@ -262,6 +302,7 @@ fn effective_surface_account_token_target_ignores_recipient_after_holder_filteri
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
         delegation_surface: None,
+        authenticated_by: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
@@ -283,6 +324,7 @@ fn effective_surface_account_token_grant_does_not_authorize_different_owner_targ
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
         delegation_surface: None,
+        authenticated_by: None,
     });
     let requested = account_token_target(AccountId::new());
 
@@ -314,6 +356,7 @@ fn user_with_effective_surface_can_authorize_account_permission() {
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
         delegation_surface: None,
+        authenticated_by: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());

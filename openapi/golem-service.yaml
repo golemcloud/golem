@@ -136,6 +136,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -233,6 +246,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -332,6 +358,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -442,6 +481,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -539,6 +591,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -642,6 +707,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -808,6 +886,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -935,6 +1026,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -1040,6 +1144,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -1140,6 +1257,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -1246,6 +1376,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -1356,6 +1499,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -1466,6 +1622,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -1570,6 +1739,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -1676,6 +1858,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -1769,6 +1964,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents:
     get:
       tags:
@@ -1915,6 +2123,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2021,6 +2242,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2116,6 +2350,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2213,6 +2460,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2332,6 +2592,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2455,6 +2728,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2566,6 +2852,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2652,6 +2951,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2741,6 +3053,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -2893,6 +3218,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -3005,6 +3343,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -3093,6 +3444,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -3186,6 +3550,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -3247,6 +3624,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -3316,6 +3706,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -3393,6 +3796,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -3478,6 +3894,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -3542,6 +3971,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -3611,6 +4053,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -3689,6 +4144,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -3757,6 +4225,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -3835,6 +4316,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -3923,6 +4417,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4005,6 +4512,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4078,6 +4598,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -4162,6 +4695,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4237,6 +4783,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4301,6 +4860,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -4380,6 +4952,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4444,6 +5029,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -4534,6 +5132,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4610,6 +5221,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4676,6 +5300,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -4751,6 +5388,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -4835,6 +5485,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4900,6 +5563,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -4974,6 +5650,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -5056,6 +5745,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5122,6 +5824,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -5197,6 +5912,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -5279,6 +6007,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5344,6 +6085,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -5421,6 +6175,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5491,6 +6258,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -5595,6 +6375,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5661,6 +6454,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -5734,6 +6540,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5800,6 +6619,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -5892,6 +6724,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5966,6 +6811,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -6046,6 +6904,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -6138,6 +7009,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -6203,6 +7087,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -6276,6 +7173,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -6366,6 +7276,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -6440,6 +7363,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -6523,6 +7459,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -6589,6 +7538,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -6664,6 +7626,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -6746,6 +7721,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -6815,6 +7803,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -6875,6 +7876,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -6960,6 +7974,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -7026,6 +8053,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -7105,6 +8145,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -7175,6 +8228,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -7236,6 +8302,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -7306,6 +8385,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -7381,6 +8473,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -7461,6 +8566,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -7527,6 +8645,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -7602,6 +8733,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -7672,6 +8816,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -7738,6 +8895,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -7813,6 +8983,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -7893,6 +9076,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -7959,6 +9155,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8034,6 +9243,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -8100,6 +9322,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8185,6 +9420,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -8251,6 +9499,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8326,6 +9587,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8408,6 +9682,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -8473,6 +9760,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8546,6 +9846,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8624,6 +9937,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -8689,6 +10015,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8765,6 +10104,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8846,6 +10198,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -8917,6 +10282,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -8999,6 +10377,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -9073,6 +10464,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -9163,6 +10567,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -9237,6 +10654,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -9327,6 +10757,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -9401,6 +10844,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -9491,6 +10947,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -9557,6 +11026,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -9636,6 +11118,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -9701,6 +11196,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -9778,6 +11286,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -9848,6 +11369,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -9930,6 +11464,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -10004,6 +11551,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -10096,6 +11656,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -10172,6 +11745,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -10261,6 +11847,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/login/oauth2/web/authorize:
     post:
       tags:
@@ -10329,6 +11928,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -10419,6 +12031,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/login/oauth2/web/poll:
     get:
       tags:
@@ -10495,6 +12120,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/me/token:
     get:
       tags:
@@ -10549,6 +12187,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -10634,6 +12285,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -10700,6 +12364,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -10775,6 +12452,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -10857,6 +12547,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -10922,6 +12625,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -10995,6 +12711,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -11073,6 +12802,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -11147,6 +12889,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -11239,6 +12994,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -11319,6 +13087,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -11389,6 +13170,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -11467,6 +13261,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -11541,6 +13348,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -11611,6 +13431,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -11698,6 +13531,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -11795,6 +13641,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -11878,6 +13737,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -11968,6 +13840,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -12038,6 +13923,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -12134,6 +14032,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -12225,6 +14136,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -12291,6 +14215,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -12370,6 +14307,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -12440,6 +14390,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -12505,6 +14468,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -12586,6 +14562,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -12656,6 +14645,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -12738,6 +14740,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -12804,6 +14819,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -12879,6 +14907,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -12965,6 +15006,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -13058,6 +15112,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -13123,6 +15190,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -13195,6 +15275,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -13253,6 +15346,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -13307,6 +15413,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -13377,6 +15496,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -13452,6 +15584,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -13534,6 +15679,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -13599,6 +15757,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -13676,6 +15847,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -13746,6 +15930,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -13828,6 +16025,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -13894,6 +16104,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -13969,6 +16192,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -14051,6 +16287,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -14116,6 +16365,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -14197,6 +16459,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -14271,6 +16546,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -14337,6 +16625,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -14412,6 +16713,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -14494,6 +16808,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -14559,6 +16886,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -14640,6 +16980,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -14714,6 +17067,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -14783,6 +17149,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -14848,6 +17227,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -14922,6 +17314,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -14987,6 +17392,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -15059,6 +17477,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -15124,6 +17555,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -15198,6 +17642,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -15263,6 +17720,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:
@@ -15335,6 +17805,19 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -15400,6 +17883,19 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          headers:
+            RETRY-AFTER:
+              style: simple
+              required: true
+              deprecated: false
+              schema:
+                type: string
           content:
             application/json; charset=utf-8:
               schema:

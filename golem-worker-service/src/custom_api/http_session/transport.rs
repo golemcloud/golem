@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::{InvocationStart, ResumeAttach};
 use golem_common::model::{IdempotencyKey, InvocationId, OwnedAgentId};
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 
 use crate::service::worker::{
     InvocationRequestStream, InvocationResponseStream, WorkerService, WorkerServiceError,
@@ -42,7 +43,7 @@ impl SessionTransport for WorkerService {
         start: InvocationStart,
         tail: InvocationRequestStream,
     ) -> Result<InvocationResponseStream, WorkerServiceError> {
-        self.invoke_agent_session(start, tail, true, AuthCtx::System)
+        self.invoke_agent_session(start, tail, true, AuthCtx::System, Surface::HttpRoute)
             .await
     }
 
@@ -51,14 +52,15 @@ impl SessionTransport for WorkerService {
         resume: ResumeAttach,
         tail: InvocationRequestStream,
     ) -> Result<InvocationResponseStream, WorkerServiceError> {
-        self.resume_agent_session(resume, tail, AuthCtx::System)
+        self.resume_agent_session(resume, tail, AuthCtx::System, Surface::HttpRoute)
             .await
     }
 
     async fn cleanup(&self, agent: OwnedAgentId, key: InvocationId) -> CleanupOutcome {
         let key = IdempotencyKey::new(key.to_string());
-        let cancel = self.cancel_invocation(&agent, &key, None, AuthCtx::System);
-        let interrupt = self.interrupt(&agent, false, None, AuthCtx::System);
+        let cancel =
+            self.cancel_invocation(&agent, &key, None, AuthCtx::System, Surface::HttpRoute);
+        let interrupt = self.interrupt(&agent, false, None, AuthCtx::System, Surface::HttpRoute);
         let (cancel, interrupt) = tokio::join!(cancel, interrupt);
         if cancel.is_ok() && interrupt.is_ok() {
             CleanupOutcome::FinishedUnconfirmed
