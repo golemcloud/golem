@@ -32,7 +32,7 @@ use crate::model::oplog::payload::types::AgentMetadataForGuests;
 use crate::model::oplog::{
     CreateParameters, CreateRequest, CreateRequestKind, DurableFunctionType, HostRequest,
     HostRequestEntityInvocation, HostStreamKind, OplogEntry, OplogPayload, PayloadId,
-    RawSnapshotData, UpdateDescription,
+    RawSnapshotData, StandaloneToolInvocation, UpdateDescription,
 };
 use crate::model::tool::{
     CompiledToolBinding, ToolActivationSnapshot, ToolBindingOwner, ToolFilesystemAccess,
@@ -289,6 +289,30 @@ fn tool_call_start(request: OplogPayload<HostRequest>) -> OplogEntry {
 }
 
 fn create(caller: Caller) -> OplogEntry {
+    create_entry(caller, None)
+}
+
+/// The create entry of the owner that a user's standalone tool call starts. The user is both the
+/// creator and the caller of the tool.
+fn standalone_tool_create(caller: Caller) -> OplogEntry {
+    let tool = StandaloneToolInvocation {
+        tool_name: ToolName::try_from("grep").unwrap(),
+        command_path: vec!["search".to_string()],
+        invocation_id: InvocationId(Uuid::from_u128(0x7)),
+        caller: caller.clone(),
+    };
+    create_entry(caller, Some(Box::new(tool)))
+}
+
+fn create_entry(
+    caller: Caller,
+    standalone_tool: Option<Box<StandaloneToolInvocation>>,
+) -> OplogEntry {
+    let owner_kind = if standalone_tool.is_some() {
+        OwnerKind::StandaloneTool
+    } else {
+        OwnerKind::ComponentAgent
+    };
     OplogEntry::Create {
         timestamp: Timestamp::now_utc().rounded(),
         parameters: Box::new(CreateParameters {
@@ -297,7 +321,7 @@ fn create(caller: Caller) -> OplogEntry {
             canonical_key: None,
             constructor_parameters: None,
             agent_id: AgentId::from_parts(7, 4),
-            owner_kind: OwnerKind::ComponentAgent,
+            owner_kind,
             agent_mode: AgentMode::Durable,
             component_revision: ComponentRevision::INITIAL,
             env: Vec::new(),
@@ -315,6 +339,7 @@ fn create(caller: Caller) -> OplogEntry {
                 caller,
                 &InvocationContextStack::fresh_rounded(),
             ),
+            standalone_tool,
             never_live: false,
         }),
     }
@@ -547,6 +572,28 @@ fn the_creator_reaches_a_processor_without_the_users_claims() {
 }
 
 #[test]
+fn the_caller_of_a_standalone_tool_reaches_a_processor_without_the_users_claims() {
+    let entry = standalone_tool_create(sample_caller());
+    assert!(holds_claims(&entry));
+
+    let received = entry.for_oplog_processor().unwrap();
+
+    assert!(!holds_claims(&received), "{received:?}");
+    let OplogEntry::Create { parameters, .. } = &received else {
+        panic!("expected a create entry, got {received:?}")
+    };
+    let tool = parameters
+        .standalone_tool
+        .as_ref()
+        .expect("the processor still learns which tool call owns the oplog");
+    assert_same_record(&tool.caller, &sample_caller_without_claims());
+    assert_same_record(
+        &parameters.create_request.caller,
+        &sample_caller_without_claims(),
+    );
+}
+
+#[test]
 fn an_external_payload_keeps_its_reference() {
     let payload_id = PayloadId(Uuid::from_u128(0x5));
     let entry = started(OplogPayload::External {
@@ -582,7 +629,8 @@ fn an_entry_without_claims_keeps_its_bytes() {
         started(serialized_inline(method_payload(no_user.clone()))),
         started(serialized_inline(method_payload(user_without_claims))),
         tool_call_start(serialized_inline(tool_call_request(no_user.clone()))),
-        create(no_user),
+        create(no_user.clone()),
+        standalone_tool_create(no_user),
         OplogEntry::GrowMemory {
             timestamp: Timestamp::now_utc().rounded(),
             delta: 100,

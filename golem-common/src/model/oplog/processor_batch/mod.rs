@@ -47,7 +47,12 @@ impl OplogEntry {
 fn hide_from_oplog_processor(entry: &mut OplogEntry) -> Result<bool, String> {
     match entry {
         OplogEntry::Create { parameters, .. } => {
-            Ok(parameters.create_request.caller.remove_claims())
+            let creator = parameters.create_request.caller.remove_claims();
+            let tool_caller = parameters
+                .standalone_tool
+                .as_mut()
+                .is_some_and(|tool| tool.caller.remove_claims());
+            Ok(creator || tool_caller)
         }
         OplogEntry::Start { request, .. } => match request {
             Some(request) => update_inline(request, remove_claims_from_host_request),
