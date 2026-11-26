@@ -259,13 +259,13 @@ The CLI reads the pages one after the other, and the agent can run during the ex
 
 Before the first read and after the last read, the CLI reads the `Create` entry of the agent and compares the fingerprints. When the agent was deleted and created again during the export, the export fails. A page read that fails, for example a read that you are not allowed to make, also fails the export. A failed read of one omitted entry does not fail the export (see [Large entries and coverage](#large-entries-and-coverage)).
 
-The export also fails when the entry at index 1 is not a `Create` entry: the export needs its fingerprint. The CLI reads the `Create` entry in full, whatever its size and `--max-entry-bytes` are.
+The export also fails when the entry at index 1 is not a `Create` entry, or when the oplog page omits the `Create` entry and its size is above `--max-entry-bytes`: the export needs its fingerprint. For a `Create` entry that is too large, export again with a larger `--max-entry-bytes`.
 
 A failed export ends with an error and a non-zero exit code. It does not change an existing `--html` file. On stdout, the documents that the export wrote before the failure stay, and the sequence of documents has no coverage document. A complete export always ends with the coverage document.
 
 ## Large entries and coverage
 
-Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by default). The CLI reads an omitted entry in full only when its size is at most `--max-entry-bytes` (default 16 MiB). A larger entry, or an entry whose read fails, stays omitted with its kind, timestamp and size, and with the reason `tooLarge` or `hydrationFailed`. The coverage document lists it in `hydrationFailures`, and the export continues with the next entry. Apart from the `Create` entry, the CLI never reads an omitted entry whose size is above `--max-entry-bytes`. The option does not limit the entries that the oplog pages include.
+Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by default). The CLI reads an omitted entry in full only when its size is at most `--max-entry-bytes` (default 16 MiB). A larger entry, or an entry whose read fails, stays omitted with its kind, timestamp and size, and with the reason `tooLarge` or `hydrationFailed`. The coverage document lists it in `hydrationFailures`, and the export continues with the next entry. The CLI never reads an omitted entry whose size is above `--max-entry-bytes`. The option does not limit the entries that the oplog pages include.
 
 A larger `--max-entry-bytes` reads larger entries and uses more memory on your machine. Each read stays one ordinary request with the limits of the server.
 
@@ -323,7 +323,7 @@ Every node of the report has a `kind`. A `body` is a `record` whose field names 
 
 `--serve --obfuscate` starts the local viewer and obfuscates each page with the key of the viewer process:
 
-- The CLI reads the `Create` entry before the server starts. A failure there stops the command.
+- The CLI reads the `Create` entry before the server starts. A failure there, also an omitted `Create` entry above `--max-entry-bytes`, stops the command.
 - The served page holds the export header, the start index, the query and the page size, and no component name or component ID. The header `root` holds the agent ID in clear, and the page shows the root as `Type[<uuid>]`.
 - Each page request checks the `Create` entry before and after the page. When the agent was deleted and created again, the request answers HTTP 409 with the text "The agent was deleted and created again. Restart the viewer to read the new agent." The status request of the viewer answers the same.
 - The status panel gets only these status fields of the agent: `status`, `lastOplogIndex`, `retryCount`, `componentRevision`, `pendingInvocationCount`, `skippedRegions` and `deletedRegions`. It never gets the last error, the agent ID, `env` or config.

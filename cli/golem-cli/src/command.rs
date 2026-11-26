@@ -1175,7 +1175,7 @@ pub mod shared_args {
         #[arg(long, requires = "obfuscate")]
         pub keep_error_text: bool,
         /// Read an entry that the oplog page omitted only when its size is at most N bytes. A
-        /// larger entry stays omitted with its size. The `Create` entry is always read in full.
+        /// larger entry stays omitted with its size.
         #[arg(
             long,
             value_name = "N",

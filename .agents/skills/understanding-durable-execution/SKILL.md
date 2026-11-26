@@ -1421,8 +1421,7 @@ registration below the start (every index holds the producer and the retention, 
 `unknown_local_stream` picks the expired or the corrupt error), a handle of a stream that the index does not know is expired when
 the start is above 1, a cursor below the start is expired, the stream fork lineage
 (`LineageError`) keeps a read error and a reference below the start typed, and a producer request
-keeps the expired error (`DurableStreamRemoteError::from_producer`). The obfuscated CLI export
-reads the `Create` entry alone (`read_create_entry`). The expired error becomes
+keeps the expired error (`DurableStreamRemoteError::from_producer`). The expired error becomes
 `WorkerExecutorError::OplogFailed` with the cause `OplogFailure::Expired`. It crosses gRPC as
 `OplogExpired` and REST as HTTP 400 `OPLOG_EXPIRED`, and the guest oplog API gives it as
 `internal-error` whose text names the expired cause and the retained start

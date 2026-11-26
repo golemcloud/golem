@@ -47,7 +47,6 @@ enum Event {
         index: u64,
         revision: u64,
     },
-    CreateEntry,
     RangePage {
         from: u64,
         to: u64,
@@ -60,13 +59,8 @@ enum Event {
 }
 
 fn root_read() -> Event {
-    Event::CreateEntry
-}
-
-/// The page read of the pin, which gives the last index of the oplog.
-fn last_index_read() -> Event {
     Event::Page {
-        from: None,
+        from: Some(1),
         count: 1,
         cursor: None,
         query: None,
@@ -82,13 +76,11 @@ struct FakeEntry {
     hydration_fails: bool,
 }
 
-/// An oplog in memory. Pages hold `count` entries from the cursor, `from` or the retained start;
-/// a read with a query returns only the entries whose JSON contains the query. A page from below
-/// the retained start is expired. The `Create` at index 1 gets the `n`-th instance ID at the
-/// `n`-th root read, the read of the `Create` entry alone.
+/// An oplog in memory. Pages hold `count` entries from the cursor, `from` or index 1; a read
+/// with a query returns only the entries whose JSON contains the query. The `Create` at index 1
+/// gets the `n`-th instance ID at the `n`-th root read (`from = 1`, `count = 1`).
 struct FakeReads {
     entries: Vec<FakeEntry>,
-    retained_start: u64,
     log: Log,
     empty_page_at: Mutex<HashSet<u64>>,
     instance_ids: Vec<Uuid>,
@@ -107,7 +99,6 @@ impl FakeReads {
     fn new(entries: Vec<FakeEntry>) -> Self {
         Self {
             entries,
-            retained_start: 1,
             log: Arc::default(),
             empty_page_at: Mutex::default(),
             instance_ids: vec![instance(1)],
@@ -165,17 +156,15 @@ impl OplogReads for FakeReads {
             cursor: cursor.map(|c| c.next_oplog_index),
             query: query.map(str::to_string),
         });
-        let instance_id = self.instance_ids[0];
-        let start = cursor
-            .map(|c| c.next_oplog_index)
-            .or(from)
-            .unwrap_or(self.retained_start);
-        if start < self.retained_start {
-            anyhow::bail!(
-                "the oplog expired: it starts at index {}",
-                self.retained_start
-            );
+        let mut instance_id = self.instance_ids[0];
+        if from == Some(1) && count == 1 && cursor.is_none() && query.is_none() {
+            let n = self.root_reads.fetch_add(1, Ordering::SeqCst);
+            if self.fail_root_read_at == Some(n) {
+                anyhow::bail!("agent not found");
+            }
+            instance_id = self.instance_ids[n.min(self.instance_ids.len() - 1)];
         }
+        let start = cursor.map(|c| c.next_oplog_index).or(from).unwrap_or(1);
         if let Some(cursor) = cursor
             && self.empty_page_at.lock().unwrap().remove(&start)
         {
@@ -296,24 +285,6 @@ impl OplogReads for FakeReads {
             anyhow::bail!("read failed");
         }
         Ok(fake.entry.clone())
-    }
-
-    async fn read_create_entry(&self) -> anyhow::Result<PublicOplogEntryWithIndex> {
-        self.log.lock().unwrap().push(Event::CreateEntry);
-        let n = self.root_reads.fetch_add(1, Ordering::SeqCst);
-        if self.fail_root_read_at == Some(n) {
-            anyhow::bail!("agent not found");
-        }
-        let fake = self
-            .entries
-            .iter()
-            .find(|e| e.entry.oplog_index.as_u64() == 1)
-            .ok_or_else(|| anyhow::anyhow!("no entry"))?;
-        let mut entry = fake.entry.clone();
-        if let PublicOplogEntry::Create(create) = &mut entry.entry {
-            create.instance_id = self.instance_ids[n.min(self.instance_ids.len() - 1)];
-        }
-        Ok(entry)
     }
 }
 
@@ -522,11 +493,10 @@ fn events(log: &Log) -> Vec<Event> {
     log.lock().unwrap().clone()
 }
 
-/// The page reads and the root reads, in order.
 fn page_reads(log: &Log) -> Vec<Event> {
     events(log)
         .into_iter()
-        .filter(|e| matches!(e, Event::Page { .. } | Event::CreateEntry))
+        .filter(|e| matches!(e, Event::Page { .. }))
         .collect()
 }
 
@@ -558,12 +528,7 @@ async fn export_follows_the_cursor_to_the_end() {
 
     let sink_events: Vec<Event> = events(&log)
         .into_iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                Event::Page { .. } | Event::Entry { .. } | Event::CreateEntry
-            )
-        })
+        .filter(|e| !matches!(e, Event::Page { .. } | Event::Entry { .. }))
         .collect();
     assert_eq!(
         sink_events,
@@ -649,33 +614,25 @@ async fn root_deleted_during_the_export_fails() {
 }
 
 #[test]
+async fn create_above_the_limit_fails_without_a_full_read() {
+    let reads = FakeReads::new(vec![omitted(create(), MAX + 1), log_entry(2, "a")]);
+    let (result, sink, log) = run(reads, options()).await;
+    assert_eq!(
+        export_error(result),
+        OplogExportError::CreateTooLarge {
+            size: MAX + 1,
+            max_entry_bytes: MAX
+        }
+    );
+    assert!(entry_reads(&log).is_empty());
+    assert!(sink.header.is_none());
+}
+
+#[test]
 async fn missing_create_fails() {
     let reads = FakeReads::new(vec![log_entry(1, "a")]);
     let (result, _, _) = run(reads, options()).await;
     assert_eq!(export_error(result), OplogExportError::CreateMissing);
-}
-
-/// When the retained oplog starts after index 1, a page from index 1 is expired. The export
-/// reads the `Create` entry alone and the entries from the retained start.
-#[test]
-async fn an_export_after_the_retained_start_reads_the_create_entry_alone() {
-    let mut reads = FakeReads::new(vec![
-        create(),
-        log_entry(2, "a"),
-        log_entry(3, "b"),
-        log_entry(4, "c"),
-    ]);
-    reads.retained_start = 3;
-    let (result, sink, log) = run(reads, options()).await;
-    result.unwrap();
-    assert!(sink.header.is_some());
-    assert_eq!(
-        sink.entries.iter().map(|e| e.index).collect::<Vec<_>>(),
-        vec![3, 4]
-    );
-    assert!(sink.coverage.is_some());
-    assert_eq!(page_reads(&log).first(), Some(&root_read()));
-    assert_eq!(page_reads(&log).last(), Some(&root_read()));
 }
 
 #[test]
@@ -1209,7 +1166,7 @@ async fn a_range_report_holds_exactly_the_range_in_index_order() {
         vec![(6, None), (6, Some(5))]
     );
     let pages = page_reads(&log);
-    assert_eq!(pages, vec![root_read(), last_index_read(), root_read()]);
+    assert_eq!(pages, vec![root_read(), root_read()]);
 }
 
 #[test]
@@ -1273,7 +1230,7 @@ async fn a_range_that_the_entry_allowance_does_not_cover_fails_without_a_report(
         OplogExportError::ScanBudgetExceeded { from: 2, to: 9 }
     );
     // No root check after the failure: the export stopped at the spent allowance.
-    assert_eq!(page_reads(&log), vec![root_read(), last_index_read()]);
+    assert_eq!(page_reads(&log), vec![root_read()]);
     assert_eq!(range_reads(&log).len(), 4);
 }
 
@@ -1336,7 +1293,7 @@ async fn a_report_that_does_not_fit_stops_reading() {
             matched_entries: Some(2),
         }
     );
-    assert_eq!(page_reads(&log), vec![root_read(), last_index_read()]);
+    assert_eq!(page_reads(&log), vec![root_read()]);
 
     // The first page of 2 to 9 holds the same two entries. With their separators they fit in the
     // limit, but the header and the coverage do not fit beside them: the export reads no more.
@@ -1354,7 +1311,7 @@ async fn a_report_that_does_not_fit_stops_reading() {
         }
     );
     assert_eq!(range_reads(&log).len(), 1);
-    assert_eq!(page_reads(&log), vec![root_read(), last_index_read()]);
+    assert_eq!(page_reads(&log), vec![root_read()]);
 }
 
 #[test]

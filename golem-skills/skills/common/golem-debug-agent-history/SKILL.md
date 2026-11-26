@@ -35,7 +35,7 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 | `--keep-scalars` | Requires `--obfuscate`. Show numbers, bools, datetimes, durations and the mantissa, scale and unit of quantities in clear; never byte lists, discriminants, lengths or text. Leaks amounts, counters, numeric IDs, dates in values, resource IDs, consumed fuel, and every bool and small number that a token hides. |
 | `--keep-shape` | Requires `--obfuscate`. Show discriminants, presence, and list, map and byte lengths; the values stay tokens. Leaks whether an optional value was present, which case occurred, item counts and payload sizes; map entries are sorted by value, so their order can show which token stands for which value. |
 | `--keep-error-text` | Requires `--obfuscate`. Keep the free text of error messages. Leaks any customer value that the text contains, such as a URL, an input value or a file name. |
-| `--max-entry-bytes <N>` | Requires `--obfuscate`. Read an entry that the oplog page omitted only when its size is at most `N` bytes (default 16777216). A larger entry stays omitted with its size. The `Create` entry is always read in full. |
+| `--max-entry-bytes <N>` | Requires `--obfuscate`. Read an entry that the oplog page omitted only when its size is at most `N` bytes (default 16777216). A larger entry stays omitted with its size. |
 | `--page` | Read one page of at most 50 entries (the HTTP batch size) and print it as one `agent.oplog-page` document, with a `cursor` when the oplog has entries after the page. A search page can end early at the server's scan budget, so it can have fewer entries, or none, and still have a cursor. Cannot be combined with `--html`, `--serve` or `--obfuscate`. |
 | `--cursor <CURSOR>` | With `--page`: read the page after the one that returned `CURSOR`. Pass the cursor back unchanged, with the same `--query`. The server refuses a cursor of another query, or one past the end of the oplog, with `STALE_CURSOR`. A cursor below the retained start of the oplog gives `OPLOG_EXPIRED`. |
 
@@ -55,7 +55,7 @@ Rules:
 - The structured output is a sequence of documents: one `agent.oplog-export-header`, one `agent.oplog-export-entry` per entry and one `agent.oplog-export-coverage`, not the `agent.oplog` documents. Branch on `$type`.
 - A sequence without a coverage document is from a failed export, and the exit code is not zero.
 - Check `incomplete`, `hydrationFailures` and `startUnknown` in the coverage document before you use the report. `incomplete` is `true` when one of the two lists is not empty. `hostTypeMismatches` lists host payloads whose type differs from the type that the CLI expects, for example after a server upgrade; they are tokens in full, so use a CLI of the server's version.
-- The CLI reads the `Create` entry in full, whatever `--max-entry-bytes` is.
+- An omitted `Create` entry above `--max-entry-bytes` fails the export. Export again with a larger limit.
 - Agent references are in clear in an `agent` node `{ agentId, agentType? }`, shown as `Type[<uuid>]` or as the UUID alone. Only the own references of the exported agent (the header `root` and its own `Create.agentId`) carry the agent type, from its `Create` entry. Every other reference holds the agent ID only. A UUID without the layout of a Golem agent ID stays a `str` token.
 - The report holds only the named agent.
 - Tokens are equal only inside one export or one `--serve` session. Do not compare two reports by their tokens.

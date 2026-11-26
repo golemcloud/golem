@@ -108,7 +108,7 @@ pub fn tool() -> anyhow::Result<Tool> {
                 "type": "integer",
                 "minimum": 0,
                 "default": DEFAULT_MAX_ENTRY_BYTES,
-                "description": "Read an entry that the oplog page omitted only when its size is at most this many bytes. A larger entry stays omitted with its size. The `Create` entry is always read in full.",
+                "description": "Read an entry that the oplog page omitted only when its size is at most this many bytes. A larger entry stays omitted with its size.",
             },
         },
         "required": ["agent_id", "from", "to"],
@@ -218,6 +218,7 @@ pub fn export_failure(error: &anyhow::Error) -> Option<(&'static str, String, Ma
         OplogExportError::StaleCursor => ("stale-cursor", Map::new()),
         OplogExportError::Expired => ("oplog-expired", Map::new()),
         OplogExportError::RootChanged
+        | OplogExportError::CreateTooLarge { .. }
         | OplogExportError::CreateMissing
         | OplogExportError::ReadFailed { .. }
         | OplogExportError::ReadFailedWithoutResponse

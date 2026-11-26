@@ -91,10 +91,6 @@ pub trait OplogReads: Send + Sync {
         oplog_index: u64,
         component_revision: ComponentRevision,
     ) -> anyhow::Result<PublicOplogEntryWithIndex>;
-
-    /// Reads the `Create` entry at index 1 alone. The server gives it also when the retained
-    /// oplog starts after index 1, where a page from index 1 is expired.
-    async fn read_create_entry(&self) -> anyhow::Result<PublicOplogEntryWithIndex>;
 }
 
 /// The default largest omitted entry, in bytes, that an export reads in full.
@@ -124,6 +120,10 @@ pub trait OplogExportSink {
 pub enum OplogExportError {
     #[error("The agent was deleted and created again during the export")]
     RootChanged,
+    #[error(
+        "The Create entry of the agent has {size} bytes, more than --max-entry-bytes ({max_entry_bytes})"
+    )]
+    CreateTooLarge { size: u64, max_entry_bytes: u64 },
     #[error("The oplog of the agent has no Create entry at index 1")]
     CreateMissing,
     /// A failed read. It holds only the HTTP status, because the error text of a service can
@@ -195,9 +195,7 @@ impl<R: OplogReads> OplogExportSession<R> {
         key: &'static TokenKey,
         options: OplogExportOptions,
     ) -> anyhow::Result<Self> {
-        let create = read_create(&reads).await?;
-        // A page without `from` starts at the retained start, so it is never expired.
-        let last_index = reads.read_page(None, 1, None, None).await?.last_index;
+        let (create, last_index) = read_create(&reads, options.max_entry_bytes).await?;
         let own_agent = OwnAgent {
             agent_id: create.agent_id,
             agent_type: create.agent_type_name,
@@ -242,7 +240,7 @@ impl<R: OplogReads> OplogExportSession<R> {
     /// Fails with [`OplogExportError::RootChanged`] when the `Create` entry has another
     /// `instance_id` than at the pin. A failed read fails too.
     pub async fn check_root(&self) -> anyhow::Result<()> {
-        let create = read_create(&self.reads).await?;
+        let (create, _) = read_create(&self.reads, self.options.max_entry_bytes).await?;
         self.check_fingerprint(create.instance_id)?;
         Ok(())
     }
@@ -411,12 +409,34 @@ impl<R: OplogReads> OplogExportSession<R> {
     }
 }
 
-/// Reads the `Create` entry at index 1 alone and returns its parameters, which hold the
-/// `instance_id` and the agent ID.
-async fn read_create<R: OplogReads>(reads: &R) -> anyhow::Result<Box<CreateParams>> {
-    let entry = reads.read_create_entry().await?;
+/// Reads the `Create` entry at index 1 and returns its `instance_id`, the agent ID and the last
+/// index of the oplog.
+async fn read_create<R: OplogReads>(
+    reads: &R,
+    max_entry_bytes: u64,
+) -> anyhow::Result<(Box<CreateParams>, u64)> {
+    let page = reads.read_page(Some(1), 1, None, None).await?;
+    let last_index = page.last_index;
+    let entry = match page.entries.into_iter().next() {
+        Some(PublicOplogPageEntry::Included(entry)) => entry,
+        Some(PublicOplogPageEntry::Omitted(omitted))
+            if omitted.oplog_index.as_u64() == 1 && omitted.entry_type == "Create" =>
+        {
+            if omitted.size > max_entry_bytes {
+                return Err(OplogExportError::CreateTooLarge {
+                    size: omitted.size,
+                    max_entry_bytes,
+                }
+                .into());
+            }
+            reads.read_entry(1, omitted.component_revision).await?
+        }
+        _ => return Err(OplogExportError::CreateMissing.into()),
+    };
     match entry.entry {
-        PublicOplogEntry::Create(create) if entry.oplog_index.as_u64() == 1 => Ok(Box::new(create)),
+        PublicOplogEntry::Create(create) if entry.oplog_index.as_u64() == 1 => {
+            Ok((Box::new(create), last_index))
+        }
         _ => Err(OplogExportError::CreateMissing.into()),
     }
 }
