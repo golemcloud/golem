@@ -3508,9 +3508,11 @@ async fn prepare_session(
             .add_and_commit_oplog(OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
                 invocation_id: idempotency_key,
-                result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentMethod {
-                    output: data_value!(1u32).value().clone(),
-                })),
+                result: golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+                    Box::new(AgentInvocationResult::AgentMethod {
+                        output: data_value!(1u32).value().clone(),
+                    }),
+                )),
                 method_name: Some("increment".into()),
                 consumed_fuel: 0,
                 component_revision: metadata.last_known_status.component_revision,
@@ -3582,9 +3584,11 @@ async fn completion_receipt_precedes_fifo_status_fold(
         .add_to_oplog(OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
             invocation_id: idempotency_key,
-            result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentMethod {
-                output: data_value!(1u32).value().clone(),
-            })),
+            result: golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+                Box::new(AgentInvocationResult::AgentMethod {
+                    output: data_value!(1u32).value().clone(),
+                }),
+            )),
             method_name: Some("increment".into()),
             consumed_fuel: 0,
             component_revision: metadata.last_known_status.component_revision,
@@ -3741,7 +3745,9 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
         .add_to_oplog(OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
             invocation_id: key,
-            result: OplogPayload::Inline(Box::new(result.clone())),
+            result: golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+                Box::new(result.clone()),
+            )),
             method_name: Some("increment".into()),
             consumed_fuel: 0,
             component_revision: worker

@@ -267,7 +267,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let worker = store.data().durable_ctx().public_state.worker();
-        if uses_streams {
+        if uses_streams && recorded_at != ResultRecordedAt::ExportReturn {
             let key = store
                 .data()
                 .durable_ctx()
@@ -1466,7 +1466,38 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 }
             };
             if let Some((finished_index, recorded_result)) = response {
-                if !recorded_result.replay_equivalent(&output.result) {
+                let worker = self.public_state.worker();
+                let refers_to_return = if let OplogEntry::AgentInvocationFinished {
+                    result: golem_common::model::oplog::FinishedResult::Returned(index),
+                    ..
+                } = worker.oplog().read(finished_index).await?
+                {
+                    let producer = worker.durable_stream_producer().await?;
+                    let session_key = producer.qualify_session(
+                        &golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                            invocation_id,
+                        ),
+                    );
+                    let status = worker
+                        .oplog()
+                        .raw_durable_stream_session_status(&session_key)
+                        .await;
+                    let expected = status
+                        .status
+                        .map_err(WorkerExecutorError::runtime)?
+                        .and_then(|status| status.invocation_result);
+                    if expected != Some(index) {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            finished_index,
+                            format!("FinishedResult::Returned({expected:?})"),
+                            format!("FinishedResult::Returned({index})"),
+                        ));
+                    }
+                    true
+                } else {
+                    false
+                };
+                if !refers_to_return && !recorded_result.replay_equivalent(&output.result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         finished_index,
                         format!(
@@ -1523,6 +1554,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 _ => None,
             };
 
+            let returned = self
+                .public_state
+                .worker()
+                .get_repaired_status()
+                .await?
+                .running
+                .as_ref()
+                .filter(|running| running.key == invocation_id)
+                .and_then(|running| running.returned);
             let finished_index = self
                 .public_state
                 .worker()
@@ -1530,6 +1570,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .add_agent_invocation_finished(
                     invocation_id,
                     &output.result,
+                    returned,
                     method_name,
                     consumed_fuel,
                     component_revision,
@@ -1551,6 +1592,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_before_status_update(commit_level)
                 .await?;
+            self.public_state.worker().notify_stream_invocation_result();
             self.close_loop_invocation_at_settled_terminal(at_return);
 
             // Bump the read-only cache epoch after the

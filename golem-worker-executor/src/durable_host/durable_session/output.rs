@@ -207,7 +207,21 @@ impl StreamSession {
             deleted_outputs,
             existing_intents,
         } = metadata.materialization_state();
+        let prepared_position = metadata.prepared_position();
         drop(metadata);
+        let method_name = if self.entity_parent_start_index.is_none()
+            && let Some(index) = prepared_position
+        {
+            match self.session_record_at(index).await? {
+                StreamSessionRecord::Prepared(prepared) => match prepared.attempt.invocation.target {
+                    golem_common::model::durable_stream::PersistedInvocationTarget::AgentMethod { method_name } => Some(method_name),
+                    _ => None,
+                },
+                _ => return Err("session prepared position names a different record".into()),
+            }
+        } else {
+            None
+        };
         let cancellation_epoch = if first_result && (cancel_session || !deleted_outputs.is_empty())
         {
             Some(self.authoritative_attachment_state().await?.epoch)
@@ -482,15 +496,29 @@ impl StreamSession {
             ..
         } = admission
             .submit(move |owner, context| async move {
-                let result = owner
-                    .register_result_streams(
-                        Some(&context),
-                        session_key,
-                        result_bytes,
-                        outputs,
-                        attribution,
-                    )
-                    .await?;
+                let result = if attribution.is_some() {
+                    owner
+                        .register_result_streams(
+                            Some(&context),
+                            session_key,
+                            result_bytes,
+                            outputs,
+                            attribution,
+                        )
+                        .await?
+                } else {
+                    owner
+                        .register_invocation_return(
+                            Some(&context),
+                            session_key,
+                            result_bytes,
+                            outputs,
+                            attribution,
+                            method_name,
+                            component_revision,
+                        )
+                        .await?
+                };
                 owner.notify_session_records_changed(Some(&context));
                 Ok::<_, StreamStoreError>(result)
             })
@@ -1814,6 +1842,27 @@ impl StreamSession {
 
     /// Reads the committed invocation result, independently of stream drain progress.
     pub async fn persisted_result(&self) -> Result<Option<SessionValue>, SessionError> {
+        if self.entity_parent_start_index.is_none()
+            && let StreamRegistrationInvocation::Local(invocation_id) = self.session_reference
+        {
+            let Some(index) = self.current_control_metadata().await?.result_position() else {
+                return Ok(None);
+            };
+            let result = self
+                .producer
+                .read_invocation_result_value(index, invocation_id)
+                .await?;
+            let value = SessionValue::from_value_and_bindings(
+                &self.producer,
+                &result.value,
+                &result.stream_bindings,
+            )
+            .await?;
+            for (binding, mapping) in result.stream_bindings.into_iter().zip(&value.mappings) {
+                self.insert_binding_mapping(binding, mapping.clone())?;
+            }
+            return Ok(Some(value));
+        }
         if let Some(result) = self.remote_result_record().await? {
             let bindings = result.stream_mappings.clone();
             let value = SessionValue::from_persisted(&self.producer, result).await?;
@@ -1881,19 +1930,26 @@ impl SessionValue {
         producer: &DurableStreamStore,
         result: StreamSessionInvocationResultRecord,
     ) -> Result<Self, SessionError> {
-        let value = ProtoSchemaValue::decode(result.result.as_slice())
+        Self::from_value_and_bindings(producer, &result.result, &result.stream_mappings).await
+    }
+
+    async fn from_value_and_bindings(
+        producer: &DurableStreamStore,
+        bytes: &[u8],
+        bindings: &[StreamBindingRecord],
+    ) -> Result<Self, SessionError> {
+        let value = ProtoSchemaValue::decode(bytes)
             .map_err(|error| format!("invalid persisted durable invocation result: {error}"))?;
         let value = remap_recursive_stream_references(value, |handle_index, _| {
             let index = usize::try_from(handle_index)
                 .map_err(|_| format!("durable result handle index {handle_index} is too large"))?;
-            result
-                .stream_mappings
+            bindings
                 .get(index)
                 .map(|mapping| mapping.transport_stream_id)
                 .ok_or_else(|| format!("unknown durable result handle index {handle_index}"))
         })?;
         let mappings = producer
-            .materialize_bindings(&result.stream_mappings)
+            .materialize_bindings(bindings)
             .await
             .map_err(SessionError::from)?;
         Ok(Self { value, mappings })

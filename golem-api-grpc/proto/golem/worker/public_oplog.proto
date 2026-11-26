@@ -30,6 +30,7 @@ message OplogEntry {
     AgentInvocationFinishedParameters AgentInvocationFinished = 4;
     AgentInvocationFailedParameters AgentInvocationFailed = 71;
     AgentInvocationSettledParameters AgentInvocationSettled = 73;
+    AgentInvocationReturnedParameters AgentInvocationReturned = 74;
     TimestampParameter Suspend = 5;
     ErrorParameters Error = 6;
     JumpParameters Jump = 8;
@@ -85,6 +86,14 @@ message OplogEntry {
     SpanClosedParameters SpanClosed = 70;
     MemorySizeReconciledParameters MemorySizeReconciled = 72;
   }
+}
+
+message AgentInvocationReturnedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID invocation_id = 2;
+  golem.schema.TypedSchemaValue result = 3;
+  optional string method_name = 4;
+  uint64 component_revision = 5;
 }
 
 // Identifies which host-owned stream a HostStreamFrame oplog entry belongs to.

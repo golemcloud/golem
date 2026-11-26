@@ -2205,6 +2205,7 @@ mod tests {
                 accepted_at: golem_common::model::Timestamp::from(0),
                 operation: None,
             },
+            returned: None,
             last_change: OplogIndex::INITIAL,
             last_change_at: golem_common::model::Timestamp::from(0),
         });

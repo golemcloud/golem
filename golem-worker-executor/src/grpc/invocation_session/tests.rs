@@ -652,11 +652,11 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
 #[test]
 async fn a_result_and_terminal_committed_between_the_reads_are_both_read() {
     use golem_common::base_model::durable_stream::{
-        StreamSessionFinishedRecord, StreamSessionInvocationResultRecord, StreamSessionRecord,
+        StreamSessionFinishedRecord, StreamSessionRecord,
     };
     use golem_common::model::Timestamp;
-    use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::payload::OplogPayload;
+    use golem_common::model::oplog::{FinishedResult, OplogEntry};
     use golem_schema::proto::golem::schema::{SchemaValue as ProtoSchemaValue, schema_value};
 
     let value = ProtoSchemaValue {
@@ -671,14 +671,18 @@ async fn a_result_and_terminal_committed_between_the_reads_are_both_read() {
         summary: None,
     };
     oplog.add_after_next_horizon(vec![
-        record(StreamSessionRecord::InvocationResult(
-            StreamSessionInvocationResultRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: streams.session_reference.clone(),
-                result: value.encode_to_vec(),
-                stream_mappings: vec![],
-            },
-        )),
+        OplogEntry::agent_invocation_finished(
+            streams.session_key.idempotency_key,
+            FinishedResult::Payload(OplogPayload::Inline(Box::new(
+                golem_common::model::AgentInvocationResult::AgentMethod {
+                    output: golem_common::schema::SchemaValue::U64(7),
+                },
+            ))),
+            None,
+            0,
+            golem_common::model::component::ComponentRevision::INITIAL,
+            true,
+        ),
         record(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: streams.session_reference.clone(),

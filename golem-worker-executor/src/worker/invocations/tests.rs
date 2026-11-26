@@ -56,6 +56,7 @@ fn running(key: InvocationId, started: u64, last_change: u64) -> RunningInvocati
             accepted_at: Timestamp::from(1),
             operation: method("m"),
         },
+        returned: None,
         last_change: index(last_change),
         last_change_at: Timestamp::from(last_change * 10),
     }

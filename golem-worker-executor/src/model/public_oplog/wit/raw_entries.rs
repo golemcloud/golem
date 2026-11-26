@@ -141,10 +141,20 @@ before (value) {}
                         wallet_pin: Box::new(invocation_wallet_pin_from_wit(params.wallet_pin)?),
                     })
                 } }
-    AgentInvocationFinished { record (params) {
+    AgentInvocationReturned { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
         result: oplog_payload_from_wit(params.result),
+        method_name: params.method_name,
+        component_revision: params.component_revision.try_into()?,
+    } }
+    AgentInvocationFinished { record (params) {
+        timestamp: timestamp_from_datetime(params.timestamp),
+        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+        result: match params.result {
+            oplog::FinishedResult::Payload(payload) => golem_common::model::oplog::FinishedResult::Payload(oplog_payload_from_wit(payload)),
+            oplog::FinishedResult::Returned(index) => golem_common::model::oplog::FinishedResult::Returned(golem_common::model::OplogIndex::from_u64(index)),
+        },
         method_name: params.method_name,
         consumed_fuel: params.consumed_fuel,
         component_revision: params
@@ -673,10 +683,20 @@ before (value) {}
         invocation_context: invocation_context.into_iter().map(|s| s.into()).collect(),
         wallet_pin: invocation_wallet_pin_to_wit(*wallet_pin),
     } }
-    AgentInvocationFinished { record (awaits_settlement) => RawAgentInvocationFinishedParameters {
+    AgentInvocationReturned { record () => RawAgentInvocationReturnedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
         result: oplog_payload_to_wit(result)?,
+        method_name: method_name,
+        component_revision: component_revision.get(),
+    } }
+    AgentInvocationFinished { record (awaits_settlement) => RawAgentInvocationFinishedParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        result: match result {
+            golem_common::model::oplog::FinishedResult::Payload(payload) => oplog::FinishedResult::Payload(oplog_payload_to_wit(payload)?),
+            golem_common::model::oplog::FinishedResult::Returned(index) => oplog::FinishedResult::Returned(index.into()),
+        },
         method_name: method_name,
         consumed_fuel: consumed_fuel,
         component_revision: component_revision.get(),

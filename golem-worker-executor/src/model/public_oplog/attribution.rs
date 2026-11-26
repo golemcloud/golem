@@ -233,6 +233,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => Some(*begin_index),
             OplogEntry::Create { .. }
             | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationReturned { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::Suspend { .. }

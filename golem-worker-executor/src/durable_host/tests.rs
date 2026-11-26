@@ -509,6 +509,7 @@ fn a_rejection_after_the_result_is_an_ordinary_trap_of_the_agent() {
                     accepted_at: Timestamp::from(0),
                     operation: None,
                 },
+                returned: None,
                 last_change: OplogIndex::INITIAL,
                 last_change_at: Timestamp::from(0),
             }),
@@ -655,9 +656,11 @@ fn a_give_up_after_the_result_records_an_exhausted_retry_state() {
                 OplogEntry::AgentInvocationFinished {
                     timestamp: Timestamp::now_utc(),
                     invocation_id: key,
-                    result: golem_common::model::oplog::OplogPayload::Inline(Box::new(
-                        golem_common::model::AgentInvocationResult::AgentInitialization,
-                    )),
+                    result: golem_common::model::oplog::FinishedResult::Payload(
+                        golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                            golem_common::model::AgentInvocationResult::AgentInitialization,
+                        )),
+                    ),
                     method_name: None,
                     consumed_fuel: 0,
                     component_revision: golem_common::model::component::ComponentRevision::INITIAL,
@@ -2476,6 +2479,7 @@ fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
                 accepted_at: golem_common::model::Timestamp::from(0),
                 operation: None,
             },
+            returned: None,
             last_change: golem_common::model::OplogIndex::INITIAL,
             last_change_at: golem_common::model::Timestamp::from(0),
         }),

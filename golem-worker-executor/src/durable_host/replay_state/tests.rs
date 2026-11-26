@@ -3895,7 +3895,9 @@ fn invocation_finished_for(invocation_id: golem_common::model::InvocationId) -> 
     OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::now_utc(),
         invocation_id,
-        result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+        result: golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+            Box::new(AgentInvocationResult::AgentInitialization),
+        )),
         method_name: None,
         consumed_fuel: 0,
         component_revision: ComponentRevision::INITIAL,
@@ -4109,6 +4111,53 @@ async fn read_invocation_finished(
     rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
         .await
         .map(|finished| finished.map(|(_, result)| result))
+}
+
+#[test]
+async fn invocation_result_replay_rejects_a_reference_to_another_invocation_or_kind() {
+    use golem_common::model::oplog::{FinishedResult, ReturnedValue};
+    for wrong_kind in [false, true] {
+        let source = if wrong_kind {
+            OplogEntry::suspend()
+        } else {
+            OplogEntry::agent_invocation_returned(
+                uuid::Uuid::from_u128(999).into(),
+                OplogPayload::Inline(Box::new(ReturnedValue {
+                    value: vec![],
+                    stream_bindings: vec![],
+                })),
+                None,
+                ComponentRevision::INITIAL,
+            )
+        };
+        let terminal = OplogEntry::agent_invocation_finished(
+            replayed_invocation_id(),
+            FinishedResult::Returned(OplogIndex::from_u64(3)),
+            None,
+            0,
+            ComponentRevision::INITIAL,
+            false,
+        );
+        let rs = replay_state_over(vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            source,
+            terminal.clone(),
+        ])
+        .await;
+        let error = rs
+            .agent_invocation_finished((OplogIndex::from_u64(4), terminal))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(if wrong_kind {
+                "not AgentInvocationReturned"
+            } else {
+                "another invocation"
+            }),
+            "{error}"
+        );
+    }
 }
 
 fn test_invocation_wallet_pin() -> InvocationWalletPin {

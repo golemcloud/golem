@@ -248,6 +248,17 @@ impl ProducerStreamIndex {
         {
             return Err(StreamStoreError::ValueStreamLimit);
         }
+        self.apply_returned_bindings(session_key, bindings)
+    }
+
+    pub(super) fn apply_returned_bindings(
+        &mut self,
+        session_key: &StreamSessionKey,
+        bindings: &[StreamBindingRecord],
+    ) -> Result<(), StreamStoreError> {
+        if bindings.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
+            return Err(StreamStoreError::ValueStreamLimit);
+        }
         let existing_mappings = self.session_stream_mappings.get(session_key);
         let mut new_mappings = HashSet::new();
         for binding in bindings {

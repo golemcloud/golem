@@ -255,6 +255,7 @@ where
             | OplogEntry::CompletionDiscarded { .. }
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationReturned { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::AgentInvocationFailed { .. }

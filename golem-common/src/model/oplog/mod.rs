@@ -189,6 +189,7 @@ impl OplogEntry {
             | OplogEntry::CompletionDiscarded { .. }
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationReturned { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::Suspend { .. }
@@ -267,6 +268,7 @@ impl OplogEntry {
             | OplogEntry::CompletionDiscarded { .. }
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationReturned { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::AgentInvocationFailed { .. }
@@ -406,6 +408,7 @@ impl OplogScopeProjection {
             // how it belongs to a durable invocation scope.
             OplogEntry::Create { .. }
             | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationReturned { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::Suspend { .. }

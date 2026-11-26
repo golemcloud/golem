@@ -380,6 +380,7 @@ pub struct RunningInvocation {
     pub key: InvocationId,
     /// `index` is the `AgentInvocationStarted` entry.
     pub request: InvocationRequestRef,
+    pub returned: Option<OplogIndex>,
     /// The last entry that changed the invocation's state: its start, a retry, an interruption
     /// or a suspension.
     pub last_change: OplogIndex,
@@ -1051,6 +1052,12 @@ impl DurableStreamSessionStatus {
         self.validated_initial_pending_invocation = Some(oplog_idx);
     }
 
+    pub fn apply_invocation_result(&mut self, index: OplogIndex, invocation_id: InvocationId) {
+        if self.session_key == Some(invocation_id) {
+            self.invocation_result.get_or_insert(index);
+        }
+    }
+
     pub fn apply_record(
         &mut self,
         oplog_idx: OplogIndex,
@@ -1351,6 +1358,15 @@ impl DurableStreamSessionIndex {
             if let Some(status) = self.get(invocation_id).cloned() {
                 let mut status = status;
                 status.apply_pending_invocation(index, invocation_id);
+                self.insert(*invocation_id, status);
+            }
+            return Ok(());
+        }
+        if let OplogEntry::AgentInvocationReturned { invocation_id, .. }
+        | OplogEntry::AgentInvocationFinished { invocation_id, .. } = entry
+        {
+            if let Some(mut status) = self.get(invocation_id).cloned() {
+                status.apply_invocation_result(index, *invocation_id);
                 self.insert(*invocation_id, status);
             }
             return Ok(());

@@ -984,6 +984,32 @@ impl DurableStreamStore {
                     continue;
                 }
                 match entry {
+                    OplogEntry::AgentInvocationReturned {
+                        invocation_id,
+                        result,
+                        ..
+                    } => {
+                        let result = oplog
+                            .download_payload(result)
+                            .await
+                            .map_err(StreamStoreError::Oplog)?;
+                        let session = StreamRegistrationInvocation::Local(invocation_id).qualify(
+                            environment_id,
+                            producer,
+                            producer_fingerprint,
+                        );
+                        index.apply_session_attribution(&session, None)?;
+                        if index
+                            .invocation_results
+                            .insert(session.clone(), oplog_index)
+                            .is_some()
+                        {
+                            return Err(StreamStoreError::CorruptHistory(
+                                "invocation returned more than once".into(),
+                            ));
+                        }
+                        index.apply_returned_bindings(&session, &result.stream_bindings)?;
+                    }
                     OplogEntry::StreamRegistered {
                         entity_parent_start_index,
                         record,

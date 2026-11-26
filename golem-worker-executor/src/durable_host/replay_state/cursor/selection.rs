@@ -38,6 +38,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => Some(*begin_index),
         OplogEntry::Create { .. }
         | OplogEntry::AgentInvocationStarted { .. }
+        | OplogEntry::AgentInvocationReturned { .. }
         | OplogEntry::AgentInvocationFinished { .. }
         | OplogEntry::AgentInvocationSettled { .. }
         | OplogEntry::AgentInvocationFailed { .. }
@@ -111,6 +112,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::CompletionDiscarded { .. }
         | OplogEntry::CompletionDelivered { .. }
         | OplogEntry::AgentInvocationStarted { .. }
+        | OplogEntry::AgentInvocationReturned { .. }
         | OplogEntry::AgentInvocationFinished { .. }
         | OplogEntry::AgentInvocationSettled { .. }
         | OplogEntry::AgentInvocationFailed { .. }

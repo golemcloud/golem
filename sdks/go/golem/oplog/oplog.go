@@ -53,6 +53,7 @@ const (
 type (
 	CreateParameters                  = oplogwit.CreateParameters
 	AgentInvocationStartedParameters  = oplogwit.AgentInvocationStartedParameters
+	AgentInvocationReturnedParameters = oplogwit.AgentInvocationReturnedParameters
 	AgentInvocationFinishedParameters = oplogwit.AgentInvocationFinishedParameters
 	AgentInvocationFailedParameters   = oplogwit.AgentInvocationFailedParameters
 	AgentInvocationSettledParameters  = oplogwit.AgentInvocationSettledParameters

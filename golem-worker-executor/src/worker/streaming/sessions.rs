@@ -213,7 +213,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
             for (index, entry) in entries {
-                if let OplogEntry::StreamSession { record, .. } = entry {
+                if let OplogEntry::AgentInvocationReturned {
+                    invocation_id,
+                    result,
+                    ..
+                } = &entry
+                    && *invocation_id == session_key.idempotency_key
+                    && StreamRegistrationInvocation::Local(*invocation_id).qualify(
+                        self.owned_agent_id.environment_id,
+                        &self.owned_agent_id.agent_id,
+                        self.initial_worker_metadata.fingerprint,
+                    ) == *session_key
+                {
+                    let result = self
+                        .oplog
+                        .download_payload(result.clone())
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?;
+                    metadata.apply_invocation_returned(index, &result.stream_bindings);
+                } else if let OplogEntry::AgentInvocationFinished { invocation_id, .. } = &entry
+                    && *invocation_id == session_key.idempotency_key
+                    && StreamRegistrationInvocation::Local(*invocation_id).qualify(
+                        self.owned_agent_id.environment_id,
+                        &self.owned_agent_id.agent_id,
+                        self.initial_worker_metadata.fingerprint,
+                    ) == *session_key
+                {
+                    metadata.apply_invocation_returned(index, &[]);
+                } else if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self
                         .oplog
                         .download_payload(record)
@@ -531,14 +558,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
         let result_mappings = match status.invocation_result {
-            Some(index) => match self.read_stream_session_record(index).await? {
-                StreamSessionRecord::InvocationResult(record) => record.stream_mappings,
-                _ => {
-                    return Err(WorkerExecutorError::runtime(
-                        "stream session index does not refer to InvocationResult",
-                    ));
-                }
-            },
+            Some(index) => {
+                self.durable_stream_producer()
+                    .await?
+                    .read_invocation_result_value(index, *idempotency_key)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                    .stream_bindings
+            }
             None => Vec::new(),
         };
         let mappings = prepared
@@ -572,7 +599,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if session.prepared.is_none() || session.finished.is_some() {
                 continue;
             }
-            match self.lookup_invocation_result(&idempotency_key).await {
+            let result = self.lookup_invocation_result(&idempotency_key).await;
+            // Lookup can observe a return committed after the maintenance snapshot.
+            let latest = self.get_repaired_status().await?;
+            if latest.settling_invocation == Some(idempotency_key)
+                && let Some(prepared) = self.prepared_stream_session(&idempotency_key).await?
+                && prepared
+                    .stream_mappings
+                    .iter()
+                    .any(|binding| binding.role.direction() == SessionStreamRole::Input)
+            {
+                // Reconstruction must replay the background readers before it closes inputs.
+                continue;
+            }
+            match result {
                 LookupResult::Complete(Ok(_)) => {
                     self.complete_durable_streaming_session(&idempotency_key)
                         .await?;

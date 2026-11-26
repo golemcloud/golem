@@ -278,6 +278,28 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     },
                 ))
             }
+            OplogEntry::AgentInvocationReturned {
+                timestamp,
+                invocation_id,
+                result,
+                method_name,
+                component_revision,
+            } => {
+                let result = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, result)
+                    .await?;
+                Ok(PublicOplogEntry::AgentInvocationReturned(
+                    golem_common::model::oplog::public_oplog_entry::AgentInvocationReturnedParams {
+                        timestamp,
+                        invocation_id,
+                        result: result
+                            .into_typed_schema_value()
+                            .map_err(|error| error.to_string())?,
+                        method_name,
+                        component_revision,
+                    },
+                ))
+            }
             OplogEntry::AgentInvocationFinished {
                 timestamp,
                 invocation_id,
@@ -287,9 +309,36 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 component_revision: entry_component_revision,
                 awaits_settlement: _,
             } => {
-                let invocation_result: AgentInvocationResult = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, result)
-                    .await?;
+                let invocation_result = crate::services::oplog::resolve_finished_result(
+                    oplog_index,
+                    invocation_id,
+                    result,
+                    |index| {
+                        let oplog_service = &oplog_service;
+                        async move {
+                            oplog_service
+                                .read_exact(owned_agent_id, agent_mode, index, 1)
+                                .await
+                                .map_err(|error| error.to_string())?
+                                .remove(&index)
+                                .ok_or_else(|| format!("missing invocation return {index}"))
+                        }
+                    },
+                    |payload| async {
+                        oplog_service
+                            .download_payload(owned_agent_id, agent_mode, payload)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    |payload| async {
+                        oplog_service
+                            .download_payload(owned_agent_id, agent_mode, payload)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    std::convert::identity,
+                )
+                .await?;
 
                 let public_result = agent_invocation_result_to_public(
                     components.clone(),

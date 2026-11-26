@@ -1176,11 +1176,27 @@ impl ReplayState {
         terminal: (OplogIndex, OplogEntry),
     ) -> Result<(OplogIndex, AgentInvocationResult), WorkerExecutorError> {
         match terminal {
-            (index, OplogEntry::AgentInvocationFinished { result, .. }) => {
-                let result = self
-                    .cursor
-                    .oplog
-                    .download_payload(result)
+            (
+                index,
+                OplogEntry::AgentInvocationFinished {
+                    invocation_id,
+                    result,
+                    ..
+                },
+            ) => {
+                let oplog = &self.cursor.oplog;
+                let result =
+                    crate::services::oplog::resolve_finished_result(
+                        index,
+                        invocation_id,
+                        result,
+                        |index| async move {
+                            oplog.read(index).await.map_err(|error| error.to_string())
+                        },
+                        |payload| oplog.download_payload(payload),
+                        |payload| oplog.download_payload(payload),
+                        std::convert::identity,
+                    )
                     .await
                     .map_err(|err| {
                         WorkerExecutorError::runtime(format!(

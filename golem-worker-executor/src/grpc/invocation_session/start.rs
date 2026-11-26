@@ -792,9 +792,40 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 send_worker_failure(&responses, error).await;
                 return;
             }
-            if let Err(error) = durable_streams.complete().await {
+            if native_tool && let Err(error) = durable_streams.complete().await {
                 send_protocol_failure(&responses, error).await;
                 return;
+            }
+            let finished = durable_streams.wait_persisted_finished();
+            tokio::pin!(finished);
+            let outcome = loop {
+                tokio::select! {
+                    result = &mut finished => break result,
+                    request = inbound.message() => match request {
+                        Ok(Some(request)) => {
+                            if let Err(error) = route_durable_request(durable_streams, &responses, &state, request).await {
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, error, async {}).await;
+                                return;
+                            }
+                        }
+                        Ok(None) | Err(_) => return,
+                    },
+                    revocation = &mut attachment_revoked => {
+                        send_attachment_revocation(&responses, revocation).await;
+                        return;
+                    },
+                }
+            };
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(details)) => {
+                    send_worker_failure(&responses, WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned())).await;
+                    return;
+                }
+                Err(error) => {
+                    send_protocol_failure(&responses, error).await;
+                    return;
+                }
             }
             if let Err(error) = durable_streams.pump_input_cancellations(&responses, &high_waters).await {
                 send_protocol_failure(&responses, error).await;

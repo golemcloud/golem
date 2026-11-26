@@ -46,20 +46,32 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
             let (result, recorded) =
                 record_result_at_return(store, display_name, result, self.uses_streams).await;
             let ok = recorded.as_ref().is_some_and(ReturnRecorded::is_recorded);
-            // A stream-free method that a durable streaming session carries ends that session
-            // with its recorded success, so a later failure of its background work cannot end it
-            // with a failure. A failed completion is left to the end of the invocation, as on
-            // the settled path.
+            // Sessions with inputs remain open until background readers drain. A session
+            // carrying only a scalar result can complete immediately.
             if ok
                 && self.uses_streams
                 && matches!(recorded, Some(ReturnRecorded::Succeeded(_)))
                 && let Some(idempotency_key) = store.data().get_current_idempotency_key().await
-                && let Err(error) = self
-                    .parent
-                    .complete_durable_streaming_session(&idempotency_key)
-                    .await
             {
-                tracing::warn!(%error, "Failed to complete durable streaming session at return");
+                let completion = match self.parent.prepared_stream_session(&idempotency_key).await {
+                    Ok(Some(prepared))
+                        if prepared.stream_mappings.iter().any(|binding| {
+                            binding.role.direction()
+                                == golem_common::model::durable_stream::SessionStreamRole::Input
+                        }) =>
+                    {
+                        Ok(())
+                    }
+                    Ok(_) => {
+                        self.parent
+                            .complete_durable_streaming_session(&idempotency_key)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = completion {
+                    tracing::warn!(%error, "Failed to complete durable streaming session at return");
+                }
             }
             self.outcome = recorded.map(LoopRecorded::Recorded);
             (result, ok)

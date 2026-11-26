@@ -377,6 +377,11 @@ impl PublicOplogEntry {
                         .caller()
                         .is_some_and(|caller| Self::caller_match(caller, query_path, query))
             }
+            PublicOplogEntry::AgentInvocationReturned(params) => {
+                Self::string_match("agentinvocationreturned", &[], query_path, query)
+                    || Self::string_match("agent-invocation-returned", &[], query_path, query)
+                    || Self::string_match(&params.invocation_id.to_string(), &[], query_path, query)
+            }
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 Self::string_match("agentinvocationfinished", &[], query_path, query)
                     || Self::string_match("invoke", &[], query_path, query)

@@ -298,6 +298,13 @@ declare module 'golem:api/oplog@1.5.0' {
     pinnedCardIds: CardId[];
     scopeCardId?: CardId;
   };
+  export type AgentInvocationReturnedParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    result: TypedSchemaValue;
+    methodName?: string;
+    componentRevision: bigint;
+  };
   export type AgentInvocationFailedParameters = {
     timestamp: Datetime;
     invocationId: Uuid;
@@ -1173,9 +1180,6 @@ declare module 'golem:api/oplog@1.5.0' {
     val: DurableStreamTerminalSummary
   } |
   {
-    tag: 'session-result'
-  } |
-  {
     tag: 'session-finished'
     val: DurableStreamOutcome
   } |
@@ -1239,10 +1243,26 @@ declare module 'golem:api/oplog@1.5.0' {
     invocationContext: SpanData[];
     walletPin: RawInvocationWalletPin;
   };
-  export type RawAgentInvocationFinishedParameters = {
+  export type FinishedResult =
+  {
+    tag: 'payload'
+    val: OplogPayload
+  } |
+  {
+    tag: 'returned'
+    val: OplogIndex
+  };
+  export type RawAgentInvocationReturnedParameters = {
     timestamp: Datetime;
     invocationId: Uuid;
     result: OplogPayload;
+    methodName?: string;
+    componentRevision: bigint;
+  };
+  export type RawAgentInvocationFinishedParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    result: FinishedResult;
     methodName?: string;
     consumedFuel: bigint;
     componentRevision: bigint;
@@ -1417,6 +1437,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-finished'
     val: RawAgentInvocationFinishedParameters
+  } |
+  {
+    tag: 'agent-invocation-returned'
+    val: RawAgentInvocationReturnedParameters
   } |
   {
     tag: 'agent-invocation-failed'
@@ -1705,6 +1729,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-finished'
     val: AgentInvocationFinishedParameters
+  } |
+  {
+    tag: 'agent-invocation-returned'
+    val: AgentInvocationReturnedParameters
   } |
   {
     tag: 'agent-invocation-failed'

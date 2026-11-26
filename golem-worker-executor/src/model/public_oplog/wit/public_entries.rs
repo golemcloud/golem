@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::oplog::public_oplog_entry::AgentInvocationReturnedParams;
 
 fn encode_tool_error(error: SerializableToolError) -> Result<wire::ToolError, String> {
     Ok(match error {
@@ -137,6 +138,13 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         timestamp: timestamp.into(),
         invocation: invocation.try_into()?,
         wallet_pin: public_invocation_wallet_pin_to_wit(wallet_pin),
+    } }
+    AgentInvocationReturned { record AgentInvocationReturnedParams => AgentInvocationReturnedParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        result: encode_public_typed_schema_value(result)?,
+        method_name: method_name,
+        component_revision: component_revision.get(),
     } }
     AgentInvocationFinished { record AgentInvocationFinishedParams => AgentInvocationFinishedParameters {
         timestamp: timestamp.into(),

@@ -181,6 +181,44 @@ impl SessionControlMetadata {
     pub fn result_position(&self) -> Option<OplogIndex> {
         self.invocation_result
     }
+
+    /// Records the return position and the bindings introduced by its value.
+    pub fn apply_invocation_returned(
+        &mut self,
+        index: OplogIndex,
+        bindings: &[StreamBindingRecord],
+    ) {
+        self.invocation_result.get_or_insert(index);
+        for (slot, binding) in bindings.iter().enumerate() {
+            if binding.role.direction() == SessionStreamRole::Output
+                && !self.root_outputs.contains(&binding.transport_stream_id)
+            {
+                self.root_outputs.push(binding.transport_stream_id);
+            }
+            if self.reader_id(binding).is_err() {
+                self.reader_bindings.push((
+                    LocalStreamReaderId {
+                        introducing_oplog_index: index,
+                        binding_slot: slot as u32,
+                    },
+                    binding.clone(),
+                ));
+            }
+            if !self.acceptance_mappings.contains(binding) {
+                self.acceptance_mappings.push(binding.clone());
+            }
+            self.visible_mappings.insert(binding.clone());
+            if !self
+                .recoverable_mappings
+                .iter()
+                .any(|(_, existing)| existing == binding)
+            {
+                self.recoverable_mappings.push((index, binding.clone()));
+            }
+            self.persisted_mappings.insert(binding.clone());
+        }
+        self.covered_through = index;
+    }
     /// Returns the session terminal record position.
     pub fn finished_position(&self) -> Option<OplogIndex> {
         self.finished

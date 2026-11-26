@@ -204,7 +204,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return match self.oplog.read(index).await? {
                 OplogEntry::AgentInvocationFinished {
                     invocation_id,
-                    result,
+                    result: golem_common::model::oplog::FinishedResult::Payload(result),
                     ..
                 } if &invocation_id == key => {
                     let output = self
@@ -1296,16 +1296,32 @@ impl InvocationResult {
 
             let result = match entry {
                 OplogEntry::AgentInvocationFinished {
+                    invocation_id,
                     result,
                     consumed_fuel,
                     component_revision,
                     ..
                 } => {
-                    let invocation_result: AgentInvocationResult = services
-                        .oplog()
-                        .download_payload(result)
-                        .await
-                        .expect("failed to deserialize function response payload");
+                    let oplog = services.oplog();
+                    let corrupt = |error| {
+                        UnreadableOplog::new(
+                            &owned_agent_id.agent_id,
+                            crate::services::oplog::OplogReadError::corruption(
+                                crate::services::oplog::OplogReadSource::Other("invocation result"),
+                                error,
+                            ),
+                        )
+                    };
+                    let invocation_result = crate::services::oplog::resolve_finished_result(
+                        oplog_idx,
+                        invocation_id,
+                        result,
+                        |index| oplog.read(index),
+                        |payload| async { oplog.download_payload(payload).await.map_err(corrupt) },
+                        |payload| async { oplog.download_payload(payload).await.map_err(corrupt) },
+                        corrupt,
+                    )
+                    .await?;
                     let background_failure = match background_failure_idx {
                         Some(failure_idx) => Some(
                             read_background_failure(

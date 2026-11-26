@@ -243,7 +243,8 @@ pub(super) fn calculate_latest_worker_status(
             OplogEntry::HostStreamFrame { .. } => {}
             OplogEntry::ToolAttachmentControl { .. } => {}
             OplogEntry::ToolAttachmentRead { .. } => {}
-            OplogEntry::StreamRegistered { .. }
+            OplogEntry::AgentInvocationReturned { .. }
+            | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
             | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. } => {}

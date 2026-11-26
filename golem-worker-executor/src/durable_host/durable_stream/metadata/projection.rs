@@ -477,6 +477,56 @@ pub(crate) async fn project_producer_metadata(
             return Err("nested registration batch is missing its enclosing item".into());
         }
         match entry {
+            OplogEntry::AgentInvocationReturned {
+                invocation_id,
+                result,
+                ..
+            } => {
+                let result = oplog.download_payload(owner, mode, result.clone()).await?;
+                let session = StreamRegistrationInvocation::Local(*invocation_id).qualify(
+                    owner.environment_id,
+                    &owner.agent_id,
+                    fingerprint,
+                );
+                projection
+                    .load(ProducerMetadataKey::Session(session.clone()))
+                    .await?;
+                if projection
+                    .index
+                    .session_entity_parent_start_index(&session)
+                    .is_some()
+                {
+                    return Err("an agent invocation return cannot have entity attribution".into());
+                }
+                projection
+                    .index
+                    .apply_session_attribution(&session, None)
+                    .map_err(|error| error.to_string())?;
+                for binding in &result.stream_bindings {
+                    if let StreamRecordReference::Local(local_id) = binding.source {
+                        let stream = qualify_local_stream(
+                            local_id,
+                            owner.environment_id,
+                            &owner.agent_id,
+                            fingerprint,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        projection.stream(stream).await?;
+                    }
+                }
+                if projection
+                    .index
+                    .invocation_results
+                    .insert(session.clone(), *index)
+                    .is_some()
+                {
+                    return Err("invocation returned more than once".into());
+                }
+                projection
+                    .index
+                    .apply_returned_bindings(&session, &result.stream_bindings)
+                    .map_err(|error| error.to_string())?;
+            }
             OplogEntry::StreamRegistered {
                 entity_parent_start_index,
                 record,

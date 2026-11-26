@@ -476,6 +476,17 @@ sealed trait JsAgentInvocationStartedParameters extends js.Object {
   def walletPin: JsPublicInvocationWalletPin = js.native
 }
 
+// --- AgentInvocationReturnedParameters ---
+
+@js.native
+sealed trait JsAgentInvocationReturnedParameters extends js.Object {
+  def timestamp: JsDatetime          = js.native
+  def invocationId: JsUuid           = js.native
+  def result: JsTypedSchemaValue     = js.native
+  def methodName: js.UndefOr[String] = js.native
+  def componentRevision: js.BigInt   = js.native
+}
+
 // --- AgentInvocationFinishedParameters ---
 
 @js.native

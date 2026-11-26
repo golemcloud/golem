@@ -327,6 +327,12 @@ mod tests;
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) fn notify_stream_invocation_result(&self) {
+        if let Some(producer) = &self.durable_stream_producer.state.lock().unwrap().producer {
+            producer.notify_session_records_changed(None);
+        }
+    }
+
     pub(crate) fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
         Arc::new(WorkerDurableStreamConsumerJournal {
             state_actor: self.state_actor.clone(),

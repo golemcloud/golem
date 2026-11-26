@@ -341,6 +341,81 @@ fn stream_terminal_public_wit_preserves_terminal_payloads() {
 }
 
 #[test]
+fn invocation_return_and_both_finished_results_survive_wit_roundtrips() {
+    use crate::preview2::golem_api_1_x::oplog;
+    use golem_common::model::oplog::{FinishedResult, ReturnedValue};
+    let invocation_id = Uuid::from_u128(42).into();
+    let returned = ReturnedValue {
+        value: vec![7, 3, 19],
+        stream_bindings: vec![],
+    };
+    let entries = [
+        OplogEntry::AgentInvocationReturned {
+            timestamp: Timestamp::from(900),
+            invocation_id,
+            result: OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(&returned).unwrap(),
+                cached: None,
+            },
+            method_name: Some("optional-stream".into()),
+            component_revision: ComponentRevision::INITIAL,
+        },
+        OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::from(1_000),
+            invocation_id,
+            result: FinishedResult::Returned(OplogIndex::from_u64(7)),
+            method_name: Some("optional-stream".into()),
+            consumed_fuel: 19,
+            component_revision: ComponentRevision::INITIAL,
+            awaits_settlement: false,
+        },
+        OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::from(1_000),
+            invocation_id,
+            result: FinishedResult::Payload(OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(
+                    &AgentInvocationResult::AgentInitialization,
+                )
+                .unwrap(),
+                cached: None,
+            }),
+            method_name: None,
+            consumed_fuel: 23,
+            component_revision: ComponentRevision::INITIAL,
+            awaits_settlement: false,
+        },
+    ];
+    for entry in entries {
+        let wire: oplog::OplogEntry = entry.clone().try_into().unwrap();
+        let restored = golem_common::model::oplog::OplogEnrichmentEntry::try_from(wire).unwrap();
+        assert_eq!(restored, entry.into());
+    }
+    let entry = PublicOplogEntry::AgentInvocationReturned(
+        golem_common::model::oplog::public_oplog_entry::AgentInvocationReturnedParams {
+            timestamp: Timestamp::from(900),
+            invocation_id,
+            result: returned.into_typed_schema_value().unwrap(),
+            method_name: Some("optional-stream".into()),
+            component_revision: ComponentRevision::INITIAL,
+        },
+    );
+    let wire: oplog::PublicOplogEntry = entry.clone().try_into().unwrap();
+    let oplog::PublicOplogEntry::AgentInvocationReturned(wire) = wire else {
+        panic!("expected invocation return")
+    };
+    let PublicOplogEntry::AgentInvocationReturned(expected) = entry else {
+        unreachable!()
+    };
+    assert_eq!(
+        golem_schema::schema::wit::decode_typed(&wire.result).unwrap(),
+        expected.result
+    );
+    assert_eq!(wire.method_name, expected.method_name);
+    assert_eq!(wire.component_revision, expected.component_revision.get());
+    assert_eq!(Uuid::from(wire.invocation_id), expected.invocation_id.0);
+}
+
+#[test]
 fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
     use crate::preview2::golem_api_1_x::oplog;
     use golem_common::model::durable_stream::StreamTerminalOrigin;
@@ -398,7 +473,6 @@ fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
                     origin,
                 })
             ),
-            entry!(StreamSession, Some(Summary::SessionResult)),
             entry!(
                 StreamSession,
                 Some(Summary::SessionFinished {

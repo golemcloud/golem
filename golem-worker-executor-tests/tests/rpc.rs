@@ -36,7 +36,7 @@ use golem_common::model::durable_stream::{
 };
 use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{
-    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+    OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
@@ -74,6 +74,7 @@ mod gc_timed_cleanup;
 mod held_response_restart;
 mod hint_before_rpc_start;
 mod input_gc;
+mod invocation_result;
 mod kept_handle_deleting_child;
 mod replay_barrier_probe;
 mod websocket_crash_probe;
@@ -82,6 +83,10 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(
     #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_rust")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -4293,6 +4298,35 @@ async fn streaming_output_resume_restores_exact_cursors(
     }
     let gate = gate.ok_or_else(|| anyhow::anyhow!("streaming output omitted its promise gate"))?;
     if restart_executor {
+        let entries = executor.stored_oplog(&worker_agent_id.agent_id).await;
+        let returned = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                OplogEntry::AgentInvocationReturned {
+                    invocation_id,
+                    method_name: Some(method),
+                    ..
+                } if method == method_name => Some(*invocation_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            returned.len(),
+            1,
+            "the gated output has one authoritative early result"
+        );
+        assert!(!entries.iter().any(|entry| matches!(entry,
+            OplogEntry::AgentInvocationFinished { invocation_id, .. } if *invocation_id == returned[0]
+        )), "the early result must precede the terminal while outputs are open");
+        let public = executor
+            .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+            .await?;
+        assert!(!public.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::StreamSession(record)
+                if matches!(StreamSessionRecord::from_value(record.record.value()), Ok(StreamSessionRecord::InvocationResult(_)))
+        )), "the callee writes no session result copy");
+    }
+    if restart_executor {
         executor.shutdown_and_wait_for_invocation_loops().await?;
     }
     drop(requests);
@@ -4518,6 +4552,30 @@ async fn streaming_output_resume_restores_exact_cursors(
         "resume must deliver every exact sibling value once"
     );
     if restart_executor {
+        let entries = executor.stored_oplog(&worker_agent_id.agent_id).await;
+        let returned = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry {
+                OplogEntry::AgentInvocationReturned {
+                    invocation_id,
+                    method_name: Some(method),
+                    ..
+                } if method == method_name => {
+                    Some((OplogIndex::from_u64(index as u64 + 1), *invocation_id))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            returned.len(),
+            1,
+            "restart must not write another returned value"
+        );
+        assert_eq!(entries.iter().filter(|entry| matches!(entry,
+            OplogEntry::AgentInvocationFinished { invocation_id, result: golem_common::model::oplog::FinishedResult::Returned(index), .. }
+                if *invocation_id == returned[0].1 && *index == returned[0].0
+        )).count(), 1, "the terminal must refer to the original return");
         return Ok(());
     }
     let final_agent_id = OwnedAgentId::new(

@@ -1720,6 +1720,7 @@ fn status_with_current_key(status: AgentStatus, key: &InvocationId) -> AgentStat
                 accepted_at: Timestamp::from(0),
                 operation: None,
             },
+            returned: None,
             last_change: OplogIndex::INITIAL,
             last_change_at: Timestamp::from(0),
         }),

@@ -52,8 +52,13 @@ where
         | OplogEntry::PendingAgentInvocation { payload, .. } => {
             copy_payload(payload, &mut copy).await?
         }
-        OplogEntry::AgentInvocationFinished { result, .. } => {
+        OplogEntry::AgentInvocationReturned { result, .. } => {
             copy_payload(result, &mut copy).await?
+        }
+        OplogEntry::AgentInvocationFinished { result, .. } => {
+            if let golem_common::model::oplog::FinishedResult::Payload(payload) = result {
+                copy_payload(payload, &mut copy).await?;
+            }
         }
         OplogEntry::Snapshot { data, .. }
         | OplogEntry::PendingUpdate {

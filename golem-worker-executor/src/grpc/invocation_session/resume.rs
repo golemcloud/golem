@@ -540,13 +540,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let _ = forwarder.await;
             return;
         }
-        if let Err(error) = streams.complete().await {
-            send_protocol_failure(&responses, error).await;
-            drop(responses);
-            let _ = forwarder.await;
-            return;
-        }
-        if let Err(error) = streams.pump_input_cancellations(&responses, &high_waters).await {
+        if native_tool && let Err(error) = streams.complete().await {
             send_protocol_failure(&responses, error).await;
             drop(responses);
             let _ = forwarder.await;
@@ -574,6 +568,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 },
             }
         };
+        if let Err(error) = streams.pump_input_cancellations(&responses, &high_waters).await {
+            send_protocol_failure(&responses, error).await;
+            drop(responses);
+            let _ = forwarder.await;
+            return;
+        }
         match result {
             Ok(result) => send_resumed_finished(&responses, result).await,
             Err(error) => send_protocol_failure(&responses, error).await,

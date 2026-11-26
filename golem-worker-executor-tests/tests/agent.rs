@@ -1583,6 +1583,7 @@ async fn rest_retry_of_a_session_result_uses_the_recorded_revision(
         AgentInvocationMode, InvocationFreshnessDisposition,
     };
     use golem_common::model::agent::{AgentMethodInput, NativeMethodInput};
+    use golem_common::schema::FromSchema;
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1636,6 +1637,22 @@ async fn rest_retry_of_a_session_result_uses_the_recorded_revision(
     let recorded = executor.invoke_agent_session(session).await?.result;
     assert!(recorded.is_some());
     assert_eq!(rest_retry(&executor).await?, recorded);
+    let entries = executor.stored_oplog(&worker.agent_id).await;
+    assert!(!entries.iter().any(|entry| matches!(
+        entry,
+        golem_common::model::oplog::OplogEntry::AgentInvocationReturned { .. }
+    )));
+    assert_eq!(entries.iter().filter(|entry| matches!(entry,
+        golem_common::model::oplog::OplogEntry::AgentInvocationFinished {
+            method_name: Some(method), result: golem_common::model::oplog::FinishedResult::Payload(_), ..
+        } if method == "increment"
+    )).count(), 1);
+    let public = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(!public.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::StreamSession(record)
+            if matches!(golem_common::model::durable_stream::StreamSessionRecord::from_value(record.record.value()),
+                Ok(golem_common::model::durable_stream::StreamSessionRecord::InvocationResult(_)))
+    )));
 
     // The latest revision has no `RustMethodFailure` type.
     executor

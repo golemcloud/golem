@@ -28,7 +28,7 @@ use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use golem_common::base_model::durable_stream::{
-    LocalStreamReaderId, StreamSessionKey, StreamSessionRecord,
+    LocalStreamReaderId, StreamRegistrationInvocation, StreamSessionKey, StreamSessionRecord,
 };
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
@@ -1052,6 +1052,34 @@ impl StreamSessionIndexService {
                         if let Some(status) = updates.get_mut(idempotency_key) {
                             status.apply_pending_invocation(*idx, idempotency_key);
                         }
+                        continue;
+                    }
+                    if let OplogEntry::AgentInvocationReturned { invocation_id, .. }
+                    | OplogEntry::AgentInvocationFinished { invocation_id, .. } = entry {
+                        let fingerprint = metadata.producer_fingerprint.ok_or("invocation result requires producer fingerprint metadata")?;
+                        let key = StreamRegistrationInvocation::Local(*invocation_id).qualify(id.environment_id, &id.agent_id, fingerprint);
+                        if !updates.contains_key(invocation_id) {
+                            let old: Option<DurableStreamSessionStatus> = self.kv
+                                .with_entity("stream_session_index", "read", "session")
+                                .get(namespace.clone(), &Self::field(invocation_id)).await?;
+                            if let Some(old) = old { updates.insert(*invocation_id, old); }
+                        }
+                        if let Some(status) = updates.get_mut(invocation_id) {
+                            status.apply_invocation_result(*idx, *invocation_id);
+                        }
+                        if !updates.contains_key(invocation_id) && !matches!(entry, OplogEntry::AgentInvocationReturned { .. }) {
+                            continue;
+                        }
+                        if !controls.contains_key(&key) {
+                            let old: Option<SessionControlMetadata> = self.kv
+                                .with_entity("stream_session_index", "read_control", "session")
+                                .get(namespace.clone(), &stream_control_index_field(&key)?).await?;
+                            controls.insert(key.clone(), old.unwrap_or_default());
+                        }
+                        let bindings = if let OplogEntry::AgentInvocationReturned { result, .. } = entry {
+                            oplog.download_payload(id, mode, result.clone()).await.map_err(String::from)?.stream_bindings
+                        } else { Vec::new() };
+                        controls.get_mut(&key).unwrap().apply_invocation_returned(*idx, &bindings);
                         continue;
                     }
                     let OplogEntry::StreamSession { record, .. } = entry else {

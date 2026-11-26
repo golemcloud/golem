@@ -399,7 +399,24 @@ impl DurableStreamStore {
                     metadata.advance_coverage(index);
                     continue;
                 }
-                if let OplogEntry::StreamSession { record, .. } = entry {
+                if let OplogEntry::AgentInvocationReturned {
+                    invocation_id,
+                    result,
+                    ..
+                } = &entry
+                    && *invocation_id == session_key.idempotency_key
+                    && self.qualify_session(&StreamRegistrationInvocation::Local(*invocation_id))
+                        == *session_key
+                {
+                    let result = self.oplog.download_payload(result.clone()).await?;
+                    metadata.apply_invocation_returned(index, &result.stream_bindings);
+                } else if let OplogEntry::AgentInvocationFinished { invocation_id, .. } = &entry
+                    && *invocation_id == session_key.idempotency_key
+                    && self.qualify_session(&StreamRegistrationInvocation::Local(*invocation_id))
+                        == *session_key
+                {
+                    metadata.apply_invocation_returned(index, &[]);
+                } else if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self.oplog.download_payload(record).await?;
                     if !record.has_supported_format() {
                         return Err(

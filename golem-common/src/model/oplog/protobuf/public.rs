@@ -254,6 +254,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     )?,
                 }),
             ),
+            oplog_entry::Entry::AgentInvocationReturned(p) => {
+                Ok(PublicOplogEntry::AgentInvocationReturned(
+                    crate::model::oplog::public_oplog_entry::AgentInvocationReturnedParams {
+                        timestamp: p.timestamp.ok_or("Missing timestamp")?.into(),
+                        invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
+                        result: p.result.ok_or("Missing result")?.try_into()?,
+                        method_name: p.method_name,
+                        component_revision: p.component_revision.try_into()?,
+                    },
+                ))
+            }
             oplog_entry::Entry::AgentInvocationFinished(agent_invocation_finished) => Ok(
                 PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                     timestamp: agent_invocation_finished
@@ -963,6 +974,19 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             wallet_pin: Some(public_invocation_wallet_pin_to_proto(
                                 agent_invocation_started.wallet_pin,
                             )),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::AgentInvocationReturned(p) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::AgentInvocationReturned(
+                        golem_api_grpc::proto::golem::worker::AgentInvocationReturnedParameters {
+                            timestamp: Some(p.timestamp.into()),
+                            invocation_id: Some(p.invocation_id.into()),
+                            result: Some(p.result.try_into()?),
+                            method_name: p.method_name,
+                            component_revision: p.component_revision.get(),
                         },
                     )),
                 }
@@ -2083,12 +2107,22 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
             PublicOplogEntry::AgentInvocationStarted(_) => {
                 Err("Converting AgentInvocationStarted from public to raw oplog entry is not yet supported".to_string())
             }
+            PublicOplogEntry::AgentInvocationReturned(p) => {
+                use crate::schema::FromSchema;
+                Ok(OplogEntry::AgentInvocationReturned {
+                    timestamp: p.timestamp,
+                    invocation_id: p.invocation_id,
+                    result: OplogPayload::Inline(Box::new(crate::model::oplog::ReturnedValue::from_value(p.result.value()).map_err(|error| error.to_string())?)),
+                    method_name: p.method_name,
+                    component_revision: p.component_revision,
+                })
+            }
             PublicOplogEntry::AgentInvocationFinished(finished) => {
                 let raw_result = public_agent_invocation_result_to_raw(finished.result)?;
                 Ok(OplogEntry::AgentInvocationFinished {
                     timestamp: finished.timestamp,
                     invocation_id: finished.invocation_id,
-                    result: OplogPayload::Inline(Box::new(raw_result)),
+                    result: crate::model::oplog::FinishedResult::Payload(OplogPayload::Inline(Box::new(raw_result))),
                     method_name: finished.method_name,
                     consumed_fuel: finished.consumed_fuel,
                     component_revision: finished.component_revision,

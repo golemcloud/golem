@@ -30,6 +30,7 @@ message RawOplogEntry {
     RawAgentInvocationFinishedParameters agent_invocation_finished = 5;
     RawAgentInvocationFailedParameters agent_invocation_failed = 70;
     RawAgentInvocationSettledParameters agent_invocation_settled = 72;
+    RawAgentInvocationReturnedParameters agent_invocation_returned = 73;
     RawTimestampOnly suspend = 6;
     RawErrorParameters error = 7;
     RawJumpParameters jump = 9;
@@ -321,8 +322,22 @@ message RawInvocationWalletPin {
   optional golem.common.UUID scope_card_id = 3;
 }
 
+message RawFinishedResult {
+  oneof result {
+    RawOplogPayload payload = 1;
+    uint64 returned = 2;
+  }
+}
+
+message RawAgentInvocationReturnedParameters {
+  golem.common.UUID invocation_id = 1;
+  RawOplogPayload result = 2;
+  optional string method_name = 3;
+  uint64 component_revision = 4;
+}
+
 message RawAgentInvocationFinishedParameters {
-  RawOplogPayload result = 1;
+  RawFinishedResult result = 1;
   int64 consumed_fuel = 2;
   uint64 component_revision = 3;
   optional string method_name = 4;
@@ -659,7 +674,6 @@ message RawDurableStreamEventSummary {
     ITEMS = 1;
     TERMINAL_FINISHED = 2;
     TERMINAL_CONSUMER_CANCELLED = 3;
-    SESSION_RESULT = 4;
     SESSION_FINISHED = 5;
     SESSION_CANCELLATION = 6;
     SESSION_EXPIRED = 7;

@@ -430,7 +430,7 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
             outcome: DurableStreamOutcome::Error
         })
     );
-    assert_eq!(summaries[7], Some(DurableStreamEventSummary::SessionResult));
+    assert_eq!(summaries[7], None);
     assert_eq!(
         summaries[8],
         Some(DurableStreamEventSummary::SessionCancellation)
@@ -2353,22 +2353,40 @@ fn request_entries_keep_their_operation_outside_the_payload() {
 
 #[test]
 fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
-    use crate::model::oplog::AgentError;
+    use crate::model::oplog::{AgentError, FinishedResult, ReturnedValue};
 
     let finished = OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::from(1_000),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
-        result: OplogPayload::SerializedInline {
+        result: crate::model::oplog::FinishedResult::Payload(OplogPayload::SerializedInline {
             bytes: crate::serialization::serialize(
                 &crate::model::AgentInvocationResult::AgentInitialization,
             )
             .unwrap(),
             cached: None,
-        },
+        }),
         method_name: None,
         consumed_fuel: 7,
         component_revision: ComponentRevision::INITIAL,
         awaits_settlement: true,
+    };
+    let mut referring = finished.clone();
+    if let OplogEntry::AgentInvocationFinished { result, .. } = &mut referring {
+        *result = FinishedResult::Returned(OplogIndex::from_u64(19));
+    }
+    let returned = OplogEntry::AgentInvocationReturned {
+        timestamp: Timestamp::from(900),
+        invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
+        result: OplogPayload::SerializedInline {
+            bytes: crate::serialization::serialize(&ReturnedValue {
+                value: vec![1, 7, 42],
+                stream_bindings: vec![],
+            })
+            .unwrap(),
+            cached: None,
+        },
+        method_name: Some("stream-result".into()),
+        component_revision: ComponentRevision::INITIAL,
     };
     let invocation_error = OplogEntry::Error {
         timestamp: Timestamp::from(2_000),
@@ -2393,7 +2411,13 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         retrying_start_index: None,
     };
 
-    for entry in [finished, invocation_error, recovery_error] {
+    for entry in [
+        returned,
+        finished,
+        referring,
+        invocation_error,
+        recovery_error,
+    ] {
         let bytes = crate::serialization::serialize(&entry).unwrap();
         let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
         assert_eq!(decoded, entry);
@@ -2425,6 +2449,21 @@ fn raw_recovery_error_naming_an_invocation_is_rejected() {
 
 #[test]
 fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
+    use golem_schema::IntoTypedSchemaValue;
+    let returned = PublicOplogEntry::AgentInvocationReturned(
+        crate::model::oplog::public_oplog_entry::AgentInvocationReturnedParams {
+            timestamp: Timestamp::from(900),
+            invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
+            result: crate::model::oplog::ReturnedValue {
+                value: vec![1, 7, 42],
+                stream_bindings: vec![],
+            }
+            .into_typed_schema_value()
+            .unwrap(),
+            method_name: Some("stream-result".into()),
+            component_revision: ComponentRevision::INITIAL,
+        },
+    );
     let finished = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
@@ -2469,7 +2508,7 @@ fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
         retrying_start_index: None,
     });
 
-    for entry in [finished, invocation_error, recovery_error] {
+    for entry in [returned, finished, invocation_error, recovery_error] {
         let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
             entry.clone().try_into().unwrap();
         let decoded: PublicOplogEntry = proto.try_into().unwrap();

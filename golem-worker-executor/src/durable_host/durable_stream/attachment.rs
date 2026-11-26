@@ -73,18 +73,31 @@ impl DurableStreamStore {
                     "consumer reader introducing record is missing".to_string(),
                 )
             })?;
-        let OplogEntry::StreamSession { record, .. } = introducing.1 else {
-            return Err(StreamStoreError::CorruptHistory(
-                "consumer reader was not introduced by a stream-session record".to_string(),
-            ));
-        };
-        let introducing = self
-            .oplog
-            .download_payload(record)
-            .await
-            .map_err(StreamStoreError::Oplog)?;
-        let session_key = crate::worker::stream_session_record_reference(&introducing, reader_id)
-            .ok_or_else(|| {
+        let session_key = match introducing.1 {
+            OplogEntry::AgentInvocationReturned {
+                invocation_id,
+                result,
+                ..
+            } => {
+                let value = self
+                    .oplog
+                    .download_payload(result)
+                    .await
+                    .map_err(StreamStoreError::Oplog)?;
+                ((reader_id.binding_slot as usize) < value.stream_bindings.len())
+                    .then_some(StreamRegistrationInvocation::Local(invocation_id))
+            }
+            OplogEntry::StreamSession { record, .. } => {
+                let introducing = self
+                    .oplog
+                    .download_payload(record)
+                    .await
+                    .map_err(StreamStoreError::Oplog)?;
+                crate::worker::stream_session_record_reference(&introducing, reader_id)
+            }
+            _ => None,
+        }
+        .ok_or_else(|| {
             StreamStoreError::CorruptHistory(
                 "consumer reader introducing record has no matching binding".to_string(),
             )

@@ -297,6 +297,14 @@ interface oplog {
         wallet-pin: public-invocation-wallet-pin,
     }
 
+    record agent-invocation-returned-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        %result: typed-schema-value,
+        method-name: option<string>,
+        component-revision: u64,
+    }
+
     record agent-invocation-finished-parameters {
         timestamp: datetime,
         invocation-id: uuid,
@@ -1089,7 +1097,6 @@ interface oplog {
         registered,
         items(u64),
         terminal(durable-stream-terminal-summary),
-        session-result,
         session-finished(durable-stream-outcome),
         session-cancellation,
         session-expired,
@@ -1124,10 +1131,23 @@ interface oplog {
         wallet-pin: raw-invocation-wallet-pin,
     }
 
-    record raw-agent-invocation-finished-parameters {
+    variant finished-result {
+        payload(oplog-payload),
+        returned(oplog-index),
+    }
+
+    record raw-agent-invocation-returned-parameters {
         timestamp: datetime,
         invocation-id: uuid,
         %result: oplog-payload,
+        method-name: option<string>,
+        component-revision: u64,
+    }
+
+    record raw-agent-invocation-finished-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        %result: finished-result,
         method-name: option<string>,
         consumed-fuel: s64,
         component-revision: u64,
@@ -1289,6 +1309,7 @@ interface oplog {
         agent-invocation-started(raw-agent-invocation-started-parameters),
         /// The agent has completed an invocation
         agent-invocation-finished(raw-agent-invocation-finished-parameters),
+        agent-invocation-returned(raw-agent-invocation-returned-parameters),
         agent-invocation-failed(raw-agent-invocation-failed-parameters),
         /// The background work of an agent invocation ended after its result was recorded
         agent-invocation-settled(raw-agent-invocation-settled-parameters),
@@ -1405,6 +1426,7 @@ interface oplog {
         agent-invocation-started(agent-invocation-started-parameters),
         /// The agent has completed an invocation
         agent-invocation-finished(agent-invocation-finished-parameters),
+        agent-invocation-returned(agent-invocation-returned-parameters),
         agent-invocation-failed(agent-invocation-failed-parameters),
         /// The background work of an agent invocation ended after its result was recorded
         agent-invocation-settled(agent-invocation-settled-parameters),
