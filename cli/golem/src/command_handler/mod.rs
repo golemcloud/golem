@@ -276,11 +276,23 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
         "retained repository key",
     )?;
     let check_sqlite_path = |path: &Path| -> anyhow::Result<()> {
-        let database = match std::fs::canonicalize(path) {
-            Ok(path) => path,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
-            Err(error) => return Err(error).context("Failed to inspect selected SQLite database"),
-        };
+        fn resolve_database(path: &Path) -> std::io::Result<PathBuf> {
+            match std::fs::canonicalize(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    match std::fs::read_link(path) {
+                        Ok(target) => resolve_database(&path.parent().unwrap().join(target)),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            Ok(path.to_path_buf())
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+                result => result,
+            }
+        }
+
+        let database =
+            resolve_database(path).context("Failed to inspect selected SQLite database")?;
         ["", "-wal", "-shm", "-journal"]
             .into_iter()
             .try_for_each(|suffix| {

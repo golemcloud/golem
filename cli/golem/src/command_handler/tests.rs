@@ -826,8 +826,16 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
             "symlink",
             #[cfg(unix)]
             "database-symlink",
+            #[cfg(unix)]
+            "dangling-database-symlink",
+            #[cfg(unix)]
+            "chained-database-symlink",
         ]
         .into_iter()
+        .filter(move |alias| {
+            !matches!(*alias, "dangling-database-symlink" | "chained-database-symlink")
+                || !database.1.is_empty()
+        })
         .flat_map(move |alias| [false, true].map(|retained_key| (database, alias, retained_key)))
     })
     .for_each(|(((database, selected_store, selected), suffix), alias, retained_key)| {
@@ -842,7 +850,7 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                 data_dir.join(database)
             };
             std::fs::create_dir_all(database_path.parent().unwrap()).unwrap();
-            let resolved_database = if alias == "database-symlink" {
+            let resolved_database = if alias.ends_with("database-symlink") {
                 database_path.with_file_name("resolved.db")
             } else {
                 database_path.clone()
@@ -853,11 +861,30 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
             ));
             std::fs::write(&state_path, b"preserve selected SQLite state").unwrap();
             #[cfg(unix)]
-            if alias == "database-symlink" {
-                if !suffix.is_empty() {
+            if alias.ends_with("database-symlink") {
+                if alias == "database-symlink" && !suffix.is_empty() {
                     std::fs::write(&resolved_database, b"selected database").unwrap();
                 }
-                std::os::unix::fs::symlink(&resolved_database, &database_path).unwrap();
+                let target = if alias == "chained-database-symlink" {
+                    let intermediate = database_path.with_file_name("intermediate.db");
+                    std::os::unix::fs::symlink(
+                        resolved_database.file_name().unwrap(),
+                        &intermediate,
+                    )
+                    .unwrap();
+                    intermediate
+                } else {
+                    resolved_database.clone()
+                };
+                std::os::unix::fs::symlink(
+                    if alias == "database-symlink" {
+                        target.as_os_str()
+                    } else {
+                        target.file_name().unwrap()
+                    },
+                    &database_path,
+                )
+                .unwrap();
             }
             let key_path = data_dir.join(crate::filesystem_config::KEY_FILE);
             if retained_key {
@@ -928,7 +955,7 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                     );
                 }
             }
-            let log_path = if matches!(alias, "direct" | "database-symlink") {
+            let log_path = if alias == "direct" || alias.ends_with("database-symlink") {
                 state_path.clone()
             } else {
                 data_dir.join("server.log")
