@@ -178,6 +178,25 @@ impl UnreadableOplog {
     pub fn is_transient(&self) -> bool {
         self.error.is_transient()
     }
+
+    /// Archive maintenance reports the storage detail for a failed tail lookup.
+    pub(crate) fn into_tail_maintenance_error(self) -> String {
+        match self.error {
+            OplogReadError::Corruption {
+                source: OplogReadSource::Archive(_),
+                detail,
+            }
+            | OplogReadError::SourceUnavailable {
+                source: OplogReadSource::Archive(_),
+                detail,
+            }
+            | OplogReadError::SourceFailure {
+                source: OplogReadSource::Primary | OplogReadSource::Archive(_),
+                detail,
+            } => detail,
+            _ => self.to_string(),
+        }
+    }
 }
 
 /// A transient failure is `RecoveryRequired`, which the start and the invocation retry with

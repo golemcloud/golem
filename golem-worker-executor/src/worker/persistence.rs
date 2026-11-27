@@ -38,7 +38,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .oplog_service()
             .try_get_last_index(&self.owned_agent_id, self.agent_mode())
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            .map_err(|error| WorkerExecutorError::runtime(error.into_tail_maintenance_error()))?;
         if !scheduled_archive_is_current(current_oplog_index, last_oplog_index) {
             return Ok(None);
         }

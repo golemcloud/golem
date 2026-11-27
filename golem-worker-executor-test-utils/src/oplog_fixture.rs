@@ -202,7 +202,7 @@ impl OplogService for OplogFixtureService {
         &self,
         id: &OwnedAgentId,
         mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner.try_get_last_index(id, mode).await
     }
 

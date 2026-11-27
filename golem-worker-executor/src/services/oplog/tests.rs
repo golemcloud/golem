@@ -9480,6 +9480,8 @@ async fn an_ephemeral_length_over_an_unavailable_archive_is_transient(_tracing: 
     let service = archive_open_service(storage).await;
     let oplog = create_ephemeral_oplog(&service, "ephemeral-length-outage").await;
     let (agent_id, _, _) = archive_open_agent("ephemeral-length-outage");
+    let maintenance_error = oplog.try_length().await.unwrap_err();
+    assert!(maintenance_error.contains("injected length outage"));
     for retention in [at(1), at(3)] {
         let handle = retained_handle(oplog.clone(), agent_id, retention);
         let error = handle
@@ -9492,7 +9494,7 @@ async fn an_ephemeral_length_over_an_unavailable_archive_is_transient(_tracing: 
             .try_length()
             .await
             .expect_err("the archive length must fail");
-        assert!(error.contains("injected length outage"), "{error}");
+        assert_eq!(error, maintenance_error);
     }
 }
 
@@ -9535,14 +9537,15 @@ async fn retained_length_keeps_an_unavailable_archive_tail_transient(_tracing: &
         .length()
         .await
         .expect_err("the stored tail is unavailable");
-    assert!(
-        matches!(
-            &error.error,
-            OplogReadError::SourceUnavailable { source: OplogReadSource::Archive(0), detail }
-                if detail.contains("injected archive tail outage")
-        ),
-        "{error:?}"
-    );
+    let OplogReadError::SourceUnavailable {
+        source: OplogReadSource::Archive(0),
+        detail,
+    } = error.error
+    else {
+        panic!("{error:?}");
+    };
+    assert!(detail.contains("injected archive tail outage"), "{detail}");
+    assert_eq!(oplog.try_length().await, Err(detail));
 }
 
 #[test]

@@ -235,7 +235,7 @@ impl Oplog for RetentionOplog {
             .service
             .try_get_last_index(&self.owner, self.mode)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(UnreadableOplog::into_tail_maintenance_error)?;
         Ok(self.retention.retained_length(last))
     }
 
