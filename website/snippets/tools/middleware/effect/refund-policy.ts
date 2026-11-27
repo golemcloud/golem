@@ -10,7 +10,7 @@ export const refundPolicy = Middleware.typed({ //@
     refund: (args, ctx) => Effect.gen(function* () {
       // reject calls by their arguments and enforce a rate limit:
       if (args.amount > 100_000) yield* refuse("over the limit") //@
-      yield* checkRateLimit(ctx.principal) //@
+      yield* checkRateLimit(ctx.caller.original) //@
       if (args.amount > 10_000) {
         // the durable caller can wait for a person across restarts:
         const approval = yield* Agents.Promises.create //@

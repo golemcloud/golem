@@ -9,7 +9,7 @@ var _ = Policy.Handle(refund.Root, func(
     if a.Amount > 100_000 { //@
         return r, tool.ConstraintViolation("over the limit") //@
     }
-    if err = checkRateLimit(ctx.Principal()); err != nil { //@
+    if err = checkRateLimit(ctx.Caller().Original); err != nil { //@
         return r, tool.ConstraintViolation("%v", err) //@
     }
     if a.Amount > 10_000 {

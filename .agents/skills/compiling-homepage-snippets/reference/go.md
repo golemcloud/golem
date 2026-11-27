@@ -133,11 +133,9 @@ What each `companion.go` supplies (the TS prelude counterparts):
 - `artifacts-files`: `SaleRow`, `querySales(team, quarter)`, `drawChart`.
 - `artifacts-login`: `Png = golem.UnstructuredBinary[pngType]` with the
   `MimeTypes()` marker (hidden here, shown in artifacts/files, for lack of
-  lines), `TeamID{Team}`, `Chart{AskedBy, PNG}`, the state
-  `book{Charts map[int32]Chart}` (exported field so a JSON snapshot keeps
-  it), `answerWithChart` (stub) and `userKey` (OIDC issuer + subject as a
-  JSON array; panics for any other principal, as the TS prelude throws),
-  and the constructor `newBook` (`&book{make(map[int32]Chart)}`, TS
+  lines), `TeamID{Team}`, `Chart{AskedBy golem.PrincipalRef, PNG}`, the
+  state `book{Charts map[int32]Chart}` (exported field so a JSON snapshot
+  keeps it), `answerWithChart` (stub), and the constructor `newBook` (`&book{make(map[int32]Chart)}`, TS
   `init: () => ({ charts: [] })`; hidden for lack of lines).
 - `artifacts-peruser`: `dashboardFor(user, request)` (the model loop that
   builds the HTML; stub).
@@ -148,12 +146,12 @@ What each `companion.go` supplies (the TS prelude counterparts):
   export, nothing for an unknown id). The TS `header(...)`/`empty()` helpers
   have no Go counterpart: Go writes `golem.HTTPHeader{Name, Value}` literals
   and `golem.StreamOf[[]byte]()` on display.
-- `artifacts-signin`: `Invoice`, `invoicesOf(org, issuer, sub)` and
+- `artifacts-signin`: `Invoice`, `invoicesOf(org, issuer, subject)` and
   `pageFor(question, invoices)` (stubs).
 - `tools-middleware`: `Verdict{Approved bool}` with a `json:"approved"` tag
   (the promise payload; the TS prelude's `approved()` reads the same JSON),
-  `askFinance(golem.PromiseID, charge, amount)`, `checkRateLimit(principal)
-  error` (a plain error; the display classifies it) and `audit(...)`
+  `askFinance(golem.PromiseID, charge, amount)`, `checkRateLimit(who
+  golem.Principal) error` (a plain error; the display classifies it) and `audit(...)`
   (stubs). The `refund` tool itself is the shared bridge stub (below).
 - `tools-overview`: `Summarizer` (tool identity type), `Args{URL}`,
   `DigestID{Topic}`, `BuildIn{URLs}` (the TS `Urls` prelude schema), the
@@ -230,7 +228,7 @@ Everything else is the real in-tree SDK: `golem.DefineAgent`/`Spec`/`Mount`
 `golem.ReadOnly()` and `golem.Description(...)`, `Implement(...).Handle(...)`
 with `golem.Adapt`/`Adapt0`/`AdaptUnit`, `golem.DefineEnum`,
 `golem.UnstructuredBinary[M]` with a `MimeTypes()` marker and `*T` as an
-option (nil → 404), `golem.Principal`/`golem.OidcPrincipal`,
+option (nil → 404), `ctx.Caller()` with `golem.UserPrincipal`/`PrincipalRef`,
 `golem.NewWebhook[T]`/`URL`/`MustAwait`, `MustSchedule` +
 `ScheduledInvocation.Cancel`, durable `time.Sleep`,
 `reflection.DiscoverAgentTypes` (`Name`, `Methods()[i].Name`)/`DiscoverTools`,
@@ -246,7 +244,7 @@ option (nil → 404), `golem.Principal`/`golem.OidcPrincipal`,
   (`toolmiddleware.go:113`; works on a tool client from
   `DefineToolClient`, `tooldef.go:188`), `(*Middleware).Handle(cmd,
   func(*MiddlewareContext[P], A) (O, error))` (`toolmiddleware.go:149`),
-  `MiddlewareContext.Principal()` (`:214`), `Policy.Underlying(ctx,
+  `MiddlewareContext.Caller()`, `Policy.Underlying(ctx,
   cmd).Forward(a)` (`:179`, `:253`), `tool.ConstraintViolation(format,
   ...)` (`toolcall.go:176`). Docs:
   `docs/src/content/v1.6/how-to-guides/go/golem-tools-middleware-go.mdx`.
@@ -267,8 +265,8 @@ option (nil → 404), `golem.Principal`/`golem.OidcPrincipal`,
   `docs/src/content/v1.6/how-to-guides/go/golem-http-router-go.mdx`
   ("The raw envelope").
 - **sign-in** (artifacts/signin): `Mount{Auth: true}`
-  (`http_mount.go:53`), a `golem.Principal` input field and the
-  `golem.OidcPrincipal{Sub, Issuer, ...}` case (`principal.go:41-56`).
+  (`http_mount.go:53`), `ctx.Caller()` on the handler's `*golem.Context[S]`
+  and the `golem.UserPrincipal{Pair, Claims, ...}` case (`caller.go`).
 
 ## Negative controls (neg.sh)
 
@@ -294,11 +292,11 @@ control per package, then deletes `neg/` and prints `NEG_OK`.
 | artifacts/overview | `func(_ *ai.ToolContext, args Quarter) (string, error) {` → `func(args Quarter) ...` | does not match ai.ToolFunc[In, Out] (cannot infer In and Out) |
 | artifacts/routes | `}).Body[Args, string](` → `Body[Args, int]` | cannot use func(...) (string, error) as func(*tool.Context, Args) (int, error) |
 | artifacts/files | `Charts.Method[ChartIn, Png]("chart",` → `Method[ChartIn, []byte]` | Adapt((*ChartID).chart) returns Png, not the declared []byte |
-| artifacts/login | `Auth: true}})` → `Auth: "oidc"}})` | cannot use "oidc" as bool |
-| tools/middleware | `askFinance(approval.ID(), …` → `askFinance(approval, …` | cannot use *golem.Promise[Verdict] as golem.PromiseID |
+| artifacts/login | `ctx.Caller().Original.EqualsRef(` → `ctx.Principal().EqualsRef(` (the 1.6 accessor) | ctx.Principal undefined |
+| tools/middleware | `checkRateLimit(ctx.Caller().Original)` → `checkRateLimit(ctx.Principal())` (the 1.6 accessor) | ctx.Principal undefined |
 | artifacts/peruser | `Dashboards.Method[AskIn, string]("ask",` → `Method[AskIn, int]` | Adapt((*dashboards).ask) returns string, not the declared int |
 | artifacts/routers | `ExportIn{ID: m[2]})` → `m[2])` | cannot use string as ExportIn in ExportCsv.MustCall |
-| artifacts/signin | `Caller golem.Principal` → `Caller string` | in.Caller (string) is not an interface |
+| artifacts/signin | `AskIn` gains the 1.6 field `Caller golem.Principal` (compiles; the native definitions test must fail) | golem.DefinitionErrors: "Principal and Caller cannot appear ..." |
 
 ## The Secrets snippet (tools/secrets)
 
@@ -377,7 +375,7 @@ config secret, `take` mints a fresh host handle with `get-config-value`
   named results `(r refund.Refund, err error)`. The TS `refuse` helper is
   not shown: Go calls `tool.ConstraintViolation(...)` directly, which is
   the only rejection a Go middleware may return besides `InvalidInput`.
-  The rate limit is `checkRateLimit(ctx.Principal())` returning a plain
+  The rate limit is `checkRateLimit(ctx.Caller().Original)` returning a plain
   error, which the display classifies as
   `tool.ConstraintViolation("%v", err)` (TS: the prelude's
   `checkRateLimit` throws the constraint violation itself). The promise is
@@ -443,20 +441,21 @@ config secret, `take` mints a fresh host handle with `get-config-value`
 - **artifacts/login** hides `Png` (with its marker type), `TeamID` and
   the constructor `newBook` in the companion for lack of lines (the first
   two are shown in artifacts/files). The `Auth: true` mount line is no
-  longer marked (sign-in moved to artifacts/signin). The
-  inputs are `AskIn{Question, Caller golem.Principal}` and `OpenIn{N int32,
-  Caller golem.Principal}` (TS `s.principal()`; the host fills the field,
-  `docs/.../golem-add-http-auth-go.mdx:66`); TS `z.number()` is `int32`.
-  The state is `book{Charts map[int32]Chart}` keyed by chart number (TS an
-  array indexed `n - 1`), so a missing number reads the zero `Chart`, whose
-  empty `AskedBy` never equals a user key: the Go counterpart of TS
-  `made?.askedBy !== userKey(caller)`. Two methods need the
+  longer marked (sign-in moved to artifacts/signin). The inputs are
+  `AskIn{Question}` and `OpenIn{N int32}`; TS `z.number()` is `int32`. The
+  handlers take `*golem.Context[book]` (not `golem.Adapt`), because only the
+  context gives `ctx.Caller()`; each header takes three lines, as in
+  tools/middleware. `ask` stores `who, _ := ctx.Caller().Original.Ref()`
+  (a `golem.PrincipalRef`) in the chart (marked line). The state is
+  `book{Charts map[int32]Chart}` keyed by chart number (TS an array
+  indexed `n - 1`), so a missing number reads the zero `Chart`, whose
+  empty `AskedBy` never equals a user: the Go counterpart of TS
+  `!made?.askedBy || !me.equals(made.askedBy)`. Two methods need the
   implementation handle (`var impl = PrivateCharts.Implement(...)`, then
-  one `var _ = impl.Handle(...)` per method; `Handle` returns
-  `golem.Registered`, not the handle). The owner check mirrors TS: `made
-  := b.Charts[o.N]`, then "anyone else, even signed in, gets a 404:" above
-  `if made.AskedBy != userKey(o.Caller) {` (marked) `return nil`, then the
-  inline PNG.
+  one `var _ = impl.Handle(...)` per method). The owner check: "anyone
+  else, even signed in, gets a 404:" above
+  `if !ctx.Caller().Original.EqualsRef(made.AskedBy) {` (marked) `return
+  nil`, then the inline PNG.
 - **artifacts/peruser** (`dashboard_agent.go`): the id is `UserID{User}`
   and the state `dashboards{User string}` (exported for the JSON
   snapshot; TS `{ user }`). The mount has `Auth: true` on its own,
@@ -481,14 +480,15 @@ config secret, `take` mints a fresh host handle with `get-config-value`
   are `golem.HTTPHeader{Name, Value: []byte(...)}` literals (TS
   `header(...)`); the `content-type` line, both `content-disposition`
   lines and `Body: csv` are marked, as in TS.
-- **artifacts/signin** (`billing_agent.go`): `AskIn` is declared after
-  `Billing` so the two comments keep the TS order (mount comment, then
-  "Golem passes in the user who signed in:" above the marked `Caller
-  golem.Principal` field). TS `caller.tag !== 'oidc'` → a failed type
-  assertion to `golem.OidcPrincipal` panics with "sign-in required" (TS
-  `throw`). Marked: the `Mount{..., Auth: true}` line, the `Caller` field,
-  and `issuer, sub := user.Issuer, user.Sub` (TS `const { issuer, sub } =
-  caller`).
+- **artifacts/signin** (`billing_agent.go`): `AskIn{Question}` is declared
+  after `Billing`, and the handler takes `*golem.Context[OrgID]` (not
+  `golem.Adapt`) to read the caller. "Golem passes in the user who signed
+  in:" sits above the marked `user, ok :=
+  ctx.Caller().Original.(golem.UserPrincipal)`, as the TS comment sits
+  above its `ctx.caller.original` line. A failed type assertion panics
+  with "sign-in required" (TS `throw`). Marked: the `Mount{..., Auth:
+  true}` line, the caller line, and `issuer, subject := user.Pair.Issuer,
+  user.Pair.Subject` (TS `const { issuer, subject } = user`).
 - **Errors.** TS `throw` becomes `panic` (traps the invocation, like an
   uncaught throw); TS `.unwrap()`/rejections become `golem.Must`/`Must0`.
 
@@ -531,3 +531,14 @@ config secret, `take` mints a fresh host handle with `get-config-value`
 ## artifacts/overview: UUID file names (Oct 22 2026)
 
 The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `q, name := args.Quarter, uuid.NewString()` (one line, so the snippet stays within 31 lines); `pkg/artifacts-overview/prefix.txt` imports `github.com/google/uuid`, already a direct requirement in `go.mod`. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.
+
+## Caller identity 2.0 (Nov 24 2026)
+
+`artifacts/login`, `artifacts/signin` and `tools/middleware` read the caller with `ctx.Caller()`
+(`*golem.Context[S]` in agent handlers, `*tool.MiddlewareContext[P]` in middleware). The 1.6
+`golem.Principal` input fields, `golem.OidcPrincipal` and `ctx.Principal()` are gone: a
+`golem.Principal` or `golem.Caller` field is now a definition error. Re-verified on the three
+changed snippets with the harness rebuilt from this file: the style checks, the comments against
+the TypeScript, gofmt, `go build` and `go vet` for wasip1, the native definitions test, one
+component each with componentize-go and the patched toolchain, `wasm-tools validate`, and the three
+negative controls above, which fail as they must.

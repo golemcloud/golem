@@ -102,7 +102,13 @@ sbt 'set every version := "0.0.0-SNAPSHOT"' \
 
 Lighter alternative when the guest WASM already exists:
 `cd sdks/scala && sbt golemPublishLocal`. Artifacts land in
-`~/.ivy2/local/cloud.golem/`. The run recorded here used the publication of
+`~/.ivy2/local/cloud.golem/`. In a linked git worktree (`git worktree add`)
+the sbt-git plugin's JGit stops while the build loads (`NoWorkTreeException:
+Bare Repository has neither a working tree, nor an index`). An untracked
+`sdks/scala/zz-local-worktree.sbt` with the one line
+`ThisBuild / com.github.sbt.git.SbtGit.GitKeys.useConsoleForROGit := true`
+makes it read git through the `git` command; delete the file after the
+publication. The run recorded here used the publication of
 Oct 19 2026 16:37 local time, newer than the last commit touching
 `sdks/scala` (`610ae1912`, Oct 19 2026 09:28 UTC); `git status sdks/scala`
 was clean.
@@ -204,12 +210,12 @@ tools/secrets calls (`harness/extra/tools-secrets.scala`; `Refund` and
 longer a display snippet). Both tools/overview and tools/secrets are
 self-contained packages. tools/middleware wraps an identical copy of that
 refund tool (`harness/extra/tools-middleware.scala`, its own package):
-`refund(charge, amount, apiKey: GuestSecretHandle, caller: Principal)`
-returning `Refund(id, status, customerEmail)` or `RefundError.Http`. The
-`caller: Principal` parameter is injected by Golem and is not part of the
-tool's input or of the generated client (`RefundToolClient().refund(charge,
-amount, handle)` is unchanged); it is how a Scala typed middleware sees the
-caller principal (see "Departures"). artifacts/routers calls the user's
+`refund(charge, amount, apiKey: GuestSecretHandle, context:
+InvocationContext)` returning `Refund(id, status, customerEmail)` or
+`RefundError.Http`. The `context: InvocationContext` parameter is injected
+by Golem and is not part of the tool's input or of the generated client
+(`RefundToolClient().refund(charge, amount, handle)` is unchanged); it is
+how a Scala typed middleware sees the caller (see "Departures"). artifacts/routers calls the user's
 `AnalystAgent` (`harness/extra/artifacts-routers.scala`, `class Id(val chat:
 String)`, `def exportCsv(id: String): AgentStream[Array[Byte]]`), from which
 the codegen generates `AnalystAgentClient`.
@@ -224,12 +230,11 @@ Prelude helpers shown without definition, as in the TS preludes: `classify`
 any other quarter before it reaches a path), `chartPng`, `pageFor`
 (artifacts overview); `Name` (the slug regex `^[a-z0-9-]{1,40}$`),
 `BadName` (the tool's usage error enum), `Row`, `querySales` (artifacts
-routes); `SaleRow`, `querySales`, `drawChart` (artifacts files); `Chart`,
-`answerWithChart`, `userKey` (OIDC issuer + subject as a JSON array, as in
-TS; throws for non-OIDC callers) (artifacts login); `Refused` (an
+routes); `SaleRow`, `querySales`, `drawChart` (artifacts files); `Chart`
+(`askedBy: Option[PrincipalRef]`) and `answerWithChart` (artifacts login); `Refused` (an
 exception carrying a `ToolInvokeError[Nothing]`), `askFinance`,
 `approved` (decodes the promise payload's JSON `approved` flag),
-`checkRateLimit` (fails with `Refused(ConstraintViolation(...))` over the
+`checkRateLimit(who: Principal)` (fails with `Refused(ConstraintViolation(...))` over the
 caller's limit), `audit` (tools middleware); `dashboardFor` (artifacts
 peruser); `empty()` (an empty `AgentStream[Array[Byte]]`) and the
 package-level `AgentStream` alias (artifacts routers); `Invoice`,
@@ -256,7 +261,8 @@ login: `auth = true`), `@agentImplementation`,
 `docs/src/content/v1.6/invoke/mcp.mdx:254`),
 `golem.tool.ToolInvocation.collect()`,
 Scala 3 `enum ... derives Schema` and `Map[String, Label]` results,
-`golem.Principal` / `Principal.Oidc` (`sub`, `issuer`) method injection,
+`golem.InvocationContext` method parameters (`ctx.caller.original`,
+`Principal.User` with `issuer`/`subject`, `ref`, `isSameAs`),
 `golem.schema.AgentStream.fromPull` (synchronous `AgentStream[String]`
 returns), `HostApi.createWebhook()` with `.url` and
 `.await().map(_.json[A]())`, generated clients `XClient.upsert(...)`, awaited
@@ -286,11 +292,14 @@ New in the 7 + 7 + 7 round:
   `RefundToolMiddleware` (`sdks/scala/codegen/src/main/scala/golem/codegen/rpc/ToolMiddlewareCodegen.scala:164-170`;
   docs `docs/src/content/v1.6/how-to-guides/scala/golem-tools-middleware-scala.mdx:12-18`).
   The handler is `refund(underlying: RefundToolUnderlying, charge, amount,
-  apiKey, caller: Principal): Future[Either[ToolInvokeError[RefundError],
-  Refund]]`; the principal is decoded from the invocation context
-  (`sdks/scala/model/src/main/scala/golem/tool/ToolMiddleware.scala:305`)
-  and dropped from the underlying's parameters
-  (`sdks/scala/codegen/src/main/scala/golem/codegen/rpc/ToolProjectionIR.scala:547`).
+  apiKey, context: InvocationContext):
+  Future[Either[ToolInvokeError[RefundError], Refund]]`; the middleware
+  runtime passes the invocation's context for that parameter
+  (`sdks/scala/model/src/main/scala/golem/tool/ToolMiddleware.scala:309`),
+  and the codegen drops it from the underlying's parameters
+  (`sdks/scala/codegen/src/main/scala/golem/codegen/rpc/ToolProjectionIR.scala:547`;
+  a parameter is the context when its type resolves to
+  `golem.InvocationContext`, `:182`).
   Forwarding is `underlying.refund(charge, amount, apiKey).toMiddlewareResult`
   (`ToolMiddleware.scala:148`); rejection is
   `ToolInvokeError.ConstraintViolation(message)`
@@ -332,9 +341,10 @@ New in the 7 + 7 + 7 round:
   call, it is recorded in the oplog and replays to the same name.
   `java.util.UUID.randomUUID()` is not used: on Scala.js it needs a
   `java.security.SecureRandom` the harness does not provide.
-- **Sign-in** (artifacts/signin): `auth = true` and `Principal` injection,
-  matched on `Principal.Oidc` (`issuer`, `sub`;
-  `sdks/scala/model/src/main/scala/golem/Principal.scala:24-35`).
+- **Sign-in** (artifacts/signin): `auth = true` and an `InvocationContext`
+  parameter; `ctx.caller.original` is matched on `Principal.User`
+  (`issuer`, `subject`;
+  `sdks/scala/model/src/main/scala/golem/InvocationContext.scala:206-210`).
 
 ## Scala-specific workarounds
 
@@ -407,11 +417,19 @@ New in the 7 + 7 + 7 round:
 - artifacts/routes: the newly marked TS `methods: { sales: ... }` line is
   the marked `def sales(...) = querySales(region)` in `AppAgentImpl`.
 - artifacts/login: the mount is unmarked and uncommented, as in TS, and
-  `@agentDefinition(mount = ..., auth = true)` fits one line. The
-  charts are a `private val ArrayBuffer[Chart]`, and the TS
-  `if (made?.askedBy !== userKey(caller)) return undefined` is the marked
-  `.filter(_.askedBy == userKey(caller))` on `charts.lift(n - 1)` (no
-  chart, or another user's chart, gives `None` → 404). The TS comment
+  `@agentDefinition(mount = ..., auth = true)` fits one line. Both methods
+  take `ctx: InvocationContext`. `ask` reads `val askedBy =
+  ctx.caller.original.ref` (an `Option[PrincipalRef]`; `None` only for an
+  anonymous caller, which `auth = true` rules out) before the `Future`
+  chain; the SDK reads the caller from the host on first use, during the
+  call (`sdks/scala/model/src/main/scala/golem/InvocationContext.scala:273-295`).
+  The marked TS `push` is the marked `charts += Chart(askedBy, png)`. The
+  charts are a `private val ArrayBuffer[Chart]`, and the TS `if
+  (!made?.askedBy || !me.equals(made.askedBy)) return undefined` is the
+  marked `.filter(_.askedBy.exists(me.isSameAs(_)))` on `charts.lift(n -
+  1)` (no chart, a chart with no owner, or another user's chart gives
+  `None` → 404), with `val me = ctx.caller.original` above it, as in TS.
+  The TS comment
   "anyone else, even signed in, gets a 404:" sits above `charts.lift(n -
   1)`, the first line of that expression, one line above the marked
   `.filter`.
@@ -429,11 +447,18 @@ New in the 7 + 7 + 7 round:
   keeps the underlying's `Either` (`forwarded`), audits only a `Right`
   (`forwarded.fold(_ => Future.unit, r => audit(...))`) and redacts with
   `forwarded.map(_.copy(customerEmail = "[redacted]"))`, so the tool's own
-  errors pass through unchanged. TS reads `principal` from the middleware
-  context; the Scala typed middleware receives it only as a parameter the
-  tool declares (`caller: Principal`, injected by Golem, not part of the
-  tool's input), so the harness refund tool declares it (in both
-  tools/middleware and tools/secrets, so the two stay identical).
+  errors pass through unchanged. TS reads `caller` from the middleware
+  context; the Scala typed middleware receives the invocation context only
+  as a parameter the tool declares (`context: InvocationContext`, injected
+  by Golem, not part of the tool's input), so the harness refund tool
+  declares it (in both tools/middleware and tools/secrets, so the two stay
+  identical), and the marked rate-limit line is
+  `checkRateLimit(context.caller.original)`.
+  SDK gap: the typed middleware sees the caller only through that tool
+  parameter, so it cannot read the caller of a tool that declares none.
+  Fix idea (2.0): give typed middleware handlers the invocation context
+  even when the presented tool declares none. The snippet still compiles,
+  because the harness `refund` tool declares the parameter.
   The `@toolMiddleware` line is the counterpart of the marked TS
   `refund.middleware({` line.
 - artifacts/peruser: Scala agents have no `init`; the marked init
@@ -453,21 +478,23 @@ New in the 7 + 7 + 7 round:
   counterpart of the TS `if`) last. TS's prelude `header(...)` helper is
   the SDK's own `HttpHeader.ascii`; TS `empty()` is a prelude `empty()`.
   The marked `body: csv` is the marked `), csv)` closing the response.
-- artifacts/signin: the TS early `throw` for non-OIDC callers is the last
-  match arm `case _ => Future.failed(Exception("sign-in required"))`; the
-  marked TS destructuring `const { issuer, sub } = caller` is the marked
-  `val (issuer, sub) = (user.issuer, user.sub)` inside `case user:
-  Principal.Oidc =>`. The TS input marker (`caller: s.principal()`) is on
-  the `def ask(question: String, caller: Principal)` signature; the
-  comment above it sits between `@endpoint(...)` and `def`. TS
-  `pageFor` returns a promise, so the page is built in `.flatMap`.
+- artifacts/signin: the marked TS `const user = ctx.caller.original` is
+  the marked `ctx.caller.original match`, under the same "Golem passes in
+  the user who signed in:" comment; the TS early `throw` for a caller that
+  is not a signed-in user is the last match arm `case _ =>
+  Future.failed(Exception("sign-in required"))`; the marked TS
+  destructuring `const { issuer, subject } = user` is the marked `val
+  (issuer, subject) = (user.issuer, user.subject)` inside `case user:
+  Principal.User =>`. The implementation's `def ask(question: String, ctx:
+  InvocationContext)` header takes two lines (68 columns). TS `pageFor`
+  returns a promise, so the page is built in `.flatMap`.
 
 ## Artifacts and middleware: no SDK gap, no shim
 
 All seven artifacts snippets and tools/middleware compile against the
 published SDK as written: the live-file mapping, query-variable endpoints,
 `@description` with an endpoint, `UnstructuredBinary["image/png"]` (plain,
-and in `Option`), `auth = true` with `Principal` injection, a
+and in `Option`), `auth = true` with an `InvocationContext` parameter, a
 `requiresFilesystem` tool with a usage error enum, a raw `@httpRouter`
 calling an agent's generated client that returns a byte stream, and a typed
 `@toolMiddleware` using host promises. The only non-Golem pieces are the `openai`
@@ -497,7 +524,9 @@ with a compiler error located in that snippet's spliced file. It then reruns
 `check.sh` on the real files to restore `src/`. About 30 s per case.
 
 Result of the recorded run (Oct 22 2026, 7 + 7 + 7 round): all 20 fail as expected, `NEG_OK`; the
-restore run ends `ALL_OK`. "Located in" is where the compiler reports it:
+restore run ends `ALL_OK`. The rows for `artifacts/login`, `artifacts/signin`
+and `tools/middleware` changed on Nov 24 2026 and were not run (see
+"Caller identity 2.0" below). "Located in" is where the compiler reports it:
 Golem macro validations fire where the codegen expands the macro (the
 generated auto-registration or RPC client for that snippet's package), which
 `neg.sh` accepts alongside the spliced file.
@@ -511,7 +540,7 @@ generated auto-registration or RPC client for that snippet's package), which
 | agents/readonly | `@readOnly` → `@readOnly(true)` | E007: `cache` is a `String` policy (spliced file) |
 | agents/stream | `AgentStream.fromPull:` → `AgentStream.of:` | E008 not a member of `golem.schema.AgentStream` (spliced file) |
 | artifacts/files | `fromInline(png, "image/png")` → `"image/jpeg"` | E007: the MIME allow-list `"image/png"` is part of the type (spliced file) |
-| artifacts/login | `@endpoint("GET", "/charts/{n}")` → `"/charts/{id}"` | Golem macro: path variable `id` is not a method parameter (generated auto-registration) |
+| artifacts/login | `ctx.caller.original.ref` → `ctx.principal.ref` (the 1.6 read) | E008: `principal` is not a member of `golem.InvocationContext` (spliced file) |
 | artifacts/overview | `mount = "/chats/{chat}"` → `"/chats/{room}"` | Golem macro: mount path variable not defined in the constructor (generated auto-registration) |
 | artifacts/routes | `@endpoint("GET", "/sales?region={region}")` → `"/sales?area={area}"` | Golem macro: query variable `area` is not a method parameter (generated auto-registration) |
 | tools/custom | `OutlineClient().outline(file)` → `outline(path = file)` | generated `OutlineClient.outline(file: String)` has no `path` parameter (spliced file) |
@@ -520,10 +549,10 @@ generated auto-registration or RPC client for that snippet's package), which
 | tools/publish | `call.collect()` → `call.drain()` | E008 not a member of `golem.tool.ToolInvocation` (spliced file) |
 | tools/requests | `HttpMethod.POST` → `HttpMethod.SEND` | E008 not a member of `org.scalajs.dom.HttpMethod` (spliced file); this snippet uses no Golem API |
 | tools/secrets | `config.value.stripeKey.handle()` → `config.value.stripeKey.get` | E007: found `String`, required `golem.schema.GuestSecretHandle` (spliced file) |
-| tools/middleware | `underlying.refund(charge, amount, apiKey)` → `underlying.refund(charge, amount, apiKey, caller)` | too many arguments for generated `RefundToolUnderlying.refund(charge, amount, apiKey)`: the principal is injected, never forwarded (spliced file) |
+| tools/middleware | `checkRateLimit(context.caller.original)` → `checkRateLimit(caller)` (the 1.6 middleware parameter) | Not found: `caller` (spliced file) |
 | artifacts/peruser | `mount = "/dashboards/{user}"` → `"/dashboards/{name}"` | Golem macro: mount path variable `name` is not defined in the agent constructor (generated auto-registration) |
 | artifacts/routers | `HttpHeader.ascii("content-type", "text/csv")` → `HttpHeader("content-type", "text/csv")` | E007: found `String`, required `Array[Byte]` (header values are bytes) (spliced file) |
-| artifacts/signin | `case user: Principal.Oidc =>` → `case user: Principal.GolemUser =>` | E008: `issuer` / `sub` are not members of `golem.Principal.GolemUser` (spliced file) |
+| artifacts/signin | `ctx: InvocationContext)` → `caller: Principal)` and `ctx.caller.original match` → `caller match` (the 1.6 parameter) | Golem macro: "Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type." |
 
 Two candidate controls compiled and were dropped: removing `derives Schema`
 from `Draft` (the Golem macro derives the schema itself) and removing
@@ -565,3 +594,25 @@ local publication.
 ## artifacts/overview: UUID file names (Oct 22 2026)
 
 The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `val key = HostApi.generateIdempotencyKey()` and `val name = Uuid.toStandardString(key)`, as in artifacts/peruser (imports in `harness/pre/artifacts-overview.scala`). To stay within 31 lines, `name = "chart"` moves onto the `FunctionTool(` line, as Rust does with `ToolDefinition`. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.
+
+## Caller identity 2.0 (Nov 24 2026)
+
+`artifacts/login`, `artifacts/signin` and `tools/middleware` read the caller
+from the invocation context: a `ctx: InvocationContext` parameter on the
+agent method, and the `context: InvocationContext` that the `refund` tool
+declares for its middleware. The 1.6 `caller: Principal` parameters,
+`Principal.Oidc` and the `userKey(caller)` helper are gone: a `Principal`
+or `Caller` in a signature is now a Golem macro error. `login` reads
+`ctx.caller.original.ref` (an `Option[PrincipalRef]`) before the `Future`
+chain, stores it with the chart and compares with `isSameAs`; `signin`
+matches `Principal.User` and reads `issuer` and `subject`.
+
+This change is not compiled. The display rules (31 lines, 68 columns) and
+the comment comparison with the TypeScript pass for all three snippets.
+Publishing the in-tree SDK at this branch's base (main of Nov 24 2026)
+failed in the SDK itself, before the snippets: `core` does not compile
+(`core/js/src/main/scala/golem/host/OplogApi.scala:770-771`, `componentId`
+and `agentId` are not members of `golem.host.js.JsAgentId`, which became a
+single UUID with the UUIDv8 agent IDs). Main fixes those two lines in #4695.
+The snippets follow the SDK sources (`model/src/main/scala/golem/InvocationContext.scala`),
+and the negative-control rows above for them were not run.

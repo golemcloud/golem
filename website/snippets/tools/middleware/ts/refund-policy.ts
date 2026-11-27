@@ -5,10 +5,10 @@ const refuse = (val: string) =>
 export const refundPolicy = refund.middleware({ //@
   name: 'refund-policy',
   implementation: {
-    refund: async (args, { underlying, principal }) => {
+    refund: async (args, { underlying, caller }) => {
       // reject calls by their arguments and enforce a rate limit:
       if (args.amount > 100_000) throw refuse('over the limit') //@
-      await checkRateLimit(principal) //@
+      await checkRateLimit(caller.original) //@
       if (args.amount > 10_000) {
         // the durable caller can wait for a person across restarts:
         const approval = createPromise() //@

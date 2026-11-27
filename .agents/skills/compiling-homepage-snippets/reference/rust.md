@@ -184,7 +184,7 @@ TypeScript does.
 3. `cargo test --lib -- --nocapture` on the host. The test evaluates every
    registered agent, router and tool descriptor, which runs the SDK's
    registration-time HTTP validation (`validate_wire_agent_http`: mount
-   variables vs constructor parameters, endpoint variables, principals,
+   variables vs constructor parameters, endpoint variables,
    auth/CORS) that the wasm build only runs at component start. It asserts
    the 19 agent types (including the router `ExportsRouter`, registered
    with kind `HttpRouter`) and the `outline` and `present` (both
@@ -192,7 +192,7 @@ TypeScript does.
    `^[a-z0-9-]{1,40}$`), `refund` (version `1.0.0`) and `summarize` tools
    are registered; that the middleware `refund-policy` is registered,
    presents `refund` with a result carrying `customer_email`, and has no
-   `caller` input (the principal is auto-injected); that `AccountAgent.describe` carries the description
+   `ctx` input (the invocation context is auto-injected); that `AccountAgent.describe` carries the description
    `Summarize a customer account by email` and `ChartAgent.chart` the
    description `Draw a sales chart for one quarter`; that `StockAgent.level` is read-only; and it decodes
    `SupportAgent`'s descriptor and asserts a config declaration with path
@@ -259,16 +259,16 @@ functions that can fail return `Result` and propagate with `?`:
 | `tools_custom` | bash client stub, `Headings = Vec<String>`, and the unit structs `OutlineImpl` and `BuildAgentImpl` (omitted from the display file to fit 31 lines) |
 | `tools_requests` | `http`, `Request`, `AUTHORIZATION`, `CONTENT_TYPE` |
 | `tools_permissions` | `AgentId`, `permissions::{self, Bounds, Holder, Lifespan, PatternGrant, PersistentCard}` |
-| `tools_secrets` | `Config`, `Secret` (`golem_rust::agentic::Secret<T>`), `ConfigSchema`; the real `refund` tool (`#[tool_definition(version = "1.0.0")] trait Refund`, `api_key: GuestSecretHandle`, an auto-injected `caller: golem_rust::tool::Principal` that is not tool input and that `RefundClient` does not take, reveals the key and POSTs to Stripe with `expand[]=charge`), its `Receipt { id, status, customer_email }` result (pub fields; `customer_email` is the charge's billing email) and so the real macro-generated `RefundClient`, `RefundMiddleware` and `RefundUnderlying` |
-| `tools_middleware` | `use crate::tools_secrets::{Receipt, RefundMiddleware, RefundUnderlying}` (the same tool, not a second `refund`); `GuestSecretHandle`, `tool::{Principal, ToolInvokeError}`, `PromiseId`, `create_promise`, `await_promise`, `tool_middleware`; the unit struct `RefundPolicy` with `new()` (height); `ask_finance` (TS `askFinance`: POSTs the promise id, charge and amount to finance), `approved` (TS `approved`: JSON `approved === true`), `check_rate_limit` (TS `checkRateLimit`, returns `ToolInvokeError::ConstraintViolation` over the limit), `audit` |
+| `tools_secrets` | `Config`, `Secret` (`golem_rust::agentic::Secret<T>`), `ConfigSchema`; the real `refund` tool (`#[tool_definition(version = "1.0.0")] trait Refund`, `api_key: GuestSecretHandle`, an auto-injected `ctx: InvocationContext` that is not tool input and that `RefundClient` does not take, reveals the key and POSTs to Stripe with `expand[]=charge`), its `Receipt { id, status, customer_email }` result (pub fields; `customer_email` is the charge's billing email) and so the real macro-generated `RefundClient`, `RefundMiddleware` and `RefundUnderlying` |
+| `tools_middleware` | `use crate::tools_secrets::{Receipt, RefundMiddleware, RefundUnderlying}` (the same tool, not a second `refund`); `GuestSecretHandle`, `InvocationContext`, `Principal`, `tool::ToolInvokeError`, `PromiseId`, `create_promise`, `await_promise`, `tool_middleware`; the unit struct `RefundPolicy` with `new()` (height); `ask_finance` (TS `askFinance`: POSTs the promise id, charge and amount to finance), `approved` (TS `approved`: JSON `approved === true`), `check_rate_limit(&Principal)` (TS `checkRateLimit`, returns `ToolInvokeError::ConstraintViolation` over the limit), `audit` |
 | `artifacts_peruser` | agent macros, `Uuid` (`golem_rust::Uuid`), `fs`; `dashboard_for` (TS `dashboardFor`) |
 | `artifacts_routers` | `AgentStream`, `Config`, `Header`, `HttpRequest`, `HttpResponse`, `HttpRouter`, `http_router`, `agent_client`, `Regex`; the caller-owned client `#[agent_client(type_name = "AnalystAgent")] trait AnalystAgent { fn new(chat: String) -> Self; fn export_csv(&self, id: String) -> AgentStream<Vec<u8>>; }` (TS prelude `Analyst`; generates the real `AnalystAgentClient` without defining a second `AnalystAgent` in this component); `header` and `empty` (TS helpers); `failed` (an error becomes a 500 with an empty body) |
-| `artifacts_signin` | `Principal`, agent macros; `Invoice`, `invoices_of`, `page_for` (TS helpers) |
+| `artifacts_signin` | `InvocationContext`, `Principal`, agent macros; `Invoice`, `invoices_of(org, issuer, subject)`, `page_for` (TS helpers) |
 | `tools_publish` | `agent_definition`/`agent_implementation`, `description`; `use crate::stubs::crm_find_customer_tool_guest_client;` so the displayed `use crm_find_customer_tool_guest_client::CrmFindCustomerClient;` resolves to the stand-in |
 | `artifacts_overview` | `model`, `run_tool_loop` (`crate::llm`), golem-ai-llm `ToolDefinition`, `fs`; `Quarter` (TS `Quarter`: a newtype with `SCHEMA`, the JSON Schema with `pattern` `^Q[1-4]-\d{4}$`, and `ToolInput::parse`, which rejects anything else before the tool body runs, so only a valid quarter reaches a path); `chart_png` (TS `chartPng`); `page_for` (TS `pageFor`, same HTML) |
 | `artifacts_routes` | `Schema`, agent and tool macros, `fs`; `Row` (TS `Row`), `type Rows = Vec<Row>` (TS `z.array(Row)`, so the impl line fits 68 columns), `query_sales` (TS `querySales`); the unit structs `PresentImpl` and `AppAgentImpl` (height) |
 | `artifacts_files` | `UnstructuredBinary`, `AllowedMimeTypes`, `description`, `endpoint`; `SaleRow`, `query_sales`, `draw_chart` (TS helpers) |
-| `artifacts_login` | `Principal`, `UnstructuredBinary`, `AllowedMimeTypes`, `endpoint`; `Chart { asked_by, png }` (TS `Chart`), `answer_with_chart` (TS `answerWithChart`), `user_key` (TS `userKey`: JSON `[issuer, sub]` of an OIDC principal, an error otherwise) |
+| `artifacts_login` | `InvocationContext`, `PrincipalRef`, `UnstructuredBinary`, `AllowedMimeTypes`, `endpoint`; the `Png` type (`PngType` with `#[mime_type("image/png")]`, moved here from the display file for height; shown in artifacts/files); `Chart { asked_by: PrincipalRef, png }` (TS `Chart`), `answer_with_chart` (TS `answerWithChart`) |
 
 ## Invented libraries and stubs
 
@@ -408,15 +408,15 @@ description in the descriptor.
   AppError>` line. TS's one-line `drawChart(await querySales(...))` is two
   lines (query, then the marked draw). `{ tag: 'inline', val, mimeType }`
   is `Png::from_inline(data, PngType::Png)` (marked).
-- artifacts/login: the same `Png` type, with no blank line after it
-  (height). The mount is one unmarked line
-  `#[agent_definition(mount = "/private/{team}", auth = true)]`, as TS. `z.number()` is `u32`. TS `this.charts[n - 1]` is
-  `self.charts.get(n.checked_sub(1)? as usize)?`, so `n = 0` is a 404. TS
-  `userKey(caller)` throws for a non-OIDC principal in both methods; in
-  Rust `ask` propagates that error with `?`, and `open` returns `None`
-  (404) through `.ok()?`, because `open` returns `Option<Png>` to fit 31
-  lines. With `auth = true` every caller is an OIDC user, so the two only
-  differ for a principal that cannot reach this mount.
+- artifacts/login: the `Png` type is in the prelude (height). The mount is
+  one unmarked line `#[agent_definition(mount = "/private/{team}", auth =
+  true)]`, as TS. `z.number()` is `u32`. Both methods take `ctx:
+  InvocationContext`. `ask` stores `ctx.caller().original().principal_ref()`
+  as a `PrincipalRef` and fails with "sign-in required" when there is none
+  (an anonymous caller, which `auth = true` rules out); `open` returns `None`
+  (404) through `principal_ref()?`, then compares with `PrincipalRef::equals`
+  (marked). TS `this.charts[n - 1]` is
+  `self.charts.get(n.checked_sub(1)? as usize)?`, so `n = 0` is a 404.
 - agents/stream: the "clients resume this Durable Stream" comment sits
   between `#[endpoint(post = "/draft")]` and the `fn` whose
   `AgentStream<String>` return type it describes. Streams are produced with
@@ -433,12 +433,18 @@ description in the descriptor.
   `#[tool_middleware(name = "refund-policy", constructor =
   RefundPolicy::new)] impl RefundMiddleware for RefundPolicy` (both the
   attribute's first line and the `impl` line marked for TS's one line);
-  the unit struct is in the prelude (height). TS gets `principal` from the
-  middleware context; the Rust typed middleware receives only the tool's
-  own parameters, so the `refund` tool declares an auto-injected
-  `caller: Principal` parameter (filled by Golem, not part of the tool
+  the unit struct is in the prelude (height). TS gets `caller` from the
+  middleware context; the Rust typed middleware receives the tool's own
+  parameters, so the `refund` tool declares an auto-injected `ctx:
+  InvocationContext` parameter (filled by Golem, not part of the tool
   input, not taken by `RefundClient` or `RefundUnderlying::refund`) and the
-  middleware reads it. TS `refuse` builds `new ToolInvokeError({ tag:
+  middleware reads `ctx.caller().original()`.
+  SDK gap: the typed middleware sees the caller only through that tool
+  parameter, so it cannot read the caller of a tool that declares none.
+  Fix idea (2.0): give typed middleware handlers the invocation context
+  even when the presented tool declares none. The snippet still compiles,
+  because the harness `refund` tool declares the parameter.
+  TS `refuse` builds `new ToolInvokeError({ tag:
   'constraint-violation' })`; Rust `refuse` returns
   `ToolInvokeError::ConstraintViolation`. TS `throw` is `return Err(..)`.
   TS `createPromise()`/`awaitPromise(p)` are `create_promise()` and
@@ -470,11 +476,11 @@ description in the descriptor.
   client from the prelude's `#[agent_client]` trait). The 200 response
   puts `status` and `headers: vec![` on one line and closes with `], body:
   csv })` (height); the `body` marker is on that closing line.
-- artifacts/signin: TS `if (caller.tag !== 'oidc') throw` is `let
-  Principal::Oidc(user) = caller else { return Err(..) };`; TS `const {
-  issuer, sub } = caller` is `let (issuer, sub) = (user.issuer, user.sub)`.
-  The "passes in the user" comment sits between `#[endpoint(post =
-  "/ask")]` and the marked `fn ask(.., caller: Principal)` line.
+- artifacts/signin: TS `if (user.kind !== 'user') throw` is `let
+  Principal::User(user) = ctx.caller().original() else { return Err(..)
+  };` (marked, under the "passes in the user" comment, as in TS); TS
+  `const { issuer, subject } = user` is `let (issuer, subject) =
+  (user.issuer(), user.subject())`.
 - agents/waits: TS `setTimeout as sleep` maps to
   `golem_rust::wasip3::clocks::monotonic_clock::wait_for as sleep` (ns).
 
@@ -485,7 +491,12 @@ display file to `neg/` (each from/to pair must occur exactly once; the copy
 keeps its markers and build.rs strips them), runs `cargo check` with
 `SNIPPET_NEG=<rel>=<copy>`, and requires a non-zero exit; it fails if any
 display file has no case, then restores the positive build and deletes
-`neg/`.
+`neg/`. The artifacts/signin case needs `cargo build`, not `cargo check`:
+the SDK raises the Rule 8 error ("Principal and Caller cannot appear ...")
+as a const panic, `Rule8::<T>::REJECTED`
+(`sdks/rust/golem-rust/src/caller.rs:660-663`), in a generic impl that
+only monomorphization reaches (`sdks/rust/golem-rust/src/agentic/agent.rs:96-104`),
+so `cargo check` accepts the mutant.
 
 | Snippet | Planted misuse | Error |
 |---|---|---|
@@ -497,7 +508,7 @@ display file has no case, then restores the positive build and deletes
 | agents/team | `.gather()?` without `.await` | E0277 `?` on a future |
 | agents/waits | `schedule_remind_cancelable` | E0599 on `MailerAgentClient` |
 | artifacts/files | `Png::from_inline(data, "image/png")` | E0308 expected `PngType`, found `&str` |
-| artifacts/login | owner check `made.asked_by != caller` (the raw `Principal`) | E0277 can't compare `String` with `Principal` |
+| artifacts/login | `ctx.caller().original().principal_ref()?` → `ctx.principal()?` (the 1.6 accessor) | E0599 no method named `principal` on `InvocationContext` |
 | artifacts/overview | mount `/chats/{name}` | macro: filesystem mount capture `{name}` must bind one constructor parameter |
 | artifacts/routes | `regex = 40` | macro: regex must be a string literal |
 | tools/custom | `requires_filesystem = "yes"` | macro: must be a bool literal |
@@ -505,10 +516,10 @@ display file has no case, then restores the positive build and deletes
 | tools/permissions | `Holder::Worker` | E0599 no variant |
 | tools/publish | `call.collect().result?` (no `.await`) | E0609 no field `result` on the real SDK's `collect()` future |
 | tools/requests | body without `.into_bytes()` | E0308 `Request<Vec<u8>>` |
-| tools/middleware | pass the auto-injected `caller` to `underlying.refund(..)` | E0061 the underlying handle takes 3 arguments, not 4 |
+| tools/middleware | `check_rate_limit(ctx.caller().original())` → `check_rate_limit(&caller)` (the 1.6 parameter) | E0425 cannot find value `caller` |
 | artifacts/peruser | mount `/dashboards/{name}` | macro: filesystem mount capture `{name}` must bind one constructor parameter |
 | artifacts/routers | drop `type Config = ();` | E0046 missing `Config` in `HttpRouter` impl |
-| artifacts/signin | `user.subject` | E0609 no field `subject` on `OidcPrincipal` (it is `sub`) |
+| artifacts/signin | `ctx: InvocationContext` → `caller: Principal` (the 1.6 parameter), read as `&caller` (`cargo build`) | E0080 "Principal and Caller cannot appear in a method, constructor or tool signature ..." (Rule 8) |
 | tools/secrets | pass `config.stripe_key` (the `Secret<String>` wrapper) instead of `.handle()?` | E0308 expected `GuestSecretHandle`, found `Secret<String>` |
 
 ## Known limits (compiles; nothing is deployed or run)
@@ -525,7 +536,7 @@ display file has no case, then restores the positive build and deletes
 - The middleware's ordering, unbypassability and promise suspension, the
   router's 404/streamed CSV and `AnalystAgent.export_csv` (no AnalystAgent
   in this component has that method; the `#[agent_client]` client is
-  checked against the trait only), and the OIDC-only branch of
+  checked against the trait only), and the signed-in-user-only branch of
   `BillingAgent.ask` are type-checked and registration-checked only.
 - Generated cross-component clients (bash, `ResearchAgent`, `SlackAgent`,
   the MCP-imported `crm_find_customer`) are stubs, so their calls are checked
@@ -576,12 +587,16 @@ schema taken from `T`.
   (`golem-rust-macro/src/tool/middleware_surface.rs:31-32`); each middleware
   method is `async fn <cmd>(&self, underlying: &U, <tool params>) ->
   Result<T, ToolInvokeError<E>>` (`middleware_surface.rs:778-783`). A tool
-  parameter of type `golem_rust::tool::Principal` is auto-injected
-  (`golem-rust-macro/src/tool/definition.rs:864-887`), filled from the
-  invocation principal for the middleware (`middleware_surface.rs:964-981`)
-  and dropped from the underlying handle's arguments
-  (`middleware_surface.rs:815-830`) and the tool client
-  (`golem-rust-macro/src/tool/client.rs:1394-1417`). Rejections use
+  parameter of type `golem_rust::tool::InvocationContext` (or
+  `golem_rust::agentic::InvocationContext`) is auto-injected: Golem fills
+  it, the middleware method receives it, and it is dropped from the tool
+  input, the underlying handle's arguments and the tool client. The tool
+  macros match the full path only (`golem-rust-macro/src/tool/definition.rs:873-889`,
+  `middleware_surface.rs:1331-1353`, `client.rs:1370-1385`): a short
+  `InvocationContext` imported with `use` is treated as tool input and does
+  not compile, so the `refund` tool in `prelude/tools_secrets.rs` writes
+  `ctx: golem_rust::tool::InvocationContext`. The middleware `impl` may use
+  the short name, because it only has to match the generated trait. Rejections use
   `ToolInvokeError::ConstraintViolation`
   (`sdks/rust/golem-rust/src/tool/tool_middleware.rs:130-143`). Usage
   matches `docs/src/content/v1.6/how-to-guides/rust/golem-tools-middleware-rust.mdx`.
@@ -602,9 +617,15 @@ schema taken from `T`.
   `type_name`, `golem-rust-macro/src/agentic/agent_client_impl.rs:164`),
   documented in `docs/src/content/v1.6/develop/reflection.mdx`
   (`XClient::upsert(..)?` then `.method(..).await?`).
-- OIDC principal: `Principal::Oidc(OidcPrincipal { issuer, sub, .. })`
-  (the WIT `golem:agent/common` principal re-exported as
-  `golem_rust::agentic::Principal`, `sdks/rust/golem-rust/src/agentic/mod.rs:15`).
+- Caller (`sdks/rust/golem-rust/src/caller.rs`): `InvocationContext::caller()
+  -> &Caller` (`:637`), `Caller::original() -> &Principal` (`:587`), the
+  enum `Principal` with `User(UserPrincipal)` (`:446-447`),
+  `UserPrincipal::issuer()` and `subject()` (`:331`, `:335`),
+  `Principal::principal_ref() -> Option<&PrincipalRef>` (`:466`, `None`
+  for an anonymous caller) and `PrincipalRef::equals` (`:105`). An agent
+  method gets the context through a `ctx: InvocationContext` parameter,
+  which Golem fills and the generated agent client does not take
+  (`golem-rust-macro/src/agentic/agent_definition_impl.rs:675`).
 
 No SDK gap was found for these four features: every call compiles against
 the in-tree SDK without a shim.
@@ -612,3 +633,18 @@ the in-tree SDK without a shim.
 ## artifacts/overview: UUID file names (Oct 22 2026)
 
 The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `let name = Uuid::new_v4();` (`golem_rust::Uuid`, imported in `prelude/artifacts_overview.rs`; `page_for` takes the `Uuid`). The PNG write is wrapped onto two highlighted lines to fit 68 columns. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.
+
+## Caller identity 2.0 (Nov 24 2026)
+
+`artifacts/login`, `artifacts/signin` and `tools/middleware` read the caller
+from the invocation context: a `ctx: InvocationContext` parameter on the
+agent method, and the `ctx` that the `refund` tool declares for its
+middleware. The 1.6 `caller: Principal` parameters, `Principal::Oidc` and
+`OidcPrincipal` are gone: a `Principal` or `Caller` in a signature is now
+the Rule 8 build error. `login` stores `principal_ref()` (a `PrincipalRef`)
+and compares with `equals`; `signin` matches `Principal::User` and reads
+`issuer()` and `subject()`. Re-verified on the three changed snippets with
+the harness rebuilt from this file: the style checks, `cargo check` and
+`cargo build` for wasm32-wasip2, `wasm-tools validate`, the native
+registration test, and the three negative controls above, which fail as
+they must.

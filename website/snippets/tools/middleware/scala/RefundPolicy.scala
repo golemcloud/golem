@@ -6,12 +6,12 @@ def refuse(why: String) =
 final class RefundPolicy extends RefundToolMiddleware:
   def refund(
     underlying: RefundToolUnderlying, charge: String, amount: Int,
-    apiKey: GuestSecretHandle, caller: Principal,
+    apiKey: GuestSecretHandle, context: InvocationContext,
   ): Future[Either[ToolInvokeError[RefundError], Refund]] =
     val done = for
       // reject calls by their arguments and enforce a rate limit:
       _ <- if amount > 100_000 then refuse("over the limit") //@
-        else checkRateLimit(caller) //@
+        else checkRateLimit(context.caller.original) //@
       _ <- if amount <= 10_000 then Future.unit else
         // the durable caller can wait for a person across restarts:
         val approval = HostApi.createPromise() //@
