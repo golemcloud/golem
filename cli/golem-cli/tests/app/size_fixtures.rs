@@ -539,7 +539,7 @@ async fn collect_fixture(
         uploaded,
         ..Default::default()
     };
-    let (guest, dynamic, named);
+    let (guest, module, named);
     let user;
     match fixture.sdk {
         Sdk::Ts | Sdk::Effect | Sdk::Scala => {
@@ -553,11 +553,17 @@ async fn collect_fixture(
                 _ => ctx.cwd_path_join(".generated/agent_guest.wasm"),
             };
             guest = std::fs::read(guest_path)?;
-            dynamic = std::fs::read(
-                ctx.cwd_path_join(format!("golem-temp/agents/{snake}.dynamic.wasm")),
-            )?;
+            let module_path = if fixture.sdk == Sdk::Scala {
+                ctx.cwd_path_join(format!(".golem/{snake}.js"))
+            } else {
+                ctx.cwd_path_join(format!(
+                    "golem-temp/ts-dist/{}/main.js",
+                    component.to_kebab_case()
+                ))
+            };
+            module = std::fs::read_to_string(module_path)?;
             inputs.guest = Some(&guest);
-            inputs.dynamic = Some(&dynamic);
+            inputs.module = Some(&module);
             if fixture.sdk != Sdk::Scala {
                 let bundle_dir =
                     ctx.cwd_path_join(format!("golem-temp/ts-dist/{}", component.to_kebab_case()));
@@ -1749,6 +1755,7 @@ fn first_call_oplog_requires_complete_network_free_evidence() {
                 local_agent_config: vec![],
                 instance_id: uuid::Uuid::from_u128(3),
                 never_live: false,
+                standalone_tool: None,
             }),
         ),
         wrap(

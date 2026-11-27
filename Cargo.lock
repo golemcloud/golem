@@ -4261,6 +4261,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "walkdir",
  "wasm-metadata 0.251.0",
  "wasm-rquickjs",
  "wasm-wave 0.251.0",
@@ -4325,7 +4326,10 @@ dependencies = [
  "golem-common",
  "tempfile",
  "test-r",
+ "tokio",
+ "walkdir",
  "wasm-rquickjs",
+ "wasmtime",
 ]
 
 [[package]]
@@ -4586,9 +4590,11 @@ dependencies = [
  "async-fs",
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-runtime",
  "aws-sdk-s3",
  "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "axum",
  "base64 0.22.1",
  "bigdecimal",
@@ -4613,9 +4619,12 @@ dependencies = [
  "http-body-util",
  "humantime-serde",
  "hyper",
+ "hyper-rustls",
  "hyper-util",
+ "if-addrs",
  "include_dir",
  "indexmap 2.14.2",
+ "ipnet",
  "jiff 1.0.3",
  "lazy_static",
  "libsqlite3-sys",
@@ -4734,6 +4743,7 @@ name = "golem-size-analysis"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "camino",
  "clap",
  "flate2",
  "hex",
@@ -4741,10 +4751,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "test-r",
  "twiggy-ir",
  "twiggy-parser",
  "wasm-encoder 0.251.0",
+ "wasm-rquickjs",
  "wasmparser 0.251.0",
  "wasmprinter 0.251.0",
  "wat",
@@ -4785,6 +4797,7 @@ dependencies = [
  "opentelemetry_sdk",
  "prometheus",
  "prost",
+ "rand 0.9.5",
  "redis",
  "reqwest 0.13.5",
  "reqwest-middleware",
@@ -5875,6 +5888,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "if_chain"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6059,6 +6082,7 @@ dependencies = [
  "anyhow",
  "assert2",
  "async-trait",
+ "aws-sdk-s3",
  "axum",
  "backtrace-on-stack-overflow",
  "base64 0.22.1",
@@ -6075,6 +6099,7 @@ dependencies = [
  "golem-common",
  "golem-schema",
  "golem-service-base",
+ "golem-shard-manager",
  "golem-test-framework",
  "h2",
  "headers",
@@ -6082,6 +6107,7 @@ dependencies = [
  "hyper",
  "indoc",
  "jiff 1.0.3",
+ "libc",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",

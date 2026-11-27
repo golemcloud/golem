@@ -118,7 +118,7 @@ pub struct ComponentServiceDefault {
     component_metadata_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
     current_component_metadata_cache:
         Cache<ComponentId, (), FetchedCurrentMetadata, WorkerExecutorError>,
-    current_metadata_generations: Arc<InvalidationGenerations>,
+    current_metadata_generations: Arc<InvalidationGenerations<EnvironmentId>>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
     compilation_limiter: CompilationLimiter,
@@ -890,9 +890,11 @@ mod tests {
         async fn get_agent_secret_revision(
             &self,
             _environment_id: EnvironmentId,
+            _owner: golem_common::model::agent_secret::AgentSecretOwner,
             _agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
             _path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
-            _revision: golem_common::model::agent_secret::AgentSecretRevision,
+            _selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+            _mode: golem_common::model::agent_secret::AgentSecretReadMode,
         ) -> Result<
             Option<golem_service_base::model::agent_secret::AgentSecret>,
             RegistryServiceError,

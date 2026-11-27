@@ -29,9 +29,9 @@ enum Command {
         /// TS, Effect and Scala: the prebuilt guest (`agent_guest.wasm`).
         #[arg(long)]
         guest: Option<PathBuf>,
-        /// TS, Effect and Scala: the guest with the bundle injected (`.dynamic.wasm`).
+        /// TS, Effect and Scala: the bundled JavaScript source.
         #[arg(long)]
-        dynamic: Option<PathBuf>,
+        module: Option<PathBuf>,
         /// TS and Effect: the rollup module map, a JSON object of module id to rendered length.
         #[arg(long)]
         module_map: Option<PathBuf>,
@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
             sdk,
             wasm,
             guest,
-            dynamic,
+            module,
             module_map,
             go_packages,
             named_wasm,
@@ -88,11 +88,15 @@ fn main() -> anyhow::Result<()> {
         } => {
             let uploaded = std::fs::read(&wasm)
                 .with_context(|| format!("could not read {}", wasm.display()))?;
-            let (guest, dynamic, named) = (read(&guest)?, read(&dynamic)?, read(&named_wasm)?);
+            let (guest, module, named) = (read(&guest)?, read(&module)?, read(&named_wasm)?);
             let inputs = CollectInputs {
                 uploaded: &uploaded,
                 guest: guest.as_deref(),
-                dynamic: dynamic.as_deref(),
+                module: module
+                    .as_deref()
+                    .map(std::str::from_utf8)
+                    .transpose()
+                    .context("JavaScript module must be UTF-8")?,
                 module_map: module_map.as_deref().map(read_module_map).transpose()?,
                 go_packages: read(&go_packages)?
                     .as_deref()

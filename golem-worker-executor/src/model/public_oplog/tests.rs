@@ -550,6 +550,7 @@ fn make_agent_metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        standalone_tool: None,
         component_id: test_component_id(),
         agent_type_name: None,
         canonical_key: None,
@@ -955,6 +956,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     }
 
     let projection = CreateProjectionParameters {
+        standalone_tool: None,
         agent_id: AgentId::from_parts(0, 1),
         agent_type_name: None,
         owner_kind: OwnerKind::EphemeralExternalTool,

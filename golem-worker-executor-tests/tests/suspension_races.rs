@@ -83,6 +83,7 @@ async fn run_retirement_during_insert(
     if shard_lost {
         let response = client
             .assign_shards(AssignShardsRequest {
+                executor_count: 1,
                 number_of_shards: 1,
                 shard_epochs: vec![ShardEpochEntry {
                     shard_id: Some(golem_api_grpc::proto::golem::shardmanager::ShardId {
@@ -137,6 +138,7 @@ async fn run_retirement_during_insert(
                 shard_ids: vec![golem_api_grpc::proto::golem::shardmanager::ShardId { value: 0 }],
                 revision: 1,
                 incarnation_id: incarnation.into(),
+                executor_count: 1,
             }),
         )
         .await??
@@ -164,6 +166,7 @@ async fn run_retirement_during_insert(
     if shard_lost {
         let response = client
             .assign_shards(AssignShardsRequest {
+                executor_count: 1,
                 number_of_shards: 1,
                 shard_epochs: vec![ShardEpochEntry {
                     shard_id: Some(golem_api_grpc::proto::golem::shardmanager::ShardId {
@@ -384,6 +387,16 @@ impl Debug for InsertGate {
 
 #[async_trait]
 impl SchedulerStorage for InsertGate {
+    async fn reschedule(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        due: jiff::Timestamp,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.reschedule(id, owner, due, now).await
+    }
+
     async fn insert(
         &self,
         id: ScheduleId,
@@ -411,6 +424,21 @@ impl SchedulerStorage for InsertGate {
     async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
         self.inner.cancel(id).await
     }
+
+    async fn get_action(&self, id: &ScheduleId) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+        self.inner.get_action(id).await
+    }
+
+    async fn replace_action(
+        &self,
+        id: &ScheduleId,
+        expected: &[u8],
+        action: &[u8],
+        due: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.replace_action(id, expected, action, due).await
+    }
+
     async fn claim_due(
         &self,
         now: jiff::Timestamp,

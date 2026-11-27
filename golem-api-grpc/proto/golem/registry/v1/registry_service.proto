@@ -17,6 +17,8 @@ import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/environment_state.proto";
+import "golem/registry/agent_secret.proto";
+import "google/protobuf/empty.proto";
 import "golem/common/quota.proto";
 import "golem/registry/resource_usage_update.proto";
 import "golem/registry/v1/registry_service_error.proto";
@@ -56,6 +58,8 @@ service RegistryService {
   rpc ResolveTypeId (ResolveTypeIdRequest) returns (ResolveTypeIdResponse);
   // Resolves retained names, including declarations on previous implementing components.
   rpc ResolveAgentTypeName (ResolveAgentTypeNameRequest) returns (ResolveAgentTypeNameResponse);
+  // Resolves a retained tool name, including tools that are no longer deployed.
+  rpc ResolveToolTypeId (ResolveToolTypeIdRequest) returns (ResolveToolTypeIdResponse);
   // Resolves an agent type of the environment's current deployment by name.
   rpc GetDeployedAgentType (GetDeployedAgentTypeRequest) returns (GetDeployedAgentTypeResponse);
 
@@ -478,6 +482,23 @@ message ResolveTypeIdRequest {
   uint32 type_id = 2;
 }
 
+message ResolveToolTypeIdRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string tool_name = 2;
+}
+
+message ResolveToolTypeIdResponse {
+  oneof result {
+    ResolveToolTypeIdSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveToolTypeIdSuccessResponse {
+  // Absent only when the environment never assigned this tool name an ID.
+  optional uint32 type_id = 1;
+}
+
 message ResolveTypeIdResponse {
   oneof result {
     ResolveTypeIdSuccessResponse success = 1;
@@ -569,8 +590,13 @@ message GetCurrentEnvironmentStateSuccessResponse {
 message GetAgentSecretRevisionRequest {
   golem.common.EnvironmentId environment_id = 1;
   repeated string path = 2;
-  uint64 revision = 3;
+  oneof revision {
+    uint64 fixed = 3;
+    google.protobuf.Empty current = 6;
+  }
   golem.common.UUID agent_secret_id = 4;
+  AgentSecretOwner owner = 5;
+  AgentSecretReadMode mode = 7;
 }
 
 message GetAgentSecretRevisionResponse {
@@ -581,7 +607,7 @@ message GetAgentSecretRevisionResponse {
 }
 
 message GetAgentSecretRevisionSuccessResponse {
-  EnvironmentState environment_state = 1;
+  optional AgentSecret agent_secret = 1;
 }
 
 message GetResourceDefinitionByIdRequest {

@@ -403,6 +403,9 @@ set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/ser
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
+    # The server log of every CLI test stays in the uploaded reports; a test that times out
+    # prints no log tail.
+    set_env GOLEM_CLI_TEST_SERVER_LOG_DIR ${MAIN_VALIDATION_REPORT_DIR}/cli-server-logs/${group}
     code = exec --get-exit-code bun .github/main-validation/progress.ts run cli ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|build-sdk-effect|ensure-builtin-artifacts)$" cli-integration-tests-${group}
     writefile ${MAIN_VALIDATION_REPORT_DIR}/cli-${group}.status ${code}
     if not eq ${code} 0

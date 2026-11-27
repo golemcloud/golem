@@ -22,6 +22,7 @@ pub mod callers;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
+pub mod standalone_tool;
 
 use self::agent_deployments_service::{
     ConfiguredRetryPoliciesEnvironmentStateService, DisabledEnvironmentStateService,
@@ -192,6 +193,7 @@ use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -963,6 +965,23 @@ impl TestWorkerExecutor {
         &self,
         agent_id: &AgentId,
     ) -> anyhow::Result<Vec<StreamExportForkAdmittedRecord>> {
+        Ok(self
+            .stored_stream_session_records(agent_id)
+            .await?
+            .into_iter()
+            .filter_map(|record| match record {
+                StreamSessionRecord::ExportForkAdmitted(record) => Some(record),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// The durable agent's stream-session records, read from oplog storage. Unlike the oplog API,
+    /// this also reads the oplog of an agent whose shard this executor no longer owns.
+    pub async fn stored_stream_session_records(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Vec<StreamSessionRecord>> {
         use golem_worker_executor::services::HasOplogService;
         use golem_worker_executor::services::oplog::OplogServiceOps;
 
@@ -986,13 +1005,12 @@ impl TestWorkerExecutor {
         let mut records = Vec::new();
         for entry in entries.into_values() {
             if let OplogEntry::StreamSession { record, .. } = entry {
-                let record = oplog
-                    .download_payload(&owned_agent_id, AgentMode::Durable, record)
-                    .await
-                    .map_err(Error::msg)?;
-                if let StreamSessionRecord::ExportForkAdmitted(record) = record {
-                    records.push(record);
-                }
+                records.push(
+                    oplog
+                        .download_payload(&owned_agent_id, AgentMode::Durable, record)
+                        .await
+                        .map_err(Error::msg)?,
+                );
             }
         }
         Ok(records)
@@ -8899,9 +8917,10 @@ impl ShardService for FakeOwnership {
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
-            .assign_shards(number_of_shards, shard_epochs, revision)
+            .assign_shards(number_of_shards, shard_epochs, revision, executor_count)
     }
 
     fn register(
@@ -8910,9 +8929,15 @@ impl ShardService for FakeOwnership {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<std::time::Instant>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
-        self.inner
-            .register(number_of_shards, shard_epochs, expires_at, revision)
+        self.inner.register(
+            number_of_shards,
+            shard_epochs,
+            expires_at,
+            revision,
+            executor_count,
+        )
     }
 
     fn install_unexpiring(
@@ -8928,8 +8953,10 @@ impl ShardService for FakeOwnership {
         &self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
-        self.inner.revoke_shards(shard_ids, revision)
+        self.inner
+            .revoke_shards(shard_ids, revision, executor_count)
     }
 
     fn update_lease(
@@ -8937,8 +8964,10 @@ impl ShardService for FakeOwnership {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: std::time::Instant,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
-        self.inner.update_lease(shard_epochs, expires_at, revision)
+        self.inner
+            .update_lease(shard_epochs, expires_at, revision, executor_count)
     }
 
     fn clear_assignment(&self) {
@@ -8951,6 +8980,10 @@ impl ShardService for FakeOwnership {
 
     fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
         self.inner.try_get_current_assignment()
+    }
+
+    fn executor_count(&self) -> Option<usize> {
+        self.inner.executor_count()
     }
 }
 

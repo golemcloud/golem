@@ -397,6 +397,8 @@ mod tests {
                 revision: AgentSecretRevision::INITIAL,
                 secret_type,
                 secret_value: Some(SchemaValue::String("present".to_string())),
+                owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                destinations: vec![],
             },
         );
 
@@ -477,6 +479,8 @@ mod tests {
                 revision: AgentSecretRevision::INITIAL,
                 secret_type,
                 secret_value: Some(SchemaValue::Bool(true)),
+                owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                destinations: vec![],
             },
         );
 
@@ -575,6 +579,8 @@ mod tests {
                 secret_value: Some(SchemaValue::Url {
                     url: SECRET_PLAINTEXT.to_string(),
                 }),
+                owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                destinations: vec![],
             },
         );
 

@@ -33,6 +33,7 @@ use golem_api_grpc::proto::golem::shardmanager::{
 use golem_api_grpc::proto::golem::worker::Cursor;
 use jiff::{SignedDuration, Timestamp as JiffTimestamp};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::num::NonZeroUsize;
 use std::ops::Add;
 use std::time::{Duration, Instant};
 
@@ -147,6 +148,19 @@ pub fn shard_epochs_from_proto<C: FromIterator<(ShardId, ShardEpoch)>>(
             ))
         })
         .collect()
+}
+
+pub fn executor_count_to_proto(count: usize, field: &str) -> Result<u32, String> {
+    if count == 0 {
+        return Err(format!("{field} must not be 0"));
+    }
+    u32::try_from(count).map_err(|_| format!("{field} {count} does not fit a u32"))
+}
+
+pub fn executor_count_from_proto(count: u32, field: &str) -> Result<NonZeroUsize, String> {
+    let count =
+        usize::try_from(count).map_err(|_| format!("{field} {count} does not fit a usize"))?;
+    NonZeroUsize::new(count).ok_or_else(|| format!("{field} must not be 0"))
 }
 
 /// Decodes a lease TTL off the wire into an expiry on the receiver's own
@@ -1182,6 +1196,7 @@ mod tests {
                 incarnation: manager,
                 number: 1,
             },
+            NonZeroUsize::MIN,
         );
 
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));

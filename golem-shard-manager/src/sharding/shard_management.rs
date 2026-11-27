@@ -344,6 +344,10 @@ impl ShardManagement {
     /// the same registration, so the same id at the same address refreshes that lease and returns
     /// it; it neither creates a second lease nor counts as a replacement. A *different* id at a
     /// known address is a restarted instance, and inherits its predecessor's shards.
+    ///
+    /// Registration does not remove elapsed leases. The delivered executor count can be high
+    /// until housekeeping removes them and a newer snapshot is delivered. This reduces a
+    /// divided resource budget; it does not grant shard ownership.
     pub async fn register_executor(
         &self,
         executor_id: ExecutorId,
@@ -950,6 +954,7 @@ impl ShardManagement {
                 worker_executors.clone(),
                 rebalance.get_unassignments(),
                 shard_state.revision,
+                shard_state.executor_count(),
                 addrs,
             )
             .await

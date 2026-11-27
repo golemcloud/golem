@@ -16,7 +16,8 @@ use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
     AgentResult, EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream,
-    build_ifs_archive, default_agent_type_provision_config_creation_for_account,
+    build_ifs_archive, default_agent_initial_permissions_without_card_grants,
+    default_agent_type_provision_config_creation_for_account,
 };
 use crate::model::IFSEntry;
 use anyhow::{Context, anyhow};
@@ -47,10 +48,10 @@ use golem_common::model::application::{
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
-    AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
-    ComponentCreation, ComponentDto, ComponentId, ComponentName, ComponentRevision,
-    ComponentUpdate, ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate,
-    ToolProvisionConfigCreation, ToolProvisionConfigUpdate,
+    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate, ComponentCreation,
+    ComponentDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
+    ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate, ToolProvisionConfigCreation,
+    ToolProvisionConfigUpdate,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
@@ -433,7 +434,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     let update = updates.entry(agent_type.type_name.clone()).or_default();
                     if update.initial_permissions.is_none() {
                         update.initial_permissions =
-                            Some(AgentTypeInitialPermissions::default_for_recipient(
+                            Some(default_agent_initial_permissions_without_card_grants(
                                 RecipientPattern::Account {
                                     account: self.account_email.clone(),
                                 },

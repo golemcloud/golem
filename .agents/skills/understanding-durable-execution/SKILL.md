@@ -1340,8 +1340,13 @@ resolves an observation-only owner from storage. Archive failure or cancellation
 it never grants access to the old poisoned producer or restarts the ephemeral invocation.
 
 Normal archival and explicit interruption share `Worker::quiesce_for_owner_retirement` under
-the owner-cleanup lock: stop execution, drain stream retirement and lifecycle/forwarding work,
-commit, then stop status writers. Only explicit interruption records a pending terminal interrupt.
+the owner-cleanup lock: stop execution, then retire the stream producer and drain that retirement
+and lifecycle/forwarding work, commit, then stop status writers. The producer is retired after the
+stop, so an interrupted streaming invocation records its session `Finished` while the stop unwinds
+it; only a lost shard fences the producer when the retirement is recorded, and writes no terminal.
+An interrupt queued while the Store is suspended reaches no guest; the invocation publishes it when
+it sets the Store running (`publish_interrupt_queued_before_running`), so a guest that blocks on a
+stream read still observes it. Only explicit interruption records a pending terminal interrupt.
 Archival moves the oplog before removing the cached worker. The open oplog generation and its
 forwarding wrapper may be reused by the next worker, so ordinary retirement does not close their
 task admission or forwarding. Deletion claims ownership under the same owner-cleanup lock, then
@@ -1671,6 +1676,8 @@ does not use this marker and retains its normal `Idle`/automatic-recovery semant
 agents retain their clean fail-stop lifecycle and never append it.
 
 ### Resharding, revocation and the oplog epoch fence
+
+Registration, lease renewal, assignment pushes and revokes carry the number of executors with a stored lease, including executors with no shards. `ShardService::executor_count` reads the last accepted count without copying the assignment, for cluster-wide resource budgets. The count and shard set share the revision and manager-incarnation check. An accepted revoke updates the count and revision without changing lease expiry. An older renewal can extend the lease but cannot replace the count. Wire receipts reject a zero count before changing the assignment. The `executor_count` metric reports the accepted count. The single-shard adapter reports one. The single-binary `golem` uses an embedded shard manager and receives its count. Registration does not remove elapsed leases first, so the count can stay high until housekeeping removes them and a newer snapshot reaches the executor. That reduces a divided budget; it does not grant ownership or change the epoch fence.
 
 Two triggers retire an agent for its lost shard rather than reconstructing it here, and both go
 through `Worker::interrupt_and_retire(InterruptKind::ShardLost)`, the one stop-and-drop path an
@@ -2093,6 +2100,7 @@ typed quota traps. Denied calls and historical claims do not consume HTTP quota.
 replay never resends that cancelled call. Only crash-like loss leaves an incomplete send.
 Request-body intake continues while replay resolution waits, so a streamed writer can reach its
 next durable call. A trap leaves the Start incomplete, never Cancelled.
+Each HTTP send reserves its key position synchronously before its first await, in guest import order, through `IdempotencyKeyPosition`. Admission and completion order can differ on replay. An eligible denied send reserves a position too, but sends nothing. A guest key or disabled injection reserves no position. Managed headers use the captured position once after Start admission, before replay resolution, even for a recorded HTTP error or an incomplete-call repair. No later branch advances the key position.
 A crash before the response headers therefore completes the recorded send
 `Start` in place (same index, same derived idempotency key, the deterministic guest re-produces
 the request body) and keeps every operation recorded next to it. The response body's
@@ -2141,6 +2149,9 @@ Its source may still be an unconsumed resource retained by the guest, even after
 is consumed. Cancelling and dropping or retaining the recipient reader must not prevent the
 invocation from finishing so a later invocation can release that source. An underlying outgoing
 transmission keeps its own network I/O active; the recipient does not duplicate that ownership.
+The live wait of a sent request's transmission ends on entity cancellation: a tool body can hold
+the request body open, so the result may arrive only after the body's Store unwinds. The
+transmission `Start` then stays incomplete under the body's `Cancelled`, like an open receive.
 Both constructors keep pending wiring in the resident registry until the resource
 is consumed or dropped. Polling and cancelling a response's transmission read cannot start
 active tail work while the unconsumed response remains guest-owned, even when the reader also
@@ -4162,6 +4173,8 @@ Completed replay performs no HTTP or secret fetch. Golem forks retain external U
 identities; they do not issue DS-level forks. See `reference/streams.md` for protocol, auth and
 memory boundaries.
 
+Secret handles pin an environment-owned secret revision. A new reveal reads that fixed revision in `Live` mode, so a handle held across secret or environment deletion returns `VersionNotFound` on its next reveal. The durable reveal records the error without plaintext. Replay returns a recorded error without a registry read; a recorded success re-materializes its fixed revision in `Historical` mode and traps if that revision is gone. Rotation does not change a held handle's revision. External durable-stream authentication also uses `Historical` reads. Owners, revision selectors and read modes pass explicitly through `EnvironmentStateService` to the registry; the environment catalog contains only environment-owned secrets. The held-handle deletion/reconstruction regression runs in `integration-tests/tests/agent_config/shared_agent_config_live_mutation.rs` for both SDKs and databases.
+
 The custom Durable Streams HTTP surface maps an opaque public session ID to a concrete invocation
 key through `DurableStreamPublicBinding::{Live, Retired}` in the independently persisted session
 index. A durable session creation uses a fresh UUID invocation key, so an expired public ID can be
@@ -4322,7 +4335,7 @@ Detailed mechanics, including scheduling and memory admission: `reference/tools.
 | Durable Golem agent (RPC) | Exactly-once logical invocation and result | Target's durable queue + shared key |
 | Ephemeral Golem agent (RPC) | At-most-once per accepted invocation; no resumption after target loss | Fail-stop target, deterministic target ID (`AgentId::ephemeral_invocation`) |
 | Oplog-processor plugin | Exactly-once delivery of each oplog batch | `services/oplog/plugin.rs`: deterministic batch key (`oplog_processor_idempotency_key`: source agent, grant id, first/last index → UUIDv5) and per-plugin `confirmed_up_to`/`sending_up_to` checkpoints persisted in `AgentStatusRecord.oplog_processor_checkpoints` |
-| External HTTP/TCP/DB/etc. | Exactly-once only if the peer honours an idempotency key; otherwise retries in the ambiguous crash window are visible | Golem attaches an `idempotency-key` header to outgoing HTTP from `derive_idempotency_key(start_index)` (`http/policy.rs`, unless the guest set one) and offers `golem:api/host.generate-idempotency-key`; the peer must deduplicate |
+| External HTTP/TCP/DB/etc. | Exactly-once only if the peer honours an idempotency key; otherwise retries in the ambiguous crash window are visible | Outgoing HTTP reserves an `IdempotencyKeyPosition` before asynchronous admission, then calls its `derive(start_index)` through `p3/http/send/headers.rs` and `http/policy.rs`, unless the guest set a key. Retries reuse the prepared header. Golem also offers `golem:api/host.generate-idempotency-key`; the peer must deduplicate. |
 
 Four exactly-once contracts coexist and must not be conflated: RPC exactly-once (one logical
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item

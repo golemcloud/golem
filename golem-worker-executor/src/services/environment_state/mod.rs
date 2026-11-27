@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevisionSelector,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -577,9 +578,11 @@ pub trait EnvironmentStateService: Send + Sync {
     async fn get_agent_secret_revision(
         &self,
         environment_id: EnvironmentId,
+        owner: AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError>;
 
     async fn get_retry_policies(
@@ -828,12 +831,14 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
     async fn get_agent_secret_revision(
         &self,
         environment_id: EnvironmentId,
+        owner: AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
         self.client
-            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .get_agent_secret_revision(environment_id, owner, agent_secret_id, path, selector, mode)
             .await
             .map_err(|e| {
                 WorkerExecutorError::runtime(format!("Failed to get agent secret revision: {e}"))

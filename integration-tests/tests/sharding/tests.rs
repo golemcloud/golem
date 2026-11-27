@@ -1,0 +1,2164 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use anyhow::{Context, ensure};
+use futures::{StreamExt, future::join_all};
+use golem_common::config::ConfigLoader;
+use golem_shard_manager::config::ShardManagerConfig;
+use golem_test_framework::components::worker_executor::WorkerExecutor;
+use golem_test_framework::components::worker_executor::spawned::SpawnedWorkerExecutor;
+use golem_test_framework::config::DbType;
+use std::future::Future;
+use tokio_stream::wrappers::IntervalStream;
+use tracing::Level;
+
+async fn observe_executor_count<S, F, Fut>(
+    expected: usize,
+    within: Duration,
+    startup: S,
+    mut scrape: F,
+) -> (S::Output, anyhow::Result<()>)
+where
+    S: Future,
+    F: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<Box<[String]>>>,
+{
+    let deadline = tokio::time::Instant::now() + within;
+    let count = async {
+        let last_scrape_error = Mutex::new(None);
+        let observed = IntervalStream::new(tokio::time::interval(Duration::from_millis(100)))
+            .then(|_| scrape())
+            .filter_map(|reported| {
+                let result = match reported {
+                    Err(error)
+                        if error
+                            .downcast_ref::<reqwest::Error>()
+                            .is_some_and(|error| !error.is_status()) =>
+                    {
+                        *last_scrape_error.lock().unwrap() = Some(error);
+                        None
+                    }
+                    Err(error) => Some(Err(error)),
+                    Ok(metrics) => batch_matches(expected, &metrics).transpose(),
+                };
+                std::future::ready(result)
+            });
+        tokio::pin!(observed);
+        let result = tokio::time::timeout_at(deadline, observed.next())
+            .await
+            .with_context(|| {
+                format!(
+                    "count {expected} was not observed by the deadline; latest scrape error: {:?}",
+                    last_scrape_error.lock().unwrap()
+                )
+            })?
+            .context("the observation stream ended")?;
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "count {expected} was not observed by the deadline; latest scrape error: {:?}",
+            last_scrape_error.lock().unwrap()
+        );
+        result
+    };
+    tokio::join!(startup, count)
+}
+
+fn batch_matches(expected: usize, metrics: &[String]) -> anyhow::Result<Option<()>> {
+    ensure!(
+        metrics.len() == 2,
+        "expected metrics from both earlier executors"
+    );
+    let ready = metrics.iter().try_fold(true, |ready, metrics| {
+        let count = metrics
+            .lines()
+            .find_map(|line| line.strip_prefix("executor_count "))
+            .context("missing required metric executor_count")?
+            .parse::<usize>()
+            .context("invalid metric executor_count")?;
+        let missing_leases = metrics
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("shard_lease_renewals_total{outcome=\"lease_not_found\"} ")
+            })
+            .context("missing required metric for lease_not_found renewals")?
+            .parse::<u64>()
+            .context("invalid metric for lease_not_found renewals")?;
+        ensure!(
+            missing_leases == 0,
+            "the fixture requires no lease loss, including setup; re-registration could supply the count"
+        );
+        anyhow::Ok(ready && count == expected)
+    })?;
+    Ok(ready.then_some(()))
+}
+
+/// Both earlier executors report two, then three within one lease from the third launch.
+/// One shard leaves the second executor empty, so no assignment can refresh its count.
+/// Startup and metrics polling run together.
+#[test]
+#[timeout("600s")]
+async fn a_third_executor_refreshes_both_existing_counts_within_one_lease(_tracing: &Tracing) {
+    if golem_common::config::env_config_provider()
+        .iter()
+        .any(|(key, _)| key == "rebalance_threshold")
+    {
+        panic!(
+            "GOLEM__REBALANCE_THRESHOLD is not supported by this fixture; use the checked manager configuration"
+        );
+    }
+    if let Some(variable) = ["REDIS_PORT", "REGISTRY_HTTP_PORT"]
+        .into_iter()
+        .find(|variable| std::env::var_os(variable).is_some())
+    {
+        panic!("{variable} is not supported by this fixture; use GOLEM_TEST_PORT_OFFSET");
+    }
+    let config = EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 1,
+        number_of_shards_override: Some(1),
+        db_type: DbType::Sqlite,
+        redis_host: "127.0.0.1".to_string(),
+        redis_port: 23100,
+        registry_http_port: 23101,
+        registry_grpc_port: 23102,
+        shard_manager_http_port: 23103,
+        shard_manager_grpc_port: 23104,
+        compilation_http_port: 23105,
+        compilation_grpc_port: 23106,
+        worker_http_port: 23107,
+        worker_grpc_port: 23108,
+        worker_custom_request_port: 23109,
+        worker_mcp_port: 23110,
+        executor_base_http_port: 23120,
+        executor_base_grpc_port: 23130,
+        ..EnvBasedTestDependenciesConfig::default()
+    }
+    .with_env_overrides();
+    let second_http_port = config
+        .executor_base_http_port
+        .checked_add(1)
+        .expect("the second executor's HTTP port exceeds 65535");
+    let second_grpc_port = config
+        .executor_base_grpc_port
+        .checked_add(1)
+        .expect("the second executor's gRPC port exceeds 65535");
+    let third_http_port = config
+        .executor_base_http_port
+        .checked_add(2)
+        .expect("the third executor's HTTP port exceeds 65535");
+    let third_grpc_port = config
+        .executor_base_grpc_port
+        .checked_add(2)
+        .expect("the third executor's gRPC port exceeds 65535");
+    let executable = config.service_binaries_dir().join("worker-executor");
+    let working_directory = config.golem_repo_root.join("golem-worker-executor");
+    let manager_config = config
+        .golem_repo_root
+        .join("golem-shard-manager/config/shard-manager.toml")
+        .canonicalize()
+        .unwrap();
+    let manager_config = ConfigLoader::<ShardManagerConfig>::new(&manager_config)
+        .figment()
+        .merge(("number_of_shards", 1usize))
+        .extract::<ShardManagerConfig>()
+        .expect("the effective shard manager configuration must load");
+    assert_eq!(
+        manager_config.rebalance_threshold, 0.1,
+        "the fixture requires the manager's 10% rebalance threshold"
+    );
+    let lease_duration = manager_config.shard_lease_duration;
+    // Dependency setup flushes Redis. The fixture requires an isolated test endpoint.
+    let redis_port = std::net::TcpListener::bind((config.redis_host.as_str(), config.redis_port))
+        .expect("the fixture refuses an occupied Redis endpoint before dependency setup");
+    drop(redis_port);
+    let deps = EnvBasedTestDependencies::new(config).await.unwrap();
+    let spawn = |http_port, grpc_port| {
+        SpawnedWorkerExecutor::new(
+            &executable,
+            &working_directory,
+            http_port,
+            grpc_port,
+            deps.rdb(),
+            deps.shard_manager(),
+            deps.worker_service(),
+            Level::WARN,
+            Level::WARN,
+            Level::WARN,
+            deps.registry_service(),
+            None,
+            None,
+            false,
+            false,
+        )
+    };
+    let second = Arc::new(spawn(second_http_port, second_grpc_port).await);
+    let mut executors = deps.worker_executor_cluster().to_vec();
+    executors.push(second.clone());
+    let executors = executors.into_boxed_slice();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .unwrap();
+    let scrape = || async {
+        join_all(executors.iter().map(|executor| {
+            let client = &client;
+            async move {
+                let (url, _) = executor
+                    .metrics_endpoint()
+                    .context("executor has no metrics endpoint")?;
+                anyhow::Ok(
+                    client
+                        .get(url)
+                        .send()
+                        .await?
+                        .error_for_status()?
+                        .text()
+                        .await?,
+                )
+            }
+        }))
+        .await
+        .into_iter()
+        .collect::<anyhow::Result<Box<[_]>>>()
+    };
+
+    // The manager never moves the only shard at the 10% threshold. The empty executor
+    // receives no assignment or revoke, including a pending fan-out or its retry.
+    let before = tokio::time::timeout(
+        Duration::from_secs(30),
+        deps.shard_manager().get_routing_table(),
+    )
+    .await
+    .expect("the before-join routing table must arrive within 30 seconds")
+    .unwrap();
+    assert_eq!(before.shards_per_pod().len(), 1);
+    let (_, initial_count) =
+        observe_executor_count(2, Duration::from_secs(60), std::future::ready(()), &scrape).await;
+    initial_count
+        .expect("invalid setup: both earlier executors must first report two without lease loss");
+    let (third, count_result) = observe_executor_count(
+        3,
+        lease_duration,
+        spawn(third_http_port, third_grpc_port),
+        &scrape,
+    )
+    .await;
+    // Scrape again after the count observation, so re-registration cannot supply three
+    // while an earlier metrics snapshot still reports no missing lease.
+    let (_, no_re_registration) =
+        observe_executor_count(3, Duration::from_secs(5), std::future::ready(()), &scrape).await;
+    let after = tokio::time::timeout(
+        Duration::from_secs(30),
+        deps.shard_manager().get_routing_table(),
+    )
+    .await;
+    let shutdown = third
+        .kill_and_wait(tokio::time::Instant::now() + Duration::from_secs(30))
+        .await;
+    let second_shutdown = second
+        .kill_and_wait(tokio::time::Instant::now() + Duration::from_secs(30))
+        .await;
+    count_result.expect("both earlier executors must report three within one lease period from starting the third executor");
+    let after = after
+        .expect("the after-join routing table must arrive within 30 seconds")
+        .unwrap();
+    shutdown.expect("the third executor must stop and be reaped");
+    second_shutdown.expect("the second executor must stop and be reaped");
+    no_re_registration.expect("renewal, not re-registration, must refresh the count");
+    let [before, after] = [before, after].map(|table| {
+        let mut table: golem_api_grpc::proto::golem::shardmanager::RoutingTable = table.into();
+        table
+            .shard_assignments
+            .sort_unstable_by_key(|entry| entry.shard_id.as_ref().unwrap().value);
+        table
+    });
+    assert_eq!(before, after, "the join must not move any shard");
+}
+
+use async_trait::async_trait;
+use axum::Router;
+use axum::routing::post;
+use bytes::Bytes;
+use golem_api_grpc::proto::golem::worker;
+use golem_client::api::RegistryServiceClient;
+
+use golem_common::model::base64::Base64;
+use golem_common::model::component::ComponentDto;
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::plugin_registration::{
+    OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
+};
+use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
+
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
+use golem_common::{agent_key, data_value};
+use golem_test_framework::components::rdb::DbInfo;
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+    WorkerExecutorClusterControl, WorkerExecutorClusterControlDispatch,
+    WorkerExecutorClusterControlStub,
+};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+
+use golem_common::model::agent::ParsedAgentKey;
+use rand::prelude::*;
+use rand::rng;
+use std::collections::{BTreeMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use test_r::{flaky, test, test_dep, timeout};
+use tokio::sync::mpsc;
+use tokio::task::{JoinHandle, JoinSet};
+use tracing::{Instrument, error, info};
+use uuid::Uuid;
+
+pub struct Tracing;
+
+impl Tracing {
+    pub fn init() -> Self {
+        crate::platform::enable_stack_overflow_backtrace();
+        init_tracing_with_default_debug_env_filter(
+            &TracingConfig::test("sharding-tests").with_env_overrides(),
+        );
+        Self
+    }
+}
+
+#[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl))]
+pub async fn create_deps() -> EnvBasedTestDependencies {
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        number_of_shards_override: Some(16),
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await
+    .unwrap();
+
+    deps.redis_monitor().assert_valid();
+
+    deps
+}
+
+#[test_dep(scope = PerWorker)]
+pub fn tracing() -> Tracing {
+    Tracing::init()
+}
+
+struct Scenario;
+
+impl Scenario {
+    pub fn case_1(sleep_duration: Duration) -> Vec<Step> {
+        Step::invoke_and_await(
+            vec![Step::StopAllWorkerExecutor],
+            vec![
+                Step::RestartShardManager,
+                Step::Sleep(sleep_duration),
+                Step::StartWorkerExecutors(4),
+            ],
+        )
+    }
+
+    pub fn case_2() -> Vec<Step> {
+        Step::invoke_and_await(
+            vec![
+                Step::StopAllWorkerExecutor,
+                Step::RestartShardManager,
+                Step::StartWorkerExecutors(4),
+                Step::RestartShardManager,
+            ],
+            vec![],
+        )
+    }
+
+    pub fn case_3(sleep_duration: Duration) -> Vec<Step> {
+        Step::invoke_and_await(
+            vec![
+                Step::StopAllWorkerExecutor,
+                Step::RestartShardManager,
+                Step::StartWorkerExecutors(4),
+                Step::StopWorkerExecutors(3),
+                Step::Sleep(sleep_duration),
+            ],
+            vec![],
+        )
+    }
+
+    pub fn case_4() -> Vec<Step> {
+        Step::invoke_and_await(
+            vec![Step::StopAllWorkerExecutor, Step::RestartShardManager],
+            vec![
+                Step::StopWorkerExecutors(4),
+                Step::StartWorkerExecutors(3),
+                Step::Sleep(Duration::from_secs(1)),
+                Step::StopWorkerExecutors(2),
+            ],
+        )
+    }
+}
+
+#[test]
+#[timeout(240000)]
+#[flaky(5)]
+async fn coordinated_scenario_01_01(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    coordinated_scenario(
+        deps,
+        cluster_control,
+        5,
+        4,
+        vec![
+            Scenario::case_1(Duration::from_secs(3)),
+            Scenario::case_2(),
+            Scenario::case_3(Duration::from_secs(3)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    )
+    .await;
+}
+
+#[test]
+#[timeout(240000)]
+#[flaky(5)]
+async fn coordinated_scenario_01_02(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    coordinated_scenario(
+        deps,
+        cluster_control,
+        5,
+        30,
+        vec![
+            Scenario::case_1(Duration::from_secs(5)),
+            Scenario::case_2(),
+            Scenario::case_3(Duration::from_secs(3)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    )
+    .await;
+}
+
+#[test]
+#[timeout(240000)]
+#[flaky(5)]
+async fn coordinated_scenario_02_01(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    coordinated_scenario(
+        deps,
+        cluster_control,
+        5,
+        10,
+        vec![
+            Scenario::case_2(),
+            Scenario::case_3(Duration::from_secs(3)),
+            Scenario::case_1(Duration::from_secs(3)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    )
+    .await;
+}
+
+#[test]
+#[timeout(240000)]
+#[flaky(5)]
+async fn coordinated_scenario_03_01(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    coordinated_scenario(
+        deps,
+        cluster_control,
+        5,
+        10,
+        vec![
+            Scenario::case_3(Duration::from_secs(3)),
+            Scenario::case_4(),
+            Scenario::case_3(Duration::from_secs(3)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    )
+    .await;
+}
+
+#[test]
+#[timeout(240000)]
+#[flaky(5)]
+async fn service_is_responsive_to_shard_changes(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    deps.reset(cluster_control, 16).await;
+    let (component, agent_ids) = deps.create_component_and_start_workers(4).await;
+
+    let deps_clone = deps.clone();
+    let cluster_control_clone = cluster_control.clone();
+    let (stop_tx, stop_rx) = mpsc::channel(128);
+    let chaos = tokio::spawn(
+        async move {
+            unstable_environment(&deps_clone, &cluster_control_clone, stop_rx).await;
+        }
+        .in_current_span(),
+    );
+
+    info!("All workers started");
+
+    for c in 0..2 {
+        if c != 0 {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+        info!("Invoking workers ({c})");
+        deps.invoke_and_await_workers(&component, &agent_ids)
+            .await
+            .expect("Invocations failed");
+        info!("Invoking workers done ({c})");
+    }
+
+    info!("Sharding test completed");
+    stop_tx.send(()).await.unwrap();
+    chaos.await.unwrap();
+}
+
+async fn coordinated_scenario(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    number_of_shard: usize,
+    number_of_workers: usize,
+    steps: Vec<Step>,
+) {
+    deps.reset(cluster_control, number_of_shard).await;
+    let (component, agent_ids) = deps
+        .create_component_and_start_workers(number_of_workers)
+        .await;
+
+    let (worker_command_tx, worker_command_rx) = mpsc::channel(128);
+    let (worker_event_tx, mut worker_event_rx) = mpsc::channel(128);
+    let (env_command_tx, env_command_rx) = mpsc::channel(128);
+    let (env_event_tx, env_event_rx) = mpsc::channel(128);
+
+    let deps_clone = deps.clone();
+    let cluster_control_clone = cluster_control.clone();
+    let chaos = tokio::spawn(
+        async move {
+            coordinated_environment(
+                &deps_clone,
+                &cluster_control_clone,
+                env_command_rx,
+                env_event_tx,
+            )
+            .await;
+        }
+        .in_current_span(),
+    );
+
+    let mut checked_command_sender = CheckedCommandSender::new(env_command_tx, env_event_rx);
+
+    let deps_clone = deps.clone();
+    let invoker = tokio::task::spawn(
+        async move {
+            worker_invocation(&deps_clone, worker_command_rx, worker_event_tx).await;
+        }
+        .in_current_span(),
+    );
+
+    for step in steps {
+        let formatted_step = format!("{step:?}");
+        info!("Step: {} - Started", formatted_step);
+        match step {
+            Step::StartWorkerExecutors(n) => {
+                checked_command_sender
+                    .send(EnvCommand::StartWorkerExecutors(n))
+                    .await;
+            }
+            Step::StopWorkerExecutors(n) => {
+                checked_command_sender
+                    .send(EnvCommand::StopWorkerExecutors(n))
+                    .await;
+            }
+            Step::StopAllWorkerExecutor => {
+                checked_command_sender
+                    .send(EnvCommand::StopAllWorkerExecutor)
+                    .await;
+            }
+            Step::RestartShardManager => {
+                checked_command_sender
+                    .send(EnvCommand::RestartShardManager)
+                    .await;
+            }
+            Step::Sleep(duration) => {
+                tokio::time::sleep(duration).await;
+            }
+            Step::InvokeAndAwaitWorkersAsync(name) => {
+                worker_command_tx
+                    .send(WorkerCommand::InvokeAndAwaitWorkers {
+                        name,
+                        component: Box::new(component.clone()),
+                        agent_ids: agent_ids.clone(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            Step::WaitForInvokeAndAwaitResult => {
+                let evt = worker_event_rx.recv().await.unwrap();
+                info!("Invoke and await completed: {evt:?}");
+            }
+        }
+        info!("Step: {} - Done", formatted_step);
+    }
+
+    info!("Sharding test completed");
+    worker_command_tx.send(WorkerCommand::Stop).await.unwrap();
+    checked_command_sender.send(EnvCommand::Stop).await;
+    chaos.await.unwrap();
+    invoker.await.unwrap();
+}
+
+#[derive(Debug)]
+enum Command {
+    StartShard,
+    StopShard,
+    RestartShardManager,
+}
+
+// Sharding test specific env functions
+#[async_trait]
+trait DepsOps {
+    async fn reset(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        number_of_shards: usize,
+    );
+    async fn create_component_and_start_workers(
+        &self,
+        n: usize,
+    ) -> (ComponentDto, Vec<ParsedAgentKey>);
+    async fn invoke_and_await_workers(
+        &self,
+        component: &ComponentDto,
+        agent_ids: &[ParsedAgentKey],
+    ) -> Result<(), worker::v1::agent_error::Error>;
+    async fn start_all_worker_executors(&self, cluster_control: &WorkerExecutorClusterControlStub);
+    async fn stop_random_worker_executor(&self, cluster_control: &WorkerExecutorClusterControlStub);
+    async fn start_random_worker_executor(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+    );
+    async fn start_random_worker_executors(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        n: usize,
+    );
+    async fn stop_random_worker_executors(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        n: usize,
+    );
+    async fn stop_all_worker_executors(&self, cluster_control: &WorkerExecutorClusterControlStub);
+    async fn start_shard_manager(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        number_of_shards: Option<usize>,
+    );
+    async fn stop_shard_manager(&self, cluster_control: &WorkerExecutorClusterControlStub);
+    async fn restart_shard_manager(&self, cluster_control: &WorkerExecutorClusterControlStub);
+    async fn clean_shard_manager_state(&self);
+    async fn flush_redis_db(&self, cluster_control: &WorkerExecutorClusterControlStub);
+}
+
+fn randomize<T>(slice: &mut [T]) {
+    let mut rng = rng();
+    slice.shuffle(&mut rng);
+}
+
+#[async_trait]
+impl DepsOps for EnvBasedTestDependencies {
+    async fn reset(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        number_of_shards: usize,
+    ) {
+        info!("Reset started");
+        self.stop_all_worker_executors(cluster_control).await;
+        DepsOps::stop_shard_manager(self, cluster_control).await;
+        self.clean_shard_manager_state().await;
+        DepsOps::flush_redis_db(self, cluster_control).await;
+        DepsOps::start_shard_manager(self, cluster_control, Some(number_of_shards)).await;
+        self.start_all_worker_executors(cluster_control).await;
+        info!("Reset done");
+    }
+
+    async fn create_component_and_start_workers(
+        &self,
+        n: usize,
+    ) -> (ComponentDto, Vec<ParsedAgentKey>) {
+        let admin = self.admin().await;
+        let (_, env) = admin.app_and_env().await.unwrap();
+        info!("Storing component");
+        let component = admin
+            .component(&env.id, "it_agent_counters_release")
+            .name("it:agent-counters")
+            .store()
+            .await
+            .unwrap();
+        info!("ComponentId: {}", component.id);
+
+        let mut agent_ids = Vec::new();
+
+        for i in 1..=n {
+            info!("Worker {i} starting");
+            let agent_id = agent_key!("Counter", format!("sharding-test-{i}"));
+            admin
+                .start_agent(&component.id, agent_id.clone())
+                .await
+                .unwrap();
+            info!("Worker {i} started");
+            agent_ids.push(agent_id);
+        }
+
+        info!("All workers started");
+
+        (component, agent_ids)
+    }
+
+    async fn invoke_and_await_workers(
+        &self,
+        component: &ComponentDto,
+        agent_ids: &[ParsedAgentKey],
+    ) -> Result<(), worker::v1::agent_error::Error> {
+        let mut tasks = JoinSet::new();
+        for agent_id in agent_ids {
+            let self_clone = self.admin().await;
+            tasks.spawn({
+                let agent_id = agent_id.clone();
+                let component = component.clone();
+                async move {
+                    let idempotency_key = IdempotencyKey::fresh();
+                    (
+                        component.id,
+                        agent_id.clone(),
+                        self_clone
+                            .invoke_and_await_agent_with_key(
+                                &component,
+                                &agent_id,
+                                &idempotency_key,
+                                "increment",
+                                data_value!(),
+                            )
+                            .await,
+                    )
+                }
+                .in_current_span()
+            });
+        }
+
+        info!("Workers invoked");
+        let mut pending_count = agent_ids.len();
+        let mut completed_agents: Vec<String> = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(180), tasks.join_next()).await {
+                Ok(Some(result)) => {
+                    let (_component_id, agent_id, result) = result.unwrap();
+                    match result {
+                        Ok(_) => {
+                            pending_count -= 1;
+                            completed_agents.push(agent_id.to_string());
+                            info!("Worker invoke success: {agent_id}, pending: {pending_count}",);
+                        }
+                        Err(err) => {
+                            error!("Worker invoke error: {agent_id}, {err:?}");
+                            panic!("Worker invoke error: {agent_id}, {err:?}");
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    let all_agents: Vec<String> = agent_ids.iter().map(|a| a.to_string()).collect();
+                    let pending: Vec<&String> = all_agents
+                        .iter()
+                        .filter(|a| !completed_agents.contains(a))
+                        .collect();
+                    tasks.abort_all();
+                    panic!(
+                        "Timed out waiting for worker invocations. Still pending ({pending_count}): {}",
+                        pending
+                            .iter()
+                            .map(|a| a.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+            }
+        }
+        info!("All workers finished invocation");
+
+        Ok(())
+    }
+
+    async fn start_all_worker_executors(&self, cluster_control: &WorkerExecutorClusterControlStub) {
+        let stopped = cluster_control.stopped_indices().await;
+        for idx in stopped {
+            cluster_control.start(idx).await;
+        }
+    }
+
+    async fn stop_random_worker_executor(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+    ) {
+        self.stop_random_worker_executors(cluster_control, 1).await;
+    }
+
+    async fn start_random_worker_executor(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+    ) {
+        self.start_random_worker_executors(cluster_control, 1).await
+    }
+
+    async fn start_random_worker_executors(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        n: usize,
+    ) {
+        let mut stopped = cluster_control.stopped_indices().await;
+        if !stopped.is_empty() {
+            {
+                let mut rng = rng();
+                stopped.shuffle(&mut rng);
+            }
+
+            let to_start = &stopped[0..n];
+            for idx in to_start {
+                cluster_control.start(*idx).await;
+            }
+        }
+    }
+
+    async fn stop_random_worker_executors(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        n: usize,
+    ) {
+        let mut started = cluster_control.started_indices().await;
+        if !started.is_empty() {
+            randomize(&mut started);
+
+            let to_stop = &started[0..n];
+
+            for idx in to_stop {
+                cluster_control.stop(*idx).await;
+            }
+        }
+    }
+
+    async fn stop_all_worker_executors(&self, cluster_control: &WorkerExecutorClusterControlStub) {
+        let started = cluster_control.started_indices().await;
+        for idx in started {
+            cluster_control.stop(idx).await;
+        }
+    }
+
+    async fn start_shard_manager(
+        &self,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        number_of_shards: Option<usize>,
+    ) {
+        cluster_control
+            .start_shard_manager(
+                number_of_shards
+                    .map(|n| u16::try_from(n).expect("number_of_shards does not fit into u16")),
+            )
+            .await;
+    }
+
+    async fn stop_shard_manager(&self, cluster_control: &WorkerExecutorClusterControlStub) {
+        cluster_control.stop_shard_manager().await;
+    }
+
+    async fn restart_shard_manager(&self, cluster_control: &WorkerExecutorClusterControlStub) {
+        cluster_control.restart_shard_manager().await;
+    }
+
+    async fn flush_redis_db(&self, cluster_control: &WorkerExecutorClusterControlStub) {
+        // Route through the parent-owned Redis owner so reset/control
+        // operations all go through the single source of truth instead
+        // of opening a worker-local connection. Matches every other
+        // lifecycle call in `DepsOps::reset`.
+        cluster_control
+            .flush_redis_db(0)
+            .await
+            .expect("WorkerExecutorClusterControl::flush_redis_db(0) must succeed");
+    }
+
+    async fn clean_shard_manager_state(&self) {
+        match self.rdb().info() {
+            DbInfo::Sqlite(_) => {
+                let sqlite_files = [
+                    "golem_shard_manager.db",
+                    "golem_shard_manager.db-shm",
+                    "golem_shard_manager.db-wal",
+                ];
+
+                for file in sqlite_files {
+                    let _ = tokio::fs::remove_file(self.temp_directory().join("sqlite").join(file))
+                        .await;
+                }
+            }
+            DbInfo::Postgres(pg) => {
+                let pool = sqlx::PgPool::connect(&pg.public_connection_string())
+                    .await
+                    .expect("Failed to connect to Postgres");
+                sqlx::query("DELETE FROM golem_shard_manager.shard_manager_state")
+                    .execute(&pool)
+                    .await
+                    .expect("Failed to clean shard_manager_state");
+                let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_leases")
+                    .execute(&pool)
+                    .await;
+                let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_resources")
+                    .execute(&pool)
+                    .await;
+                // The local-mode mirror of the shard state; assignments first, because of
+                // the foreign key.
+                let _ = sqlx::query("DELETE FROM golem_shard_manager.shard_assignments")
+                    .execute(&pool)
+                    .await;
+                let _ = sqlx::query("DELETE FROM golem_shard_manager.executor_leases")
+                    .execute(&pool)
+                    .await;
+                pool.close().await;
+            }
+            DbInfo::Mysql(_) => {
+                panic!("Mysql is not supported in sharding tests");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Step {
+    StartWorkerExecutors(usize),
+    StopWorkerExecutors(usize),
+    StopAllWorkerExecutor,
+    RestartShardManager,
+    Sleep(Duration),
+    InvokeAndAwaitWorkersAsync(String),
+    WaitForInvokeAndAwaitResult,
+}
+
+impl Step {
+    pub fn invoke_and_await(before_invoke: Vec<Step>, before_await: Vec<Step>) -> Vec<Step> {
+        let step_count = before_invoke.len() + 1 + before_await.len();
+        let mut step_descriptions = Vec::with_capacity(step_count);
+        let mut steps = Vec::with_capacity(step_count);
+
+        {
+            for step in &before_invoke {
+                step_descriptions.push(format!("{step:?}"));
+            }
+
+            step_descriptions.push("Invoke".to_string());
+
+            for step in &before_await {
+                step_descriptions.push(format!("{step:?}"));
+            }
+
+            step_descriptions.push("Wait".to_string());
+        }
+        let description = step_descriptions.join(", ");
+
+        {
+            for step in before_invoke {
+                steps.push(step);
+            }
+
+            steps.push(Step::InvokeAndAwaitWorkersAsync(description));
+
+            for step in before_await {
+                steps.push(step);
+            }
+
+            steps.push(Step::WaitForInvokeAndAwaitResult)
+        }
+
+        steps
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+enum EnvCommand {
+    StartWorkerExecutors(usize),
+    StopWorkerExecutors(usize),
+    StopAllWorkerExecutor,
+    StartShardManager,
+    StopShardManager,
+    RestartShardManager,
+    Stop,
+}
+
+impl EnvCommand {
+    fn response_event(&self) -> Option<EnvEvent> {
+        match self {
+            EnvCommand::StartWorkerExecutors(_) => Some(EnvEvent::StartWorkerExecutorsDone),
+            EnvCommand::StopWorkerExecutors(_) => Some(EnvEvent::StopWorkerExecutorsDone),
+            EnvCommand::StopAllWorkerExecutor => Some(EnvEvent::StopAllWorkerExecutorDone),
+            EnvCommand::StartShardManager => Some(EnvEvent::StartShardManagerDone),
+            EnvCommand::StopShardManager => Some(EnvEvent::StopShardManagerDone),
+            EnvCommand::RestartShardManager => Some(EnvEvent::RestartShardManagerDone),
+            EnvCommand::Stop => None,
+        }
+    }
+}
+
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, PartialEq)]
+enum EnvEvent {
+    StartWorkerExecutorsDone,
+    StopWorkerExecutorsDone,
+    StopAllWorkerExecutorDone,
+    StartShardManagerDone,
+    StopShardManagerDone,
+    RestartShardManagerDone,
+}
+
+struct CheckedCommandSender {
+    env_command_tx: mpsc::Sender<EnvCommand>,
+    env_event_rx: mpsc::Receiver<EnvEvent>,
+}
+
+impl CheckedCommandSender {
+    fn new(
+        env_command_tx: mpsc::Sender<EnvCommand>,
+        env_event_rx: mpsc::Receiver<EnvEvent>,
+    ) -> Self {
+        Self {
+            env_command_tx,
+            env_event_rx,
+        }
+    }
+
+    async fn send(&mut self, command: EnvCommand) {
+        let response_event = command.response_event();
+        self.env_command_tx.send(command).await.unwrap();
+        if let Some(response_event) = response_event {
+            let event = self.env_event_rx.recv().await.unwrap();
+            assert_eq!(event, response_event);
+        };
+    }
+}
+
+enum WorkerCommand {
+    InvokeAndAwaitWorkers {
+        name: String,
+        component: Box<ComponentDto>,
+        agent_ids: Vec<ParsedAgentKey>,
+    },
+    Stop,
+}
+
+#[derive(Debug)]
+enum WorkerEvent {
+    #[allow(dead_code)]
+    InvokeAndAwaitWorkersCompleted(String),
+}
+
+async fn coordinated_environment(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    mut command_rx: mpsc::Receiver<EnvCommand>,
+    event_tx: mpsc::Sender<EnvEvent>,
+) {
+    info!("Starting Golem Sharding Tester");
+
+    loop {
+        let command = command_rx.recv().await.unwrap();
+        let formatted_command = format!("{command:?}");
+        let response_event = command.response_event();
+
+        info!("Command: {} - Started", formatted_command);
+        match command {
+            EnvCommand::StartWorkerExecutors(n) => {
+                deps.start_random_worker_executors(cluster_control, n).await;
+            }
+            EnvCommand::StopWorkerExecutors(n) => {
+                deps.stop_random_worker_executors(cluster_control, n).await;
+            }
+            EnvCommand::StopAllWorkerExecutor => {
+                deps.stop_all_worker_executors(cluster_control).await;
+            }
+            EnvCommand::StartShardManager => {
+                DepsOps::start_shard_manager(deps, cluster_control, None).await;
+            }
+            EnvCommand::StopShardManager => {
+                DepsOps::stop_shard_manager(deps, cluster_control).await;
+            }
+            EnvCommand::RestartShardManager => {
+                DepsOps::restart_shard_manager(deps, cluster_control).await;
+            }
+            EnvCommand::Stop => break,
+        }
+
+        if let Some(response_event) = response_event {
+            event_tx.send(response_event).await.unwrap();
+        }
+
+        info!("Command: {} - Done", formatted_command);
+    }
+}
+
+async fn worker_invocation(
+    deps: &EnvBasedTestDependencies,
+    mut command_rx: mpsc::Receiver<WorkerCommand>,
+    event_tx: mpsc::Sender<WorkerEvent>,
+) {
+    while let WorkerCommand::InvokeAndAwaitWorkers {
+        name,
+        component,
+        agent_ids,
+    } = command_rx.recv().await.unwrap()
+    {
+        deps.invoke_and_await_workers(&component, &agent_ids)
+            .await
+            .expect("Worker invocation failed");
+        event_tx
+            .send(WorkerEvent::InvokeAndAwaitWorkersCompleted(name))
+            .await
+            .unwrap();
+    }
+}
+
+async fn unstable_environment(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    mut stop_rx: mpsc::Receiver<()>,
+) {
+    info!("Starting Golem Sharding Tester");
+
+    async fn worker(
+        deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
+    ) {
+        let mut commands = [
+            Command::StartShard,
+            Command::StopShard,
+            Command::RestartShardManager,
+        ];
+        {
+            let mut rng = rng();
+            commands.shuffle(&mut rng);
+        }
+        let command = &commands[0];
+        let formatted_command = format!("{command:?}");
+        info!("Command: {} - Started", formatted_command);
+        match command {
+            Command::StartShard => {
+                deps.start_random_worker_executor(cluster_control).await;
+            }
+            Command::StopShard => {
+                deps.stop_random_worker_executor(cluster_control).await;
+            }
+            Command::RestartShardManager => {
+                DepsOps::restart_shard_manager(deps, cluster_control).await;
+            }
+        }
+        info!("Command: {} - Done", formatted_command);
+    }
+
+    fn random_seconds() -> u64 {
+        let mut rng = rng();
+        rng.random_range(1..10)
+    }
+
+    while stop_rx.try_recv().is_err() {
+        std::thread::sleep(Duration::from_secs(random_seconds()));
+        worker(deps, cluster_control).await;
+    }
+}
+
+// ========================================================================
+// Oplog processor plugin helpers for sharding tests
+// ========================================================================
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct BatchCallback {
+    #[allow(dead_code)]
+    source_worker_id: String,
+    #[allow(dead_code)]
+    account_id: String,
+    #[allow(dead_code)]
+    agent_type: Option<String>,
+    #[allow(dead_code)]
+    first_entry_index: u64,
+    #[allow(dead_code)]
+    entry_count: u64,
+    invocations: Vec<InvocationRecord>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct InvocationRecord {
+    oplog_index: u64,
+    fn_name: String,
+}
+
+fn invocation_count(batches: &[BatchCallback]) -> usize {
+    batches.iter().map(|b| b.invocations.len()).sum()
+}
+
+fn extract_function_names(batches: &[BatchCallback]) -> Vec<String> {
+    let mut all: Vec<_> = batches.iter().flat_map(|b| b.invocations.iter()).collect();
+    all.sort_by_key(|i| i.oplog_index);
+    all.into_iter().map(|i| i.fn_name.clone()).collect()
+}
+
+fn assert_unique_oplog_indices(batches: &[BatchCallback]) {
+    let indices: Vec<u64> = batches
+        .iter()
+        .flat_map(|b| b.invocations.iter().map(|i| i.oplog_index))
+        .collect();
+    let unique: HashSet<u64> = indices.iter().copied().collect();
+    assert_eq!(
+        indices.len(),
+        unique.len(),
+        "Duplicate oplog indices found: {:?}",
+        indices
+    );
+}
+
+async fn start_callback_server() -> (String, Arc<Mutex<Vec<BatchCallback>>>, JoinHandle<()>) {
+    let received: Arc<Mutex<Vec<BatchCallback>>> = Arc::new(Mutex::new(Vec::new()));
+    let received_clone = received.clone();
+
+    // Keep the listener address family aligned with the callback URL. Using
+    // `localhost` against an IPv4-only listener flakes in CI when the client
+    // resolves it to IPv6.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let handle = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/callback",
+            post(move |body: Bytes| {
+                async move {
+                    let body_str = String::from_utf8(body.to_vec()).unwrap();
+                    let batch: BatchCallback = serde_json::from_str(&body_str).unwrap();
+                    let mut batches = received_clone.lock().unwrap();
+                    batches.push(batch);
+                    "ok"
+                }
+                .in_current_span()
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    (
+        format!("http://127.0.0.1:{port}/callback"),
+        received,
+        handle,
+    )
+}
+
+async fn wait_for_invocations(
+    received: &Arc<Mutex<Vec<BatchCallback>>>,
+    expected_count: usize,
+    timeout: Duration,
+) -> Vec<BatchCallback> {
+    let start = tokio::time::Instant::now();
+    loop {
+        let batches = received.lock().unwrap().clone();
+        let count = invocation_count(&batches);
+        if count >= expected_count {
+            return batches;
+        }
+        if start.elapsed() > timeout {
+            panic!(
+                "Timed out waiting for callbacks (got {} of {} expected, {} batches: {:?})",
+                count,
+                expected_count,
+                batches.len(),
+                batches,
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn wait_for_oplog_completions(
+    user: &(impl TestDsl + Send + Sync + ?Sized),
+    worker_id: &golem_common::model::agent::OwnedAgentId,
+    expected_count: usize,
+    timeout: Duration,
+    received: &Arc<Mutex<Vec<BatchCallback>>>,
+) {
+    let start = tokio::time::Instant::now();
+    loop {
+        let oplog = user
+            .get_oplog(worker_id, OplogIndex::INITIAL)
+            .await
+            .unwrap_or_default();
+
+        let completed = oplog
+            .iter()
+            .filter(|e| matches!(&e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count();
+
+        if completed >= expected_count {
+            return;
+        }
+
+        if start.elapsed() > timeout {
+            let batches = received.lock().unwrap().clone();
+            panic!(
+                "Timed out waiting for oplog completions \
+                     (got {} of {} expected AgentInvocationFinished entries; \
+                     {} callback invocations across {} batches: {:?})",
+                completed,
+                expected_count,
+                invocation_count(&batches),
+                batches.len(),
+                batches,
+            );
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+// ========================================================================
+// I1: Shard reassignment — no entry loss
+// ========================================================================
+
+#[test]
+#[timeout(240000)]
+#[flaky(3)]
+async fn oplog_processor_shard_reassignment_no_loss(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    deps.reset(cluster_control, 16).await;
+
+    let user = deps.admin().await;
+    let (_, env) = user.app_and_env().await.unwrap();
+    let client = user.registry_service_client().await;
+
+    let (callback_url, received, _server) = start_callback_server().await;
+
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await
+        .unwrap();
+    let plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: format!("oplog-processor-{}", Uuid::new_v4()),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin.id,
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut params = BTreeMap::new();
+    params.insert("callback-url".to_string(), callback_url);
+
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .with_parametrized_plugin("Repository", &grant.id, 0, params)
+        .store()
+        .await
+        .unwrap();
+
+    let repo_id = agent_key!("Repository", "worker1");
+    let worker_id = user
+        .start_agent(&component.id, repo_id.clone())
+        .await
+        .unwrap();
+
+    for i in 0..3 {
+        user.invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!(format!("G{i}"), format!("Item {i}")),
+        )
+        .await
+        .unwrap();
+    }
+
+    // Two-phase setup gate: wait for oplog persistence, then for callbacks.
+    wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
+    let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
+
+    // Shard reassignment: stop 2 executors, allow reassignment, then start them back.
+    deps.stop_random_worker_executors(cluster_control, 2).await;
+    // Give the shard manager time to detect executor loss and reassign shards.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    deps.start_random_worker_executors(cluster_control, 2).await;
+
+    // Wait for the worker to become usable again after shard movement.
+    user.wait_for_statuses(
+        &worker_id,
+        &[AgentStatus::Idle, AgentStatus::Running],
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    for i in 3..6 {
+        user.invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!(format!("G{i}"), format!("Item {i}")),
+        )
+        .await
+        .unwrap();
+    }
+
+    let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
+    let oplog = user
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await
+        .unwrap();
+    let mut expected_completions = Vec::new();
+    let mut fn_names = Vec::new();
+    for entry in oplog {
+        match entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(start) => {
+                use golem_common::model::oplog::PublicAgentInvocation;
+                fn_names.push(match start.invocation {
+                    PublicAgentInvocation::AgentInitialization(_) => {
+                        "agent-initialization".to_string()
+                    }
+                    PublicAgentInvocation::AgentMethodInvocation(method) => method.method_name,
+                    other => panic!("unexpected source invocation: {other:?}"),
+                });
+            }
+            PublicOplogEntry::AgentInvocationFinished(_) => {
+                expected_completions.push(entry.oplog_index.as_u64());
+            }
+            _ => {}
+        }
+    }
+    // A processor may receive the start and finish in different instances. Its
+    // resident name map is not authoritative; compare delivered finish indices
+    // against the source history, including duplicates and missing completions.
+    let mut delivered_completions: Vec<_> = batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .invocations
+                .iter()
+                .map(|invocation| invocation.oplog_index)
+        })
+        .collect();
+    expected_completions.sort_unstable();
+    delivered_completions.sort_unstable();
+    assert_eq!(expected_completions.len(), 7);
+    assert_eq!(delivered_completions, expected_completions);
+    // Exactly-once: exactly 1 init + 6 adds, no duplicates across shard reassignment.
+    assert_eq!(
+        fn_names
+            .iter()
+            .filter(|f| f.as_str() == "agent-initialization")
+            .count(),
+        1
+    );
+    assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 6);
+    assert_unique_oplog_indices(&batches);
+}
+
+// ========================================================================
+// I2: Shard move with in-flight batch
+// ========================================================================
+
+#[test]
+#[timeout(240000)]
+#[flaky(3)]
+async fn oplog_processor_shard_move_inflight(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    deps.reset(cluster_control, 16).await;
+
+    let user = deps.admin().await;
+    let (_, env) = user.app_and_env().await.unwrap();
+    let client = user.registry_service_client().await;
+
+    let (callback_url, received, _server) = start_callback_server().await;
+
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await
+        .unwrap();
+    let plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: format!("oplog-processor-{}", Uuid::new_v4()),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin.id,
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut params = BTreeMap::new();
+    params.insert("callback-url".to_string(), callback_url);
+
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .with_parametrized_plugin("Repository", &grant.id, 0, params)
+        .store()
+        .await
+        .unwrap();
+
+    let repo_id = agent_key!("Repository", "worker1");
+    let worker_id = user
+        .start_agent(&component.id, repo_id.clone())
+        .await
+        .unwrap();
+
+    for i in 0..2 {
+        user.invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!(format!("G{i}"), format!("Item {i}")),
+        )
+        .await
+        .unwrap();
+    }
+
+    wait_for_oplog_completions(&user, &worker_id, 3, Duration::from_secs(120), &received).await;
+
+    // Stop all executors immediately — before flush timer fires
+    deps.stop_all_worker_executors(cluster_control).await;
+    deps.start_all_worker_executors(cluster_control).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    user.wait_for_statuses(
+        &worker_id,
+        &[AgentStatus::Idle, AgentStatus::Running],
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    for i in 2..4 {
+        user.invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!(format!("G{i}"), format!("Item {i}")),
+        )
+        .await
+        .unwrap();
+    }
+
+    wait_for_oplog_completions(&user, &worker_id, 5, Duration::from_secs(120), &received).await;
+    let batches = wait_for_invocations(&received, 5, Duration::from_secs(120)).await;
+    let oplog = user
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await
+        .unwrap();
+    let mut expected = Vec::new();
+    let mut fn_names = Vec::new();
+    for entry in oplog {
+        match entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(start) => {
+                use golem_common::model::oplog::PublicAgentInvocation;
+                fn_names.push(match start.invocation {
+                    PublicAgentInvocation::AgentInitialization(_) => {
+                        "agent-initialization".to_string()
+                    }
+                    PublicAgentInvocation::AgentMethodInvocation(method) => method.method_name,
+                    other => panic!("unexpected source invocation: {other:?}"),
+                });
+            }
+            PublicOplogEntry::AgentInvocationFinished(_) => {
+                expected.push(entry.oplog_index.as_u64());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(expected.len(), 5);
+    let mut delivered: Vec<_> = batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .invocations
+                .iter()
+                .map(|invocation| invocation.oplog_index)
+        })
+        .collect();
+    // A shard move can split start/finish across plugin instances, losing the
+    // callback's function name. Completion indices still identify every delivery.
+    expected.sort_unstable();
+    delivered.sort_unstable();
+    assert_eq!(
+        delivered, expected,
+        "Missing or duplicate completions: {batches:?}"
+    );
+    assert_eq!(
+        fn_names
+            .iter()
+            .filter(|f| f.as_str() == "agent-initialization")
+            .count(),
+        1
+    );
+    assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 4);
+}
+
+// ========================================================================
+// I3: Locality recovery — delivery continues after shard reassignment
+// ========================================================================
+
+#[test]
+#[timeout(480000)]
+#[flaky(5)]
+async fn oplog_processor_locality_recovery(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    deps.reset(cluster_control, 16).await;
+
+    let user = deps.admin().await;
+    let (_, env) = user.app_and_env().await.unwrap();
+    let client = user.registry_service_client().await;
+
+    let (callback_url, received, _server) = start_callback_server().await;
+
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await
+        .unwrap();
+    let plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: format!("oplog-processor-{}", Uuid::new_v4()),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin.id,
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut params = BTreeMap::new();
+    params.insert("callback-url".to_string(), callback_url);
+
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .with_parametrized_plugin("Repository", &grant.id, 0, params)
+        .store()
+        .await
+        .unwrap();
+
+    let repo_id = agent_key!("Repository", "worker1");
+    let worker_id = user
+        .start_agent(&component.id, repo_id.clone())
+        .await
+        .unwrap();
+
+    for i in 0..3 {
+        user.invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!(format!("G{i}"), format!("Item {i}")),
+        )
+        .await
+        .unwrap();
+    }
+
+    // Two-phase setup gate: wait for oplog persistence, then for callbacks
+    wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
+    let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
+
+    deps.stop_random_worker_executors(cluster_control, 2).await;
+    // Give the shard manager time to detect executor loss and reassign shards
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    deps.start_random_worker_executors(cluster_control, 2).await;
+
+    user.wait_for_statuses(
+        &worker_id,
+        &[AgentStatus::Idle, AgentStatus::Running],
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+
+    for i in 3..6 {
+        user.invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!(format!("G{i}"), format!("Item {i}")),
+        )
+        .await
+        .unwrap();
+    }
+
+    let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
+    let fn_names = extract_function_names(&batches);
+    // Exactly-once: exactly 1 init + 6 adds, no duplicates after locality recovery.
+    assert_eq!(
+        fn_names
+            .iter()
+            .filter(|f| f.as_str() == "agent-initialization")
+            .count(),
+        1
+    );
+    assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 6);
+    assert_unique_oplog_indices(&batches);
+}
+
+// ========================================================================
+// I4: End-to-end stress with crashes
+// ========================================================================
+
+#[test]
+#[timeout(360000)]
+#[flaky(5)]
+async fn oplog_processor_stress_with_crashes(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) {
+    deps.reset(cluster_control, 16).await;
+
+    let user = deps.admin().await;
+    let (_, env) = user.app_and_env().await.unwrap();
+    let client = user.registry_service_client().await;
+
+    let (callback_url, received, _server) = start_callback_server().await;
+
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await
+        .unwrap();
+    let plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: format!("oplog-processor-{}", Uuid::new_v4()),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: plugin.id,
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut params = BTreeMap::new();
+    params.insert("callback-url".to_string(), callback_url);
+
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .with_parametrized_plugin("Repository", &grant.id, 0, params)
+        .store()
+        .await
+        .unwrap();
+
+    let repo_id = agent_key!("Repository", "worker1");
+    let worker_id = user
+        .start_agent(&component.id, repo_id.clone())
+        .await
+        .unwrap();
+
+    for i in 0..20 {
+        user.invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!(format!("G{i}"), format!("Item {i}")),
+        )
+        .await
+        .unwrap();
+
+        // Crash at iteration 7
+        if i == 7 {
+            info!("I4: Triggering simulated crash at iteration {i}");
+            user.simulated_crash(&worker_id).await.unwrap();
+            user.wait_for_statuses(
+                &worker_id,
+                &[AgentStatus::Idle, AgentStatus::Running],
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+        }
+
+        // Stop/start executor at iteration 14
+        if i == 14 {
+            info!("I4: Stopping/starting executor at iteration {i}");
+            deps.stop_random_worker_executors(cluster_control, 1).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            deps.start_random_worker_executors(cluster_control, 1).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            user.wait_for_statuses(
+                &worker_id,
+                &[AgentStatus::Idle, AgentStatus::Running],
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    // Exactly-once: exactly 1 init + 20 adds, no duplicates despite crash + executor restart.
+    let batches = wait_for_invocations(&received, 21, Duration::from_secs(120)).await;
+    let fn_names = extract_function_names(&batches);
+    assert_eq!(
+        fn_names
+            .iter()
+            .filter(|f| f.as_str() == "agent-initialization")
+            .count(),
+        1
+    );
+    assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 20);
+    assert_unique_oplog_indices(&batches);
+}
+
+#[cfg(unix)]
+mod unix {
+    use super::*;
+    use golem_common::model::agent::OwnedAgentId;
+    use golem_common::schema::SchemaValue;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout(360000)]
+    // Not `#[flaky]`, unlike the scenarios above: what this pins is that a duplicate never
+    // happens, and a retry would hide one that only happens some of the time.
+    async fn an_executor_paused_until_its_shards_move_cannot_finish_the_invocations_it_started(
+        deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        _tracing: &Tracing,
+    ) {
+        // Under the executor's `suspend_after` (10s by default), so the sleep runs in flight instead
+        // of suspending the agent: the executors freeze mid-invocation, which is the case a lease
+        // alone cannot stop - a frozen executor wakes up still holding work it can try to finish.
+        const DELAY_MILLIS: u64 = 8_000;
+
+        deps.reset(cluster_control, 16).await;
+        let admin = deps.admin().await;
+        let (_, env) = admin.app_and_env().await.unwrap();
+        let component = admin
+            .component(&env.id, "it_agent_counters_release")
+            .name("it:agent-counters")
+            .store()
+            .await
+            .unwrap();
+
+        let mut agents = Vec::new();
+        for i in 1..=8 {
+            let parsed_agent_id = agent_key!("InstantiationGrowthCounter", format!("fenced-{i}"));
+            let agent_id = admin
+                .start_agent(&component.id, parsed_agent_id.clone())
+                .await
+                .unwrap();
+            agents.push((parsed_agent_id, agent_id));
+        }
+
+        // Read before anything is in flight, so that connecting does not eat into the delay the
+        // executors have to be frozen inside.
+        let pool = match deps.rdb().info() {
+            DbInfo::Postgres(pg) => sqlx::PgPool::connect(&pg.public_connection_string())
+                .await
+                .expect("Failed to connect to Postgres"),
+            _ => panic!("this test only implements reading the stored owning epochs from Postgres"),
+        };
+        let mut initial_epochs = Vec::new();
+        for (parsed_agent_id, agent_id) in &agents {
+            let epoch = stored_owning_epoch(&pool, agent_id)
+                .await
+                .unwrap_or_else(|| {
+                    panic!("{parsed_agent_id}: the owning epoch is recorded before the first entry")
+                });
+            initial_epochs.push(epoch);
+        }
+
+        let mut invocations = JoinSet::new();
+        for (parsed_agent_id, _) in &agents {
+            let user = deps.admin().await;
+            let component = component.clone();
+            let parsed_agent_id = parsed_agent_id.clone();
+            invocations.spawn(
+                async move {
+                    let result = user
+                        .invoke_and_await_agent_with_key(
+                            &component,
+                            &parsed_agent_id,
+                            &IdempotencyKey::fresh(),
+                            "delayed_increment",
+                            data_value!(DELAY_MILLIS),
+                        )
+                        .await;
+                    (parsed_agent_id, result)
+                }
+                .in_current_span(),
+            );
+        }
+
+        // Every invocation is inside its sleep now, on whichever executor owns its agent. Freezing
+        // all executors but one leaves the survivor as the only one to take their shards over, so
+        // nothing here needs to know which executor owned which agent.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let started = cluster_control.started_indices().await;
+        let (survivor, frozen) = started
+            .split_first()
+            .expect("the reset starts every executor");
+        info!("Pausing worker executors {frozen:?}, keeping {survivor}");
+        for idx in frozen {
+            cluster_control.pause(*idx).await;
+        }
+
+        // Long enough for the shard manager to have taken the frozen executors' shards away and
+        // granted them to the survivor at a higher epoch, so that it recovers and finishes their
+        // invocations itself, and past the delay, so that the frozen executors' own sleeps are over
+        // the moment they wake. What normally moves the shards is the shard manager's health check,
+        // which unregisters an executor once its probes and their retries have gone unanswered,
+        // usually well before its lease runs out; and the worker service's keep-alive drops the
+        // calls stuck on a frozen executor, so that they are retried against the new owner. The
+        // lease is only the upper bound on the move: at the default 60s, renewed every 20s and
+        // reaped on a 20s tick, an unrenewed lease is gone within 80s of the pause. That bound
+        // keeps a thawed executor from waking up as the owner; it does not stretch the callers'
+        // retries, which count on the health check.
+        tokio::time::sleep(Duration::from_secs(90)).await;
+
+        // Thawed, the frozen executors carry on from exactly where they stopped, still holding
+        // invocations the survivor now owns. For each one, either the executor gives the agent up
+        // when it re-registers, or it finishes the sleep first and the fence refuses its write.
+        // Which of the two each agent took is a race this cannot steer, and both are safe only
+        // because the survivor recorded a higher epoch first, which the epoch check below asserts.
+        // The refusal itself is pinned deterministically by golem-worker-executor's oplog and
+        // indexed-storage tests; in a live cluster it is visible as
+        // `oplog_epoch_fence_total{op="append",outcome="refused"}`.
+        info!("Resuming worker executors {frozen:?}");
+        for idx in frozen {
+            cluster_control.resume(*idx).await;
+        }
+
+        while let Some(joined) =
+            tokio::time::timeout(Duration::from_secs(180), invocations.join_next())
+                .await
+                .expect("Timed out waiting for the invocations to finish")
+        {
+            let (parsed_agent_id, result) = joined.unwrap();
+            let value = result
+                .unwrap_or_else(|err| panic!("{parsed_agent_id}: invocation failed: {err:?}"))
+                .into_return_value()
+                .unwrap_or_else(|| panic!("{parsed_agent_id}: expected a return value"));
+            assert_eq!(
+                value,
+                SchemaValue::U32(1),
+                "{parsed_agent_id}: the delayed increment must be applied exactly once"
+            );
+        }
+
+        let mut owner_changed = false;
+        for ((parsed_agent_id, agent_id), initial) in agents.iter().zip(&initial_epochs) {
+            let current = stored_owning_epoch(&pool, agent_id)
+                .await
+                .unwrap_or_else(|| {
+                    panic!("{parsed_agent_id}: the owning epoch is no longer recorded")
+                });
+            assert!(
+                current >= *initial,
+                "{parsed_agent_id}: the stored epoch went down from {initial} to {current}"
+            );
+            owner_changed |= current > *initial;
+        }
+        pool.close().await;
+        assert!(
+            owner_changed,
+            "no agent's shard changed owner during the test, so the run exercised neither the \
+             give-up nor the fence"
+        );
+
+        assert_every_started_executor_serves(cluster_control, "while the invocations finished")
+            .await;
+
+        for (parsed_agent_id, agent_id) in &agents {
+            assert_eq!(
+                count_completions_of(&admin, agent_id, "delayed_increment").await,
+                1,
+                "{parsed_agent_id}: exactly one executor may record the invocation's completion"
+            );
+            // The agent's state agrees: one increment from the delayed call, one from this.
+            let next = admin
+                .invoke_and_await_agent(&component, parsed_agent_id, "increment", data_value!())
+                .await
+                .unwrap()
+                .into_return_value()
+                .unwrap_or_else(|| panic!("{parsed_agent_id}: expected a return value"));
+            assert_eq!(
+                next,
+                SchemaValue::U32(2),
+                "{parsed_agent_id}: the delayed increment must not have been applied twice"
+            );
+        }
+
+        // Again after the follow-up calls: they are the first new traffic after the thaw, and the
+        // first chance for a re-registered executor to recover agents on a shard it was given back.
+        assert_every_started_executor_serves(
+            cluster_control,
+            "while the agents were invoked again",
+        )
+        .await;
+    }
+
+    /// Asserts that no started executor has died: a write the fence let through would land in an
+    /// oplog the survivor is writing too, and a conflicting append there is fatal to the executor
+    /// that makes it - which can be the rightful owner. Checked through the health endpoint rather
+    /// than process liveness: an aborting process stays "running" until the OS has finished
+    /// writing its crash report, which can outlast this test. Each call is a single probe, so it
+    /// only covers what happened before it.
+    async fn assert_every_started_executor_serves(
+        cluster_control: &WorkerExecutorClusterControlStub,
+        during: &str,
+    ) {
+        for idx in cluster_control.started_indices().await {
+            assert!(
+                cluster_control.is_serving(idx).await,
+                "worker executor {idx} stopped serving {during}"
+            );
+        }
+    }
+
+    /// The owning epoch the executors' indexed storage holds for `agent_id`'s oplog. Read from the
+    /// storage itself because the public oplog does not carry the shard epoch.
+    async fn stored_owning_epoch(pool: &sqlx::PgPool, agent_id: &OwnedAgentId) -> Option<i64> {
+        sqlx::query_scalar(
+            "SELECT epoch FROM golem_worker_executor_indexed.indexed_key_epoch \
+             WHERE namespace = 'durable-worker-oplog' AND env = $1 AND agent = $2",
+        )
+        .bind(agent_id.environment_id.0)
+        .bind(agent_id.agent_id.as_uuid())
+        .fetch_optional(pool)
+        .await
+        .expect("Failed to read indexed_key_epoch")
+    }
+
+    /// Counts the completions `agent_id`'s oplog records for `method`. Scoped to one method on
+    /// purpose: an agent's own initialization completes asynchronously after `start_agent` returns,
+    /// so any count taken over every method races it.
+    async fn count_completions_of(
+        user: &impl TestDsl,
+        agent_id: &OwnedAgentId,
+        method: &str,
+    ) -> usize {
+        user.get_oplog(agent_id, OplogIndex::INITIAL)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::AgentInvocationFinished(params)
+                        if params.method_name.as_deref() == Some(method)
+                )
+            })
+            .count()
+    }
+}

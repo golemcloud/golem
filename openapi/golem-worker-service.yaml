@@ -2449,7 +2449,7 @@ paths:
     post:
       tags:
       - Agent
-      summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
+      summary: Invoke a tool on an existing agent or a fresh component baseline owner
       description: |-
         Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
@@ -2879,13 +2879,15 @@ paths:
     get:
       tags:
       - Invocation
-      summary: Find the invocations that the caller started on an agent with an idempotency key
+      summary: Find the invocations that the caller started with an idempotency key
       description: |-
         The key is matched in the caller's own idempotency scope, against every method and tool
         command the agent ran, including those a later revision removed. A removed method is
         found only while one of its invocations has the method name outside an external payload;
         otherwise pass `operation`. A caller without a scope, and a key used through an HTTP
         route, find nothing. No match is `404`.
+        With `tool`, match each currently deployed command, or only `command` when given.
+        With both `agent` and `tool`, match hosted tool invocations on that agent.
       parameters:
       - name: environment_id
         schema:
@@ -2901,7 +2903,23 @@ paths:
           format: uuid
         in: query
         description: The agent ID
-        required: true
+        required: false
+        deprecated: false
+        explode: true
+      - name: tool
+        schema:
+          type: string
+        in: query
+        description: The tool name; with an agent, finds invocations hosted on that agent
+        required: false
+        deprecated: false
+        explode: true
+      - name: command
+        schema:
+          type: string
+        in: query
+        description: Only this command path; without it, finds every command of the tool
+        required: false
         deprecated: false
         explode: true
       - name: operation
@@ -6554,7 +6572,7 @@ components:
       properties:
         invocationId:
           type: string
-          description: '`<agent ID>.<UUID>`'
+          description: '`<agent ID>.<UUID>` or `<tool name>.<UUID>`'
         agentId:
           type: string
           format: uuid
@@ -6783,14 +6801,13 @@ components:
       enum:
       - await
       - schedule
-      - lookup
     NativeToolInvocationRequest:
       type: object
       title: NativeToolInvocationRequest
       description: |-
         Select exactly one target: `agentId` for an existing real owner, or `componentId`
-        for a fresh ephemeral owner using that deployed component's baseline without constructing an agent.
-        Input is required for await and schedule, and forbidden for lookup.
+        for a fresh owner using that deployed component's baseline without constructing an agent.
+        Component tools use durable owners; host tools use ephemeral owners. Input is required.
       required:
       - toolName
       - commandPath
@@ -6819,9 +6836,12 @@ components:
       type: object
       title: NativeToolInvocationResponse
       required:
+      - invocationId
       - agentId
       - idempotencyKey
       properties:
+        invocationId:
+          type: string
         agentId:
           type: string
           format: uuid
@@ -7144,12 +7164,13 @@ components:
       description: |-
         Authoritative kind of an execution owner.
 
-        This is persisted at creation time. Owners other than component agents have the
-        reserved type tag, which tells no kind apart, so only this value grants their authority.
+        This is persisted at creation time. External-tool and oplog-processor owners share the
+        reserved type tag, so only this value grants their authority.
       enum:
       - component-agent
       - ephemeral-external-tool
       - oplog-processor
+      - standalone-tool
     Pair:
       type: object
       title: Pair
@@ -9423,6 +9444,26 @@ components:
             $ref: '#/components/schemas/PublicAttribute'
         kind:
           $ref: '#/components/schemas/PublicSpanKind'
+    PublicStandaloneToolInvocation:
+      type: object
+      title: PublicStandaloneToolInvocation
+      required:
+      - toolName
+      - commandPath
+      - invocationId
+      - caller
+      properties:
+        toolName:
+          type: string
+        commandPath:
+          type: array
+          items:
+            type: string
+        invocationId:
+          type: string
+          format: uuid
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
     PublicTokenProvenance:
       type: object
       title: PublicTokenProvenance
@@ -12534,6 +12575,8 @@ components:
           format: uuid
         neverLive:
           type: boolean
+        standaloneTool:
+          $ref: '#/components/schemas/PublicStandaloneToolInvocation'
     r#CreateResourceParams:
       type: object
       title: r#CreateResourceParams

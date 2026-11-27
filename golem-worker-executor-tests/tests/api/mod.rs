@@ -3253,6 +3253,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             shard_ids: vec![shard],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -3282,6 +3283,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     );
     let assigned = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,
@@ -3306,6 +3308,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     faults.clear();
     let assigned = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,
@@ -10009,6 +10012,16 @@ async fn owner_load_restores_lost_invocation_wake(
 
     #[async_trait]
     impl SchedulerStorage for LoseFirstWake {
+        async fn reschedule(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+            due: jiff::Timestamp,
+            now: jiff::Timestamp,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.reschedule(id, owner, due, now).await
+        }
+
         async fn insert(
             &self,
             id: ScheduleId,
@@ -10028,6 +10041,23 @@ async fn owner_load_restores_lost_invocation_wake(
 
         async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
             self.inner.cancel(id).await
+        }
+
+        async fn get_action(
+            &self,
+            id: &ScheduleId,
+        ) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+            self.inner.get_action(id).await
+        }
+
+        async fn replace_action(
+            &self,
+            id: &ScheduleId,
+            expected: &[u8],
+            action: &[u8],
+            due: jiff::Timestamp,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.replace_action(id, expected, action, due).await
         }
 
         async fn claim_due(
@@ -12556,6 +12586,7 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -12576,6 +12607,7 @@ async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
         .client
         .clone()
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),
                 epoch: 0,
@@ -12813,6 +12845,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             shard_ids: vec![shard],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -12838,6 +12871,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             async move {
                 client
                     .assign_shards(AssignShardsRequest {
+                        executor_count: 1,
                         shard_epochs: vec![ShardEpochEntry {
                             shard_id: Some(shard),
                             epoch: 0,
@@ -12859,6 +12893,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             shard_ids: vec![shard],
             revision: 3,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -13174,6 +13209,16 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
 
     #[async_trait]
     impl SchedulerStorage for WakeAfterArming {
+        async fn reschedule(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+            due: jiff::Timestamp,
+            now: jiff::Timestamp,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.reschedule(id, owner, due, now).await
+        }
+
         async fn insert(
             &self,
             id: ScheduleId,
@@ -13186,6 +13231,23 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
 
         async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
             self.inner.cancel(id).await
+        }
+
+        async fn get_action(
+            &self,
+            id: &ScheduleId,
+        ) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+            self.inner.get_action(id).await
+        }
+
+        async fn replace_action(
+            &self,
+            id: &ScheduleId,
+            expected: &[u8],
+            action: &[u8],
+            due: jiff::Timestamp,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.replace_action(id, expected, action, due).await
         }
 
         async fn claim_due(
@@ -13679,12 +13741,16 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
     ] {
         let mut fresh = lookup(fingerprint);
         fresh.mode = mode as i32;
+        fresh.component_id = Some(component.id.into());
         if let Some(tool) = fresh.external_tool.as_mut() {
             tool.fresh_owner = true;
         }
         let fresh = answer(executor.invoke_agent_session(fresh).await);
         assert!(
-            fresh.contains("VALIDATION") && fresh.contains("fresh external tool owner"),
+            fresh.contains("VALIDATION")
+                && fresh.contains(
+                    "a fresh external tool owner cannot have an expected agent fingerprint",
+                ),
             "{mode:?}: {fresh}"
         );
     }

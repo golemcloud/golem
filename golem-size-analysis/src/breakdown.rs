@@ -20,7 +20,7 @@ pub enum Bucket {
     UserCode,
     /// The Scala.js bundle, which has no finer attribution.
     Bundle,
-    /// The data that pre-initialization (Wizer) adds to the JS component.
+    /// Initialized data growth beyond the source-bearing reference component.
     Snapshot,
     /// Bytes no symbol owns: the component wrapper, data segments, names and other metadata.
     Other,
@@ -105,13 +105,14 @@ fn data_bytes(file: &[u8]) -> anyhow::Result<u64> {
         .sum())
 }
 
-/// The Wizer snapshot of a JS component: the data-section growth of the preinitialized
-/// component over its `.dynamic.wasm` input. Other sections, such as a stripped `name` section,
-/// do not count, so this is not the size difference of an `optimized` and a `quick` build.
+/// The initialized data growth relative to a guest with the source injected as a reference.
+/// The reference need not be a build intermediate: initializer-input builds pass the source
+/// separately. This excludes source storage already attributed to the bundle, not all bytes
+/// physically written by Wizer. Other sections, such as stripped names, do not count.
 pub fn js_snapshot_bytes(dynamic: &[u8], preinitialized: &[u8]) -> anyhow::Result<u64> {
     let (before, after) = (data_bytes(dynamic)?, data_bytes(preinitialized)?);
     after.checked_sub(before).with_context(|| {
-        format!("the preinitialized component has less data ({after}) than its input ({before})")
+        format!("the preinitialized component has less data ({after}) than its injection reference ({before})")
     })
 }
 
@@ -119,7 +120,7 @@ pub fn js_snapshot_bytes(dynamic: &[u8], preinitialized: &[u8]) -> anyhow::Resul
 pub struct JsComponent<'a> {
     /// The prebuilt guest the bundle was injected into (`agent_guest.wasm`).
     pub guest: &'a [u8],
-    /// The guest with the bundle injected (`.dynamic.wasm`).
+    /// A reference constructed by injecting the bundle into the guest.
     pub dynamic: &'a [u8],
     /// The uploaded file: the preinitialized component, or `dynamic` itself when the preset does
     /// not pre-initialize.
@@ -128,17 +129,9 @@ pub struct JsComponent<'a> {
 
 impl JsComponent<'_> {
     fn bundle_and_snapshot(&self) -> anyhow::Result<(u64, u64)> {
-        use wasm_encoder::reencode::{ReencodeComponent, RoundtripReencoder};
-
-        // Injection re-encodes the guest and removes padded instruction operands. Compare
-        // the same encoding on both sides so those runtime savings do not reduce the bundle.
-        let mut guest = wasm_encoder::Component::new();
-        RoundtripReencoder
-            .parse_component(&mut guest, wasmparser::Parser::new(0), self.guest)
-            .context("failed to re-encode the JS guest")?;
-        let bundle = (self.dynamic.len() as u64)
-            .checked_sub(guest.finish().len() as u64)
-            .context("the injected component is smaller than its re-encoded guest")?;
+        let bundle = data_bytes(self.dynamic)?
+            .checked_sub(data_bytes(self.guest)?)
+            .context("the injection reference has less data than its guest")?;
         let snapshot = if self.uploaded == self.dynamic {
             0
         } else {
@@ -154,7 +147,7 @@ impl JsComponent<'_> {
     }
 }
 
-/// TypeScript and Effect: the guest is the runtime; the bytes the injection added are split into
+/// TypeScript and Effect: the guest is the runtime; the data bytes the injection added are split into
 /// SDK, dependencies and user code in proportion to the rollup module map (module id to rendered
 /// length); the snapshot is the data growth from pre-initialization. The uploaded file's other
 /// bytes, such as a stripped `name` section, are counted against the runtime.
@@ -688,9 +681,10 @@ mod tests {
 
     #[test]
     fn js_bundle_is_split_by_module_map_and_kept_out_of_the_runtime() {
-        let guest = wrap(&[js_core(1000, "runtime")]);
+        let guest = wrap(&[js_core(1000, &"runtime".repeat(300))]);
         let dynamic = wrap(&[js_core(1600, "runtime")]);
         let uploaded = wrap(&[js_core(2000, "r")]);
+        assert!(guest.len() > dynamic.len(), "names are not bundle storage");
         let module_map = BTreeMap::from([
             ("src/main.ts".to_string(), 300),
             (
@@ -709,7 +703,7 @@ mod tests {
         };
         let breakdown = js_breakdown(&component, &module_map).unwrap();
 
-        let bundle = (dynamic.len() - guest.len()) as u64;
+        let bundle = 600;
         assert_eq!(breakdown.bucket(Bucket::Snapshot), 400);
         assert_eq!(breakdown.bucket(Bucket::UserCode), bundle / 2);
         assert_eq!(breakdown.bucket(Bucket::Sdk), bundle / 3);
@@ -778,7 +772,7 @@ mod tests {
         let guest = wrap(&[padded.finish()]);
         let canonical = wrap(&[canonical.finish()]);
         let mut dynamic = canonical.clone();
-        // A seven-byte custom section distinguishes added bytes from encoding savings.
+        // Custom sections and encoding savings both belong to the runtime, not the bundle.
         dynamic.extend(crate::sections::tests::section(0, &[0, 1, 2, 3, 4]));
         assert!(dynamic.len() < guest.len());
         let component = JsComponent {
@@ -788,12 +782,12 @@ mod tests {
         };
         let map = BTreeMap::from([("src/main.ts".into(), 1)]);
         let breakdown = js_breakdown(&component, &map).unwrap();
-        assert_eq!(breakdown.bucket(Bucket::UserCode), 7);
-        assert_eq!(breakdown.bucket(Bucket::Runtime), canonical.len() as u64);
+        assert_eq!(breakdown.bucket(Bucket::UserCode), 0);
+        assert_eq!(breakdown.bucket(Bucket::Runtime), dynamic.len() as u64);
         assert_eq!(breakdown.bucket(Bucket::Snapshot), 0);
         assert_eq!(
             scala_breakdown(&component).unwrap().bucket(Bucket::Bundle),
-            7
+            0
         );
     }
 

@@ -1010,17 +1010,6 @@ impl TestContext {
         child
     }
 
-    /// Spawns a long-running golem-cli command without waiting for any of its output.
-    fn cli_process<I, S>(&self, command_args: I) -> Child
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let (child, stdout) = self.spawn_cli_process(command_args);
-        forward_stdout(stdout);
-        child
-    }
-
     /// Spawns golem-cli, forwards its stderr and returns its stdout lines.
     fn spawn_cli_process<I, S>(
         &self,

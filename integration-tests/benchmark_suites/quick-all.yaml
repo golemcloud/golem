@@ -3,6 +3,7 @@
 name: quick-all
 benchmarks:
   - name: cold-start-unknown-small
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 1, 5, 10 ]
@@ -10,6 +11,7 @@ benchmarks:
     disableCompilationCache: true
 
   - name: cold-start-unknown-medium
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 1, 5, 10 ]
@@ -17,120 +19,140 @@ benchmarks:
     disableCompilationCache: true
 
   - name: cold-start-unknown-small
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 1, 5, 10 ]
     length: [ 2 ]
 
   - name: cold-start-unknown-medium
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 1, 5, 10 ]
     length: [ 5 ]
 
   - name: latency-small
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 100, 500, 1000 ]
     length: [ 2 ]
 
   - name: latency-medium
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 100, 500, 1000 ]
     length: [ 5 ]
 
   - name: sleep
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 10, 100, 500 ]
     length: [ 10000 ]
 
   - name: durability-overhead
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 10, 100, 1000 ]
     length: [ 5000 ]
 
   - name: throughput-echo
+    version: 3
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10, 100 ]
     length: [ 1000 ]
 
   - name: throughput-echo-aggregate
+    version: 3
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10, 100 ]
     length: [ 1000 ]
 
   - name: throughput-large-input
+    version: 3
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10 ]
     length: [ 100, 10000, 100000 ]
 
   - name: throughput-large-input-aggregate
+    version: 3
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10 ]
     length: [ 100, 10000, 100000 ]
 
   - name: throughput-cpu-intensive
+    version: 3
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10 ]
     length: [ 100 ]
 
   - name: throughput-cpu-intensive-aggregate
+    version: 3
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10 ]
     length: [ 100 ]
 
   - name: streaming-tool
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 1 ]
     length: [ 4 ]
 
   - name: streaming-rpc
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 1 ]
     length: [ 4 ]
 
   - name: streaming-rpc-history
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 2 ]
     length: [ 4 ]
 
   - name: streaming-rpc-cold-indexed
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 2 ]
     length: [ 4 ]
 
   - name: streaming-rpc-reconnect
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 2 ]
     length: [ 16 ]
 
   - name: streaming-rpc-recovery
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 2 ]
     length: [ 16 ]
 
   - name: streaming-rpc-recovery-siblings
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 2 ]
     length: [ 16 ]
 
   - name: streaming-rpc-recovery-nested
+    version: 1
     iterations: 1
     clusterSize: [ 1 ]
     size: [ 2 ]

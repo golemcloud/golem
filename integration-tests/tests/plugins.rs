@@ -550,8 +550,8 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         "the plugin must have a persisted target"
     );
     for target in &targets {
-        let metadata = user.get_worker_metadata(target).await?;
-        assert_eq!(metadata.owner_kind, OwnerKind::OplogProcessor);
+        // Processor IDs are not agent addresses in the public metadata API.
+        // Read the persisted owner identity from the target's Create entry instead.
         let target_oplog = user.get_oplog(target, OplogIndex::INITIAL).await?;
         let PublicOplogEntry::Create(parameters) = &target_oplog[0].entry else {
             panic!("processor target has no Create entry")

@@ -128,6 +128,9 @@ pub(super) fn pre_acceptance_rejection_reason(
     error: &WorkerExecutorError,
 ) -> InvocationRejectionReason {
     match error {
+        WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
+            InvocationRejectionReason::IdempotencyConflict
+        }
         WorkerExecutorError::InvalidRequest { details } => {
             if details.starts_with("IdempotencyConflict:") {
                 InvocationRejectionReason::IdempotencyConflict

@@ -322,6 +322,8 @@ async fn audit_2_deployed_duplicate_occurrences_use_distinct_keys_and_pass_opaqu
     let plaintext = "gol40-k1-audit-must-never-record-this-plaintext";
     fixture.environment.set_agent_secret(AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: fixture.context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["toolSecret".to_string()]),
         revision: AgentSecretRevision::INITIAL,

@@ -178,6 +178,18 @@ impl DeploymentService {
             .transpose()
     }
 
+    pub async fn resolve_tool_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        tool_name: &ToolName,
+    ) -> Result<Option<golem_common::model::type_id::TypeId>, DeploymentError> {
+        self.deployment_repo
+            .get_environment_tool_type_id(environment_id.0, tool_name.as_str())
+            .await?
+            .map(|row| row.into_model().map(|(_, _, id)| id).map_err(Into::into))
+            .transpose()
+    }
+
     pub async fn list_deployments(
         &self,
         environment_id: EnvironmentId,

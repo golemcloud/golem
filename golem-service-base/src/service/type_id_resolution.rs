@@ -16,8 +16,10 @@ use crate::clients::registry::{RegistryService, RegistryServiceError};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::tool::ToolName;
 use golem_common::model::type_id::{TypeId, TypeIdKind};
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -29,34 +31,43 @@ enum NameLookupError {
     Registry(RegistryServiceError),
 }
 
-/// Invalidation generations of cached values that a deployment makes stale.
+/// Invalidation generations of cached values grouped by a resource key.
 ///
 /// A fetch records [`Self::current`] before its registry call. A fetched value is valid only
 /// while [`Self::is_current`] holds for it, so a fetch that is in flight during an invalidation
-/// of its environment is dropped and repeated instead of keeping the old value.
-#[derive(Default)]
-pub struct InvalidationGenerations {
+/// of its resource is dropped instead of keeping the old value.
+pub struct InvalidationGenerations<K> {
     generation: AtomicU64,
-    invalidated_at: Mutex<HashMap<EnvironmentId, u64>>,
+    invalidated_at: Mutex<HashMap<K, u64>>,
     all_invalidated_at: AtomicU64,
 }
 
-impl InvalidationGenerations {
+impl<K> Default for InvalidationGenerations<K> {
+    fn default() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            invalidated_at: Mutex::new(HashMap::new()),
+            all_invalidated_at: AtomicU64::new(0),
+        }
+    }
+}
+
+impl<K: Eq + Hash> InvalidationGenerations<K> {
     /// The generation to record before a registry call.
     pub fn current(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
     }
 
-    /// Invalidates the environment's values and returns the new generation. Cached values of
-    /// the environment with an older generation are stale.
-    pub fn invalidate(&self, environment_id: EnvironmentId) -> u64 {
+    /// Invalidates the resource's values and returns the new generation. Cached values of
+    /// the resource with an older generation are stale.
+    pub fn invalidate(&self, key: K) -> u64 {
         let mut invalidated_at = self.invalidated_at.lock().unwrap();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        invalidated_at.insert(environment_id, generation);
+        invalidated_at.insert(key, generation);
         generation
     }
 
-    /// Invalidates the values of every environment and returns the new generation.
+    /// Invalidates the values of every resource and returns the new generation.
     pub fn invalidate_all(&self) -> u64 {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.all_invalidated_at
@@ -64,16 +75,16 @@ impl InvalidationGenerations {
         generation
     }
 
-    /// Whether a value of the environment fetched at `generation` is still valid.
-    pub fn is_current(&self, environment_id: EnvironmentId, generation: u64) -> bool {
-        let environment = self
+    /// Whether a value of the resource fetched at `generation` is still valid.
+    pub fn is_current(&self, key: K, generation: u64) -> bool {
+        let resource = self
             .invalidated_at
             .lock()
             .unwrap()
-            .get(&environment_id)
+            .get(&key)
             .copied()
             .unwrap_or(0);
-        generation >= environment.max(self.all_invalidated_at.load(Ordering::SeqCst))
+        generation >= resource.max(self.all_invalidated_at.load(Ordering::SeqCst))
     }
 }
 
@@ -90,8 +101,9 @@ impl InvalidationGenerations {
 pub struct TypeIdResolutionCache {
     registry_service: Arc<dyn RegistryService>,
     names: Cache<Key, (), Arc<(TypeIdKind, String)>, NameLookupError>,
+    tool_ids: Cache<(EnvironmentId, ToolName), (), TypeId, NameLookupError>,
     implementers: Cache<Key, (), FetchedImplementer, RegistryServiceError>,
-    generations: Arc<InvalidationGenerations>,
+    generations: Arc<InvalidationGenerations<EnvironmentId>>,
 }
 
 #[derive(Clone)]
@@ -109,6 +121,12 @@ impl TypeIdResolutionCache {
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
                 "type_id_names",
+            ),
+            tool_ids: Cache::new(
+                Some(capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::None,
+                "tool_type_ids",
             ),
             implementers: Cache::new(
                 Some(capacity),
@@ -142,6 +160,37 @@ impl TypeIdResolutionCache {
             .await;
         match result {
             Ok(names) => Ok(Some(names)),
+            Err(NameLookupError::Unassigned) => Ok(None),
+            Err(NameLookupError::Registry(error)) => Err(error),
+        }
+    }
+
+    /// The retained ID of a tool name. An unassigned name is not cached.
+    pub async fn tool_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        tool_name: &ToolName,
+    ) -> Result<Option<TypeId>, RegistryServiceError> {
+        let registry_service = self.registry_service.clone();
+        let name = tool_name.clone();
+        match self
+            .tool_ids
+            .get_or_insert_simple_spawned(
+                &(environment_id, tool_name.clone()),
+                move || async move {
+                    match registry_service
+                        .resolve_tool_type_id(environment_id, &name)
+                        .await
+                    {
+                        Ok(Some(id)) => Ok(id),
+                        Ok(None) => Err(NameLookupError::Unassigned),
+                        Err(error) => Err(NameLookupError::Registry(error)),
+                    }
+                },
+            )
+            .await
+        {
+            Ok(id) => Ok(Some(id)),
             Err(NameLookupError::Unassigned) => Ok(None),
             Err(NameLookupError::Registry(error)) => Err(error),
         }

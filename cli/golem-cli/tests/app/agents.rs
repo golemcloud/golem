@@ -1418,20 +1418,26 @@ async fn test_streaming_invocation_cli_end_to_end() {
             Duration::from_millis(25),
         )
         .await;
-    // A takeover attaches to the accepted invocation: the server answers with `InvocationReady`,
-    // which is not a new acceptance, so the takeover prints no event. Its effect is the
-    // revocation of the original attachment, while the takeover stays attached.
-    let mut takeover = ctx.cli_process([
-        cmd::AGENT,
-        cmd::INVOKE,
-        &takeover_agent,
-        "produce_byte_then_wait",
-        flag::FORMAT,
-        "json",
-        "--no-stream",
-        "--takeover-session",
-        takeover_checkpoint.to_str().unwrap(),
-    ]);
+    // The takeover revokes the original attachment and attaches to the same invocation. Its
+    // acceptance or readiness carries the output stream that the original attachment read, and
+    // the result that follows names that stream.
+    let mut takeover = ctx
+        .cli_process_after(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &takeover_agent,
+                "produce_byte_then_wait",
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+                "--takeover-session",
+                takeover_checkpoint.to_str().unwrap(),
+            ],
+            "\"kind\":\"result\"",
+            Duration::ZERO,
+        )
+        .await;
     assert!(
         !tokio::time::timeout(Duration::from_secs(40), original_attachment.wait())
             .await
@@ -4245,6 +4251,7 @@ async fn deploy_raw_output_tool(ctx: &mut TestContext) {
             pub trait RawOutput {
                 async fn emit(&self, stdout: OutputStream);
                 fn repeat(&self, text: String, count: u32) -> String;
+                fn length(&self, text: String) -> u32;
                 async fn flood(&self, stdout: OutputStream);
                 #[arg(diagnostics, channel = "stderr")]
                 async fn flood_diagnostics(&self, diagnostics: OutputStream);
@@ -4260,6 +4267,10 @@ async fn deploy_raw_output_tool(ctx: &mut TestContext) {
 
                 fn repeat(&self, text: String, count: u32) -> String {
                     text.repeat(count as usize)
+                }
+
+                fn length(&self, text: String) -> u32 {
+                    text.len() as u32
                 }
 
                 async fn flood(&self, mut stdout: OutputStream) {
@@ -4364,25 +4375,64 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
     let receipt = &document["response"];
     let owner: golem_common::model::AgentId =
         serde_json::from_value(receipt["agentId"].clone()).unwrap();
-    let owner = owner.to_string();
     let invocation_id = receipt["idempotencyKey"].as_str().unwrap();
     Uuid::parse_str(invocation_id).expect("the receipt contains the final invocation UUID");
     assert_ne!(invocation_id, "structured-cli-repeat");
+    let public_id = receipt["invocationId"]
+        .as_str()
+        .expect("scalar receipt invocation ID");
+    assert_eq!(public_id, format!("raw-output.{invocation_id}"));
+    let direct = ctx.cli(["invocation", "get", public_id]).await;
+    assert!(direct.success_or_dump());
+
+    let triggered = ctx
+        .cli([
+            "--format",
+            "json",
+            cmd::TOOL,
+            cmd::INVOKE,
+            "--component",
+            "tool-raw-stdout:provider",
+            "--trigger",
+            "raw-output",
+            "--",
+            "repeat",
+            "triggered",
+            "2",
+        ])
+        .await;
+    assert!(triggered.success_or_dump());
+    let trigger_receipt = triggered.stdout_json::<serde_json::Value>().pop().unwrap();
+    let trigger_id = trigger_receipt["response"]["invocationId"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        trigger_id,
+        format!(
+            "raw-output.{}",
+            trigger_receipt["response"]["idempotencyKey"]
+                .as_str()
+                .unwrap()
+        )
+    );
+    assert!(
+        ctx.cli(["invocation", "get", trigger_id])
+            .await
+            .success_or_dump()
+    );
 
     let lookup = ctx
         .cli_with_input(
             [
                 "--format",
                 "json",
-                cmd::TOOL,
-                cmd::INVOKE,
-                "--agent",
-                &owner,
-                "--lookup",
-                "--idempotency-key",
-                invocation_id,
+                "invocation",
+                "get",
+                "--tool",
                 "raw-output",
-                "--",
+                "--idempotency-key",
+                "structured-cli-repeat",
+                "--command",
                 "repeat",
             ],
             &[],
@@ -4394,6 +4444,70 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
         String::from_utf8_lossy(&lookup.stderr)
     );
     assert!(String::from_utf8_lossy(lookup.stdout()).contains("a ba ba b"));
+    let found: serde_json::Value = serde_json::from_slice(lookup.stdout()).unwrap();
+    assert_eq!(
+        found["summary"]["invocationId"],
+        format!("raw-output.{invocation_id}")
+    );
+    assert!(owner.type_id().is_some());
+    let second = ctx
+        .cli([
+            flag::YES,
+            cmd::TOOL,
+            cmd::INVOKE,
+            "--component",
+            "tool-raw-stdout:provider",
+            "--idempotency-key",
+            "structured-cli-repeat",
+            "raw-output",
+            "--",
+            "length",
+            "abcdef",
+        ])
+        .await;
+    assert!(second.success_or_dump());
+    let lookup = ctx
+        .cli([
+            "--format",
+            "json",
+            "invocation",
+            "get",
+            "--tool",
+            "raw-output",
+            "--idempotency-key",
+            "structured-cli-repeat",
+        ])
+        .await;
+    assert!(lookup.success_or_dump());
+    let found = lookup.stdout_json::<serde_json::Value>().pop().unwrap();
+    let matches = found["invocations"].as_array().unwrap();
+    assert_eq!(matches.len(), 2);
+    let operations = matches
+        .iter()
+        .map(|item| item["summary"]["operation"].as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        operations,
+        std::collections::HashSet::from(["tool:raw-output/repeat", "tool:raw-output/length"])
+    );
+    let removed = ctx
+        .cli([
+            cmd::TOOL,
+            cmd::INVOKE,
+            "--component",
+            "tool-raw-stdout:provider",
+            "raw-output",
+            "--lookup",
+        ])
+        .await;
+    assert!(!removed.success());
+    assert!(
+        removed
+            .stderr_text()
+            .contains("unexpected argument '--lookup'"),
+        "{}",
+        removed.stderr_text()
+    );
 
     let output = ctx
         .cli_with_input(

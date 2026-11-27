@@ -103,6 +103,41 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .map_err(SchedulerStorageError::from)
     }
 
+    async fn get_action(
+        &self,
+        schedule_id: &ScheduleId,
+    ) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+        let query = sqlx::query_as::<_, (Vec<u8>,)>(
+            "SELECT action FROM scheduled_actions WHERE schedule_id = ?;",
+        )
+        .bind(schedule_id.id.to_string());
+        self.pool
+            .with_ro("scheduler_storage", "get_action")
+            .fetch_optional_as(query)
+            .await
+            .map(|row| row.map(|(action,)| action))
+            .map_err(SchedulerStorageError::from)
+    }
+
+    async fn replace_action(
+        &self,
+        schedule_id: &ScheduleId,
+        expected_action: &[u8],
+        action: &[u8],
+        due_at: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let query = sqlx::query(
+            "UPDATE scheduled_actions SET action = ?, due_at_ms = ?, available_at_ms = ?, lease_owner = NULL, lease_until_ms = NULL, attempt_count = 0 WHERE schedule_id = ? AND action = ?;",
+        ).bind(action).bind(datetime_to_millis(due_at)).bind(datetime_to_millis(due_at))
+            .bind(schedule_id.id.to_string()).bind(expected_action);
+        self.pool
+            .with_rw("scheduler_storage", "replace_action")
+            .execute(query)
+            .await
+            .map(|result| result.rows_affected() == 1)
+            .map_err(SchedulerStorageError::from)
+    }
+
     async fn claim_due(
         &self,
         now: jiff::Timestamp,
@@ -237,6 +272,27 @@ impl SchedulerStorage for SqliteSchedulerStorage {
 
         self.pool
             .with_rw("scheduler_storage", "extend_lease")
+            .execute(query)
+            .await
+            .map(|result| result.rows_affected() == 1)
+            .map_err(SchedulerStorageError::from)
+    }
+
+    async fn reschedule(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+        due_at: jiff::Timestamp,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let query = sqlx::query("UPDATE scheduled_actions SET due_at_ms = ?, available_at_ms = ?, lease_owner = NULL, lease_until_ms = NULL WHERE schedule_id = ? AND lease_owner = ? AND lease_until_ms > ?;")
+            .bind(datetime_to_millis(due_at))
+            .bind(datetime_to_millis(due_at))
+            .bind(schedule_id.id.to_string())
+            .bind(lease_owner.to_string())
+            .bind(datetime_to_millis(now));
+        self.pool
+            .with_rw("scheduler_storage", "reschedule")
             .execute(query)
             .await
             .map(|result| result.rows_affected() == 1)

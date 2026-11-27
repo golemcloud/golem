@@ -164,6 +164,12 @@ async fn effect_duplex_websocket_crash_continuation(
         let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
             anyhow::bail!("missing acceptance");
         };
+        // A queued acceptance has no stream mappings yet; readiness carries them.
+        let accepted = tokio::time::timeout(
+            Duration::from_secs(10),
+            await_session_readiness(&mut responses, None, accepted),
+        )
+        .await??;
         let stream_id = accepted.stream_mappings[0]
             .handle
             .as_ref()

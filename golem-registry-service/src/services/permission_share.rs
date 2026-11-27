@@ -139,7 +139,11 @@ impl PermissionShareService {
                 )
                 .await
             {
-                Ok(record) => return Ok(record.try_into()?),
+                Ok(record) => {
+                    return Ok(record
+                        .signal_new_events_available(&self.registry_change_notifier)
+                        .try_into()?);
+                }
                 Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
                     if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
                 {

@@ -115,11 +115,17 @@ async fn invoke(ctx: &TestContext, environment: &str, agent: &str) {
     assert!(outputs.success_or_dump());
 }
 
+/// How long a CLI command or a tool call of these tests may take. It ends a stalled command well
+/// before the test times out, so the failure shows the tail of the server log.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// The JSON documents that the CLI prints for `args` with `--format json`.
 async fn cli_json(ctx: &TestContext, args: &[&str]) -> Vec<Value> {
     let mut command = args.to_vec();
     command.extend([flag::FORMAT, "json"]);
-    let outputs = ctx.cli(command).await;
+    let outputs = tokio::time::timeout(COMMAND_TIMEOUT, ctx.cli(command.clone()))
+        .await
+        .unwrap_or_else(|_| panic!("golem-cli {} did not end", command.join(" ")));
     assert!(outputs.success_or_dump());
     outputs.stdout_json()
 }
@@ -157,10 +163,13 @@ pub(super) async fn call(
     let Value::Object(arguments) = arguments else {
         panic!("tool arguments must be an object");
     };
-    client
-        .call_tool(CallToolRequestParams::new(tool.to_string()).with_arguments(arguments))
-        .await
-        .unwrap()
+    tokio::time::timeout(
+        COMMAND_TIMEOUT,
+        client.call_tool(CallToolRequestParams::new(tool.to_string()).with_arguments(arguments)),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the {tool} tool call did not end"))
+    .unwrap()
 }
 
 /// Sends a tool call that the test can cancel.

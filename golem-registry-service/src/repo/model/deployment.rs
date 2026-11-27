@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::agent_secrets::{
-    AgentSecretCreationRecord, AgentSecretRepoError, AgentSecretRevisionData,
-    AgentSecretRevisionRecord,
+    AgentSecretCreationRecord, AgentSecretDestinations, AgentSecretRepoError,
+    AgentSecretRevisionData, AgentSecretRevisionRecord,
 };
 use super::audit::DeletableRevisionAuditFields;
 use super::resource_definition::{ResourceDefinitionCreationArgs, ResourceDefinitionRepoError};
@@ -38,7 +38,7 @@ use golem_common::error_forwarding;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
-use golem_common::model::agent_secret::AgentSecretId;
+use golem_common::model::agent_secret::{AgentSecretId, AgentSecretOwner};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
@@ -1448,9 +1448,11 @@ impl DeploymentRevisionCreationRecord {
                     AgentSecretCreationRecord::new(
                         AgentSecretId::new(),
                         environment_id,
+                        AgentSecretOwner::Environment,
                         r.path,
                         r.secret_type,
                         r.secret_value,
+                        vec![],
                         actor,
                     )
                 })
@@ -1464,6 +1466,7 @@ impl DeploymentRevisionCreationRecord {
                         agent_secret_revision_data: Blob::new(AgentSecretRevisionData {
                             secret_value: Some(r.new_secret_value),
                         }),
+                        destinations: AgentSecretDestinations::Copy,
                         audit: DeletableRevisionAuditFields::new(actor.0),
                     })
                 })
@@ -1480,9 +1483,11 @@ impl DeploymentRevisionCreationRecord {
                     let create_record = AgentSecretCreationRecord::new(
                         AgentSecretId::new(),
                         environment_id,
+                        AgentSecretOwner::Environment,
                         r.path,
                         r.secret_type,
                         r.secret_value,
+                        vec![],
                         actor,
                     );
 

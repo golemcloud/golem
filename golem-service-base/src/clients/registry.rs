@@ -52,8 +52,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     revoke_card_response, update_worker_connection_limit_response,
 };
 use golem_api_grpc::proto::golem::registry::v1::{
-    GetGolemIssuerRequest, ResolveAgentTypeNameRequest, get_golem_issuer_response,
-    resolve_agent_type_name_response,
+    GetGolemIssuerRequest, ResolveAgentTypeNameRequest, ResolveToolTypeIdRequest,
+    get_golem_issuer_response, resolve_agent_type_name_response, resolve_tool_type_id_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -63,7 +63,8 @@ use golem_common::model::agent::{
     ResolvedAgentType,
 };
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevisionSelector,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
@@ -75,7 +76,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
-use golem_common::model::tool::ToolDeploymentState;
+use golem_common::model::tool::{ToolDeploymentState, ToolName};
 use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
@@ -376,6 +377,17 @@ pub trait RegistryService: Send + Sync {
         ))
     }
 
+    /// Resolves the retained ID of a tool name, including removed tools.
+    async fn resolve_tool_type_id(
+        &self,
+        _environment_id: EnvironmentId,
+        _tool_name: &ToolName,
+    ) -> Result<Option<TypeId>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "resolve_tool_type_id is not supported by this registry service",
+        ))
+    }
+
     /// Resolves a retained agent type name on every historical implementing component.
     async fn resolve_agent_type_name(
         &self,
@@ -417,9 +429,11 @@ pub trait RegistryService: Send + Sync {
     async fn get_agent_secret_revision(
         &self,
         _environment_id: EnvironmentId,
+        _owner: AgentSecretOwner,
         _agent_secret_id: AgentSecretId,
         _path: CanonicalAgentSecretPath,
-        _revision: AgentSecretRevision,
+        _selector: AgentSecretRevisionSelector,
+        _mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, RegistryServiceError> {
         Err(RegistryServiceError::internal_client_error(
             "get_agent_secret_revision is not supported by this registry service",
@@ -1523,6 +1537,32 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
+    async fn resolve_tool_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        tool_name: &ToolName,
+    ) -> Result<Option<TypeId>, RegistryServiceError> {
+        let tool_name = tool_name.to_string();
+        let response = self
+            .client
+            .call("resolve_tool_type_id", move |client| {
+                Box::pin(client.resolve_tool_type_id(ResolveToolTypeIdRequest {
+                    environment_id: Some(environment_id.into()),
+                    tool_name: tool_name.clone(),
+                }))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(resolve_tool_type_id_response::Result::Success(payload)) => payload
+                .type_id
+                .map(|id| TypeId::try_from(id).map_err(RegistryServiceError::internal_client_error))
+                .transpose(),
+            Some(resolve_tool_type_id_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
     async fn resolve_agent_type_name(
         &self,
         environment_id: EnvironmentId,
@@ -1665,17 +1705,31 @@ impl RegistryService for GrpcRegistryService {
     async fn get_agent_secret_revision(
         &self,
         environment_id: EnvironmentId,
+        owner: AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, RegistryServiceError> {
+        use golem_api_grpc::proto::golem::registry::AgentSecretReadMode as ProtoReadMode;
+        use golem_api_grpc::proto::golem::registry::v1::get_agent_secret_revision_request::Revision;
         let response = self
             .client
             .call("get_agent_secret_revision", move |client| {
                 let request = GetAgentSecretRevisionRequest {
                     environment_id: Some(environment_id.into()),
+                    owner: Some(owner.clone().into()),
                     path: path.0.clone(),
-                    revision: revision.get(),
+                    revision: Some(match selector {
+                        AgentSecretRevisionSelector::Current => Revision::Current(()),
+                        AgentSecretRevisionSelector::Fixed(revision) => {
+                            Revision::Fixed(revision.get())
+                        }
+                    }),
+                    mode: match mode {
+                        AgentSecretReadMode::Live => ProtoReadMode::Live,
+                        AgentSecretReadMode::Historical => ProtoReadMode::Historical,
+                    } as i32,
                     agent_secret_id: Some(agent_secret_id.0.into()),
                 };
                 Box::pin(client.get_agent_secret_revision(request))
@@ -1685,13 +1739,11 @@ impl RegistryService for GrpcRegistryService {
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(get_agent_secret_revision_response::Result::Success(payload)) => {
-                let converted: EnvironmentState = payload
-                    .environment_state
-                    .ok_or("missing environment_state field")?
-                    .try_into()?;
-                Ok(converted.agent_secrets.into_values().next())
-            }
+            Some(get_agent_secret_revision_response::Result::Success(payload)) => payload
+                .agent_secret
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(Into::into),
             Some(get_agent_secret_revision_response::Result::Error(error)) => Err(error.into()),
         }
     }

@@ -40,6 +40,7 @@ use golem_common::model::oplog::{
     HostResponseP3HttpClientRequestBodyTransmission, HostStreamKind, OplogEntry, OplogIndex,
 };
 use golem_common::serialization::serialize;
+use golem_service_base::error::worker_executor::InterruptKind;
 use http::HeaderMap;
 use http_body::Body as HttpBody;
 use http_body::Frame;
@@ -1489,6 +1490,9 @@ pub(super) fn fail_transmission_task(
 /// a closed channel means the wiring was dropped, which the built-in
 /// machinery treats as success), records it as the `body-transmission`
 /// `Start`/`End`, and resolves the guest future with the recorded value.
+/// The cancellation of an entity body ends the live wait for the raw result
+/// and leaves the `Start` incomplete: the body may hold the request body open,
+/// so the result could otherwise arrive only after its Store unwinds.
 /// Replay: claims the recorded `Start` and resolves the guest future from the
 /// recorded `End`; an incomplete `Start` re-executes against the raw channel,
 /// which on replay carries [`consume_replayed_request`]'s drain-derived
@@ -1644,7 +1648,37 @@ where
                 // durable. A consume-body recipient has already waited for its input.
                 let raw = match input {
                     Some(raw) => raw,
-                    None => raw_rx.unwrap().await.unwrap_or(Ok(())),
+                    None => {
+                        // A tool body may hold the request body open, so the result can arrive
+                        // only after the body's Store unwinds. The body's cancellation token
+                        // therefore ends the wait, and `abandon_for_trap` leaves the `Start`
+                        // incomplete under the body's `Cancelled`, as `websocket::client::receive`
+                        // does. Other interrupts keep waiting for the network result.
+                        let cancellation = accessor.with(|mut access| {
+                            durable_worker_ctx::<Ctx, U>(access.data_mut()).entity_cancellation()
+                        });
+                        let cancelled = async {
+                            match &cancellation {
+                                Some(cancellation) => cancellation.cancelled().await,
+                                None => std::future::pending().await,
+                            }
+                        };
+                        tokio::select! {
+                            biased;
+                            raw = raw_rx.unwrap() => raw.unwrap_or(Ok(())),
+                            () = cancelled => {
+                                accessor.with(|mut access| {
+                                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                                        .tool_trap_disposal
+                                        .store(true, std::sync::atomic::Ordering::Release);
+                                });
+                                handle.abandon_for_trap();
+                                return Err(wasmtime::Error::from_anyhow(
+                                    InterruptKind::EntityCancellation.into(),
+                                ));
+                            }
+                        }
+                    }
                 };
                 recovery.settle_recordings().await;
                 if let Some(error) = recovery.error() {

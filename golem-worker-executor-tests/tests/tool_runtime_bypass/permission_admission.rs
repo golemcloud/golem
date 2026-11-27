@@ -231,6 +231,8 @@ async fn permission_fixture_with_overrides(
     let (effect_port, effect_server, effects) = start_effect_server().await?;
     environment.set_agent_secret(AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["contextSecret".to_string()]),
         revision: AgentSecretRevision::INITIAL,
@@ -1267,6 +1269,16 @@ struct LostInvocationWake {
 
 #[async_trait]
 impl SchedulerStorage for LostInvocationWake {
+    async fn reschedule(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        due: jiff::Timestamp,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.reschedule(id, owner, due, now).await
+    }
+
     async fn insert(
         &self,
         id: ScheduleId,
@@ -1291,6 +1303,20 @@ impl SchedulerStorage for LostInvocationWake {
 
     async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
         self.inner.cancel(id).await
+    }
+
+    async fn get_action(&self, id: &ScheduleId) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+        self.inner.get_action(id).await
+    }
+
+    async fn replace_action(
+        &self,
+        id: &ScheduleId,
+        expected: &[u8],
+        action: &[u8],
+        due: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.replace_action(id, expected, action, due).await
     }
 
     async fn claim_due(

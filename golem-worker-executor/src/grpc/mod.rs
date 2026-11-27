@@ -92,8 +92,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
-use golem_common::model::protobuf::shard_epochs_from_proto;
-use golem_common::model::protobuf::to_protobuf_resource_description;
+use golem_common::model::protobuf::{shard_epochs_from_proto, to_protobuf_resource_description};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
     AgentStatus, AgentStatusRecord, OwnedAgentId, ScanCursor, ShardDeliveryOutcome, ShardEpoch,
@@ -211,6 +210,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &shard_assignment.shard_epochs,
                 shard_assignment.expires_at,
                 revision,
+                shard_assignment.executor_count,
             ),
             // The single-shard executor: no shard manager delivered this assignment, so there is
             // nothing to order it against.

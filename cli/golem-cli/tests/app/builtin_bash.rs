@@ -273,7 +273,7 @@ fn decode_result(response: &Value) -> BashResult {
     serde_json::from_value(value).unwrap()
 }
 
-// Enqueue a bash run under a request seed and return its accepted invocation UUID.
+// Enqueue a bash run under a request seed and return its accepted invocation ID.
 async fn trigger(ctx: &TestContext, cwd: &str, script: &str, key: &str) -> String {
     trigger_on(ctx, OWNER, cwd, script, key).await
 }
@@ -307,7 +307,10 @@ async fn trigger_on(ctx: &TestContext, owner: &str, cwd: &str, script: &str, key
     let document: Value = serde_json::from_slice(output.stdout()).unwrap();
     let accepted = document["response"]["idempotencyKey"].as_str().unwrap();
     uuid::Uuid::parse_str(accepted).expect("trigger returns the accepted invocation UUID");
-    accepted.to_string()
+    format!(
+        "{}.{accepted}",
+        document["response"]["agentId"].as_str().unwrap()
+    )
 }
 
 // Observe an existing invocation by key; input-free lookup never starts a replacement.
@@ -316,35 +319,51 @@ async fn lookup(ctx: &TestContext, key: &str) -> Value {
 }
 
 async fn lookup_on(ctx: &TestContext, owner: &str, key: &str) -> Value {
+    let id = if key
+        .parse::<golem_common::model::OwnedInvocationId>()
+        .is_ok()
+    {
+        key.to_string()
+    } else {
+        format!("{owner}.{key}")
+    };
     let output = ctx
         .cli_with_input(
-            [
-                flag::YES,
-                "--format",
-                "json",
-                cmd::TOOL,
-                cmd::INVOKE,
-                "--agent",
-                owner,
-                "--lookup",
-                "--idempotency-key",
-                key,
-                "bash",
-                "--",
-                "run",
-            ],
+            [flag::YES, "--format", "json", "invocation", "get", &id],
             &[],
         )
         .await;
     assert!(output.success(), "{}", output.stderr_text());
     let response: Value = serde_json::from_slice(output.stdout()).unwrap();
-    response["response"].clone()
+    response
 }
 
 #[test]
 #[timeout("10 minutes")]
 async fn component_tool_final_receipt_lookup_does_not_repeat_execution() {
     let ctx = context().await;
+    let hosted = invoke_with_key(&ctx, OWNER, "", "echo hosted", "hosted-lookup-key").await;
+    assert_result(&hosted, "hosted\n", "", 0);
+    let lookup = ctx
+        .cli([
+            "--format",
+            "json",
+            "invocation",
+            "get",
+            "--agent",
+            OWNER,
+            "--tool",
+            "bash",
+            "--command",
+            "run",
+            "--idempotency-key",
+            "hosted-lookup-key",
+        ])
+        .await;
+    assert!(lookup.success_or_dump());
+    let found = lookup.stdout_json::<Value>().pop().unwrap();
+    assert_eq!(found["summary"]["operation"], "tool:bash/run");
+    assert_result(&decode_result(&found["result"]), "hosted\n", "", 0);
     let manifest_path = ctx.cwd_path_join("golem.yaml");
     let mut manifest: Value =
         serde_yaml::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
@@ -416,9 +435,9 @@ async fn component_tool_final_receipt_lookup_does_not_repeat_execution() {
     let owner = owner.to_string();
     for _ in 0..2 {
         let found = lookup_on(&ctx, &owner, key).await;
-        assert_eq!(found["agentId"], receipt["agentId"]);
-        assert_eq!(found["idempotencyKey"], receipt["idempotencyKey"]);
-        assert_eq!(found["result"], receipt["result"]);
+        assert_eq!(found["summary"]["agentId"], receipt["agentId"]);
+        assert_eq!(found["summary"]["invocationId"], format!("{owner}.{key}"));
+        assert_eq!(found["result"]["result"], receipt["result"]);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -451,22 +470,17 @@ async fn component_tool_final_receipt_lookup_does_not_repeat_execution() {
         .await;
     assert!(output.success(), "{}", output.stderr_text());
     let live: Value = serde_json::from_slice(output.stdout()).unwrap();
-    let target: golem_common::model::invocation_session_public::PublicNativeToolTarget =
-        serde_json::from_value(live["target"].clone()).unwrap();
-    let golem_common::model::invocation_session_public::PublicNativeToolTarget::Agent { agent_id } =
-        target
-    else {
-        panic!("live receipt must contain the actual accepted owner: {live:#}")
-    };
+    let invocation_id = live["invocationId"]
+        .as_str()
+        .expect("live receipt has its invocation ID");
     let key = live["idempotencyKey"].as_str().unwrap();
     uuid::Uuid::parse_str(key).expect("live receipt contains the accepted invocation UUID");
+    assert_eq!(invocation_id, format!("bash.{key}"));
     assert_ne!(key, "component-tool-live-final-lookup-not-a-uuid");
-    let owner = agent_id.to_string();
     for _ in 0..2 {
-        let found = lookup_on(&ctx, &owner, key).await;
-        assert_eq!(found["agentId"], owner);
-        assert_eq!(found["idempotencyKey"], key);
-        assert_result(&decode_result(&found), "execution=2\n", "", 0);
+        let found = lookup_on(&ctx, "", invocation_id).await;
+        assert_eq!(found["summary"]["invocationId"], invocation_id);
+        assert_result(&decode_result(&found["result"]), "execution=2\n", "", 0);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
     let _ = stop.send(());
@@ -474,11 +488,11 @@ async fn component_tool_final_receipt_lookup_does_not_repeat_execution() {
 }
 
 async fn await_completion(ctx: &TestContext, key: &str) -> BashResult {
-    decode_result(&await_completion_response(ctx, key).await)
+    decode_result(&await_completion_response(ctx, key).await["result"])
 }
 
 async fn await_completion_on(ctx: &TestContext, owner: &str, key: &str) -> BashResult {
-    decode_result(&await_completion_response_on(ctx, owner, key).await)
+    decode_result(&await_completion_response_on(ctx, owner, key).await["result"])
 }
 
 // Like `await_completion`, but returns the raw envelope instead of assuming `result.type` is
@@ -492,10 +506,19 @@ async fn await_completion_response_on(ctx: &TestContext, owner: &str, key: &str)
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         let response = lookup_on(ctx, owner, key).await;
-        if response["status"] == "complete" {
+        if matches!(
+            response["summary"]["state"].as_str(),
+            Some("completed" | "failed" | "background-failed")
+        ) {
             return response;
         }
-        assert_eq!(response["status"], "pending", "{response:#}");
+        assert!(
+            matches!(
+                response["summary"]["state"].as_str(),
+                Some("pending" | "running" | "waiting" | "retrying")
+            ),
+            "{response:#}"
+        );
         assert!(
             Instant::now() < deadline,
             "{key} did not complete: {response:#}"
@@ -630,7 +653,13 @@ async fn crash_at_checkpoint(
     // The parked request proves the sibling already appended `before` and is inside its call.
     let abandoned = next_arrival(arrived).await;
     let pending = lookup(ctx, key).await;
-    assert_eq!(pending["status"], "pending", "{pending:#}");
+    assert!(
+        matches!(
+            pending["summary"]["state"].as_str(),
+            Some("running" | "waiting")
+        ),
+        "{pending:#}"
+    );
     simulate_crash(ctx).await;
     // Recovery re-sends the incomplete GET under its original durable call, so the key matches.
     let resent = next_arrival(arrived).await;
@@ -1683,7 +1712,13 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
     assert_eq!(first_get.method, "GET");
     assert!(!first_get.idempotency_key.is_empty());
     let pending = lookup(&ctx, &get_key).await;
-    assert_eq!(pending["status"], "pending", "{pending:#}");
+    assert!(
+        matches!(
+            pending["summary"]["state"].as_str(),
+            Some("running" | "waiting")
+        ),
+        "{pending:#}"
+    );
     simulate_crash(&ctx).await;
     let resent_get = next_http_arrival(&mut arrived).await;
     assert_eq!(resent_get.method, "GET", "recovery must re-send the GET");
@@ -1718,7 +1753,13 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
         assert_eq!(first_post.method, "POST", "cycle {cycle}");
         assert!(!first_post.idempotency_key.is_empty(), "cycle {cycle}");
         let pending = lookup_on(&ctx, &owner, &post_key).await;
-        assert_eq!(pending["status"], "pending", "cycle {cycle}: {pending:#}");
+        assert!(
+            matches!(
+                pending["summary"]["state"].as_str(),
+                Some("running" | "waiting")
+            ),
+            "cycle {cycle}: {pending:#}"
+        );
         simulate_crash_on(&ctx, &owner).await;
         drop(first_post.release);
         let resent_post = next_http_arrival(&mut arrived).await;
@@ -1750,7 +1791,13 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
     let first_keyed = next_http_arrival(&mut arrived).await;
     assert_eq!(first_keyed.idempotency_key, "order-42");
     let pending = lookup_on(&ctx, keyed_owner, &keyed_key).await;
-    assert_eq!(pending["status"], "pending", "{pending:#}");
+    assert!(
+        matches!(
+            pending["summary"]["state"].as_str(),
+            Some("running" | "waiting")
+        ),
+        "{pending:#}"
+    );
     simulate_crash_on(&ctx, keyed_owner).await;
     drop(first_keyed.release);
     let resent_keyed = next_http_arrival(&mut arrived).await;

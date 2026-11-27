@@ -47,6 +47,7 @@ trait TestContext: std::fmt::Debug + Send + Sync {
     fn agent_method_name(&self) -> &'static str;
     fn create_replay_gate_method_name(&self) -> &'static str;
     fn reveal_secret_then_await_replay_gate_method_name(&self) -> &'static str;
+    fn reveal_held_secret_across_replay_gates_method_name(&self) -> &'static str;
     fn case_config_path_segment(&self, segment: &str) -> String;
 }
 
@@ -70,6 +71,9 @@ fn test_context_ts() -> Arc<dyn TestContext> {
         }
         fn reveal_secret_then_await_replay_gate_method_name(&self) -> &'static str {
             "revealSecretThenAwaitReplayGate"
+        }
+        fn reveal_held_secret_across_replay_gates_method_name(&self) -> &'static str {
+            "revealHeldSecretAcrossReplayGates"
         }
         fn case_config_path_segment(&self, segment: &str) -> String {
             ccase!(kebab -> camel, segment)
@@ -99,6 +103,9 @@ fn test_context_rust() -> Arc<dyn TestContext> {
         }
         fn reveal_secret_then_await_replay_gate_method_name(&self) -> &'static str {
             "reveal_secret_then_await_replay_gate"
+        }
+        fn reveal_held_secret_across_replay_gates_method_name(&self) -> &'static str {
+            "reveal_held_secret_across_replay_gates"
         }
         fn case_config_path_segment(&self, segment: &str) -> String {
             ccase!(kebab -> snake, segment)

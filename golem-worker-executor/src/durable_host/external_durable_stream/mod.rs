@@ -30,6 +30,9 @@ use crate::services::external_durable_stream::{
 };
 use crate::services::{HasActiveAgents, HasExternalDurableStreamService, HasWorker};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::agent_secret::{
+    AgentSecretOwner, AgentSecretReadMode, AgentSecretRevisionSelector,
+};
 use golem_common::model::card::SecretVerb;
 use golem_common::model::oplog::host_functions::{
     GolemAgentDurableStreamReaderNew, GolemAgentDurableStreamReaderRead,
@@ -498,7 +501,14 @@ async fn live_attempt<U: Send + 'static, Ctx: WorkerCtx, T>(
         let token = if let Some(entry) = auth {
             let key = canonical_config_key(&entry).map_err(|_| denied())?;
             let secret = service
-                .get_agent_secret_revision(environment, entry.secret_id, key, entry.pinned_revision)
+                .get_agent_secret_revision(
+                    environment,
+                    AgentSecretOwner::Environment,
+                    entry.secret_id,
+                    key,
+                    AgentSecretRevisionSelector::Fixed(entry.pinned_revision),
+                    AgentSecretReadMode::Historical,
+                )
                 .await
                 .map_err(|_| {
                     DurableStreamError::new(

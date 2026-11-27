@@ -89,13 +89,15 @@ use golem_api_grpc::proto::golem::registry::v1::{
 };
 use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeNameRequest, ResolveAgentTypeNameResponse, ResolveAgentTypeNameSuccessResponse,
-    resolve_agent_type_name_response,
+    ResolveToolTypeIdRequest, ResolveToolTypeIdResponse, ResolveToolTypeIdSuccessResponse,
+    resolve_agent_type_name_response, resolve_tool_type_id_response,
 };
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevision,
+    AgentSecretRevisionSelector, CanonicalAgentSecretPath,
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
@@ -112,7 +114,6 @@ use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::environment::EnvironmentState;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -784,11 +785,40 @@ impl RegistryServiceGrpcApi {
         &self,
         request: GetAgentSecretRevisionRequest,
     ) -> Result<GetAgentSecretRevisionSuccessResponse, GrpcApiError> {
+        use golem_api_grpc::proto::golem::registry::AgentSecretReadMode as ProtoReadMode;
+        use golem_api_grpc::proto::golem::registry::v1::get_agent_secret_revision_request::Revision;
+        let invalid_request = |error: String| {
+            GrpcApiError::BadRequest(ErrorsBody {
+                code: api::error_code::VALIDATION_ERROR.to_string(),
+                errors: vec![error],
+                cause: None,
+            })
+        };
         let environment_id: EnvironmentId = request
             .environment_id
             .ok_or("missing environment_id field")?
             .try_into()?;
-        let revision = AgentSecretRevision::new(request.revision).map_err(|err| err.to_string())?;
+        let owner = AgentSecretOwner::try_from(
+            request
+                .owner
+                .ok_or_else(|| invalid_request("missing owner field".to_string()))?,
+        )
+        .map_err(invalid_request)?;
+        let selector = match request
+            .revision
+            .ok_or_else(|| invalid_request("missing revision field".to_string()))?
+        {
+            Revision::Fixed(revision) => AgentSecretRevisionSelector::Fixed(
+                AgentSecretRevision::new(revision)
+                    .map_err(|err| invalid_request(err.to_string()))?,
+            ),
+            Revision::Current(()) => AgentSecretRevisionSelector::Current,
+        };
+        let mode = match ProtoReadMode::try_from(request.mode) {
+            Ok(ProtoReadMode::Live) => AgentSecretReadMode::Live,
+            Ok(ProtoReadMode::Historical) => AgentSecretReadMode::Historical,
+            _ => return Err(invalid_request("invalid secret read mode".to_string())),
+        };
         let agent_secret_id = AgentSecretId(
             request
                 .agent_secret_id
@@ -799,22 +829,11 @@ impl RegistryServiceGrpcApi {
 
         let agent_secret = self
             .environment_state_service
-            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .get_agent_secret_revision(environment_id, owner, agent_secret_id, path, selector, mode)
             .await?;
 
         Ok(GetAgentSecretRevisionSuccessResponse {
-            environment_state: Some(
-                EnvironmentState {
-                    agent_deployment_details: HashMap::new(),
-                    agent_secrets: agent_secret
-                        .into_iter()
-                        .map(|secret| (secret.path.clone(), secret))
-                        .collect(),
-                    retry_policies: Vec::new(),
-                    tool_deployment: None,
-                }
-                .try_into()?,
-            ),
+            agent_secret: agent_secret.map(TryInto::try_into).transpose()?,
         })
     }
 
@@ -893,6 +912,24 @@ impl RegistryServiceGrpcApi {
                 .into_iter()
                 .map(|agent_type| RegisteredAgentType::from(agent_type).into())
                 .collect(),
+        })
+    }
+
+    async fn resolve_tool_type_id_internal(
+        &self,
+        request: ResolveToolTypeIdRequest,
+    ) -> Result<ResolveToolTypeIdSuccessResponse, GrpcApiError> {
+        let environment_id = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let tool_name = golem_common::model::tool::ToolName::try_from(request.tool_name)?;
+        let type_id = self
+            .deployment_service
+            .resolve_tool_type_id(environment_id, &tool_name)
+            .await?;
+        Ok(ResolveToolTypeIdSuccessResponse {
+            type_id: type_id.map(|id| id.get()),
         })
     }
 
@@ -1621,6 +1658,30 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         }))
     }
 
+    async fn resolve_tool_type_id(
+        &self,
+        request: Request<ResolveToolTypeIdRequest>,
+    ) -> Result<Response<ResolveToolTypeIdResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "resolve_tool_type_id",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            tool_name = request.tool_name,
+        );
+        let response = match self
+            .resolve_tool_type_id_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => resolve_tool_type_id_response::Result::Success(result),
+            Err(error) => resolve_tool_type_id_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(ResolveToolTypeIdResponse {
+            result: Some(response),
+        }))
+    }
+
     async fn get_deployed_agent_type(
         &self,
         request: Request<GetDeployedAgentTypeRequest>,
@@ -1731,7 +1792,8 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
             "get_agent_secret_revision",
             environment_id = EnvironmentId::render_proto(request.environment_id),
             path = request.path.join("."),
-            revision = request.revision,
+            revision = format!("{:?}", request.revision),
+            mode = request.mode,
         );
 
         let response = match self
