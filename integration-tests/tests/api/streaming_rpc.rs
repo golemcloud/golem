@@ -454,10 +454,8 @@ impl TrustedInvocationSession {
         ephemeral: bool,
     ) -> anyhow::Result<Self> {
         let idempotency_key = IdempotencyKey::fresh();
-        let request_key = InvocationRequestKey::external(
-            AuthCtx::System.idempotency_scope(),
-            Some(&idempotency_key),
-        );
+        // A system request has no caller scope, so its key never deduplicates.
+        let request_key = InvocationRequestKey::external(None, Some(&idempotency_key));
         // An ephemeral invocation runs on an instance of its own, whose ID derives from the
         // invocation's owner key, and the executor creates it from the constructor.
         let (target, constructor) = if ephemeral {

@@ -52,11 +52,11 @@ impl TestWorkerExecutor {
         let account_id = component.account_id;
         let component_id = component.id;
         let tool_name = ToolName::try_from(tool).map_err(anyhow::Error::msg)?;
-        let scope = self.auth_ctx().idempotency_scope();
+        let scope = self.idempotency_scope();
         let invocation_id = StandaloneToolInvocation::unique_part(
             environment_id,
             &tool_name,
-            scope,
+            scope.clone(),
             command,
             Some(key),
         );

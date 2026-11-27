@@ -23868,8 +23868,7 @@ async fn tool_guest_invocation_id_names_its_public_owner_and_can_call_an_agent(
     let fingerprint = executor.get_worker_metadata(&hosted).await?.fingerprint;
     for standalone in [true, false] {
         let key = IdempotencyKey::fresh();
-        let request_key =
-            InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
+        let request_key = InvocationRequestKey::external(executor.idempotency_scope(), Some(&key));
         let call = executor.standalone_tool(
             &component,
             type_id,
@@ -26571,7 +26570,7 @@ async fn start_external_tool_command(
                 }),
                 request_key: Some(
                     golem_common::model::InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
+                        executor.idempotency_scope(),
                         Some(&key),
                     )
                     .into(),

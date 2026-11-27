@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::*;
-use crate::base_model::ShardId;
 use crate::base_model::agent_id::H_BITS;
+use crate::base_model::caller::{AgentPrincipal, Caller, Claims, Pair, Principal, UserPrincipal};
+use crate::base_model::{InvocationRequestKey, ShardId};
 use crate::model::agent::AgentTypeName;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::MetadataEnvelope;
@@ -90,6 +91,21 @@ fn idempotency_key(value: &str) -> IdempotencyKey {
     IdempotencyKey::new(value.to_string())
 }
 
+fn scope(issuer: &str, subject: &str) -> IdempotencyScope {
+    IdempotencyScope::Pair {
+        issuer: issuer.to_string(),
+        subject: subject.to_string(),
+    }
+}
+
+fn user(subject: &str) -> Caller {
+    Caller::entry(Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", subject),
+        claims: Claims::from_json(format!(r#"{{"sub":"{subject}"}}"#)).unwrap(),
+        authenticated_at: "2026-01-02T03:04:05.678Z".parse().unwrap(),
+    }))
+}
+
 const CALLER_FINGERPRINT: AgentFingerprint =
     AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000005"));
 const COMPONENT: ComponentId = ComponentId(uuid!("11111111-2222-4333-8444-555555555555"));
@@ -102,7 +118,12 @@ fn all_derivations() -> Vec<(&'static str, AgentId)> {
         ("keyed", root),
         (
             "idempotent_create",
-            AgentId::idempotent_create(ENV, type_id(7), "user:acct-1", &idempotency_key("key-1")),
+            AgentId::idempotent_create(
+                ENV,
+                type_id(7),
+                &scope("https://issuer.example", "alice"),
+                &idempotency_key("key-1"),
+            ),
         ),
         (
             "ephemeral_invocation",
@@ -145,7 +166,7 @@ fn golden_vectors() {
             ("keyed", "00000007-0cfd-8d08-825f-b29b4e7457ad".to_string()),
             (
                 "idempotent_create",
-                "00000007-fb86-88c4-bd22-e49a08a43417".to_string()
+                "00000007-62c6-8e72-9a0a-eb28ad99a78a".to_string()
             ),
             (
                 "ephemeral_invocation",
@@ -190,8 +211,12 @@ fn derivations_are_deterministic() {
 fn variable_length_inputs_are_length_prefixed() {
     let key = |value: &str| idempotency_key(value);
     assert_ne!(
-        AgentId::idempotent_create(ENV, type_id(7), "ab", &key("c")),
-        AgentId::idempotent_create(ENV, type_id(7), "a", &key("bc")),
+        AgentId::idempotent_create(ENV, type_id(7), &scope("i", "ab"), &key("c")),
+        AgentId::idempotent_create(ENV, type_id(7), &scope("i", "a"), &key("bc")),
+    );
+    assert_ne!(
+        AgentId::idempotent_create(ENV, type_id(7), &scope("ab", "c"), &key("k")),
+        AgentId::idempotent_create(ENV, type_id(7), &scope("a", "bc"), &key("k")),
     );
     assert_ne!(
         AgentId::durable_stream_session(ENV, type_id(7), "ab", "c"),
@@ -212,8 +237,13 @@ fn environment_and_type_are_part_of_every_typed_derivation() {
         "the type ID must be hashed, not only used as the tag"
     );
     assert_ne!(
-        AgentId::idempotent_create(ENV, type_id(7), "s", &idempotency_key("k")),
-        AgentId::idempotent_create(OTHER_ENV, type_id(7), "s", &idempotency_key("k"))
+        AgentId::idempotent_create(ENV, type_id(7), &scope("i", "s"), &idempotency_key("k")),
+        AgentId::idempotent_create(
+            OTHER_ENV,
+            type_id(7),
+            &scope("i", "s"),
+            &idempotency_key("k")
+        )
     );
     assert_ne!(
         AgentId::durable_stream_session(ENV, type_id(7), "r", "s"),
@@ -226,6 +256,57 @@ fn environment_and_type_are_part_of_every_typed_derivation() {
     assert_ne!(
         AgentId::imported_phantom(ENV, type_id(7), PHANTOM_NAME),
         AgentId::imported_phantom(OTHER_ENV, type_id(7), PHANTOM_NAME)
+    );
+}
+
+/// Each derivation that depends on the caller gives two original callers two IDs for the
+/// same idempotency key, and gives one original caller one ID at every entry point.
+#[test]
+fn the_ids_of_keyed_requests_depend_on_the_original_caller() {
+    let ids = |caller: &Caller| {
+        let scope = IdempotencyScope::of(caller).expect("a user has a scope");
+        let request =
+            InvocationRequestKey::external(Some(scope.clone()), Some(&idempotency_key("key-1")));
+        [
+            AgentId::idempotent_create(ENV, type_id(7), &scope, &idempotency_key("key-1")),
+            AgentId::ephemeral_invocation(ENV, type_id(7), &request.owner_key("run")),
+            AgentId::external_tool_owner(ENV, COMPONENT, &request.owner_key("run")),
+        ]
+    };
+    let alice = ids(&user("alice"));
+    let bob = ids(&user("bob"));
+    for (of_alice, of_bob) in alice.iter().zip(&bob) {
+        assert_ne!(of_alice, of_bob);
+    }
+    assert_eq!(alice, ids(&user("alice")));
+    let through_an_agent = user("alice").propagate(Principal::Agent(AgentPrincipal::of_agent(
+        "https://golem.example".to_string(),
+        AgentId::from_parts(7, 0xc0),
+        CALLER_FINGERPRINT,
+        AgentTypeName("Relay".to_string()),
+        ENV,
+    )));
+    assert_eq!(alice, ids(&through_an_agent));
+}
+
+/// A caller without a scope has no keyed request: its key is ignored, so each request gets an
+/// owner key of its own, and with it an ephemeral instance and a tool owner of its own.
+#[test]
+fn a_caller_without_a_scope_gets_a_new_id_for_each_request() {
+    let owner_key = || {
+        InvocationRequestKey::external(
+            IdempotencyScope::of(&Caller::anonymous()),
+            Some(&idempotency_key("key-1")),
+        )
+        .owner_key("run")
+    };
+    assert_ne!(
+        AgentId::ephemeral_invocation(ENV, type_id(7), &owner_key()),
+        AgentId::ephemeral_invocation(ENV, type_id(7), &owner_key())
+    );
+    assert_ne!(
+        AgentId::external_tool_owner(ENV, COMPONENT, &owner_key()),
+        AgentId::external_tool_owner(ENV, COMPONENT, &owner_key())
     );
 }
 

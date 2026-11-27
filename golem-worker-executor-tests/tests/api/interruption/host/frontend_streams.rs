@@ -117,7 +117,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     let fingerprint = executor.get_worker_metadata(&id).await?.fingerprint;
     let key = IdempotencyKey::fresh();
     let request_key = golem_common::model::InvocationRequestKey::external(
-        executor.auth_ctx().idempotency_scope(),
+        executor.idempotency_scope(),
         Some(&key),
     );
     let stored_key = executor

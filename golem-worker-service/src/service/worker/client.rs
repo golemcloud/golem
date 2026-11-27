@@ -67,7 +67,7 @@ use golem_common::model::oplog::{
 use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
-    InvocationRequestKey, PromiseId, ScanCursor,
+    IdempotencyScope, InvocationRequestKey, PromiseId, ScanCursor,
 };
 use golem_common::model::{
     AgentInvocationOutput, AgentInvocationResult, BackgroundFailure, InvocationStatus,
@@ -825,6 +825,7 @@ pub trait WorkerClient: Send + Sync {
     async fn lookup_invocations(
         &self,
         agent_id: &AgentId,
+        scope: &IdempotencyScope,
         idempotency_key: &IdempotencyKey,
         operation: Option<String>,
         environment_id: EnvironmentId,
@@ -2359,6 +2360,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn lookup_invocations(
         &self,
         agent_id: &AgentId,
+        scope: &IdempotencyScope,
         idempotency_key: &IdempotencyKey,
         operation: Option<String>,
         environment_id: EnvironmentId,
@@ -2370,6 +2372,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             auth_ctx: Some(auth_ctx.into()),
             idempotency_key: Some(idempotency_key.clone().into()),
             operation,
+            scope: Some(scope.clone().into()),
         };
         self.call_worker_executor(
             *agent_id,

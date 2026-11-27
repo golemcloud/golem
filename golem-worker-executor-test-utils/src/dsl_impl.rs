@@ -277,6 +277,7 @@ impl TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
                 operation: operation.map(str::to_string),
+                scope: self.idempotency_scope().map(Into::into),
             })
             .await?
             .into_inner();
@@ -449,8 +450,7 @@ impl TestWorkerExecutor {
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
-        let request_key =
-            InvocationRequestKey::external(self.auth_ctx().idempotency_scope(), idempotency_key);
+        let request_key = InvocationRequestKey::external(self.idempotency_scope(), idempotency_key);
         self.invoke_and_await_target(
             component,
             ProtoAgentTarget {
@@ -906,10 +906,8 @@ impl TestDsl for TestWorkerExecutor {
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
-        let request_key = InvocationRequestKey::external(
-            self.auth_ctx().idempotency_scope(),
-            Some(idempotency_key),
-        );
+        let request_key =
+            InvocationRequestKey::external(self.idempotency_scope(), Some(idempotency_key));
         let (target, constructor) =
             invocation_target(component, agent_id, &request_key.owner_key(method_name))?;
 
@@ -959,8 +957,7 @@ impl TestDsl for TestWorkerExecutor {
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
-        let request_key =
-            InvocationRequestKey::external(self.auth_ctx().idempotency_scope(), idempotency_key);
+        let request_key = InvocationRequestKey::external(self.idempotency_scope(), idempotency_key);
         let (target, constructor) =
             invocation_target(component, agent_id, &request_key.owner_key(method_name))?;
         self.invoke_and_await_target(

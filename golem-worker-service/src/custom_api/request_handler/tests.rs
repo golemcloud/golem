@@ -975,7 +975,8 @@ async fn create_dispatch_rejects_overrides_before_creating_an_agent() {
 }
 
 #[test]
-async fn create_dispatch_returns_reference_and_selector_location_without_caller_scope() {
+async fn create_dispatch_returns_reference_and_selector_location_and_scopes_the_key_by_the_session_user()
+ {
     use crate::api::agents::AgentReference;
     use golem_common::model::AgentFingerprint;
     use golem_service_base::model::auth::AuthCtx;
@@ -1046,7 +1047,6 @@ async fn create_dispatch_returns_reference_and_selector_location_without_caller_
                         golem_common::model::caller::Caller::anonymous()
                     );
                 }
-                assert!(call.auth.idempotency_scope().is_none());
                 assert!(!call.ignore_already_existing);
                 assert!(call.environment_variables.is_empty());
                 assert!(call.config.is_empty());
@@ -1062,12 +1062,16 @@ async fn create_dispatch_returns_reference_and_selector_location_without_caller_
                 );
                 ids.push(reference.agent_id);
             }
-            assert_ne!(
-                ids[0], ids[1],
-                "an authenticated HTTP session is not an idempotency scope"
-            );
             let calls = harness.creates.calls.lock().unwrap();
-            assert_ne!(calls[0].idempotency_key, calls[1].idempotency_key);
+            if authenticated {
+                // The signed-in user sends the same key again: the retry names the first agent.
+                assert_eq!(ids[0], ids[1], "the key of a signed-in caller deduplicates");
+                assert_eq!(calls[0].idempotency_key, calls[1].idempotency_key);
+            } else {
+                // An anonymous caller has no caller scope, so its key is ignored.
+                assert_ne!(ids[0], ids[1], "the key of an anonymous caller is ignored");
+                assert_ne!(calls[0].idempotency_key, calls[1].idempotency_key);
+            }
         }
     }
 }
@@ -1137,7 +1141,7 @@ async fn create_dispatch_waits_for_worker_completion_and_preserves_worker_failur
 }
 
 #[test]
-async fn oidc_create_dispatch_does_not_turn_a_session_into_an_idempotency_scope() {
+async fn oidc_create_dispatch_scopes_the_idempotency_key_by_the_session_user() {
     use crate::api::agents::AgentReference;
     use crate::custom_api::model::OidcSession;
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
@@ -1260,14 +1264,13 @@ async fn oidc_create_dispatch_does_not_turn_a_session_into_an_idempotency_scope(
             let reference: AgentReference = response.into_body().into_json().await.unwrap();
             ids.push(reference.agent_id);
         }
-        assert_ne!(ids[0], ids[1]);
+        assert_eq!(
+            ids[0], ids[1],
+            "the same session user and the same key name one agent"
+        );
         let calls = harness.creates.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
-        assert!(
-            calls
-                .iter()
-                .all(|call| call.auth.is_system() && call.auth.idempotency_scope().is_none())
-        );
+        assert!(calls.iter().all(|call| call.auth.is_system()));
         for call in calls.iter() {
             let Principal::User(user) = &call.caller.original else {
                 panic!("an authenticated HTTP constructor must receive its session user");
@@ -1275,7 +1278,7 @@ async fn oidc_create_dispatch_does_not_turn_a_session_into_an_idempotency_scope(
             assert_eq!(user.pair, Pair::new("https://idp.example", "create-user"));
             assert!(call.caller.original.equals(&call.caller.immediate));
         }
-        assert_ne!(calls[0].idempotency_key, calls[1].idempotency_key);
+        assert_eq!(calls[0].idempotency_key, calls[1].idempotency_key);
     }
 }
 

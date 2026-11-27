@@ -118,7 +118,7 @@ pub(super) fn invocation_create_intent(
             exclusive: false,
             idempotency_key: Some(
                 golem_common::model::InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
+                    executor.idempotency_scope(),
                     Some(key),
                 )
                 .owner_key(method),

@@ -257,7 +257,7 @@ async fn exercise_python_session(
                 }),
                 request_key: Some(
                     golem_common::model::InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
+                        executor.idempotency_scope(),
                         Some(&key),
                     )
                     .into(),

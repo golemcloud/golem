@@ -890,7 +890,7 @@ Other fields, such as `env`, `config` or `keyed`, are rejected with `400 Bad Req
 
 Creation waits for the constructor to complete and returns `201 Created` with an `AgentReference` JSON body (`agentId` and `agentFingerprint`). The `Location` header addresses the new agent through the ID mount: `/decisions?instance=<agentId>` for the query example, or `/decisions/<agentId>` for a path ID mount. Insert the method suffix before the query string to call an endpoint: `/decisions/state?instance=<agentId>` or `/decisions/<agentId>/state`.
 
-`Idempotency-Key` uses the shared creation policy. Current HTTP route callers have no caller scope, including authenticated callers, so the header is ignored: repeating a create request creates another unkeyed agent. Authentication does not turn the OIDC subject or deployment account into an idempotency scope.
+`Idempotency-Key` uses the shared creation policy, and the caller of the route's session is its scope: the pair of the session's issuer and subject. A retry with the same key from the same signed-in user returns the agent of the first attempt, and another user with the same key gets its own agent. An anonymous caller has no scope, so the header is ignored and repeating a create request creates another unkeyed agent. A method endpoint uses the same rule for its `Idempotency-Key`, unless the endpoint maps that header to a method parameter.
 
 ### Files on key and ID mounts
 

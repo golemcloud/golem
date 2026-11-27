@@ -335,12 +335,20 @@ impl From<IdempotencyScope> for golem::worker::CallerIdempotencyScope {
 
         Self {
             value: Some(match value {
-                IdempotencyScope::User(account) => Value::User(account.into()),
-                IdempotencyScope::Agent(account) => Value::Agent(account.into()),
-                IdempotencyScope::AdminImpersonation { admin, target } => {
-                    Value::AdminImpersonation(golem::worker::AdminImpersonationIdempotencyScope {
-                        admin: Some(admin.into()),
-                        target: Some(target.into()),
+                IdempotencyScope::Pair { issuer, subject } => {
+                    Value::Pair(golem::worker::PairIdempotencyScope { issuer, subject })
+                }
+                IdempotencyScope::AdminImpersonation {
+                    admin,
+                    issuer,
+                    subject,
+                } => Value::AdminImpersonation(golem::worker::AdminImpersonationIdempotencyScope {
+                    admin: Some(admin.into()),
+                    target: Some(golem::worker::PairIdempotencyScope { issuer, subject }),
+                }),
+                IdempotencyScope::Tokens(ids) => {
+                    Value::Tokens(golem::worker::TokenSetIdempotencyScope {
+                        ids: ids.into_iter().map(Into::into).collect(),
                     })
                 }
             }),
@@ -355,18 +363,24 @@ impl TryFrom<golem::worker::CallerIdempotencyScope> for IdempotencyScope {
         use golem::worker::caller_idempotency_scope::Value;
 
         match value.value.ok_or("missing caller idempotency scope")? {
-            Value::User(account) => Ok(Self::User(account.try_into()?)),
-            Value::Agent(account) => Ok(Self::Agent(account.try_into()?)),
-            Value::AdminImpersonation(scope) => Ok(Self::AdminImpersonation {
-                admin: scope
-                    .admin
-                    .ok_or("missing admin idempotency account")?
-                    .try_into()?,
-                target: scope
-                    .target
-                    .ok_or("missing target idempotency account")?
-                    .try_into()?,
+            Value::Pair(pair) => Ok(Self::Pair {
+                issuer: pair.issuer,
+                subject: pair.subject,
             }),
+            Value::AdminImpersonation(scope) => {
+                let target = scope.target.ok_or("missing target idempotency pair")?;
+                Ok(Self::AdminImpersonation {
+                    admin: scope
+                        .admin
+                        .ok_or("missing admin idempotency account")?
+                        .try_into()?,
+                    issuer: target.issuer,
+                    subject: target.subject,
+                })
+            }
+            // The token IDs get their normal form: ascending order, each ID one time.
+            Value::Tokens(tokens) => Self::tokens(tokens.ids.into_iter().map(Into::into))
+                .ok_or_else(|| "a token idempotency scope has no token".to_string()),
         }
     }
 }
@@ -1044,7 +1058,6 @@ mod tests {
         use uuid::Uuid;
 
         let account = AccountId(Uuid::from_u128(11));
-        let target = AccountId(Uuid::from_u128(12));
         let agent_id = crate::base_model::AgentId::from_parts(7, 13);
         let fingerprint = AgentFingerprint(Uuid::from_u128(14));
         let key = IdempotencyKey::from("same-key");
@@ -1057,12 +1070,16 @@ mod tests {
             InvocationRequestKey::external(None, Some(&key)),
         ];
         for scope in [
-            IdempotencyScope::User(account),
-            IdempotencyScope::Agent(account),
+            IdempotencyScope::Pair {
+                issuer: "https://issuer.example/雪".to_string(),
+                subject: "alice".to_string(),
+            },
             IdempotencyScope::AdminImpersonation {
                 admin: account,
-                target,
+                issuer: "https://issuer.example/雪".to_string(),
+                subject: "alice".to_string(),
             },
+            IdempotencyScope::Tokens(vec![Uuid::from_u128(5), Uuid::from_u128(7)]),
         ] {
             requests.push(InvocationRequestKey::External {
                 scope,
@@ -1089,7 +1106,13 @@ mod tests {
         use uuid::Uuid;
 
         let account = AccountId(Uuid::from_u128(11));
-        let scope: golem::worker::CallerIdempotencyScope = IdempotencyScope::User(account).into();
+        let pair = golem::worker::PairIdempotencyScope {
+            issuer: "https://issuer.example".to_string(),
+            subject: "alice".to_string(),
+        };
+        let scope = golem::worker::CallerIdempotencyScope {
+            value: Some(Scope::Pair(pair.clone())),
+        };
         let key = Some(IdempotencyKey::from("key").into());
         for value in [
             None,
@@ -1123,7 +1146,7 @@ mod tests {
                     .is_err()
             );
         }
-        for (admin, target) in [(None, Some(account.into())), (Some(account.into()), None)] {
+        for (admin, target) in [(None, Some(pair)), (Some(account.into()), None)] {
             let scope = golem::worker::CallerIdempotencyScope {
                 value: Some(Scope::AdminImpersonation(
                     golem::worker::AdminImpersonationIdempotencyScope { admin, target },
@@ -1131,17 +1154,32 @@ mod tests {
             };
             assert!(IdempotencyScope::try_from(scope).is_err());
         }
-        for value in [
-            Scope::User(Default::default()),
-            Scope::Agent(Default::default()),
-        ] {
-            assert!(
-                IdempotencyScope::try_from(golem::worker::CallerIdempotencyScope {
-                    value: Some(value)
-                })
-                .is_err()
-            );
-        }
+        // A token scope without a token is not a scope.
+        assert!(
+            IdempotencyScope::try_from(golem::worker::CallerIdempotencyScope {
+                value: Some(Scope::Tokens(Default::default()))
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_token_scope_from_protobuf_gets_its_normal_form() {
+        use golem::worker::caller_idempotency_scope::Value as Scope;
+        use uuid::Uuid;
+
+        let wire = golem::worker::CallerIdempotencyScope {
+            value: Some(Scope::Tokens(golem::worker::TokenSetIdempotencyScope {
+                ids: [7u128, 5, 7]
+                    .into_iter()
+                    .map(|id| Uuid::from_u128(id).into())
+                    .collect(),
+            })),
+        };
+        assert_eq!(
+            IdempotencyScope::try_from(wire).unwrap(),
+            IdempotencyScope::Tokens(vec![Uuid::from_u128(5), Uuid::from_u128(7)])
+        );
     }
 
     #[test]

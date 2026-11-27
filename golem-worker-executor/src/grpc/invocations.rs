@@ -15,8 +15,8 @@
 //! Reads of the invocations of one agent. None of them starts the agent.
 
 use super::{
-    AuthCtx, HasAll, OwnedAgentId, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError,
-    WorkerExecutorImpl, extract_owned_agent_id, golem,
+    HasAll, OwnedAgentId, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
+    extract_owned_agent_id, golem,
 };
 use crate::worker::invocations::{
     InvocationFilter, InvocationKind, InvocationListEntry, InvocationPagePosition, InvocationState,
@@ -29,7 +29,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ListInvocationsSuccess, LookupInvocationsRequest,
 };
 use golem_common::model::{
-    AgentFingerprint, IdempotencyKey, InvocationId, InvocationRequestKey, OplogIndex, Timestamp,
+    AgentFingerprint, IdempotencyKey, IdempotencyScope, InvocationId, InvocationRequestKey,
+    OplogIndex, Timestamp,
 };
 use golem_common::serialization::{decode, serialize};
 use std::sync::Arc;
@@ -310,21 +311,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 "idempotency_key not found",
             ))?
             .into();
-        let auth: AuthCtx = request
-            .auth_ctx
-            .clone()
-            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
-            .try_into()
-            .map_err(|error| {
-                WorkerExecutorError::invalid_request(format!("invalid auth_ctx: {error}"))
-            })?;
         let worker = self
             .agent_for_invocation_read(&owned_agent_id, &request.auth_ctx, "lookup invocations")
             .await?;
-        // A caller without an idempotency scope never derived a keyed invocation ID.
-        let Some(scope) = auth.idempotency_scope() else {
+        // The worker service gives the caller scope of the key. A caller without a scope never
+        // derived a keyed invocation ID.
+        let Some(scope) = request.scope.clone() else {
             return Ok(Vec::new());
         };
+        let scope = IdempotencyScope::try_from(scope).map_err(|error| {
+            WorkerExecutorError::invalid_request(format!("invalid scope: {error}"))
+        })?;
         let request_key = InvocationRequestKey::External { scope, key };
         let found = Self::not_found_if_deleting(
             &worker,

@@ -133,8 +133,7 @@ async fn effect_duplex_websocket_crash_continuation(
                 })),
             }),
             request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
             ),
             idempotency_key: Some(key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),

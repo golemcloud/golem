@@ -56,7 +56,7 @@ mod tool_lookup_tests {
         let unique = StandaloneToolInvocation::unique_part(
             harness.environment_id,
             &tool,
-            auth.idempotency_scope(),
+            harness.worker_service.rest_idempotency_scope(&auth),
             "current",
             Some(&key),
         );
@@ -151,7 +151,7 @@ mod tool_lookup_tests {
         let unique = golem_common::model::StandaloneToolInvocation::unique_part(
             harness.environment_id,
             &tool,
-            auth.idempotency_scope(),
+            harness.worker_service.rest_idempotency_scope(&auth),
             "current",
             Some(&key),
         );

@@ -2811,8 +2811,7 @@ async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
             caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
             freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
             request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
             ),
             ..Default::default()
         })

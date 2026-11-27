@@ -685,7 +685,6 @@ mod tests {
     // the raw key the public API also sends.
     #[test]
     fn invocation_start_create_key_is_the_owner_key_its_ephemeral_id_derives_from() {
-        use golem_common::model::account::AccountId;
         use golem_common::model::{IdempotencyKey, IdempotencyScope, InvocationRequestKey};
 
         let method = "handle";
@@ -696,7 +695,10 @@ mod tests {
             // Public invocation API: scoped request_key plus the raw user key.
             (
                 InvocationRequestKey::external(
-                    Some(IdempotencyScope::User(AccountId::new())),
+                    Some(IdempotencyScope::Pair {
+                        issuer: "https://issuer.example".to_string(),
+                        subject: "caller".to_string(),
+                    }),
                     Some(&raw),
                 ),
                 Some(raw.clone()),

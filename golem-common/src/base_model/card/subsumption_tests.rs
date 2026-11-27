@@ -222,7 +222,7 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
 fn agents_of_type(agent_type: &str, type_tag: u32) -> Vec<(&'static str, AgentOwnerLeafPattern)> {
     use crate::base_model::environment::EnvironmentId;
     use crate::base_model::type_id::TypeId;
-    use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
+    use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, IdempotencyScope};
     use crate::model::agent::{AgentKey, AgentTypeName};
     use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 
@@ -244,7 +244,15 @@ fn agents_of_type(agent_type: &str, type_tag: u32) -> Vec<(&'static str, AgentOw
         ("unkeyed", AgentId::random(type_id)),
         (
             "unkeyed with an idempotency key",
-            AgentId::idempotent_create(environment, type_id, "user:acct", &idempotency_key("k")),
+            AgentId::idempotent_create(
+                environment,
+                type_id,
+                &IdempotencyScope::Pair {
+                    issuer: "golem".to_string(),
+                    subject: "account:acct".to_string(),
+                },
+                &idempotency_key("k"),
+            ),
         ),
         (
             "ephemeral",

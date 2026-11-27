@@ -57,7 +57,7 @@ async fn selected_writer_fence(
         .await;
     let key = IdempotencyKey::fresh();
     let stored_key = golem_common::model::InvocationRequestKey::external(
-        executor.auth_ctx().idempotency_scope(),
+        executor.idempotency_scope(),
         Some(&key),
     )
     .finalize(id.agent_id, fingerprint, "add")

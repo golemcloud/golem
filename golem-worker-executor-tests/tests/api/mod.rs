@@ -4763,8 +4763,8 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     let idempotency_key = IdempotencyKey::fresh();
-    let scope = executor.auth_ctx().idempotency_scope().unwrap();
-    assert!(matches!(scope, IdempotencyScope::User(_)));
+    let scope = executor.idempotency_scope().unwrap();
+    assert!(matches!(scope, IdempotencyScope::Pair { .. }));
     let final_key = OwnedInvocationId::external(
         worker_id.agent_id,
         executor.get_worker_metadata(&worker_id).await?.fingerprint,
@@ -4952,8 +4952,8 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     executor.resume(&worker_id, false).await?;
 
     let oldest_key = oldest_key.unwrap();
-    let scope = executor.auth_ctx().idempotency_scope().unwrap();
-    assert!(matches!(scope, IdempotencyScope::User(_)));
+    let scope = executor.idempotency_scope().unwrap();
+    assert!(matches!(scope, IdempotencyScope::Pair { .. }));
     let final_key = OwnedInvocationId::external(
         worker_id.agent_id,
         executor.get_worker_metadata(&worker_id).await?.fingerprint,
@@ -9729,9 +9729,9 @@ async fn grpc_schedule_commits_pending_without_loading_target(
     assert!(!executor.worker_is_loaded(&owned).await);
     let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint;
     let raw_key = IdempotencyKey::new("scheduled-key-not-a-uuid".to_string());
-    let scope = executor.auth_ctx().idempotency_scope().unwrap();
-    assert!(matches!(scope, IdempotencyScope::User(_)));
-    let request_key = InvocationRequestKey::external(Some(scope), Some(&raw_key));
+    let scope = executor.idempotency_scope().unwrap();
+    assert!(matches!(scope, IdempotencyScope::Pair { .. }));
+    let request_key = InvocationRequestKey::external(Some(scope.clone()), Some(&raw_key));
     let key = OwnedInvocationId::external(
         target.agent_id,
         fingerprint,
@@ -13364,7 +13364,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
         worker_id.agent_id,
         fingerprint,
         "increment",
-        executor.auth_ctx().idempotency_scope(),
+        executor.idempotency_scope(),
         oldest_key.as_ref(),
     )
     .id();
