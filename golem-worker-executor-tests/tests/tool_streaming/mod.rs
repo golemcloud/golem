@@ -107,7 +107,7 @@ use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironment
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::standalone_tool::StandaloneToolCall;
 use golem_worker_executor_test_utils::{
-    AgentInvocationSuccessGateHandle, InvocationErrorExt, LastUniqueId, OplogShape,
+    AgentInvocationSuccessGateHandle, InvocationError, InvocationErrorExt, LastUniqueId, OplogShape,
     PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
     TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
     native_test_tool_metadata, start_with_overrides,
@@ -24410,6 +24410,13 @@ async fn standalone_unaccepted_owner_rechecks_the_component_tool_activation(
     let rejected = executor.invoke_agent_session(unaccepted).await.unwrap_err();
     assert!(
         matches!(
+            rejected.invocation_error(),
+            Some(InvocationError::Rejected { .. })
+        ),
+        "the owner is rejected before acceptance: {rejected:#}"
+    );
+    assert!(
+        matches!(
             rejected.invocation_error().expect("typed rejection").worker_error(),
             Some(WorkerExecutorError::InvalidRequest { details }) if details == "standalone durable owners require a component tool"
         ),
@@ -25129,6 +25136,10 @@ async fn verify_retained_startup_failure_after_restart(
     .await
     .expect("a retained primary startup failure must answer a same-key caller");
     let failure = failure.expect_err("a terminal startup failure became a success");
+    assert!(
+        matches!(failure.invocation_error(), Some(InvocationError::Failed { .. })),
+        "the same-key caller gets the failure outcome, not a rejection: {failure:#}"
+    );
     let Some(WorkerExecutorError::FailedToResumeAgent { reason, .. }) = failure.worker_error()
     else {
         anyhow::bail!("expected FailedToResumeAgent: {failure:#}");
