@@ -75,11 +75,16 @@ A method whose declared result type contains a stream records `AgentInvocationRe
 the value and its bindings in the same batch as its `StreamRegistered` entries. This includes
 an `option<stream>` that returns `none`, with no bindings. Its successful terminal holds
 `FinishedResult::Returned` and refers to that entry; the terminal of a scalar result holds
-`FinishedResult::Payload`. The callee writes no session `InvocationResult`. Cancellation or
+`FinishedResult::Payload`. The callee writes no session `RemoteResult`. Cancellation or
 failure after an early return preserves the early value, but lookup reports completion only
 after a terminal. RPC caller journals and entity-attributed tool sessions retain their
-`InvocationResult` records. A tool session has a `Local` key but is not an agent invocation's
-result; an agent invocation return must have no entity attribution.
+`RemoteResult` records. RPC and component-tool terminals refer to that journal entry when it
+exists and carry an inline value otherwise. Replay resolves the reference; the public oplog
+shows the stripped value. A tool session has a `Local` key but is not an agent invocation's
+result; an agent invocation return must have no entity attribution. The outer native-tool
+client session also has an unattributed `Local` key: its prepared target is `ExternalTool`,
+not `AgentMethod`. It writes `RemoteResult` after the native entity terminal, so that terminal
+stays inline.
 
 - **Replay** consumes the terminal at the return, where the live run wrote it. The invocation's
   replay anchor stays open until its `AgentInvocationSettled` or the replay tail, so its
