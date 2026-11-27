@@ -73,10 +73,8 @@ cargo clippy -p <affected-sdk-crate> --all-targets -- -Dwarnings
 - pnpm (managed via `packageManager` field)
 - `wasm32-wasip2`: `rustup target add wasm32-wasip2` (the Preview 3 wrapper still builds through
   this Rust target)
-- `wasm-rquickjs-cli`: install the value of `wasm-rquickjs-version` in
-  `.github/actions/setup-main-validation/action.yml`. For a version, use
-  `cargo install --locked wasm-rquickjs-cli@<VERSION>`; for a 40-hex revision, use
-  `cargo install --locked --git https://github.com/golemcloud/wasm-rquickjs --rev <REVISION> wasm-rquickjs-cli`
+- `wasm-rquickjs-cli`: `cargo install --locked wasm-rquickjs-cli@<VERSION>` (check
+  `wasm-rquickjs-version` in `.github/actions/setup-main-validation/action.yml`)
 
 ### Packages
 
