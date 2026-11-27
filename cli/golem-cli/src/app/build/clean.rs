@@ -1,10 +1,3 @@
-use crate::app::context::BuildContext;
-use crate::fs;
-use crate::log::{LogIndent, log_action};
-use crate::model::app::CleanMode;
-use golem_common::model::component::ComponentName;
-use std::collections::BTreeSet;
-use std::path::PathBuf;
 // Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Golem Source License v1.1 (the "License");
@@ -19,7 +12,24 @@ use std::path::PathBuf;
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::context::BuildContext;
+use crate::fs;
+use crate::log::{LogIndent, log_action};
+use crate::model::app::{Application, CleanMode};
+use golem_common::model::component::ComponentName;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
 pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> {
+    let operation_lock = Application::operation_lock_path(ctx.application().app_root_dir());
+    let validate = |path: &std::path::Path| -> anyhow::Result<()> {
+        let path = fs::absolute_lexical_path_from_base_dir(path, ctx.application().app_root_dir());
+        anyhow::ensure!(
+            !operation_lock.starts_with(&path),
+            "Clean targets must not delete the application operation lock"
+        );
+        Ok(())
+    };
     {
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
@@ -72,6 +82,15 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
             paths
         };
 
+        for (_, path) in &paths {
+            validate(path)?;
+        }
+        if matches!(mode, CleanMode::All) {
+            for clean in ctx.application().common_clean() {
+                validate(&clean.source.join(&clean.value))?;
+            }
+        }
+
         for (context, path) in paths {
             fs::delete_logged(context, &path)?;
         }
@@ -89,7 +108,19 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
             log_action("Cleaning", "application build dir");
             let _indent = LogIndent::new();
 
-            fs::delete_logged("temp dir", ctx.application().temp_dir())?;
+            let temp = ctx
+                .application()
+                .app_root_dir()
+                .join(ctx.application().temp_dir());
+            if temp.try_exists()? {
+                // Waiters must keep using the same lock file across clean operations.
+                for entry in std::fs::read_dir(&temp)? {
+                    let entry = entry?;
+                    if entry.path() != operation_lock {
+                        fs::delete_logged("temp dir entry", &entry.path())?;
+                    }
+                }
+            }
         }
         CleanMode::SelectedComponentsOnly => {
             // NOP

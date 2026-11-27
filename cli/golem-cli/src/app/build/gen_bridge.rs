@@ -209,7 +209,8 @@ pub(crate) async fn plan_explicit_manifest_guest_bridge_generation_for_component
     })
 }
 
-pub(crate) async fn plan_dependency_guest_bridge_generation_for_components_lenient(
+#[cfg(test)]
+async fn plan_dependency_guest_bridge_generation_for_components_lenient(
     ctx: &BuildContext<'_>,
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
@@ -481,7 +482,7 @@ async fn collect_manifest_targets_for_components_and_mode(
         .filter(|target| target.bridge_mode == BridgeMode::Guest)
     {
         if let BridgeSdkTargetSubject::Tool { rpc_name, .. } = &target.subject {
-            let metadata = ctx.extracted_metadata.lock().unwrap().clone();
+            let metadata = ctx.extracted_metadata();
             let bindings = ctx.application().environment_tool_bindings();
             for provider in
                 local_tool_middleware_components(ctx, bindings.get(rpc_name.as_str()), &metadata)?
@@ -490,7 +491,7 @@ async fn collect_manifest_targets_for_components_and_mode(
                     extract_and_store_component_metadata(ctx, &provider).await?;
                 }
             }
-            let metadata = ctx.extracted_metadata.lock().unwrap().clone();
+            let metadata = ctx.extracted_metadata();
             let missing =
                 local_tool_middleware_components(ctx, bindings.get(rpc_name.as_str()), &metadata)?
                     .into_iter()
@@ -504,7 +505,7 @@ async fn collect_manifest_targets_for_components_and_mode(
             }
         }
     }
-    let metadata = ctx.extracted_metadata.lock().unwrap().clone();
+    let metadata = ctx.extracted_metadata();
     let raw_guest_targets = targets
         .iter()
         .filter(|target| target.bridge_mode == BridgeMode::Guest)
@@ -651,7 +652,7 @@ fn collect_remote_tool_manifest_targets_for_entry(
         }
         let grant = ctx
             .release_grant_by_name(name)
-            .ok_or_else(|| crate::app::context::BuildMetadataRequired::Tool(name.clone()))?;
+            .with_context(|| format!("Remote tool '{name}' has no resolved build preparation"))?;
         targets.push(BridgeSdkTarget {
             source: BridgeSdkTargetSource::RemoteRelease {
                 release_id: grant.release.id,
@@ -913,7 +914,6 @@ async fn collect_dependency_guest_bridge_targets(
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
-    let mut targets = Vec::new();
     let mut extracted = BTreeMap::new();
 
     for component_name in source_component_names {
@@ -924,7 +924,27 @@ async fn collect_dependency_guest_bridge_targets(
             );
         }
     }
-    for (component_name, metadata) in &extracted {
+    let available_sources = extracted.keys().cloned().collect::<Vec<_>>();
+    extracted.extend(ctx.extracted_metadata());
+    resolve_dependency_guest_bridge_inputs(
+        ctx,
+        &available_sources,
+        selection_scope_component_names,
+        &extracted,
+    )
+}
+
+pub(super) fn resolve_dependency_guest_bridge_inputs(
+    ctx: &BuildContext<'_>,
+    source_component_names: &[ComponentName],
+    selection_scope_component_names: &[ComponentName],
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    let mut targets = Vec::new();
+    for component_name in source_component_names {
+        let Some(metadata) = extracted.get(component_name) else {
+            continue;
+        };
         validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
         collect_dependency_agent_bridge_targets(
             ctx,
@@ -1001,9 +1021,9 @@ async fn collect_dependency_guest_bridge_targets(
         else {
             unreachable!()
         };
-        let grant = ctx
-            .release_grant_by_name(tool_name)
-            .ok_or_else(|| crate::app::context::BuildMetadataRequired::Tool(tool_name.clone()))?;
+        let grant = ctx.release_grant_by_name(tool_name).with_context(|| {
+            format!("Remote tool '{tool_name}' has no resolved build preparation")
+        })?;
         for target_language in dependency_guest_bridge_target_languages(
             ctx,
             &dependency,
@@ -1073,8 +1093,7 @@ async fn collect_dependency_guest_bridge_targets(
         }
     }
 
-    extracted.extend(ctx.extracted_metadata.lock().unwrap().clone());
-    present_guest_tool_targets(ctx, targets, &extracted)
+    present_guest_tool_targets(ctx, targets, extracted)
 }
 
 fn present_guest_tool_targets(
@@ -1364,8 +1383,8 @@ pub(crate) fn validate_dependency_tool_bridge_presentations(
             BridgeSdkTargetSource::RemoteRelease { .. } => (
                 crate::model::app::SubjectSource::RemoteRelease,
                 ctx.release_grant_by_name(&tool_name)
-                    .ok_or_else(|| {
-                        crate::app::context::BuildMetadataRequired::Tool(tool_name.clone())
+                    .with_context(|| {
+                        format!("Remote tool '{tool_name}' has no resolved build preparation")
                     })?
                     .release
                     .definition
@@ -1778,6 +1797,7 @@ async fn gen_bridge_sdk_target(
             bridge_mode: target.bridge_mode,
             rust_config: target.rust_config.clone(),
         })?
+        .with_output_inventory(output_dir.as_std_path().to_path_buf())
         .with_sources(|| vec![&freshness_source])
         .with_targets(|| vec![&output_dir])
         .run_async_or_skip(
@@ -2060,7 +2080,8 @@ bridge:
             ));
             let app_ctx = crate::app::context::ApplicationContext::for_test(application);
             let build_config = crate::model::app::BuildConfig::default();
-            let ctx = BuildContext::new(&app_ctx, &build_config);
+            let execution = crate::app::build::BuildExecution::default();
+            let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
             let provider = ComponentName("app:provider".into());
             let consumer = ComponentName("app:consumer".into());
             let shopping_cart = agent_type("ShoppingCart");
@@ -2168,8 +2189,9 @@ tools:
             mcp_tools: tools.into(),
             mcp_diagnostics: Vec::new(),
         };
-        let ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let execution = crate::app::build::BuildExecution::default()
+            .with_environment_tools(environment_tools.clone());
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
         let mut targets = vec![BridgeSdkTarget {
             source: BridgeSdkTargetSource::local(ComponentName("app:second".into())),
             subject: BridgeSdkTargetSubject::Tool {
@@ -2298,8 +2320,9 @@ mcp:
             }],
             mcp_diagnostics: Vec::new(),
         };
-        let ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let execution = crate::app::build::BuildExecution::default()
+            .with_environment_tools(environment_tools.clone());
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
         let mut targets = Vec::new();
 
         collect_tool_manifest_targets_for_entry(
@@ -2351,8 +2374,9 @@ mcp:
                 reason: "unsupported schema".into(),
             }],
         };
-        let ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let execution = crate::app::build::BuildExecution::default()
+            .with_environment_tools(environment_tools.clone());
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
 
         let error = collect_tool_manifest_targets_for_entry(
             &ctx,
@@ -2397,8 +2421,9 @@ components:
             mcp_tools: Vec::new(),
             mcp_diagnostics: Vec::new(),
         };
-        let ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let execution = crate::app::build::BuildExecution::default()
+            .with_environment_tools(environment_tools.clone());
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
 
         let error = validate_no_ambient_tool_collisions(
             &ctx,
@@ -2444,10 +2469,12 @@ environments:
             mcp_tools: Vec::new(),
             mcp_diagnostics: Vec::new(),
         };
-        let original_ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&original_tools);
-        let configured_ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&configured_tools);
+        let original_execution = crate::app::build::BuildExecution::default()
+            .with_environment_tools(original_tools.clone());
+        let original_ctx = BuildContext::new(&app_ctx, &build_config, &original_execution);
+        let configured_execution = crate::app::build::BuildExecution::default()
+            .with_environment_tools(configured_tools.clone());
+        let configured_ctx = BuildContext::new(&app_ctx, &build_config, &configured_execution);
         let name = ToolName::try_from("search").unwrap();
         let output_dir = app_ctx
             .application()
@@ -2516,7 +2543,8 @@ components:
             let build_config = crate::model::app::BuildConfig::default();
             let consumer = ComponentName("app:consumer".into());
             let scope = [consumer];
-            let missing = BuildContext::new(&app_ctx, &build_config);
+            let missing_execution = crate::app::build::BuildExecution::default();
+            let missing = BuildContext::new(&app_ctx, &build_config, &missing_execution);
             let error = plan_dependency_guest_bridge_generation_for_components_lenient(
                 &missing,
                 &[],
@@ -2541,8 +2569,9 @@ components:
                 mcp_tools: tools.into(),
                 mcp_diagnostics: Vec::new(),
             };
-            let ctx = BuildContext::new(&app_ctx, &build_config)
-                .with_environment_tools(&environment_tools);
+            let execution = crate::app::build::BuildExecution::default()
+                .with_environment_tools(environment_tools.clone());
+            let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
             let plan =
                 plan_dependency_guest_bridge_generation_for_components_lenient(&ctx, &[], &scope)
                     .await
@@ -2585,8 +2614,9 @@ components:
             mcp_tools: Vec::new(),
             mcp_diagnostics: Vec::new(),
         };
-        let ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let execution = crate::app::build::BuildExecution::default()
+            .with_environment_tools(environment_tools.clone());
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
         let scope = [ComponentName("app:consumer".into())];
 
         let plan =
@@ -2711,7 +2741,8 @@ components:
         );
         let app_ctx = crate::app::context::ApplicationContext::for_test(application);
         let build_config = crate::model::app::BuildConfig::default();
-        let ctx = BuildContext::new(&app_ctx, &build_config);
+        let execution = crate::app::build::BuildExecution::default();
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
         let metadata_path = ctx
             .application()
             .repl_metadata_json(GuestLanguage::TypeScript);
@@ -2761,7 +2792,8 @@ components:
         );
         let app_ctx = crate::app::context::ApplicationContext::for_test(application);
         let build_config = crate::model::app::BuildConfig::default();
-        let ctx = BuildContext::new(&app_ctx, &build_config);
+        let execution = crate::app::build::BuildExecution::default();
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
         let target = CustomBridgeSdkTarget {
             agent_type_names: HashSet::new(),
             target_language: None,
@@ -3335,10 +3367,12 @@ tools:
                 mcp_tools: vec![],
                 mcp_diagnostics: vec![],
             };
-            let ctx =
-                BuildContext::new_with_resolved_tool_grants(&app_ctx, &build_config, &tool_grants)
-                    .with_tool_middleware_grants(&middleware_grants)
-                    .with_environment_tools(&environment_tools);
+            let execution = crate::app::build::BuildExecution::with_resolved_grants(
+                tool_grants.clone(),
+                middleware_grants.clone(),
+            )
+            .with_environment_tools(environment_tools.clone());
+            let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
             let plan = plan_dependency_guest_bridge_generation_for_components_lenient(
                 &ctx,
                 &[],
@@ -3402,11 +3436,12 @@ tools:
             mcp_tools: vec![],
             mcp_diagnostics: vec![],
         };
-        let ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let execution = crate::app::build::BuildExecution::default()
+            .with_environment_tools(environment_tools.clone());
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
         let mut adapter = presenting_adapter();
         adapter.aliases.push("qualified-adapter".into());
-        ctx.extracted_metadata.lock().unwrap().insert(
+        ctx.store_extracted_component_metadata(
             ComponentName("app:first".into()),
             ExtractedComponentMetadata {
                 agent_types: vec![],
@@ -3421,7 +3456,7 @@ tools:
         )
         .await
         .unwrap();
-        let mut metadata = ctx.extracted_metadata.lock().unwrap().clone();
+        let mut metadata = ctx.extracted_metadata();
         let incomplete =
             validate_dependency_tool_bridge_presentations(&ctx, &metadata, &plan.targets)
                 .unwrap_err();
@@ -3440,7 +3475,7 @@ tools:
             );
         }
         validate_dependency_tool_bridge_presentations(&ctx, &metadata, &plan.targets).unwrap();
-        ctx.extracted_metadata.lock().unwrap().insert(
+        ctx.store_extracted_component_metadata(
             ComponentName("app:second".into()),
             ExtractedComponentMetadata {
                 agent_types: vec![],
@@ -3505,8 +3540,9 @@ bridge:
                     mcp_tools: vec![],
                     mcp_diagnostics: vec![],
                 };
-                let ctx = BuildContext::new(&app_ctx, &build_config)
-                    .with_environment_tools(&environment_tools);
+                let execution = crate::app::build::BuildExecution::default()
+                    .with_environment_tools(environment_tools.clone());
+                let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
                 let plan = plan_dependency_guest_bridge_generation_for_components_lenient(
                     &ctx,
                     &[],
@@ -3550,10 +3586,9 @@ bridge:
                     .unwrap()
                     .tool_middlewares
                     .push(presenting_adapter());
-                ctx.extracted_metadata
-                    .lock()
-                    .unwrap()
-                    .extend(metadata.clone());
+                for (name, value) in &metadata {
+                    ctx.store_extracted_component_metadata(name.clone(), value.clone());
+                }
                 let plan = plan_dependency_guest_bridge_generation_for_components_lenient(
                     &ctx,
                     &[],
@@ -3612,7 +3647,9 @@ bridge:
                     .unwrap()
                     .tool_middlewares
                     .push(unrelated);
-                ctx.extracted_metadata.lock().unwrap().extend(metadata);
+                for (name, value) in metadata {
+                    ctx.store_extracted_component_metadata(name, value);
+                }
                 let selected = plan_dependency_guest_bridge_generation_for_components_lenient(
                     &ctx,
                     &[],
@@ -3693,8 +3730,9 @@ tools:
                 mcp_tools: vec![],
                 mcp_diagnostics: vec![],
             };
-            let ctx =
-                BuildContext::new(&app_ctx, &config).with_environment_tools(&environment_tools);
+            let execution = crate::app::build::BuildExecution::default()
+                .with_environment_tools(environment_tools.clone());
+            let ctx = BuildContext::new(&app_ctx, &config, &execution);
             let mut target = environment_tool_bridge_target(
                 &ctx,
                 &"search".try_into().unwrap(),
@@ -3821,8 +3859,9 @@ agents:
                         mcp_tools: vec![],
                         mcp_diagnostics: vec![],
                     };
-                    let ctx = BuildContext::new(&app_ctx, &build_config)
-                        .with_environment_tools(&environment_tools);
+                    let execution = crate::app::build::BuildExecution::default()
+                        .with_environment_tools(environment_tools.clone());
+                    let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
                     let mut target = environment_tool_bridge_target(
                         &ctx,
                         &ToolName::try_from("search").unwrap(),

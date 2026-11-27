@@ -227,6 +227,7 @@ impl ReplHandler {
             }
         }
 
+        self.ctx.finish_application_operation();
         match repl_language {
             ReplLanguage::TypeScript => TypeScriptRepl::new(self.ctx.clone()).run(args).await,
         }

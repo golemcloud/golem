@@ -18,12 +18,12 @@ use crate::app::build::componentize::build_components;
 use crate::app::build::gen_bridge::{
     BridgeGenerationPlan, build_owner_components, component_tool_dependency_components,
     gen_bridge_sdk_targets, local_tool_middleware_components, plan_custom_bridge_generation,
-    plan_dependency_guest_bridge_generation_for_components_lenient,
     plan_explicit_manifest_guest_bridge_generation_for_components_lenient,
     plan_manifest_external_bridge_generation_for_components_lenient,
-    plan_repl_bridge_generation_lenient, validate_dependency_tool_bridge_presentations,
-    validate_host_managed_bridge_targets, validate_no_ambient_tool_collisions,
-    validate_no_output_dir_collisions, validate_supported_bridge_targets, write_repl_metadata,
+    plan_repl_bridge_generation_lenient, resolve_dependency_guest_bridge_inputs,
+    validate_dependency_tool_bridge_presentations, validate_host_managed_bridge_targets,
+    validate_no_ambient_tool_collisions, validate_no_output_dir_collisions,
+    validate_supported_bridge_targets, write_repl_metadata,
 };
 use crate::app::context::BuildContext;
 use crate::bridge_gen::BridgeMode;
@@ -49,78 +49,299 @@ pub mod extract_component_metadata;
 pub mod gen_bridge;
 pub mod go_inputs;
 pub mod go_toolchain;
+mod inspect;
+pub mod plan;
+pub mod preparation;
 pub mod task_result_marker;
 pub mod up_to_date_check;
 
-pub async fn build_app(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    if ctx.should_run_step(AppBuildStep::Check) {
-        check_build_tool_requirements(ctx).await?;
+#[derive(Default)]
+pub struct BuildExecution {
+    progress: std::sync::Mutex<plan::BuildProgress>,
+    extracted: std::sync::Mutex<BTreeMap<ComponentName, ExtractedComponentMetadata>>,
+    resolved_tool_grants: crate::model::tool_release::ResolvedToolGrants,
+    resolved_middleware_grants: crate::command_handler::ResolvedToolMiddlewareGrants,
+    environment_tools: Option<crate::app::context::ResolvedEnvironmentTools>,
+}
+
+impl BuildExecution {
+    fn progress(&self) -> plan::BuildProgress {
+        self.progress.lock().unwrap().clone()
     }
 
-    build_app_with_build_plan(ctx).await?;
+    pub(crate) fn extracted_metadata(&self) -> BTreeMap<ComponentName, ExtractedComponentMetadata> {
+        self.extracted.lock().unwrap().clone()
+    }
 
+    pub(crate) fn component_metadata(
+        &self,
+        name: &ComponentName,
+    ) -> Option<ExtractedComponentMetadata> {
+        self.extracted.lock().unwrap().get(name).cloned()
+    }
+
+    pub(crate) fn store_component_metadata(
+        &self,
+        name: ComponentName,
+        metadata: ExtractedComponentMetadata,
+    ) {
+        self.extracted.lock().unwrap().insert(name, metadata);
+    }
+
+    pub(crate) fn remove_component_metadata(&self, name: &ComponentName) {
+        self.extracted.lock().unwrap().remove(name);
+    }
+
+    pub(super) fn executed_commands(&self, name: &ComponentName) -> usize {
+        self.progress
+            .lock()
+            .unwrap()
+            .executed_commands
+            .get(name)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(super) fn record_executed_command(&self, name: ComponentName, count: usize) {
+        self.progress
+            .lock()
+            .unwrap()
+            .executed_commands
+            .insert(name, count);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_environment_tools(
+        mut self,
+        tools: crate::app::context::ResolvedEnvironmentTools,
+    ) -> Self {
+        self.environment_tools = Some(tools);
+        self
+    }
+
+    pub(crate) fn with_resolved_grants(
+        tools: crate::model::tool_release::ResolvedToolGrants,
+        middlewares: crate::command_handler::ResolvedToolMiddlewareGrants,
+    ) -> Self {
+        Self {
+            resolved_tool_grants: tools,
+            resolved_middleware_grants: middlewares,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn resolved_tool_grants(&self) -> &crate::model::tool_release::ResolvedToolGrants {
+        &self.resolved_tool_grants
+    }
+
+    pub(crate) fn resolved_middleware_grants(
+        &self,
+    ) -> &crate::command_handler::ResolvedToolMiddlewareGrants {
+        &self.resolved_middleware_grants
+    }
+
+    pub(crate) fn environment_tools(
+        &self,
+    ) -> Option<&crate::app::context::ResolvedEnvironmentTools> {
+        self.environment_tools.as_ref()
+    }
+
+    fn preparation_is_available(&self, operation: &preparation::BuildPreparationOperation) -> bool {
+        match operation {
+            preparation::BuildPreparationOperation::ToolRelease(reference) => {
+                self.resolved_tool_grants.get(reference).is_some()
+            }
+            preparation::BuildPreparationOperation::MiddlewareRelease(reference) => {
+                self.resolved_middleware_grants.get(reference).is_some()
+            }
+            preparation::BuildPreparationOperation::EnvironmentTools { .. } => {
+                self.environment_tools.is_some()
+            }
+        }
+    }
+
+    pub(crate) fn complete_environment_preparation(
+        &mut self,
+        result: crate::app::context::ResolvedEnvironmentTools,
+    ) {
+        self.environment_tools = Some(result);
+    }
+
+    pub(crate) fn complete_tool_preparation(
+        &mut self,
+        reference: golem_common::model::tool_release::ToolReleaseReference,
+        grant: golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails,
+    ) {
+        self.resolved_tool_grants.insert(reference, grant);
+    }
+
+    pub(crate) fn complete_middleware_preparation(
+        &mut self,
+        reference: golem_common::model::tool_middleware_release::ToolMiddlewareReleaseReference,
+        grant: golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantWithDetails,
+    ) {
+        self.resolved_middleware_grants.insert(reference, grant);
+    }
+}
+
+pub enum BuildAdvance {
+    Complete,
+    Prepare(BTreeSet<preparation::BuildPreparationId>),
+}
+
+fn check_required_middleware_artifacts(
+    ctx: &BuildContext<'_>,
+    checked_plan: &plan::BuildPlan,
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
+) -> anyhow::Result<()> {
+    if !ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Build) {
+        return Ok(());
+    }
+    for name in checked_plan.required_middleware_components(extracted) {
+        if ctx
+            .application_context()
+            .installed_component(&name)
+            .is_none()
+        {
+            inspect::check_requirement(
+                &plan::BuildRequirement::ExistingFile {
+                    path: ctx.application().component(&name).wasm(),
+                },
+                ctx.application_config(),
+            )?;
+        }
+    }
     Ok(())
 }
 
-async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    let explicit_bridge_component_names = ctx
-        .application_context()
-        .selected_component_names()
+fn pending_preparations(
+    ctx: &BuildContext<'_>,
+    checked_plan: &plan::BuildPlan,
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
+) -> anyhow::Result<BTreeSet<preparation::BuildPreparationId>> {
+    if !ctx.should_run_step(AppBuildStep::GenBridge) {
+        return Ok(BTreeSet::new());
+    }
+    Ok(checked_plan
+        .preparations()
+        .selected(
+            &checked_plan.selected_components(extracted),
+            extracted,
+            ctx.execution().environment_tools(),
+            checked_plan.preparation_limits(),
+        )?
+        .into_iter()
+        .filter(|id| {
+            !ctx.execution()
+                .preparation_is_available(&checked_plan.preparations().entries[id].operation)
+        })
+        .collect())
+}
+
+/// Inspect admission requirements before authorizing project preparation. This
+/// does not construct an executable plan from unpersisted loading changes.
+pub async fn inspect_build_requirements(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+    if let Some(packages) = ctx.application_context().package_preparation() {
+        packages.revalidate().await?;
+    }
+    let requirements = inspect::inspect_build(
+        ctx,
+        ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Check),
+    )?;
+    check_required_middleware_artifacts(ctx, &requirements, &BTreeMap::new())?;
+    let selected = requirements.selected_components(&BTreeMap::new());
+    requirements.preparations().selected(
+        &selected,
+        &BTreeMap::new(),
+        None,
+        requirements.preparation_limits(),
+    )?;
+    // Conditional candidates reserve their programs now, but their artifacts are
+    // required only when metadata activates the corresponding selection rule.
+    for stage in requirements.stages() {
+        for requirement in stage.actions.iter().flat_map(|action| &action.requirements) {
+            if selected.contains(&stage.component)
+                || !matches!(requirement, plan::BuildRequirement::ExistingFile { .. })
+            {
+                inspect::check_requirement(requirement, ctx.application_config())?;
+            }
+        }
+    }
+    if ctx.should_run_step(AppBuildStep::Check) {
+        check_build_tool_requirements(
+            ctx,
+            requirements
+                .stages()
+                .filter(|stage| {
+                    stage
+                        .actions
+                        .iter()
+                        .any(|action| matches!(action.operation, plan::BuildOperation::Command(_)))
+                })
+                .map(|stage| &stage.component),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn preflight_build(ctx: &BuildContext<'_>) -> anyhow::Result<plan::BuildPlan> {
+    if let Some(packages) = ctx.application_context().package_preparation() {
+        packages.revalidate().await?;
+    }
+    let plan = inspect::inspect_build(
+        ctx,
+        ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Check),
+    )?;
+    check_required_middleware_artifacts(ctx, &plan, &BTreeMap::new())?;
+    inspect::check_host_requirements(&plan, ctx.application_config())?;
+    if ctx.should_run_step(AppBuildStep::Check) {
+        check_build_tool_requirements(
+            ctx,
+            plan.stages()
+                .filter(|stage| {
+                    stage
+                        .actions
+                        .iter()
+                        .any(|action| matches!(action.operation, plan::BuildOperation::Command(_)))
+                })
+                .map(|stage| &stage.component),
+        )
+        .await?;
+    }
+    inspect::log_build_plan(&plan);
+    Ok(plan)
+}
+
+pub async fn build_app(
+    ctx: &BuildContext<'_>,
+    checked_plan: &plan::BuildPlan,
+) -> anyhow::Result<BuildAdvance> {
+    for (component, metadata) in &ctx.extracted_metadata() {
+        validate_no_ambient_tool_collisions(ctx, component, &metadata.tools)?;
+    }
+    if let BuildAdvance::Prepare(inputs) =
+        build_components_with_dependency_ordering(ctx, checked_plan).await?
+    {
+        return Ok(BuildAdvance::Prepare(inputs));
+    }
+    let explicit_bridge_component_names = checked_plan
+        .explicit_components()
         .iter()
         .cloned()
         .collect::<Vec<_>>();
-    let has_dependency_guest_request =
-        ctx.should_run_step(AppBuildStep::GenBridge)
-            && (selected_component_names_have_guest_bridge_dependencies(
-                ctx,
-                &explicit_bridge_component_names,
-            ) || ctx.custom_bridge_sdk_target().is_none()
-                && ctx.application().bridge_sdks().for_all_used_modes().any(
-                    |(_, mode, targets)| {
-                        mode == BridgeMode::Guest
-                            && targets.tools.as_ref().is_some_and(|tools| {
-                                manifest_tool_bridge_request_may_match_selected_components(
-                                    ctx,
-                                    tools,
-                                    &explicit_bridge_component_names,
-                                )
-                            })
-                    },
-                ));
-    let effective_component_names = if has_dependency_guest_request {
-        selected_component_names_with_dependencies_for_build(ctx).await?
-    } else {
-        explicit_bridge_component_names.clone()
-    };
-    let requests = if ctx.should_run_step(AppBuildStep::GenBridge) {
-        bridge_requests(ctx, &explicit_bridge_component_names)
-    } else {
-        Vec::new()
-    };
-    let mut validated_targets = Vec::<(BridgeRequestId, BridgeSdkTarget)>::new();
-    let claims = bridge_output_dir_claims(ctx, &explicit_bridge_component_names);
-    let mut pending_components = effective_component_names
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut built_components = BTreeSet::<ComponentName>::new();
-    let mut available_guest_bridge_dependencies = BTreeSet::new();
-    let mut generated_guest_target_keys = BTreeSet::<BridgeSdkTargetKey>::new();
-
-    build_components_with_dependency_ordering(
-        ctx,
-        has_dependency_guest_request,
-        &claims,
-        &mut validated_targets,
-        &mut generated_guest_target_keys,
-        &mut pending_components,
-        &mut built_components,
-        &mut available_guest_bridge_dependencies,
-    )
-    .await?;
+    let has_dependency_guest_request = checked_plan
+        .bridges()
+        .contains_key(&BridgeRequestId::DependencyGuest);
+    let plan::BuildProgress {
+        mut validated_targets,
+        mut generated_guest_target_keys,
+        completed_bridge_requests,
+        ..
+    } = ctx.execution().progress();
 
     if has_dependency_guest_request {
-        let extracted = ctx.extracted_metadata.lock().unwrap().clone();
+        let extracted = ctx.extracted_metadata();
         let targets = validated_targets
             .iter()
             .filter(|(request, _)| *request == BridgeRequestId::DependencyGuest)
@@ -135,7 +356,9 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
         BridgeRequestId::ManifestGuest,
         BridgeRequestId::Repl,
     ] {
-        if !requests.contains(&request_id) {
+        if !checked_plan.bridges().contains_key(&request_id)
+            || completed_bridge_requests.contains(&request_id)
+        {
             continue;
         }
 
@@ -152,8 +375,11 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
             request_id,
             plan.targets.clone(),
             &mut validated_targets,
-            &claims,
+            checked_plan,
             generated_target_keys,
+            ctx.execution()
+                .environment_tools()
+                .map_or(0, |tools| tools.result_count()),
         )?;
 
         let exact_targets = plan.targets.clone();
@@ -202,9 +428,13 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
             )
             .await?;
         }
+        let mut progress = ctx.execution().progress.lock().unwrap();
+        progress.validated_targets = validated_targets.clone();
+        progress.generated_guest_target_keys = generated_guest_target_keys.clone();
+        progress.completed_bridge_requests.insert(request_id);
     }
 
-    Ok(())
+    Ok(BuildAdvance::Complete)
 }
 
 fn target_dependency(target: &BridgeSdkTarget) -> ComponentDependency {
@@ -232,17 +462,13 @@ fn target_dependency(target: &BridgeSdkTarget) -> ComponentDependency {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn build_components_with_dependency_ordering(
     ctx: &BuildContext<'_>,
-    has_dependency_guest_request: bool,
-    claims: &[OutputDirClaim],
-    validated_targets: &mut Vec<(BridgeRequestId, BridgeSdkTarget)>,
-    generated_guest_target_keys: &mut BTreeSet<BridgeSdkTargetKey>,
-    pending_components: &mut BTreeSet<ComponentName>,
-    built_components: &mut BTreeSet<ComponentName>,
-    available_guest_bridge_dependencies: &mut BTreeSet<ComponentDependency>,
-) -> anyhow::Result<()> {
+    checked_plan: &plan::BuildPlan,
+) -> anyhow::Result<BuildAdvance> {
+    let has_dependency_guest_request = checked_plan
+        .bridges()
+        .contains_key(&BridgeRequestId::DependencyGuest);
     let _indent = if ctx.should_run_step(AppBuildStep::Build) {
         log_action("Building", "components");
         Some(LogIndent::new())
@@ -250,178 +476,111 @@ async fn build_components_with_dependency_ordering(
         None
     };
 
-    let owners = build_owner_components(ctx);
-    let mut extracted = BTreeMap::new();
-    while !pending_components.is_empty() {
-        if has_dependency_guest_request {
-            expand_build_component_dependencies(
-                ctx,
-                pending_components,
-                built_components,
-                &extracted,
-            )?;
+    loop {
+        let extracted = ctx.extracted_metadata();
+        let progress = ctx.execution().progress();
+        let pending_components = checked_plan
+            .selected_components(&extracted)
+            .difference(&progress.completed)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if let Some(preparation) = ctx.application_context().package_preparation() {
+            let prepared = ctx
+                .application_context()
+                .prepared_packages()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Package inputs must be prepared before executing build stages")
+                })?;
+            prepared.validate(preparation).await?;
         }
-        if has_dependency_guest_request && !ctx.should_run_step(AppBuildStep::Build) {
-            for component_name in pending_components
+        check_required_middleware_artifacts(ctx, checked_plan, &extracted)?;
+        for name in pending_components.iter() {
+            for requirement in checked_plan
+                .stage(name)?
+                .actions
+                .iter()
+                .flat_map(|action| &action.requirements)
+            {
+                inspect::check_requirement(requirement, ctx.application_config())?;
+            }
+        }
+        let inputs = pending_preparations(ctx, checked_plan, &extracted)?;
+        if !inputs.is_empty() {
+            return Ok(BuildAdvance::Prepare(inputs));
+        }
+        if pending_components.is_empty() {
+            return Ok(BuildAdvance::Complete);
+        }
+        if has_dependency_guest_request
+            && !ctx.should_run_step(AppBuildStep::Build)
+            && let Some(component_name) = pending_components
                 .iter()
                 .filter(|name| !extracted.contains_key(*name))
+                .find(|&name| ctx.application().component(name).wasm().exists())
                 .cloned()
-                .collect::<Vec<_>>()
-            {
-                let wasm = ctx.application().component(&component_name).wasm();
-                if !wasm.exists() {
-                    continue;
-                }
-                let metadata = extract_and_store_component_metadata(ctx, &component_name).await?;
-                extracted.insert(component_name.clone(), metadata);
-                built_components.insert(component_name);
-            }
+        {
+            extract_and_store_component_metadata(ctx, &component_name).await?;
+            ctx.execution()
+                .progress
+                .lock()
+                .unwrap()
+                .built_components
+                .insert(component_name);
+            continue;
         }
         let mut made_progress = false;
 
         if has_dependency_guest_request
             && generate_available_dependency_guest_bridges(
                 ctx,
-                claims,
-                validated_targets,
-                generated_guest_target_keys,
-                pending_components,
-                built_components,
-                available_guest_bridge_dependencies,
+                checked_plan,
+                &pending_components,
+                &progress,
+                &extracted,
+                ctx.execution()
+                    .environment_tools()
+                    .map_or(0, |tools| tools.result_count()),
             )
             .await?
         {
-            made_progress = true;
+            continue;
         }
 
-        let mut buildable_components = Vec::new();
-        for component_name in pending_components.iter() {
-            if !has_dependency_guest_request
-                || component_guest_bridge_requirements(ctx, component_name)
-                    .iter()
-                    .all(|dependency| {
-                        let Some(language) =
-                            ctx.application().component(component_name).guest_language()
-                        else {
-                            return match dependency {
-                                ComponentDependency::Agent {
-                                    component_name,
-                                    agent_type_name,
-                                } => extracted.get(component_name).is_some_and(|metadata| {
-                                    metadata
-                                        .agent_types
-                                        .iter()
-                                        .any(|agent| &agent.type_name == agent_type_name)
-                                }),
-                                ComponentDependency::Tool { tool_name, .. } => {
-                                    dependency.component_name().is_none_or(|provider| {
-                                        extracted.get(provider).is_some_and(|metadata| {
-                                            metadata
-                                                .tools
-                                                .iter()
-                                                .any(|tool| tool.name() == Some(tool_name.as_str()))
-                                        })
-                                    })
-                                }
-                            };
-                        };
-                        validated_targets.iter().any(|(_, target)| {
-                            target.target_language == language
-                                && target_dependency(target) == *dependency
-                                && generated_guest_target_keys
-                                    .contains(&BridgeSdkTargetKey::from_bridge_target(ctx, target))
-                        })
-                    })
-            {
-                buildable_components.push(component_name.clone());
-            }
-        }
-
-        for component_name in buildable_components {
+        let mut values = checked_plan.metadata_values(&extracted);
+        values.extend(
+            progress
+                .validated_targets
+                .iter()
+                .filter(|(_, target)| {
+                    progress
+                        .generated_guest_target_keys
+                        .contains(&BridgeSdkTargetKey::from_bridge_target(ctx, target))
+                })
+                .map(|(_, target)| plan::BuildValue::GuestBridge {
+                    dependency: target_dependency(target),
+                    language: target.target_language,
+                }),
+        );
+        if let Some(component_name) = checked_plan
+            .ready(&progress, &values)
+            .into_iter()
+            .find(|name| pending_components.contains(name))
+        {
             if ctx.should_run_step(AppBuildStep::Build) {
-                ctx.extracted_metadata
-                    .lock()
-                    .unwrap()
-                    .remove(&component_name);
-                build_components(ctx, &component_name).await?;
+                ctx.remove_extracted_component_metadata(&component_name);
+                build_components(ctx, checked_plan.stage(&component_name)?).await?;
             }
-
-            pending_components.remove(&component_name);
-            built_components.insert(component_name.clone());
+            {
+                let mut progress = ctx.execution().progress.lock().unwrap();
+                checked_plan.complete(&mut progress, &component_name, &values)?;
+                progress.built_components.insert(component_name.clone());
+            }
             if has_dependency_guest_request {
                 let component = ctx.application().component(&component_name);
                 if component.wasm().exists() {
                     let metadata =
                         extract_and_store_component_metadata(ctx, &component_name).await?;
                     validate_no_ambient_tool_collisions(ctx, &component_name, &metadata.tools)?;
-                    extracted.insert(component_name.clone(), metadata);
-                }
-                expand_build_component_dependencies(
-                    ctx,
-                    pending_components,
-                    built_components,
-                    &extracted,
-                )?;
-                let metadata = extracted.get(&component_name);
-                if !owners.contains(&component_name) {
-                    made_progress = true;
-                    continue;
-                }
-                let tool_names = component_tool_dependency_components(ctx, &component_name)
-                    .iter()
-                    .flat_map(|name| {
-                        ctx.application()
-                            .component(name)
-                            .properties()
-                            .dependencies
-                            .clone()
-                    })
-                    .filter_map(|dependency| match dependency {
-                        ComponentDependency::Tool { tool_name, .. } => {
-                            Some(tool_name.as_str().to_string())
-                        }
-                        _ => None,
-                    })
-                    .collect::<BTreeSet<_>>();
-                if tool_names.is_empty() {
-                    made_progress = true;
-                    continue;
-                }
-                let mapping = metadata
-                    .into_iter()
-                    .flat_map(|metadata| &metadata.agent_types)
-                    .map(|agent| (agent.type_name.clone(), component_name.clone()))
-                    .collect();
-                let agents = ctx.application().resolve_agents(&mapping)?;
-                let mut bindings = component
-                    .layer_properties()
-                    .tool_bindings
-                    .value()
-                    .iter()
-                    .filter(|(name, _)| tool_names.contains(*name))
-                    .map(|(_, binding)| binding.clone())
-                    .collect::<Vec<_>>();
-                for agent in metadata
-                    .into_iter()
-                    .flat_map(|metadata| &metadata.agent_types)
-                {
-                    let resolved = agents
-                        .agent(&agent.type_name)
-                        .expect("extracted agent has resolved bindings");
-                    bindings.extend(
-                        resolved
-                            .tool_bindings()
-                            .iter()
-                            .filter(|(name, _)| tool_names.contains(*name))
-                            .map(|(_, binding)| binding.clone()),
-                    );
-                }
-                for binding in bindings {
-                    pending_components.extend(
-                        local_tool_middleware_components(ctx, Some(&binding), &extracted)?
-                            .difference(built_components)
-                            .cloned(),
-                    );
                 }
             }
             made_progress = true;
@@ -430,51 +589,51 @@ async fn build_components_with_dependency_ordering(
         if !made_progress {
             report_guest_bridge_dependency_ordering_cycle(
                 ctx,
-                pending_components,
-                available_guest_bridge_dependencies,
+                &pending_components,
+                &progress.available_guest_bridge_dependencies,
                 &extracted,
             )?;
         }
     }
-
-    Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn generate_available_dependency_guest_bridges(
     ctx: &BuildContext<'_>,
-    claims: &[OutputDirClaim],
-    validated_targets: &mut Vec<(BridgeRequestId, BridgeSdkTarget)>,
-    generated_guest_target_keys: &mut BTreeSet<BridgeSdkTargetKey>,
+    checked_plan: &plan::BuildPlan,
     pending_components: &BTreeSet<ComponentName>,
-    built_components: &BTreeSet<ComponentName>,
-    available_guest_bridge_dependencies: &mut BTreeSet<ComponentDependency>,
+    progress: &plan::BuildProgress,
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
+    preparation_edges: usize,
 ) -> anyhow::Result<bool> {
-    let scope_component_names = built_components
+    let scope_component_names = progress
+        .built_components
         .iter()
         .chain(pending_components.iter())
         .cloned()
         .collect::<Vec<_>>();
-    let built_component_names = built_components.iter().cloned().collect::<Vec<_>>();
-    let source_component_names = built_component_names
+    let source_component_names = progress
+        .built_components
         .iter()
-        .filter(|component_name| ctx.application().component(component_name).wasm().exists())
+        .filter(|component_name| extracted.contains_key(*component_name))
         .cloned()
         .collect::<Vec<_>>();
-    let plan = plan_dependency_guest_bridge_generation_for_components_lenient(
+    let targets = resolve_dependency_guest_bridge_inputs(
         ctx,
         &source_component_names,
         &scope_component_names,
-    )
-    .await?;
+        extracted,
+    )?;
 
+    let mut validated_targets = progress.validated_targets.clone();
+    let mut generated_guest_target_keys = progress.generated_guest_target_keys.clone();
     let new_targets = validate_and_filter_new_bridge_targets(
         ctx,
         BridgeRequestId::DependencyGuest,
-        plan.targets,
-        validated_targets,
-        claims,
-        generated_guest_target_keys,
+        targets,
+        &mut validated_targets,
+        checked_plan,
+        &mut generated_guest_target_keys,
+        preparation_edges,
     )?;
 
     if !new_targets.is_empty() {
@@ -486,7 +645,12 @@ async fn generate_available_dependency_guest_bridges(
             .iter()
             .map(|target| BridgeSdkTargetKey::from_bridge_target(ctx, target)),
     );
-    available_guest_bridge_dependencies.extend(new_targets.iter().map(target_dependency));
+    let mut progress = ctx.execution().progress.lock().unwrap();
+    progress.validated_targets = validated_targets;
+    progress.generated_guest_target_keys = generated_guest_target_keys;
+    progress
+        .available_guest_bridge_dependencies
+        .extend(new_targets.iter().map(target_dependency));
     Ok(!new_targets.is_empty())
 }
 
@@ -495,8 +659,9 @@ fn validate_and_filter_new_bridge_targets(
     request_id: BridgeRequestId,
     targets: Vec<BridgeSdkTarget>,
     validated_targets: &mut Vec<(BridgeRequestId, BridgeSdkTarget)>,
-    claims: &[OutputDirClaim],
+    checked_plan: &plan::BuildPlan,
     generated_target_keys: &mut BTreeSet<BridgeSdkTargetKey>,
+    preparation_edges: usize,
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut new_targets = Vec::new();
     let mut new_target_keys = BTreeSet::new();
@@ -510,6 +675,10 @@ fn validate_and_filter_new_bridge_targets(
         }
     }
 
+    checked_plan.validate_bridge_expansion(
+        validated_targets.len().saturating_add(new_targets.len()),
+        preparation_edges,
+    )?;
     let mut tagged_targets = validated_targets.clone();
     tagged_targets.extend(
         new_targets
@@ -525,7 +694,7 @@ fn validate_and_filter_new_bridge_targets(
     validate_supported_bridge_targets(&exact_targets)?;
     validate_host_managed_bridge_targets(&exact_targets)?;
     validate_no_output_dir_collisions(&exact_targets)?;
-    validate_exact_targets_against_claims(&tagged_targets, claims)?;
+    validate_exact_targets_against_claims(&tagged_targets, checked_plan.output_claims())?;
 
     for target in &new_targets {
         validated_targets.push((request_id, target.clone()));
@@ -704,26 +873,104 @@ fn selected_component_names_have_guest_bridge_dependencies(
         .any(|component_name| !component_guest_bridge_requirements(ctx, component_name).is_empty())
 }
 
-async fn selected_component_names_with_dependencies_for_build(
+fn needs_dependency_guest_bridges(
     ctx: &BuildContext<'_>,
-) -> anyhow::Result<Vec<ComponentName>> {
-    let mut selected = BTreeSet::<ComponentName>::new();
-    selected.extend(
-        ctx.application_context()
-            .selected_component_names()
-            .iter()
-            .cloned(),
-    );
-    expand_build_component_dependencies(ctx, &mut selected, &BTreeSet::new(), &BTreeMap::new())?;
-    Ok(selected.into_iter().collect())
+    selected_component_names: &[ComponentName],
+) -> bool {
+    selected_component_names_have_guest_bridge_dependencies(ctx, selected_component_names)
+        || ctx.custom_bridge_sdk_target().is_none()
+            && ctx
+                .application()
+                .bridge_sdks()
+                .for_all_used_modes()
+                .any(|(_, mode, targets)| {
+                    mode == BridgeMode::Guest
+                        && targets.tools.as_ref().is_some_and(|tools| {
+                            manifest_tool_bridge_request_may_match_selected_components(
+                                ctx,
+                                tools,
+                                selected_component_names,
+                            )
+                        })
+                })
 }
 
-fn expand_build_component_dependencies(
+fn owner_middleware_selection_rules(
     ctx: &BuildContext<'_>,
-    selected: &mut BTreeSet<ComponentName>,
-    built: &BTreeSet<ComponentName>,
-    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
-) -> anyhow::Result<()> {
+    component_name: &ComponentName,
+) -> anyhow::Result<Vec<plan::BuildSelectionRule>> {
+    let tool_names = component_tool_dependency_components(ctx, component_name)
+        .iter()
+        .flat_map(|name| {
+            ctx.application()
+                .component(name)
+                .properties()
+                .dependencies
+                .clone()
+        })
+        .filter_map(|dependency| match dependency {
+            ComponentDependency::Tool { tool_name, .. } => Some(tool_name.to_string()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if tool_names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let agent_names = ctx
+        .application()
+        .agent_ids()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mapping = agent_names
+        .iter()
+        .map(|name| (name.clone(), component_name.clone()))
+        .collect();
+    let agents = ctx.application().resolve_agents(&mapping)?;
+    let component = ctx.application().component(component_name);
+    let bindings = component
+        .layer_properties()
+        .tool_bindings
+        .value()
+        .iter()
+        .filter(|(name, _)| tool_names.contains(*name))
+        .map(|(_, binding)| binding)
+        .collect::<Vec<_>>();
+    let mut rules = Vec::new();
+    for binding in bindings {
+        rules.push(plan::BuildSelectionRule {
+            owner: component_name.clone(),
+            after_metadata: true,
+            subject: None,
+            components: local_tool_middleware_components(ctx, Some(binding), &BTreeMap::new())?,
+        });
+    }
+    for agent in &agent_names {
+        for (_, binding) in agents
+            .agent(agent)
+            .expect("declared agent has resolved bindings")
+            .tool_bindings()
+            .iter()
+            .filter(|(name, _)| tool_names.contains(*name))
+        {
+            rules.push(plan::BuildSelectionRule {
+                owner: component_name.clone(),
+                after_metadata: true,
+                subject: Some(ComponentDependency::Agent {
+                    component_name: component_name.clone(),
+                    agent_type_name: agent.clone(),
+                }),
+                components: local_tool_middleware_components(ctx, Some(binding), &BTreeMap::new())?,
+            });
+        }
+    }
+    rules.retain(|rule| !rule.components.is_empty());
+    Ok(rules)
+}
+
+fn manifest_middleware_selection_rules(
+    ctx: &BuildContext<'_>,
+) -> anyhow::Result<Vec<plan::BuildSelectionRule>> {
+    let mut rules = Vec::new();
     if ctx.should_run_step(AppBuildStep::GenBridge) && ctx.custom_bridge_sdk_target().is_none() {
         let bindings = ctx.application().environment_tool_bindings();
         for (_, mode, targets) in ctx.application().bridge_sdks().for_all_used_modes() {
@@ -736,55 +983,45 @@ fn expand_build_component_dependencies(
                 .map(|tools| tools.clone().into_set())
                 .unwrap_or_default();
             for (name, binding) in &bindings {
-                if matchers.contains("*")
-                    || matchers.contains(name)
-                    || extracted.iter().any(|(component, metadata)| {
-                        ctx.application_context()
-                            .selected_component_names()
-                            .contains(component)
-                            && matchers.contains(component.as_str())
-                            && metadata
-                                .tools
-                                .iter()
-                                .any(|tool| tool.name() == Some(name.as_str()))
-                    })
+                if !matchers.contains("*")
+                    && !matchers.contains(name)
+                    && !ctx
+                        .application_context()
+                        .selected_component_names()
+                        .iter()
+                        .any(|owner| matchers.contains(owner.as_str()))
                 {
-                    selected.extend(
-                        local_tool_middleware_components(ctx, Some(binding), extracted)?
-                            .difference(built)
-                            .cloned(),
-                    );
+                    continue;
+                }
+                let components =
+                    local_tool_middleware_components(ctx, Some(binding), &BTreeMap::new())?;
+                if components.is_empty() {
+                    continue;
+                }
+                for owner in ctx.application_context().selected_component_names() {
+                    let subject = if matchers.contains("*") || matchers.contains(name) {
+                        None
+                    } else if matchers.contains(owner.as_str()) {
+                        Some(ComponentDependency::Tool {
+                            tool_name: name.as_str().try_into().map_err(anyhow::Error::msg)?,
+                            source: crate::model::app::SubjectSource::Local {
+                                component_name: owner.clone(),
+                            },
+                        })
+                    } else {
+                        continue;
+                    };
+                    rules.push(plan::BuildSelectionRule {
+                        owner: owner.clone(),
+                        after_metadata: subject.is_some(),
+                        subject,
+                        components: components.clone(),
+                    });
                 }
             }
         }
     }
-    loop {
-        let selected_count_before = selected.len();
-        for dependency in selected
-            .iter()
-            .flat_map(|component_name| component_guest_bridge_requirements(ctx, component_name))
-            .collect::<Vec<_>>()
-        {
-            if let Some(component_name) = dependency.component_name()
-                && !built.contains(component_name)
-            {
-                selected.insert(component_name.clone());
-            }
-        }
-        for component in selected.clone() {
-            selected.extend(
-                component_environment_tool_middleware_requirements(ctx, &component, extracted)?
-                    .difference(built)
-                    .cloned(),
-            );
-        }
-
-        if selected.len() == selected_count_before {
-            break;
-        }
-    }
-
-    Ok(())
+    Ok(rules)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -1618,8 +1855,8 @@ bridge:
                 reason: "unsupported schema".into(),
             }],
         };
-        let ctx =
-            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let execution = BuildExecution::default().with_environment_tools(environment_tools);
+        let ctx = BuildContext::new(&app_ctx, &build_config, &execution);
 
         let error = validate_manifest_guest_matchers_resolved(&ctx, &[], &[])
             .unwrap_err()

@@ -126,6 +126,7 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
             manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-directory-source-ifs
+            includes: [nested/agents.yaml]
 
             environments:
               local:
@@ -138,23 +139,96 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
                 - sourcePath: ./scratch/component
                   targetPath: /component-workspace
                   permissions: read-only
-
-            agents:
-              IfsProbeAgent:
-                files:
-                - sourcePath: ./scratch/workspace/.keep
-                  targetPath: /workspace/.keep
-                  permissions: read-write
         ", MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    fs::create_dir_all(ctx.cwd_path_join("nested")).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("nested/agents.yaml"),
+        formatdoc! {"
+        manifestVersion: {MANIFEST_VERSION}
+        agents:
+          IfsProbeAgent:
+            files:
+            - sourcePath: ../scratch/workspace/.keep
+              targetPath: /workspace/.keep
+              permissions: read-write
+            - sourcePath: same.txt
+              targetPath: /declaring.txt
+            presets:
+              app-env:local:
+                files:
+                - sourcePath: environment.txt
+                  targetPath: /environment.txt
+    ", MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("nested/same.txt"),
+        "agent declaration bytes\n",
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("nested/environment.txt"),
+        "environment declaration bytes\n",
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("same.txt"),
+        "wrong component-directory bytes\n",
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("environment.txt"),
+        "wrong environment-directory bytes\n",
     )
     .unwrap();
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("/component-workspace/nested.txt:"));
-    assert!(outputs.stdout_contains("/workspace/.keep:"));
+    for (probe, remove_decoys) in [("with-decoys", false), ("without-decoys", true)] {
+        if remove_decoys {
+            std::fs::remove_file(ctx.cwd_path_join("same.txt")).unwrap();
+            std::fs::remove_file(ctx.cwd_path_join("environment.txt")).unwrap();
+        }
+        let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+        assert!(outputs.success_or_dump());
+        if !remove_decoys {
+            assert!(outputs.stdout_contains("/component-workspace/nested.txt:"));
+            assert!(outputs.stdout_contains("/workspace/.keep:"));
+        }
+        let agent = format!("IfsProbeAgent(\"{probe}\")");
+        assert!(
+            ctx.cli([flag::YES, cmd::AGENT, cmd::CREATE, &agent, "--keyed"])
+                .await
+                .success_or_dump()
+        );
+        for (path, bytes) in [
+            ("/component-workspace/nested.txt", "component seed\n"),
+            ("/workspace/.keep", "seed\n"),
+            ("/declaring.txt", "agent declaration bytes\n"),
+            ("/environment.txt", "environment declaration bytes\n"),
+        ] {
+            let download = tempfile::tempdir().unwrap();
+            let destination = download.path().join("contents");
+            let output = ctx
+                .cli([
+                    cmd::AGENT,
+                    "file-contents",
+                    &agent,
+                    path,
+                    "--output",
+                    destination.to_str().unwrap(),
+                ])
+                .await;
+            assert!(output.success_or_dump());
+            assert_eq!(
+                fs::read(&destination).unwrap(),
+                bytes.as_bytes(),
+                "{probe}: {path}"
+            );
+        }
+    }
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),

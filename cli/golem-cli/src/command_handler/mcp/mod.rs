@@ -860,6 +860,7 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
     let ctx = lazy.get_or_init().await?;
     // The questions about the manifest are answered here, once, and every call keeps the answer.
     drop(ctx.app_context_lock_mut().await?);
+    ctx.finish_application_operation();
     let environment = ctx
         .environment_handler()
         .resolve_environment(EnvironmentResolveMode::Any)
@@ -1074,7 +1075,10 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     };
     let confirmed = command.global_flags.yes;
 
-    let ctx = match server_ctx.for_tool_call(confirmed, environment.clone(), cancellation) {
+    let ctx = match server_ctx
+        .for_tool_call(confirmed, environment.clone(), cancellation)
+        .await
+    {
         Ok(ctx) => Arc::new(ctx),
         Err(error) => {
             let tool_error = classify(&error, Some(tool));
@@ -1109,7 +1113,10 @@ async fn run_oplog_export_call(
     // agent ID or data of the agent.
     let result = {
         let _silent = (LogOutput::new(Output::None), TracingSuppression::new());
-        match server_ctx.for_tool_call(false, environment.clone(), cancellation) {
+        match server_ctx
+            .for_tool_call(false, environment.clone(), cancellation)
+            .await
+        {
             Ok(ctx) => oplog_export::run(Arc::new(ctx), arguments, OUTPUT_CAPTURE_LIMIT).await,
             Err(error) => Err(error),
         }

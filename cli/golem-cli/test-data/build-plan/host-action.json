@@ -1,0 +1,14 @@
+{
+  "inputs": ["/work/build.mjs", "/work/package.json", "/work/package-lock.json"],
+  "outputs": ["/work/dist/main.wasm"],
+  "requirements": [{"kind": "hostProgram", "program": "node", "directory": "/work"}],
+  "effects": ["readFiles", "writeFiles", "hostProcess", "fetchDependencies"],
+  "operation": {
+    "kind": "command",
+    "command": {
+      "command": "node build.mjs",
+      "sources": ["build.mjs", "package.json", "package-lock.json"],
+      "targets": ["dist/main.wasm"]
+    }
+  }
+}

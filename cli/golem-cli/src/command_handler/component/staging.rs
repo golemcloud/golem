@@ -65,7 +65,7 @@ pub(super) async fn extract_local_component(
     Agents,
 )> {
     let metadata = match package_bytes {
-        Some(bytes) if !app.installed_components.contains_key(name) => {
+        Some(bytes) if app.installed_component(name).is_none() => {
             let metadata =
                 crate::model::agent::extraction::extract_component_metadata_from_bytes(bytes)
                     .await?;
@@ -74,8 +74,15 @@ pub(super) async fn extract_local_component(
                 .await?
         }
         _ => {
-            extract_and_store_component_metadata(&BuildContext::new(app, &BuildConfig::new()), name)
-                .await?
+            extract_and_store_component_metadata(
+                &BuildContext::new(
+                    app,
+                    &BuildConfig::new(),
+                    &crate::app::build::BuildExecution::default(),
+                ),
+                name,
+            )
+            .await?
         }
     };
     let agent_components = metadata

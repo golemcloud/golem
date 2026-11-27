@@ -226,6 +226,9 @@
       "$ref": "#/definitions/package.digest"
     },
     {
+      "$ref": "#/definitions/package.install"
+    },
+    {
       "$ref": "#/definitions/deploy.deployment"
     },
     {
@@ -4718,6 +4721,20 @@
             "additionalProperties": false
           }
         }
+      },
+      "additionalProperties": false
+    },
+    "package.install": {
+      "type": "object",
+      "description": "The package pin saved to the application manifest and lock by install.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "install",
+      "required": ["$type", "name", "version", "digest"],
+      "properties": {
+        "$type": { "const": "package.install" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
       },
       "additionalProperties": false
     },
@@ -12247,6 +12264,10 @@
     {
       "type": "package.digest",
       "rustType": "PackageDigest"
+    },
+    {
+      "type": "package.install",
+      "rustType": "PackageInstallResult"
     },
     {
       "type": "deploy.deployment",

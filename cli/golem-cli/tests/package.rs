@@ -307,20 +307,21 @@ pub(crate) async fn push_package(reference: &str, archive: &[u8]) -> anyhow::Res
 }
 
 #[test]
-#[timeout("45s")]
+#[timeout("90s")]
 async fn install_file_package_builds_without_instantiating_and_keeps_lock_read_only() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let manifest = format!(
-        "# keep me\nmanifestVersion: {}\napp: installer # keep me too\nenvironments:\n  local: {{ server: local }}\n",
+        "# keep me\nmanifestVersion: {}\napp: installer # keep me too\npackage: {{ name: installer, version: 1.2.3 }}\nenvironments:\n  local: {{ server: local }}\n",
         versions::sdk::MANIFEST
     );
     fs::write(root.join("golem.yaml"), &manifest).unwrap();
+    fs::create_dir(root.join("packages")).unwrap();
     for (name, instruction) in [("traps", "unreachable"), ("loops", "(loop br 0)")] {
         let wasm = wat::parse_str(format!(
             "(component (core module $m (func $start {instruction}) (start $start)) (core instance (instantiate $m)))"
         )).unwrap();
-        let tar = format!("{name}.tar");
+        let tar = format!("packages/{name}.tar");
         let digest = write_install_fixture(&root.join(&tar), name, wasm);
         let result = run_cli(root, &["install", &format!("./{tar}")]).await;
         assert!(
@@ -328,29 +329,195 @@ async fn install_file_package_builds_without_instantiating_and_keeps_lock_read_o
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
+        let installed: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(
+            installed,
+            serde_json::json!({"$type": "package.install", "name": name, "version": "1.2.3", "digest": digest})
+        );
+        let quiet = run_cli(root, &["--quiet", "install", &format!("./{tar}")]).await;
+        assert!(quiet.status.success());
+        assert!(
+            quiet.stderr.is_empty(),
+            "Quiet install diagnostics: {}",
+            String::from_utf8_lossy(&quiet.stderr)
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&quiet.stdout).unwrap(),
+            installed
+        );
         let edited = fs::read_to_string(root.join("golem.yaml")).unwrap();
         assert!(edited.contains("# keep me\n") && edited.contains("# keep me too\n"));
         assert!(edited.contains("packages:") && edited.contains(&digest));
+        let pins: serde_yaml::Value = serde_yaml::from_str(&edited).unwrap();
+        assert_eq!(pins["packages"][name]["source"].as_str().unwrap(), tar);
+        if name == "traps" {
+            let lock = fs::read(root.join("golem.lock")).unwrap();
+            fs::write(root.join("golem.yaml"), &manifest).unwrap();
+            assert_cli_error(
+                root,
+                &["--yes", "build", "--step", "check"],
+                "no manifest entry",
+            )
+            .await;
+            assert_eq!(
+                fs::read_to_string(root.join("golem.yaml")).unwrap(),
+                manifest
+            );
+            assert_eq!(fs::read(root.join("golem.lock")).unwrap(), lock);
+            assert_eq!(cli(root, &["install", &tar]).await, installed);
+        }
     }
     let lock = fs::read(root.join("golem.lock")).unwrap();
-    assert_eq!(cli(root, &["build"]).await["built"], true);
+    let pinned_manifest = fs::read(root.join("golem.yaml")).unwrap();
+    let unpack = root.join("golem-temp/package-unpack");
+    assert!(
+        !unpack.exists(),
+        "Loading pins must not allocate package roots"
+    );
+    let mut package_operations = Vec::new();
+    for args in [
+        vec!["build", "--step", "check"],
+        vec!["--yes", "build", "--step", "check"],
+    ] {
+        let checked = run_cli(root, &args).await;
+        assert!(
+            checked.status.success(),
+            "{}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        assert!(!unpack.exists(), "Check must not materialize packages");
+        assert_eq!(fs::read(root.join("golem.yaml")).unwrap(), pinned_manifest);
+        assert_eq!(fs::read(root.join("golem.lock")).unwrap(), lock);
+        let dump = format!(
+            "{}{}",
+            String::from_utf8_lossy(&checked.stderr),
+            String::from_utf8_lossy(&checked.stdout)
+        );
+        let operation = dump
+            .lines()
+            .find(|line| line.contains("package inputs:"))
+            .unwrap_or_else(|| {
+                panic!("Separate package preparation inspection is missing: {dump}")
+            });
+        package_operations.push(operation.to_owned());
+        assert!(dump.contains("no executable build plan was constructed"));
+        assert!(!dump.contains("operation: PackageAssets"));
+    }
+    assert_eq!(
+        package_operations[0], package_operations[1],
+        "Unchanged package inputs must produce the same concrete inventory"
+    );
+    let dry_run = cli(root, &["publish", "--dry-run"]).await;
+    assert!(!root.join("golem-package.tar").exists());
+    assert_eq!(cli(root, &["package", "pack"]).await, dry_run);
+    let repacked = package::read(Cursor::new(
+        fs::read(root.join("golem-package.tar")).unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(repacked.config().components.len(), 2);
+    assert_eq!(dry_run["digest"], repacked.digest());
+    assert_eq!(fs::read(root.join("golem.yaml")).unwrap(), pinned_manifest);
     assert_eq!(fs::read(root.join("golem.lock")).unwrap(), lock);
+    let prepared = fs::read_dir(&unpack)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .as_encoded_bytes()
+                .starts_with(b"root-")
+        })
+        .unwrap();
+    let wasm = fs::read_dir(prepared.join("traps/wasm"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let original_wasm = fs::read(&wasm).unwrap();
+    let modified = fs::metadata(&wasm).unwrap().modified().unwrap();
+    for _ in 0..2 {
+        let built = run_cli(root, &["build"]).await;
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&built.stdout).unwrap()["built"],
+            true
+        );
+        assert!(String::from_utf8_lossy(&built.stderr).contains("Up-to-date"));
+        assert_eq!(fs::metadata(&wasm).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(&wasm).unwrap(), original_wasm);
+    }
+    assert_eq!(fs::read(root.join("golem.lock")).unwrap(), lock);
+    assert!(
+        prepared.exists(),
+        "Prepared outputs persist beyond the command"
+    );
+    fs::write(&wasm, b"corrupt").unwrap();
+    let check = run_cli(root, &["--yes", "build", "--step", "check"]).await;
+    assert!(check.status.success());
+    assert!(
+        String::from_utf8_lossy(&check.stderr).contains("no executable build plan was constructed")
+    );
+    assert_eq!(fs::read(&wasm).unwrap(), b"corrupt");
+    assert_eq!(cli(root, &["build"]).await["built"], true);
+    assert_eq!(fs::read(&wasm).unwrap(), original_wasm);
+    for output in [wasm.clone(), prepared.join("package-manifest.json")] {
+        fs::remove_file(&output).unwrap();
+        let check = run_cli(root, &["--yes", "build", "--step", "check"]).await;
+        assert!(check.status.success());
+        assert!(
+            String::from_utf8_lossy(&check.stderr)
+                .contains("no executable build plan was constructed")
+        );
+        assert!(!output.exists(), "Check must not repair package outputs");
+        assert_eq!(cli(root, &["build"]).await["built"], true);
+        assert!(output.exists());
+        assert_eq!(fs::read(&wasm).unwrap(), original_wasm);
+    }
+    let unexpected = prepared.join("unexpected.txt");
+    fs::write(&unexpected, b"not part of the verified package").unwrap();
+    let check = run_cli(root, &["--yes", "build", "--step", "check"]).await;
+    assert!(check.status.success());
+    assert!(
+        String::from_utf8_lossy(&check.stderr).contains("no executable build plan was constructed")
+    );
+    assert!(unexpected.exists(), "Check must not repair package outputs");
+    assert_eq!(cli(root, &["build"]).await["built"], true);
+    assert!(!unexpected.exists());
 
     let other = tempfile::tempdir().unwrap();
+    let manifest_with_packages = fs::read_to_string(root.join("golem.yaml")).unwrap();
+    fs::create_dir(other.path().join("packages")).unwrap();
+    for file in [
+        "golem.yaml",
+        "golem.lock",
+        "packages/loops.tar",
+        "packages/traps.tar",
+    ] {
+        fs::copy(root.join(file), other.path().join(file)).unwrap();
+    }
+    assert_eq!(cli(other.path(), &["build"]).await["built"], true);
+    assert_eq!(cli(other.path(), &["clean"]).await["cleaned"], true);
+    fs::remove_dir_all(other.path().join("isolated-config/package-cache")).unwrap();
     write_install_fixture(
-        &root.join("traps.tar"),
+        &other.path().join("packages/traps.tar"),
         "traps",
         b"different bytes".to_vec(),
     );
-    let manifest_with_packages = fs::read_to_string(root.join("golem.yaml")).unwrap();
-    for file in ["golem.yaml", "golem.lock", "loops.tar", "traps.tar"] {
-        fs::copy(root.join(file), other.path().join(file)).unwrap();
-    }
     assert_cli_error(other.path(), &["build"], "digest").await;
+    assert_eq!(cli(other.path(), &["clean"]).await["cleaned"], true);
+    assert!(!other.path().join("golem-temp/package-unpack").exists());
+    assert!(other.path().join("golem-temp/operation.lock").is_file());
 
+    let mut changed: serde_yaml::Value = serde_yaml::from_str(&manifest_with_packages).unwrap();
+    changed["packages"]["traps"]["version"] = serde_yaml::Value::String("2.0.0".into());
     fs::write(
         root.join("golem.yaml"),
-        manifest_with_packages.replacen("1.2.3", "2.0.0", 1),
+        serde_yaml::to_string(&changed).unwrap(),
     )
     .unwrap();
     for command in ["build", "deploy"] {
@@ -370,6 +537,114 @@ async fn assert_cli_error(dir: &Path, args: &[&str], expected: &str) {
         !result.status.success() && output.contains(expected),
         "{args:?}: {output}"
     );
+}
+
+#[test]
+#[timeout("45s")]
+async fn application_operations_serialize_and_clean_preserves_the_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("golem.yaml"), format!(
+        "manifestVersion: {}\napp: application-lock\nenvironments:\n  local: {{ server: local }}\ncomponents:\n  local:hold:\n    componentWasm: local.wasm\n    build:\n      - command: node hold.cjs\n", versions::sdk::MANIFEST)).unwrap();
+    let wasm = wat::parse_str("(component)").unwrap();
+    fs::write(root.join("local.wasm"), &wasm).unwrap();
+    write_install_fixture(&root.join("installed.tar"), "installed", wasm);
+    cli(root, &["install", "./installed.tar"]).await;
+    fs::write(
+        root.join("hold.cjs"),
+        r#"
+const fs = require('node:fs');
+const path = require('node:path');
+const slot = process.env.PACKAGE_TEST_SLOT;
+const parent = 'golem-temp/package-unpack';
+const roots = fs.readdirSync(parent).filter(name => name.startsWith('root-'));
+if (roots.length !== 1) throw new Error('Expected exactly one shared package root');
+const root = path.join(parent, roots[0]);
+const wasmDir = path.join(root, 'installed/wasm');
+const wasm = fs.readFileSync(path.join(wasmDir, fs.readdirSync(wasmDir)[0]));
+if (wasm[0] !== 0 || wasm[1] !== 97) throw new Error('Missing package Wasm');
+fs.writeFileSync(slot + '.ready', root);
+const timer = setInterval(() => {
+  if (fs.existsSync(slot + '.release')) {
+    clearInterval(timer);
+    clearTimeout(deadline);
+  }
+}, 10);
+const deadline = setTimeout(() => { throw new Error('Timed out waiting for release'); }, 20000);
+"#,
+    )
+    .unwrap();
+    let mut children = Vec::new();
+    for slot in ["first", "second"] {
+        let child = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+            .kill_on_drop(true)
+            .current_dir(root)
+            .env("PACKAGE_TEST_SLOT", slot)
+            .arg("--config-dir")
+            .arg(root.join("isolated-config"))
+            .args(["--yes", "build", "--step", "build"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        children.push((slot, child));
+        if slot == "second" {
+            break;
+        }
+        let child = &mut children.last_mut().unwrap().1;
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while !root.join(format!("{slot}.ready")).exists() {
+                if child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("The build must read package assets before waiting");
+        if !root.join(format!("{slot}.ready")).exists() {
+            let (_, child) = children.pop().unwrap();
+            let output = child.wait_with_output().await.unwrap();
+            panic!(
+                "Build exited before reading package assets: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert_cli_error(root, &["clean"], "operation lock").await;
+    }
+    let shared = fs::read_to_string(root.join("first.ready")).unwrap();
+    let help = run_cli(root, &["build", "--help"]).await;
+    assert!(
+        help.status.success(),
+        "Help must not wait on the application lock"
+    );
+    assert!(!root.join("second.ready").exists());
+    assert!(root.join(&shared).exists());
+    for (slot, child) in children {
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while !root.join(format!("{slot}.ready")).exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("The next build must start after the previous build releases its lock");
+        assert_eq!(
+            fs::read_to_string(root.join(format!("{slot}.ready"))).unwrap(),
+            shared
+        );
+        fs::write(root.join(format!("{slot}.release")), b"release").unwrap();
+        let result = child.wait_with_output().await.unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(root.join(&shared).exists());
+    }
+    fs::remove_file(root.join("installed.tar")).unwrap();
+    fs::remove_dir_all(root.join("isolated-config/package-cache")).unwrap();
+    assert_eq!(cli(root, &["clean"]).await["cleaned"], true);
+    assert!(!root.join(&shared).exists());
 }
 
 // Assemble a package without a publisher-side build, which cannot extract these components.
@@ -433,6 +708,7 @@ includes:
 - settings/golem.yaml
 environments:
   local:
+    componentPresets: debug
     server:
       url: http://{}
       auth:
@@ -441,6 +717,9 @@ environments:
 components:
   app:agent:
     componentWasm: agent.wasm
+    files:
+    - sourcePath: ./component.txt
+      targetPath: /component.txt
   app:tool:
     componentWasm: tool.wasm
 tools:
@@ -460,18 +739,33 @@ tools:
     let source = crate::workspace_path()
         .join("test-components/golem_it_tool_runtime_bypass_provider_release.wasm");
     let mut results = Vec::new();
-    for _ in 0..2 {
+    for iteration in 0..2 {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("golem.yaml"), &manifest).unwrap();
         let settings = dir.path().join("settings");
         fs::create_dir(&settings).unwrap();
         let agent_manifest = format!(
-            "manifestVersion: {}\nagents:\n  PackageFileAgent:\n    config:\n      file: ./sample.txt\n      text: ./sample.txt\n",
+            "manifestVersion: {}\nagents:\n  PackageFileAgent:\n    config:\n      file: ./sample.txt\n      text: ./sample.txt\n    files:\n    - sourcePath: ./agent.txt\n      targetPath: /agent.txt\n    presets:\n      app-env:local:\n        files:\n        - sourcePath: ./environment.txt\n          targetPath: /environment.txt\n      debug:\n        files:\n        - sourcePath: ./debug.txt\n          targetPath: /debug.txt\n",
             versions::sdk::MANIFEST
         );
         fs::write(settings.join("golem.yaml"), &agent_manifest).unwrap();
         fs::write(settings.join("sample.txt"), "from the declaring manifest\n").unwrap();
         fs::write(dir.path().join("sample.txt"), "from the app root\n").unwrap();
+        fs::write(
+            dir.path().join("component.txt"),
+            "component initial bytes\n",
+        )
+        .unwrap();
+        for (file, bytes) in [
+            ("agent.txt", "agent initial bytes\n"),
+            ("environment.txt", "environment initial bytes\n"),
+            ("debug.txt", "preset initial bytes\n"),
+        ] {
+            fs::write(settings.join(file), bytes).unwrap();
+            if iteration == 0 {
+                fs::write(dir.path().join(file), "wrong component-directory bytes\n").unwrap();
+            }
+        }
         fs::write(dir.path().join("hello world.txt"), "portable file\n").unwrap();
         fs::copy(
             crate::workspace_path().join("test-components/it_agent_counters_release.wasm"),
@@ -534,6 +828,32 @@ tools:
             package.blob(&file.digest),
             Some(&b"from the declaring manifest\n"[..])
         );
+        let files = defaults.files.as_ref().unwrap();
+        let expected = std::collections::BTreeMap::from([
+            ("/component.txt", "component initial bytes\n"),
+            ("/agent.txt", "agent initial bytes\n"),
+            ("/environment.txt", "environment initial bytes\n"),
+            ("/debug.txt", "preset initial bytes\n"),
+        ]);
+        assert_eq!(files.entries.len(), expected.len());
+        let mut archive = tar::Archive::new(package.blob(&files.layer).unwrap());
+        let contents = archive
+            .entries()
+            .unwrap()
+            .map(|entry| {
+                let mut entry = entry.unwrap();
+                let path = entry.path().unwrap().to_string_lossy().into_owned();
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+                (path, bytes)
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for (path, file) in &files.entries {
+            assert_eq!(
+                contents[path],
+                expected[file.target.as_abs_str()].as_bytes()
+            );
+        }
         assert!(
             component
                 .metadata

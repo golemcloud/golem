@@ -386,7 +386,11 @@ impl ComponentCommandHandler {
                 .exists()
             {
                 let agent_types = extract_and_store_component_metadata(
-                    &BuildContext::new(app_ctx, &BuildConfig::new()),
+                    &BuildContext::new(
+                        app_ctx,
+                        &BuildConfig::new(),
+                        &crate::app::build::BuildExecution::default(),
+                    ),
                     &component_name,
                 )
                 .await?
@@ -916,7 +920,7 @@ impl ComponentCommandHandler {
                     .remote_release_references()
                     .next()
                     .is_some(),
-                app.installed_package_calls.clone(),
+                app.installed_package_calls().clone(),
             )
         };
 
@@ -2022,7 +2026,7 @@ impl ComponentCommandHandler {
         let tools = extracted_metadata.tools;
         let tool_middlewares = extracted_metadata.tool_middlewares;
         let component = app_ctx.application().component(component_name);
-        let installed = app_ctx.installed_components.get(component_name);
+        let installed = app_ctx.installed_component(component_name);
         let wasm_path =
             installed.map_or_else(|| component.wasm(), |installed| installed.wasm_path.clone());
 
