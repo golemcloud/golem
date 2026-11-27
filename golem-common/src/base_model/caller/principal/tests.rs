@@ -549,3 +549,39 @@ fn caller_digest_is_the_same_only_for_the_same_record() {
     );
     assert_ne!(ana.digest(), Caller::anonymous().digest());
 }
+
+#[test]
+fn removing_claims_keeps_the_pair_and_the_authentication_time() {
+    use crate::base_model::caller::test_support::{every_principal, sample_caller};
+
+    for principal in every_principal() {
+        let mut without = principal.clone();
+        let removed = without.remove_claims();
+        match (&principal, &without) {
+            (Principal::User(before), Principal::User(after)) => {
+                assert!(removed);
+                assert_eq!(after.claims.as_json(), "{}");
+                assert_eq!(after.pair, before.pair);
+                assert_eq!(after.authenticated_at, before.authenticated_at);
+                assert!(
+                    !without.clone().remove_claims(),
+                    "nothing is left to remove"
+                );
+            }
+            _ => {
+                assert!(!removed, "{principal:?} holds no claims");
+                assert!(without.same_record(&principal));
+            }
+        }
+    }
+
+    let mut caller = sample_caller();
+    assert!(caller.remove_claims());
+    assert!(caller.original.same_record(&Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::empty(),
+        authenticated_at: "2026-01-02T03:04:05.678Z".parse::<Timestamp>().unwrap(),
+    })));
+    assert!(caller.immediate.same_record(&sample_caller().immediate));
+    assert_eq!(caller.tokens, sample_caller().tokens);
+}

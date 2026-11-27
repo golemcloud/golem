@@ -275,6 +275,11 @@ impl Claims {
     pub fn as_json(&self) -> &str {
         self.0.get()
     }
+
+    /// The empty claim set, `{}`.
+    pub fn empty() -> Self {
+        Self::from_json("{}".to_string()).expect("`{}` is a claim set")
+    }
 }
 
 /// One open container of the claim set while `check_member_names` scans it.
@@ -487,6 +492,14 @@ impl Caller {
             tokens: self.tokens.clone(),
         }
     }
+
+    /// Removes a user's verified claims from both roles (see [`Principal::remove_claims`]).
+    /// Returns whether any claims were removed.
+    pub fn remove_claims(&mut self) -> bool {
+        let original = self.original.remove_claims();
+        let immediate = self.immediate.remove_claims();
+        original || immediate
+    }
 }
 
 /// The same recorded caller: every field is equal, and claims are equal byte for byte.
@@ -504,6 +517,20 @@ impl PartialEq for Caller {
 impl Eq for Caller {}
 
 impl Principal {
+    /// Removes a user's verified claims: a user keeps its pair and its authentication time, and
+    /// gets the empty claim set. Other principals hold no claims. Returns whether any claims were
+    /// removed.
+    pub fn remove_claims(&mut self) -> bool {
+        let Principal::User(user) = self else {
+            return false;
+        };
+        if user.claims.as_json() == "{}" {
+            return false;
+        }
+        user.claims = Claims::empty();
+        true
+    }
+
     /// True exactly when every field of both principals is equal, claims byte for byte.
     pub fn same_record(&self, other: &Principal) -> bool {
         match (self, other) {
