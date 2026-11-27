@@ -234,7 +234,7 @@ impl EnvBasedTestDependenciesConfig {
         self.golem_repo_root.join("test-components")
     }
 
-    fn service_binaries_dir(&self) -> PathBuf {
+    pub fn service_binaries_dir(&self) -> PathBuf {
         resolve_cargo_target_dir(&self.golem_repo_root).join(&self.bin_profile)
     }
 }

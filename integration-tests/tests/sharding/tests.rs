@@ -18,7 +18,7 @@ use golem_common::config::ConfigLoader;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_executor::spawned::SpawnedWorkerExecutor;
-use golem_test_framework::config::{DbType, service_executable};
+use golem_test_framework::config::DbType;
 use std::future::Future;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::Level;
@@ -160,11 +160,7 @@ async fn a_third_executor_refreshes_both_existing_counts_within_one_lease(_traci
         .executor_base_grpc_port
         .checked_add(2)
         .expect("the third executor's gRPC port exceeds 65535");
-    let executable = service_executable(&config.golem_repo_root, "worker-executor")
-        .parent()
-        .unwrap()
-        .with_file_name(&config.bin_profile)
-        .join("worker-executor");
+    let executable = config.service_binaries_dir().join("worker-executor");
     let working_directory = config.golem_repo_root.join("golem-worker-executor");
     let manager_config = config
         .golem_repo_root
