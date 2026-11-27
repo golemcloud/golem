@@ -179,7 +179,7 @@ The worker executors and worker services wait out a failover themselves, so no c
 
 Tools such as `grpcurl` and your own scripts must follow the `NotLeader` detail themselves. A replica that refuses a call before it ran adds the detail `type.googleapis.com/golem.shardmanager.v1.RefusedBeforeRunning` to the status. It does so when it is starting, stopping, no longer sure that it holds its lease, or knows no ready leader. The detail has no message type in the proto and its value is empty, so a tool recognises it by that type URL alone. A call refused with that mark never ran, so a tool may send it to another replica whatever the call is. An `UNAVAILABLE` with neither detail may have run.
 
-A `kubectl port-forward` to the Service can land on a standby. Its answer then names a pod IP that a laptop cannot reach. Port-forward to the serving pod instead, which is the one whose `/metrics` shows `shard_manager_is_serving 1`.
+A `kubectl port-forward` to the Service can land on a standby. Its answer then names a pod IP that a laptop cannot reach. Port-forward to the serving pod instead, which is the one whose `/metrics` shows `golem_shard_manager_is_serving 1`.
 
 ## Health probes and monitoring
 
@@ -210,14 +210,14 @@ Monitor these metrics across all replicas:
 
 | Metric | Interpretation |
 | --- | --- |
-| `shard_manager_is_serving` | `1` on the replica that takes calls. Use it to find the leader that serves |
-| `shard_manager_is_leader` | `1` on the replica that holds the leadership lease. Expect the sum across replicas to be `1` in steady state, though not necessarily throughout a failover |
-| `shard_manager_leader_since_epoch` | Election time in Unix seconds; `0` while standing by |
-| `shard_manager_campaign_attempt_failures_total` | Rising values indicate failed, retried attempts to reach etcd during election |
+| `golem_shard_manager_is_serving` | `1` on the replica that takes calls. Use it to find the leader that serves |
+| `golem_shard_manager_is_leader` | `1` on the replica that holds the leadership lease. Expect the sum across replicas to be `1` in steady state, though not necessarily throughout a failover |
+| `golem_shard_manager_leader_since_timestamp_seconds` | Election time in Unix seconds; `0` while standing by |
+| `golem_shard_manager_campaign_attempt_failures_total` | Rising values indicate failed, retried attempts to reach etcd during election |
 
-The two gauges differ while a new leader starts. `shard_manager_is_leader` is `1` from the moment the replica wins the election, because it holds the lease from then. `shard_manager_is_serving` becomes `1` only after the replica has restored its state and checked the executors: a short time after a crash, and up to `initial_health_check_timeout` after a longer outage.
+The two gauges differ while a new leader starts. `golem_shard_manager_is_leader` is `1` from the moment the replica wins the election, because it holds the lease from then. `golem_shard_manager_is_serving` becomes `1` only after the replica has restored its state and checked the executors: a short time after a crash, and up to `initial_health_check_timeout` after a longer outage.
 
-Both gauges read `0` on a healthy standby and on a stuck one alike. `/readyz` and `shard_manager_campaign_attempt_failures_total` tell them apart. A replica that etcd stopped answering, or that has not reached its own address, is not ready. A rising counter means the replica cannot reach etcd and is retrying. A ready standby with a flat counter is waiting for the leadership. See [Metrics](/next/operate/metrics) for metrics collection.
+Both gauges read `0` on a healthy standby and on a stuck one alike. `/readyz` and `golem_shard_manager_campaign_attempt_failures_total` tell them apart. A replica that etcd stopped answering, or that has not reached its own address, is not ready. A rising counter means the replica cannot reach etcd and is retrying. A ready standby with a flat counter is waiting for the leadership. See [Metrics](/next/operate/metrics) for metrics collection.
 
 To read the election itself, run `etcdctl elect -l /golem/shard-manager/leader`. It prints the leader's election value, a JSON document with its identity, its gRPC address, a `ready` flag and its build `version`.
 

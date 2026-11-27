@@ -34,8 +34,6 @@ impl PrimaryOplogState {
             let environment_id = self.owned_agent_id.environment_id();
             let agent_id = self.owned_agent_id.agent_id();
             let agent_mode = self.agent_mode;
-            let account_id = self.account_id.to_string();
-            let environment_id_label = environment_id.to_string();
 
             let upload = async move {
                 blob_storage
@@ -51,12 +49,7 @@ impl PrimaryOplogState {
                     )
                     .await
                     .map_err(|e| format!("Failed uploading oplog data to the blob store {e}"))?;
-                record_storage_bytes_written(
-                    STORAGE_TYPE_OPLOG,
-                    &account_id,
-                    &environment_id_label,
-                    data_len,
-                );
+                record_storage_bytes_written(STORAGE_TYPE_OPLOG, data_len);
                 Ok::<(), String>(())
             };
 
@@ -175,18 +168,8 @@ impl PrimaryOplogState {
             return Err(error);
         }
 
-        record_storage_bytes_written(
-            STORAGE_TYPE_OPLOG,
-            &self.account_id_label,
-            &self.environment_id_label,
-            bytes_written,
-        );
-        record_storage_objects_written(
-            STORAGE_TYPE_OPLOG,
-            &self.account_id_label,
-            &self.environment_id_label,
-            entry_count,
-        );
+        record_storage_bytes_written(STORAGE_TYPE_OPLOG, bytes_written);
+        record_storage_objects_written(STORAGE_TYPE_OPLOG, entry_count);
 
         self.last_committed_idx = last_idx;
         Ok(BTreeMap::from_iter(

@@ -902,7 +902,6 @@ impl EphemeralOplog {
         lower_services: &NEVec<Arc<dyn super::multilayer::OplogArchiveService>>,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        account_id: golem_common::model::account::AccountId,
         entry_count_limit: u64,
         transfer_tx: &UnboundedSender<BackgroundTransferMessage>,
         multi_layer_oplog_service: &MultiLayerOplogService,
@@ -932,11 +931,7 @@ impl EphemeralOplog {
                 shard_epoch = None;
             }
             if i != (lower_services.len().get() - 1) {
-                let instrumented = Arc::new(InstrumentedOplogArchive::new(
-                    raw,
-                    account_id,
-                    owned_agent_id.environment_id(),
-                ));
+                let instrumented = Arc::new(InstrumentedOplogArchive::new(raw));
                 let wrapped = if fresh {
                     WrappedOplogArchive::new_fresh(
                         i,
@@ -959,11 +954,7 @@ impl EphemeralOplog {
                 };
                 lower.push(Arc::new(wrapped));
             } else {
-                lower.push(Arc::new(InstrumentedOplogArchive::new(
-                    raw,
-                    account_id,
-                    owned_agent_id.environment_id(),
-                )));
+                lower.push(Arc::new(InstrumentedOplogArchive::new(raw)));
             }
         }
         Ok(NEVec::try_from_vec(lower).expect("At least one lower layer is required"))

@@ -19,14 +19,16 @@ use tracing::info;
 pub struct ProvidedWorkerExecutor {
     host: String,
     grpc_port: u16,
+    http_port: Option<u16>,
 }
 
 impl ProvidedWorkerExecutor {
-    pub fn new(host: String, grpc_port: u16) -> Self {
+    pub fn new(host: String, grpc_port: u16, http_port: Option<u16>) -> Self {
         info!("Using already running golem-worker-executor on {host}, grpc port: {grpc_port}");
         Self {
             host: host.clone(),
             grpc_port,
+            http_port,
         }
     }
 }
@@ -38,6 +40,15 @@ impl WorkerExecutor for ProvidedWorkerExecutor {
     }
     fn grpc_port(&self) -> u16 {
         self.grpc_port
+    }
+    fn http_port(&self) -> Option<u16> {
+        self.http_port
+    }
+
+    /// The executor is not restarted by this process, so its generation stays 0.
+    fn metrics_endpoint(&self) -> Option<(String, u64)> {
+        self.http_port
+            .map(|port| (format!("http://{}:{port}/metrics", self.host), 0))
     }
 
     async fn restart(&self) {

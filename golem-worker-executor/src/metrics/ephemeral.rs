@@ -12,43 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::metrics::catalog;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use lazy_static::lazy_static;
 use prometheus::*;
 
 lazy_static! {
-    static ref EPHEMERAL_PROMISE_WAITING: Gauge = register_gauge!(
-        "ephemeral_promise_waiting",
-        "Number of ephemeral agents currently waiting on promises"
-    )
-    .unwrap();
-    static ref EPHEMERAL_NON_SUSPENDING_FAILURE_TOTAL: CounterVec = register_counter_vec!(
-        "ephemeral_non_suspending_failure_total",
-        "Number of ephemeral failures that replace suspension",
-        &["reason"]
-    )
-    .unwrap();
-    static ref EPHEMERAL_INVOCATION_ATTEMPT_TOTAL: CounterVec = register_counter_vec!(
-        "ephemeral_invocation_attempt_total",
-        "Number of ephemeral invocation attempts by freshness disposition",
-        &["disposition"]
-    )
-    .unwrap();
-    static ref EPHEMERAL_KNOWN_FRESH_VALIDATION_FAILURE_TOTAL: Counter = register_counter!(
-        "ephemeral_known_fresh_validation_failure_total",
-        "Number of rejected KnownFresh invocation requests"
-    )
-    .unwrap();
-    static ref EPHEMERAL_LOWER_OPLOG_EXISTENCE_READ_TOTAL: Counter = register_counter!(
-        "ephemeral_lower_oplog_existence_read_total",
-        "Number of lower oplog existence reads for ephemeral agents"
-    )
-    .unwrap();
-    static ref EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL: Counter = register_counter!(
-        "ephemeral_inactive_invocation_failure_total",
-        "Number of attempts to invoke or resume inactive ephemeral agents"
-    )
-    .unwrap();
+    static ref EPHEMERAL_PROMISE_WAITING: Gauge = catalog::EPHEMERAL_PROMISE_WAITING.register();
+    static ref EPHEMERAL_NON_SUSPENDING_FAILURE_TOTAL: CounterVec =
+        catalog::EPHEMERAL_NON_SUSPENDING_FAILURE_TOTAL.register();
+    static ref EPHEMERAL_INVOCATION_ATTEMPT_TOTAL: CounterVec =
+        catalog::EPHEMERAL_INVOCATION_ATTEMPT_TOTAL.register();
+    static ref EPHEMERAL_KNOWN_FRESH_VALIDATION_FAILURE_TOTAL: Counter =
+        catalog::EPHEMERAL_KNOWN_FRESH_VALIDATION_FAILURE_TOTAL.register();
+    static ref EPHEMERAL_LOWER_OPLOG_EXISTENCE_READ_TOTAL: Counter =
+        catalog::EPHEMERAL_LOWER_OPLOG_EXISTENCE_READ_TOTAL.register();
+    static ref EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL: Counter =
+        catalog::EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL.register();
 }
 
 pub fn inc_promise_waiting() {

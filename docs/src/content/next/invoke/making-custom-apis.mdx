@@ -913,7 +913,7 @@ Route metadata can customize that HTTP surface without changing the agent method
 
 Reader and append limits must be positive and no greater than the registry installation maximums. Omitted values resolve to the installation defaults during deployment. Configure these under `durable_stream_routes` in the registry service: reader default and maximum are both 16, while the append default is 100 and maximum is 1000. Reader and append accounting is independent for each route and worker-service node, even when routes resolve to the same canonical stream. Catch-up reads instead share that canonical stream's separate rate budget, and the node-wide live-reader ceiling remains shared across routes.
 
-These controls provide admission protection, not cluster-wide quotas, and do not replace executor protocol limits. Admission exhaustion returns `429 Too Many Requests` with `Retry-After: 1`; routing, connectivity, or shard unavailability returns `503 Service Unavailable`. See [Gateway configuration](/next/operate/durable_streams#gateway-configuration) for service-wide controls and [Metrics](/next/operate/metrics#worker-service) for monitoring.
+These controls provide admission protection, not cluster-wide quotas, and do not replace executor protocol limits. Admission exhaustion returns `429 Too Many Requests` with `Retry-After: 1`; routing, connectivity, or shard unavailability returns `503 Service Unavailable`. See [Gateway configuration](/next/operate/durable_streams#gateway-configuration) for service-wide controls and [Metrics](/next/operate/metrics#http-and-grpc-apis) for monitoring.
 
 <Callout type="info">
   These options preserve the official Durable Streams wire protocol: they choose

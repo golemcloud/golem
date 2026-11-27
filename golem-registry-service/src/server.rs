@@ -20,8 +20,6 @@ use golem_registry_service::bootstrap::Services;
 use golem_registry_service::config::{RegistryServiceConfig, make_config_loader};
 use golem_registry_service::{RegistryService, metrics};
 use golem_service_base::config::BlobStorageConfig;
-use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use opentelemetry_sdk::trace::SdkTracer;
 use prometheus::Registry;
 use std::panic;
@@ -49,17 +47,6 @@ fn main() -> anyhow::Result<()> {
     info!("Using configuration:\n{}", config.to_safe_string_indented());
 
     let prometheus = metrics::register_all();
-
-    let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
-        .without_counter_suffixes()
-        .without_units()
-        .build();
-
-    global::set_meter_provider(
-        MeterProviderBuilder::default()
-            .with_reader(exporter)
-            .build(),
-    );
 
     let num_cpus = std::thread::available_parallelism()?;
 

@@ -148,7 +148,7 @@ impl StorageMetricsClient {
 fn parse_counters(body: &str) -> anyhow::Result<BTreeMap<StorageOperation, u64>> {
     ensure!(
         body.lines()
-            .any(|line| line.starts_with("executor_version_info{")),
+            .any(|line| line.starts_with("golem_executor_build_info{")),
         "scrape is not a complete executor metrics response"
     );
     let mut counters = BTreeMap::new();
@@ -204,7 +204,7 @@ mod tests {
 
     fn snapshot(generation: u64, count: u64) -> StorageSnapshot {
         let body = format!(
-            "executor_version_info{{version=\"test\"}} 1\n{METRIC}{{kind=\"keyvalue\",operation=\"get_many\",service=\"stream_session_index\",api=\"read_recovery\",entity=\"metadata\"}} {count}\n"
+            "golem_executor_build_info{{version=\"test\"}} 1\n{METRIC}{{kind=\"keyvalue\",operation=\"get_many\",service=\"stream_session_index\",api=\"read_recovery\",entity=\"metadata\"}} {count}\n"
         );
         StorageSnapshot {
             executors: BTreeMap::from([(
@@ -222,7 +222,7 @@ mod tests {
         assert!(parse_counters("").is_err());
         assert!(parse_counters("<html>proxy error</html>").is_err());
         assert!(
-            parse_counters("executor_version_info{version=\"test\"} 1\n")
+            parse_counters("golem_executor_build_info{version=\"test\"} 1\n")
                 .unwrap()
                 .is_empty()
         );

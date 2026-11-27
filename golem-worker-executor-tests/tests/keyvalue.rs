@@ -930,14 +930,12 @@ async fn kv_set_increments_storage_bytes_and_objects_written_metrics(
         .await?;
     let agent_id = agent_key!("KeyValue", "kv-metrics-set-1");
     let bucket = format!("{}-kv-metrics-set-bucket", component.id);
-    let account_id = context.account_id.to_string();
-    let environment_id = context.default_environment_id.to_string();
 
     let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_KV])
         .get();
     let objects_before = STORAGE_OBJECTS_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_KV])
         .get();
 
     // set "hello" (5 bytes)
@@ -970,19 +968,19 @@ async fn kv_set_increments_storage_bytes_and_objects_written_metrics(
 
     drop(executor);
 
-    assert_eq!(
+    assert!(
         STORAGE_BYTES_WRITTEN_TOTAL
-            .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
-            .get(),
-        bytes_before + 11.0,
-        "bytes_written should increase by 5 + 6 = 11"
+            .with_label_values(&[STORAGE_TYPE_KV])
+            .get()
+            >= bytes_before + 11.0,
+        "bytes_written should increase by at least 5 + 6 = 11"
     );
-    assert_eq!(
+    assert!(
         STORAGE_OBJECTS_WRITTEN_TOTAL
-            .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
-            .get(),
-        objects_before + 2.0,
-        "objects_written should increase by 2"
+            .with_label_values(&[STORAGE_TYPE_KV])
+            .get()
+            >= objects_before + 2.0,
+        "objects_written should increase by at least 2"
     );
 
     Ok(())
@@ -1005,8 +1003,6 @@ async fn kv_delete_increments_storage_objects_deleted_metric(
         .await?;
     let agent_id = agent_key!("KeyValue", "kv-metrics-delete-1");
     let bucket = format!("{}-kv-metrics-delete-bucket", component.id);
-    let account_id = context.account_id.to_string();
-    let environment_id = context.default_environment_id.to_string();
 
     // write a key first
     executor
@@ -1019,7 +1015,7 @@ async fn kv_delete_increments_storage_objects_deleted_metric(
         .await?;
 
     let objects_deleted_before = STORAGE_OBJECTS_DELETED_TOTAL
-        .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_KV])
         .get();
 
     executor
@@ -1033,12 +1029,12 @@ async fn kv_delete_increments_storage_objects_deleted_metric(
 
     drop(executor);
 
-    assert_eq!(
+    assert!(
         STORAGE_OBJECTS_DELETED_TOTAL
-            .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
-            .get(),
-        objects_deleted_before + 1.0,
-        "objects_deleted should increase by 1 after delete"
+            .with_label_values(&[STORAGE_TYPE_KV])
+            .get()
+            >= objects_deleted_before + 1.0,
+        "objects_deleted should increase by at least 1 after delete"
     );
 
     Ok(())

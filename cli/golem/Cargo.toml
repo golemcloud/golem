@@ -41,7 +41,6 @@ dirs = { workspace = true }
 figment = { workspace = true }
 hex = { workspace = true }
 opentelemetry = { workspace = true }
-opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 prometheus = { workspace = true }

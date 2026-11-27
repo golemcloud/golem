@@ -50,7 +50,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 /// the first failure has already returned.
 const STARTUP_SETTLE: Duration = Duration::from_secs(2);
 
-const CAMPAIGN_FAILURES_METRIC: &str = "shard_manager_campaign_attempt_failures_total";
+const CAMPAIGN_FAILURES_METRIC: &str = "golem_shard_manager_campaign_attempt_failures_total";
 
 fn unreachable_config() -> EtcdConfig {
     EtcdConfig {

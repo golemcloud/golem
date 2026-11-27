@@ -2527,7 +2527,7 @@ scenarios:
         #
         # The evidence has to come from outside the workload, and it does. The
         # scheduler polls its own schema on this cluster whether or not anything
-        # is scheduled, so `db_success_seconds{svc="scheduler_storage"}` moves
+        # is scheduled, so `golem_db_success_seconds{svc="scheduler_storage"}` moves
         # under the fault regardless of what the workload does. Check it before
         # believing a clean result here.
         slowed: []

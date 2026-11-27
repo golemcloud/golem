@@ -74,7 +74,7 @@ const REFUSAL_TIMEOUT: Duration = Duration::from_secs(5);
 /// closes, which is what distinguishes a revoke from an expiry.
 const REVOKE_WINDOW: Duration = Duration::from_millis(500);
 const NUMBER_OF_SHARDS: usize = 1024;
-const IS_LEADER_METRIC: &str = "shard_manager_is_leader";
+const IS_LEADER_METRIC: &str = "golem_shard_manager_is_leader";
 
 fn etcd_config(etcd: &DockerEtcd) -> EtcdConfig {
     EtcdConfig {
@@ -441,7 +441,7 @@ async fn only_a_started_leader_is_marked_ready(etcd: &Arc<DockerEtcd>) {
     standby.abort();
 }
 
-const IS_SERVING_METRIC: &str = "shard_manager_is_serving";
+const IS_SERVING_METRIC: &str = "golem_shard_manager_is_serving";
 
 /// The current reading of a gauge on the process-wide default registry, or `None` while it has
 /// never been set. This replica's only because this suite runs sequentially.
@@ -461,8 +461,8 @@ fn gauge(name: &str) -> Option<f64> {
 
 #[test]
 #[tracing::instrument(skip_all)]
-// `shard_manager_is_leader` turns on at the election, before the state restore and the executor
-// health check; only `shard_manager_is_serving` says the replica takes calls.
+// `golem_shard_manager_is_leader` turns on at the election, before the state restore and the executor
+// health check; only `golem_shard_manager_is_serving` says the replica takes calls.
 async fn the_serving_gauge_is_on_while_the_leader_serves_and_drops_on_step_down(
     etcd: &Arc<DockerEtcd>,
 ) {
@@ -1409,7 +1409,7 @@ async fn a_read_through_a_stalled_etcd_survives_it(etcd: &Arc<DockerEtcd>) {
     );
 }
 
-/// The current `shard_manager_is_leader` reading, or `None` while the gauge has never been set.
+/// The current `golem_shard_manager_is_leader` reading, or `None` while the gauge has never been set.
 ///
 /// The leadership metrics live on the process-wide default registry, not the one `run()` is
 /// handed; the reading is this replica's only because this suite runs sequentially.
@@ -1429,7 +1429,7 @@ fn is_leader_gauge() -> Option<f64> {
 
 #[test]
 #[tracing::instrument(skip_all)]
-// `sum(shard_manager_is_leader) != 1` is the alert this gauge exists for, so a replica that steps
+// `sum(golem_shard_manager_is_leader) != 1` is the alert this gauge exists for, so a replica that steps
 // down still exporting 1 hides the very state the alert is meant to catch.
 async fn the_leader_gauge_drops_on_step_down(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
@@ -1924,9 +1924,9 @@ async fn the_watchdog_fires_within_one_ttl_on_a_black_hole(etcd: &Arc<DockerEtcd
     info!(?noticed, "The leader stopped after a black-holed keepalive");
 }
 
-const CAMPAIGN_FAILURES_METRIC: &str = "shard_manager_campaign_attempt_failures_total";
+const CAMPAIGN_FAILURES_METRIC: &str = "golem_shard_manager_campaign_attempt_failures_total";
 
-/// The current `shard_manager_campaign_attempt_failures_total` reading, or `None` while the
+/// The current `golem_shard_manager_campaign_attempt_failures_total` reading, or `None` while the
 /// counter has never been registered.
 fn campaign_attempt_failures() -> Option<u64> {
     prometheus::default_registry()

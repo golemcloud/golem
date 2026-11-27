@@ -17,7 +17,6 @@ use crate::config::{CompileWorkerConfig, RegistryServiceConfig, StaticRegistrySe
 use crate::model::*;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::EnvironmentId;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -57,7 +56,6 @@ impl ComponentCompilationService {
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        environment_id: EnvironmentId,
         wasm_hash: Hash,
         sender: Option<StaticRegistryServiceConfig>,
     ) -> Result<(), CompilationError> {
@@ -71,7 +69,6 @@ impl ComponentCompilationService {
                 id: component_id,
                 revision: component_revision,
             },
-            environment_id,
             wasm_hash,
             sender,
         };
@@ -100,6 +97,7 @@ mod tests {
         component_compilation_service_server::ComponentCompilationService as _,
     };
     use golem_common::base_model::api::error_code::INTERNAL_COMPILATION_QUEUE_FULL;
+    use golem_common::model::environment::EnvironmentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -153,16 +151,9 @@ mod tests {
         });
         let service = ComponentCompilationService { queue };
         let id = ComponentId::new();
-        let environment = EnvironmentId::new();
         let enqueue = async |revision| {
             service
-                .enqueue_compilation(
-                    id,
-                    ComponentRevision::new(revision).unwrap(),
-                    environment,
-                    hash,
-                    None,
-                )
+                .enqueue_compilation(id, ComponentRevision::new(revision).unwrap(), hash, None)
                 .await
                 .unwrap();
         };
@@ -182,7 +173,6 @@ mod tests {
         crate::metrics::decrement_upload_queue_length();
         storage
             .put(
-                environment,
                 hash,
                 id,
                 retried.component_and_revision.revision,
@@ -224,7 +214,10 @@ mod tests {
             accepted.result,
             Some(component_compilation_response::Result::Success(_))
         ));
-        assert_eq!(queue_length("component_compilation_queue_length"), 1.0);
+        assert_eq!(
+            queue_length("golem_component_compilation_queue_length"),
+            1.0
+        );
 
         let rejected = service
             .enqueue_compilation(tonic::Request::new(request.clone()))
@@ -239,12 +232,14 @@ mod tests {
             matches!(error.error, Some(component_compilation_error::Error::InternalError(body))
             if body.code == INTERNAL_COMPILATION_QUEUE_FULL)
         );
-        assert_eq!(queue_length("component_compilation_queue_length"), 1.0);
+        assert_eq!(
+            queue_length("golem_component_compilation_queue_length"),
+            1.0
+        );
         let queued = receiver.recv().await.unwrap();
         crate::metrics::decrement_queue_length();
         assert_eq!(queued.component.id, component_id);
         assert_eq!(u64::from(queued.component.revision), 7);
-        assert_eq!(queued.environment_id, environment_id);
         assert!(
             receiver.try_recv().is_err(),
             "rejected request must not enter the queue"
@@ -264,7 +259,10 @@ mod tests {
             matches!(error.error, Some(component_compilation_error::Error::InternalError(body))
             if body.code != INTERNAL_COMPILATION_QUEUE_FULL && body.error.contains("closed"))
         );
-        assert_eq!(queue_length("component_compilation_queue_length"), 0.0);
+        assert_eq!(
+            queue_length("golem_component_compilation_queue_length"),
+            0.0
+        );
     }
 
     struct GatedStorage {
@@ -295,7 +293,6 @@ mod tests {
 
         async fn put(
             &self,
-            environment_id: EnvironmentId,
             hash: Hash,
             id: ComponentId,
             revision: ComponentRevision,
@@ -303,9 +300,7 @@ mod tests {
         ) -> Result<(), WorkerExecutorError> {
             self.uploads.send(revision).unwrap();
             self.upload_gate.acquire().await.unwrap().forget();
-            self.inner
-                .put(environment_id, hash, id, revision, component)
-                .await
+            self.inner.put(hash, id, revision, component).await
         }
     }
 
@@ -332,10 +327,9 @@ mod tests {
         UploadWorker::start(storage.clone(), artifacts);
         let service = ComponentCompilationService { queue };
         let id = ComponentId::new();
-        let environment = EnvironmentId::new();
         let hash = |revision: u8| Hash::new(blake3::hash(&[revision]));
         service
-            .enqueue_compilation(id, ComponentRevision::INITIAL, environment, hash(0), None)
+            .enqueue_compilation(id, ComponentRevision::INITIAL, hash(0), None)
             .await
             .unwrap();
         storage.gets.acquire().await.unwrap().forget();
@@ -344,7 +338,6 @@ mod tests {
                 .enqueue_compilation(
                     id,
                     ComponentRevision::new(revision).unwrap(),
-                    environment,
                     hash(revision as u8),
                     None,
                 )
@@ -353,13 +346,7 @@ mod tests {
         }
         assert!(matches!(
             service
-                .enqueue_compilation(
-                    id,
-                    ComponentRevision::new(3).unwrap(),
-                    environment,
-                    hash(3),
-                    None
-                )
+                .enqueue_compilation(id, ComponentRevision::new(3).unwrap(), hash(3), None)
                 .await,
             Err(CompilationError::QueueFull)
         ));
@@ -372,7 +359,6 @@ mod tests {
                 .enqueue_compilation(
                     id,
                     ComponentRevision::new(revision).unwrap(),
-                    environment,
                     hash(revision as u8),
                     None,
                 )
@@ -381,13 +367,7 @@ mod tests {
         }
         assert!(matches!(
             service
-                .enqueue_compilation(
-                    id,
-                    ComponentRevision::new(5).unwrap(),
-                    environment,
-                    hash(5),
-                    None
-                )
+                .enqueue_compilation(id, ComponentRevision::new(5).unwrap(), hash(5), None)
                 .await,
             Err(CompilationError::QueueFull)
         ));
@@ -397,9 +377,12 @@ mod tests {
                 .is_err(),
             "a full upload queue must stop the compiler from starting another component"
         );
-        assert_eq!(queue_length("component_compilation_queue_length"), 2.0);
         assert_eq!(
-            queue_length("component_compilation_upload_queue_length"),
+            queue_length("golem_component_compilation_queue_length"),
+            2.0
+        );
+        assert_eq!(
+            queue_length("golem_component_compilation_upload_queue_length"),
             1.0
         );
         storage.upload_gate.add_permits(4);
@@ -411,20 +394,13 @@ mod tests {
             .enqueue_compilation(
                 ComponentId::new(),
                 ComponentRevision::new(5).unwrap(),
-                EnvironmentId::new(),
                 hash(4),
                 None,
             )
             .await
             .unwrap();
         service
-            .enqueue_compilation(
-                id,
-                ComponentRevision::new(6).unwrap(),
-                environment,
-                hash(6),
-                None,
-            )
+            .enqueue_compilation(id, ComponentRevision::new(6).unwrap(), hash(6), None)
             .await
             .unwrap();
         // The next distinct artifact must start while revision 4's upload is still blocked.
@@ -435,11 +411,14 @@ mod tests {
         drop(storage);
         assert!(
             uploaded.recv().await.is_none(),
-            "the duplicate from another environment must not compile or upload again"
+            "the duplicate Wasm of another component must not compile or upload again"
         );
-        assert_eq!(queue_length("component_compilation_queue_length"), 0.0);
         assert_eq!(
-            queue_length("component_compilation_upload_queue_length"),
+            queue_length("golem_component_compilation_queue_length"),
+            0.0
+        );
+        assert_eq!(
+            queue_length("golem_component_compilation_upload_queue_length"),
             0.0
         );
     }

@@ -1,6 +1,6 @@
 use crate::base_model::api;
+use crate::metrics::catalog;
 use crate::model::error::ErrorBody;
-use opentelemetry::metrics::{Counter, Histogram};
 use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::{FutureExt, Span, SpanKind, TraceContextExt, Tracer};
 use opentelemetry::{Context, Key, KeyValue, global};
@@ -11,8 +11,8 @@ use poem::web::RealIp;
 use poem::{
     Endpoint, FromRequest, IntoEndpoint, IntoResponse, Middleware, Request, Response, Result,
 };
-use prometheus::{Encoder, Registry, TextEncoder};
-use std::sync::Arc;
+use prometheus::{Encoder, HistogramVec, IntCounterVec, Registry, TextEncoder};
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 use tracing::Instrument;
 
@@ -201,104 +201,74 @@ fn set_path_pattern(
     }
 }
 
-pub struct OpenTelemetryMetrics {
-    request_count: Counter<u64>,
-    error_count: Counter<u64>,
-    duration: Histogram<f64>,
-}
+/// Records `golem_http_requests_total` and `golem_http_request_duration_seconds` for each
+/// request. The route label is the matched route pattern, so a request path never becomes a
+/// label value.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HttpMetrics;
 
-impl Default for OpenTelemetryMetrics {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+static HTTP_REQUESTS_TOTAL: LazyLock<IntCounterVec> =
+    LazyLock::new(|| catalog::HTTP_REQUESTS_TOTAL.register());
+static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> =
+    LazyLock::new(|| catalog::HTTP_REQUEST_DURATION_SECONDS.register());
 
-impl OpenTelemetryMetrics {
-    pub fn new() -> Self {
-        Self::from_meter(global::meter("poem"))
-    }
-
-    fn from_meter(meter: opentelemetry::metrics::Meter) -> Self {
-        Self {
-            request_count: meter
-                .u64_counter("poem_requests_count")
-                .with_description("total request count (since start of service)")
-                .build(),
-            error_count: meter
-                .u64_counter("poem_errors_count")
-                .with_description("failed request count (since start of service)")
-                .build(),
-            duration: meter
-                .f64_histogram("poem_request_duration_ms")
-                .with_unit("milliseconds")
-                .with_description(
-                    "request duration histogram (in milliseconds, since start of service)",
-                )
-                .build(),
-        }
-    }
-}
-
-impl<E: Endpoint> Middleware<E> for OpenTelemetryMetrics {
-    type Output = OpenTelemetryMetricsEndpoint<E>;
+impl<E: Endpoint> Middleware<E> for HttpMetrics {
+    type Output = HttpMetricsEndpoint<E>;
 
     fn transform(&self, inner: E) -> Self::Output {
-        OpenTelemetryMetricsEndpoint {
-            request_count: self.request_count.clone(),
-            error_count: self.error_count.clone(),
-            duration: self.duration.clone(),
-            inner,
-        }
+        HttpMetricsEndpoint { inner }
     }
 }
 
-pub struct OpenTelemetryMetricsEndpoint<E> {
-    request_count: Counter<u64>,
-    error_count: Counter<u64>,
-    duration: Histogram<f64>,
+pub struct HttpMetricsEndpoint<E> {
     inner: E,
 }
 
-impl<E: Endpoint> Endpoint for OpenTelemetryMetricsEndpoint<E> {
+impl<E: Endpoint> Endpoint for HttpMetricsEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
-        let mut labels = vec![
-            KeyValue::new("http.request.method", req.method().to_string()),
-            KeyValue::new("url.full", req.original_uri().to_string()),
-        ];
+        let method = method_label(req.method());
         let start = Instant::now();
         let result = self.inner.call(req).await.map(IntoResponse::into_response);
 
-        match &result {
-            Ok(response) => {
-                add_path_pattern(&mut labels, response.data::<PathPattern>());
-                labels.push(KeyValue::new(
-                    "http.response.status_code",
-                    response.status().as_u16() as i64,
-                ));
-            }
-            Err(error) => {
-                add_path_pattern(&mut labels, error.data::<PathPattern>());
-                labels.push(KeyValue::new(
-                    "http.response.status_code",
-                    error.status().as_u16() as i64,
-                ));
-                self.error_count.add(1, &labels);
-                labels.push(KeyValue::new("exception.message", error.to_string()));
-            }
-        }
-
-        self.request_count.add(1, &labels);
-        self.duration
-            .record(start.elapsed().as_secs_f64() * 1000.0, &labels);
+        let (status, route) = match &result {
+            Ok(response) => (response.status(), response.data::<PathPattern>()),
+            Err(error) => (error.status(), error.data::<PathPattern>()),
+        };
+        let route = route_label(route);
+        let labels = [method, route, status.as_str()];
+        HTTP_REQUESTS_TOTAL.with_label_values(&labels).inc();
+        HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&labels)
+            .observe(start.elapsed().as_secs_f64());
         result
     }
 }
 
-fn add_path_pattern(labels: &mut Vec<KeyValue>, path: Option<&PathPattern>) {
-    if let Some(path) = path {
-        labels.push(KeyValue::new("http.path_pattern", path.0.to_string()));
+/// The `route` label of a request: the matched pattern of a Golem API, or `other`.
+///
+/// A route nested at `/`, such as the custom HTTP APIs of the gateway, has an empty pattern. A
+/// route mounted with `.at("*", ...)`, such as the registry API in the single executable, prefixes
+/// the inner pattern with `/*`, and a request that no inner route matches has the bare `/*`.
+fn route_label(route: Option<&PathPattern>) -> &str {
+    let route = route.map_or("", |route| route.0.as_ref());
+    let route = route.strip_prefix("/*").unwrap_or(route);
+    if route.is_empty() { "other" } else { route }
+}
+
+fn method_label(method: &Method) -> &'static str {
+    match *method {
+        Method::GET => "GET",
+        Method::HEAD => "HEAD",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::DELETE => "DELETE",
+        Method::CONNECT => "CONNECT",
+        Method::OPTIONS => "OPTIONS",
+        Method::TRACE => "TRACE",
+        Method::PATCH => "PATCH",
+        _ => "other",
     }
 }
 

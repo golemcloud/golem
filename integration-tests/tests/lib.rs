@@ -20,6 +20,7 @@ mod fork;
 mod gol40_chunk_g_environment_resolution_acceptance;
 mod invocation_context;
 mod invocations;
+mod metrics_catalog;
 mod otlp_plugin;
 mod owner_environment_resolution;
 mod permissions;
@@ -54,6 +55,7 @@ tag_suite!(agent_config, group12);
 tag_suite!(api, group2);
 
 tag_suite!(invocation_context, group7);
+tag_suite!(metrics_catalog, group7);
 tag_suite!(otlp_plugin, group7);
 tag_suite!(plugins, group7);
 

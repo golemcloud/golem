@@ -27,6 +27,7 @@
 //! from `getrusage` and is the peak of the whole process, linear memories
 //! included.
 
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 
@@ -48,24 +49,11 @@ unsafe extern "C" {
 }
 
 lazy_static! {
-    static ref MIMALLOC_PEAK_RSS_BYTES: GaugeVec = register_gauge_vec!(
-        "golem_mimalloc_peak_rss_bytes",
-        "Peak resident set size of the executor process since it started, from getrusage",
-        &["executor_id"]
-    )
-    .unwrap();
-    static ref MIMALLOC_CURRENT_COMMIT_BYTES: GaugeVec = register_gauge_vec!(
-        "golem_mimalloc_current_commit_bytes",
-        "Heap address space that mimalloc committed; on Linux it goes down only when mimalloc unmaps memory, so it is close to a high-water mark and can exceed the resident heap",
-        &["executor_id"]
-    )
-    .unwrap();
-    static ref MIMALLOC_PEAK_COMMIT_BYTES: GaugeVec = register_gauge_vec!(
-        "golem_mimalloc_peak_commit_bytes",
-        "Peak of golem_mimalloc_current_commit_bytes since the executor started",
-        &["executor_id"]
-    )
-    .unwrap();
+    static ref MIMALLOC_PEAK_RSS_BYTES: GaugeVec = catalog::MIMALLOC_PEAK_RSS_BYTES.register();
+    static ref MIMALLOC_CURRENT_COMMIT_BYTES: GaugeVec =
+        catalog::MIMALLOC_CURRENT_COMMIT_BYTES.register();
+    static ref MIMALLOC_PEAK_COMMIT_BYTES: GaugeVec =
+        catalog::MIMALLOC_PEAK_COMMIT_BYTES.register();
 }
 
 /// Reads `mi_process_info` and updates the mimalloc memory gauges. Cheap and

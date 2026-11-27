@@ -15,6 +15,7 @@
 use uuid::Uuid;
 
 use golem_common::model::InvocationId;
+use golem_common::model::account::AccountId;
 
 use super::*;
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
@@ -125,7 +126,6 @@ async fn open_idle_multilayer(
     let oplog = MultiLayerOplog::new(
         owned_agent_id,
         AgentMode::Durable,
-        account_id,
         primary,
         service.clone(),
         Box::new(|| {}),
@@ -326,7 +326,6 @@ async fn observer_open_after_primary_growth(archived: u64) {
     let observer = MultiLayerOplog::new(
         owned,
         AgentMode::Durable,
-        account,
         observer,
         service,
         Box::new(|| {}),

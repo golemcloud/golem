@@ -127,7 +127,8 @@ pub fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
         .unwrap()
 }
 
-/// Installs the process-global metrics recorder and starts reporting metrics for `runtime`.
+/// Installs the process-global metrics recorder and starts reporting metrics for `runtime`, under
+/// the `golem_tokio_` prefix of the catalog.
 ///
 /// This must be called at most once by the owner of a process, regardless of how many services
 /// share the runtime.
@@ -137,6 +138,8 @@ pub fn install_runtime_metrics(
     sampling_interval: Duration,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) {
+    golem_common::metrics::catalog::register_process_metrics(&registry);
+
     let recorder = match metrics_prometheus::Recorder::builder()
         .with_registry(registry)
         .try_build_and_install()
@@ -150,8 +153,15 @@ pub fn install_runtime_metrics(
         }
     };
 
-    let reporter =
-        tokio_metrics::RuntimeMetricsReporterBuilder::default().with_interval(sampling_interval);
+    let reporter = tokio_metrics::RuntimeMetricsReporterBuilder::default()
+        .with_interval(sampling_interval)
+        .with_metrics_transformer(|name| {
+            metrics::Key::from_name(name.replacen(
+                "tokio_",
+                golem_common::metrics::catalog::TOKIO_RUNTIME.prefix,
+                1,
+            ))
+        });
 
     join_set.spawn_on(
         async move {

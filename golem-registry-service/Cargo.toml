@@ -22,6 +22,11 @@ name = "tests"
 path = "tests/lib.rs"
 harness = false
 
+[[test]]
+name = "storage_metrics"
+path = "tests/storage_metrics.rs"
+harness = false
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-async-trait = { workspace = true }
@@ -55,7 +60,6 @@ mime = { workspace = true }
 oauth2 = { workspace = true }
 openidconnect.workspace = true
 opentelemetry = { workspace = true }
-opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true, features = [
     "cookie",

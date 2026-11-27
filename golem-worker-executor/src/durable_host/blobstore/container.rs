@@ -337,20 +337,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                let account_id = self.created_by().to_string();
-                let environment_id_str = environment_id.to_string();
-                record_storage_bytes_written(
-                    STORAGE_TYPE_BLOB_STORE,
-                    &account_id,
-                    &environment_id_str,
-                    length,
-                );
-                record_storage_objects_written(
-                    STORAGE_TYPE_BLOB_STORE,
-                    &account_id,
-                    &environment_id_str,
-                    1,
-                );
+                record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, length);
+                record_storage_objects_written(STORAGE_TYPE_BLOB_STORE, 1);
             }
             handle
                 .complete(
@@ -436,12 +424,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                let account_id = self.created_by().to_string();
-                let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(
                     STORAGE_TYPE_BLOB_STORE,
-                    &account_id,
-                    &environment_id_str,
                     result
                         .as_ref()
                         .map_or(0, |mutation| mutation.objects_deleted),
@@ -538,12 +522,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                let account_id = self.created_by().to_string();
-                let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(
                     STORAGE_TYPE_BLOB_STORE,
-                    &account_id,
-                    &environment_id_str,
                     result
                         .as_ref()
                         .map_or(count, |mutation| mutation.objects_deleted),
@@ -786,12 +766,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                let account_id = self.created_by().to_string();
-                let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(
                     STORAGE_TYPE_BLOB_STORE,
-                    &account_id,
-                    &environment_id_str,
                     result
                         .as_ref()
                         .map_or(0, |mutation| mutation.objects_deleted),

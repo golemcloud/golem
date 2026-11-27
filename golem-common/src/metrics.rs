@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod catalog;
+
 pub const DEFAULT_TIME_BUCKETS: &[f64; 11] = &[
     0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0,
 ];
@@ -35,40 +37,21 @@ pub const DEFAULT_COUNT_BUCKETS: &[f64; 12] = &[
 ];
 
 pub mod external_calls {
+    use crate::metrics::catalog;
     use std::time::Duration;
 
     use lazy_static::lazy_static;
     use prometheus::*;
 
-    use crate::metrics::DEFAULT_TIME_BUCKETS;
-
     lazy_static! {
-        static ref EXTERNAL_CALL_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
-            "external_call_success_seconds",
-            "Duration of successful external calls",
-            &["target", "op"],
-            DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref EXTERNAL_CALL_RESPONSE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
-            "external_call_response_size_bytes",
-            "Size of response of external calls",
-            &["target", "op"],
-            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref EXTERNAL_CALL_RETRY_TOTAL: CounterVec = register_counter_vec!(
-            "external_call_retry_total",
-            "Number of failed external calls that get retried",
-            &["target", "op"]
-        )
-        .unwrap();
-        static ref EXTERNAL_CALL_FAILURE_TOTAL: CounterVec = register_counter_vec!(
-            "external_call_failure_total",
-            "Number of failed external calls that not to be retried",
-            &["target", "op"]
-        )
-        .unwrap();
+        static ref EXTERNAL_CALL_SUCCESS_SECONDS: HistogramVec =
+            catalog::EXTERNAL_CALL_SUCCESS_SECONDS.register();
+        static ref EXTERNAL_CALL_RESPONSE_SIZE_BYTES: HistogramVec =
+            catalog::EXTERNAL_CALL_RESPONSE_SIZE_BYTES.register();
+        static ref EXTERNAL_CALL_RETRY_TOTAL: CounterVec =
+            catalog::EXTERNAL_CALL_RETRY_TOTAL.register();
+        static ref EXTERNAL_CALL_FAILURE_TOTAL: CounterVec =
+            catalog::EXTERNAL_CALL_FAILURE_TOTAL.register();
     }
 
     pub fn record_external_call_success(
@@ -105,39 +88,19 @@ pub mod external_calls {
 }
 
 pub mod redis {
+    use crate::metrics::catalog;
     use std::time::Duration;
 
     use lazy_static::lazy_static;
     use prometheus::*;
 
     lazy_static! {
-        static ref REDIS_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
-            "redis_success_seconds",
-            "Duration of successful Redis calls",
-            &["svc", "api", "cmd"],
-            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref REDIS_FAILURE_TOTAL: CounterVec = register_counter_vec!(
-            "redis_failure_total",
-            "Number of failed Redis calls",
-            &["svc", "api", "cmd"]
-        )
-        .unwrap();
-        static ref REDIS_SERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
-            "redis_serialized_size_bytes",
-            "Size of serialized Redis entities",
-            &["svc", "entity"],
-            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref REDIS_DESERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
-            "redis_deserialized_size_bytes",
-            "Size of deserialized Redis entities",
-            &["svc", "entity"],
-            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
-        )
-        .unwrap();
+        static ref REDIS_SUCCESS_SECONDS: HistogramVec = catalog::REDIS_SUCCESS_SECONDS.register();
+        static ref REDIS_FAILURE_TOTAL: CounterVec = catalog::REDIS_FAILURE_TOTAL.register();
+        static ref REDIS_SERIALIZED_SIZE_BYTES: HistogramVec =
+            catalog::REDIS_SERIALIZED_SIZE_BYTES.register();
+        static ref REDIS_DESERIALIZED_SIZE_BYTES: HistogramVec =
+            catalog::REDIS_DESERIALIZED_SIZE_BYTES.register();
     }
 
     pub fn record_redis_success(
@@ -183,29 +146,16 @@ pub mod redis {
 }
 
 pub mod caching {
+    use crate::metrics::catalog;
     use lazy_static::lazy_static;
     use prometheus::*;
 
     lazy_static! {
-        static ref CACHE_SIZE: GaugeVec =
-            register_gauge_vec!("cache_size", "Current size of the cache", &["cache"]).unwrap();
-        static ref CACHE_CAPACITY: GaugeVec = register_gauge_vec!(
-            "cache_capacity",
-            "Current maximal capacity of the cache",
-            &["cache"]
-        )
-        .unwrap();
-        static ref CACHE_HIT_TOTAL: CounterVec =
-            register_counter_vec!("cache_hit_total", "Number of cache hits", &["cache"]).unwrap();
-        static ref CACHE_MISS_TOTAL: CounterVec =
-            register_counter_vec!("cache_miss_total", "Number of cache misses", &["cache"])
-                .unwrap();
-        static ref CACHE_EVICTION_TOTAL: CounterVec = register_counter_vec!(
-            "cache_eviction_total",
-            "Number of cache evictions",
-            &["cache", "trigger"]
-        )
-        .unwrap();
+        static ref CACHE_SIZE: GaugeVec = catalog::CACHE_SIZE.register();
+        static ref CACHE_CAPACITY: GaugeVec = catalog::CACHE_CAPACITY.register();
+        static ref CACHE_HIT_TOTAL: CounterVec = catalog::CACHE_HIT_TOTAL.register();
+        static ref CACHE_MISS_TOTAL: CounterVec = catalog::CACHE_MISS_TOTAL.register();
+        static ref CACHE_EVICTION_TOTAL: CounterVec = catalog::CACHE_EVICTION_TOTAL.register();
     }
 
     pub fn record_cache_size(cache: &'static str, size: usize) {
@@ -234,32 +184,17 @@ pub mod caching {
 }
 
 pub mod api {
+    use crate::metrics::catalog;
     use lazy_static::lazy_static;
-    use prometheus::{Gauge, HistogramVec, register_gauge, register_histogram_vec};
+    use prometheus::{Gauge, HistogramVec};
     use std::fmt::Debug;
     use tracing::{Span, debug, error};
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     lazy_static! {
-        static ref API_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
-            "api_success_seconds",
-            "Time taken for successfully serving API requests",
-            &["api", "api_type"],
-            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref API_FAILURE_SECONDS: HistogramVec = register_histogram_vec!(
-            "api_failure_seconds",
-            "Time taken for serving failed API requests",
-            &["api", "api_type", "error"],
-            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref GRPC_API_ACTIVE_STREAMS: Gauge = register_gauge!(
-            "grpc_api_active_streams",
-            "Number of active gRPC API streams"
-        )
-        .unwrap();
+        static ref API_SUCCESS_SECONDS: HistogramVec = catalog::API_SUCCESS_SECONDS.register();
+        static ref API_FAILURE_SECONDS: HistogramVec = catalog::API_FAILURE_SECONDS.register();
+        static ref GRPC_API_ACTIVE_STREAMS: Gauge = catalog::GRPC_API_ACTIVE_STREAMS.register();
     }
 
     pub fn record_api_success(
@@ -423,70 +358,25 @@ pub mod api {
 }
 
 pub mod db {
+    use crate::metrics::catalog;
     use std::time::Duration;
 
     use lazy_static::lazy_static;
     use prometheus::*;
 
     lazy_static! {
-        static ref DB_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
-            "db_success_seconds",
-            "Duration of successful db calls",
-            &["db_type", "svc", "api"],
-            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref DB_FAILURE_TOTAL: CounterVec = register_counter_vec!(
-            "db_failure_total",
-            "Number of failed db calls",
-            &["db_type", "svc", "api"]
-        )
-        .unwrap();
-        static ref DB_ROLLBACK_TOTAL: CounterVec = register_counter_vec!(
-            "db_rollback_total",
-            "Number of explicit db transaction rollbacks",
-            &["db_type", "svc", "api"]
-        )
-        .unwrap();
-        static ref DB_TRANSACTION_SECONDS: HistogramVec = register_histogram_vec!(
-            "db_transaction_seconds",
-            "Duration of db transactions",
-            &["db_type", "svc", "api"],
-            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref DB_SERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
-            "db_serialized_size_bytes",
-            "Size of serialized db entities",
-            &["db_type", "svc", "entity"],
-            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref DB_DESERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
-            "db_deserialized_size_bytes",
-            "Size of deserialized db entities",
-            &["db_type", "svc", "entity"],
-            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref DB_POOL_SIZE: GaugeVec = register_gauge_vec!(
-            "db_pool_size",
-            "Total number of connections in the db connection pool",
-            &["db_type", "svc"]
-        )
-        .unwrap();
-        static ref DB_POOL_IDLE: GaugeVec = register_gauge_vec!(
-            "db_pool_idle",
-            "Number of idle connections in the db connection pool",
-            &["db_type", "svc"]
-        )
-        .unwrap();
-        static ref DB_POOL_MAX: GaugeVec = register_gauge_vec!(
-            "db_pool_max",
-            "Maximum number of connections in the db connection pool",
-            &["db_type", "svc"]
-        )
-        .unwrap();
+        static ref DB_SUCCESS_SECONDS: HistogramVec = catalog::DB_SUCCESS_SECONDS.register();
+        static ref DB_FAILURE_TOTAL: CounterVec = catalog::DB_FAILURE_TOTAL.register();
+        static ref DB_ROLLBACK_TOTAL: CounterVec = catalog::DB_ROLLBACK_TOTAL.register();
+        static ref DB_TRANSACTION_SECONDS: HistogramVec =
+            catalog::DB_TRANSACTION_SECONDS.register();
+        static ref DB_SERIALIZED_SIZE_BYTES: HistogramVec =
+            catalog::DB_SERIALIZED_SIZE_BYTES.register();
+        static ref DB_DESERIALIZED_SIZE_BYTES: HistogramVec =
+            catalog::DB_DESERIALIZED_SIZE_BYTES.register();
+        static ref DB_POOL_SIZE: GaugeVec = catalog::DB_POOL_SIZE.register();
+        static ref DB_POOL_IDLE: GaugeVec = catalog::DB_POOL_IDLE.register();
+        static ref DB_POOL_MAX: GaugeVec = catalog::DB_POOL_MAX.register();
     }
 
     pub fn record_db_success(

@@ -16,7 +16,7 @@ use crate::StartedComponents;
 use anyhow::Context;
 use golem_common::base_model::api;
 use golem_common::model::domain_registration::Domain;
-use golem_common::poem::{CliClientInfoMiddleware, OpenTelemetryMetrics, PrometheusExporter};
+use golem_common::poem::{CliClientInfoMiddleware, HttpMetrics, PrometheusExporter};
 use golem_registry_service::startup::{StartupPhase, StartupProgress};
 use golem_service_base::http_server::{self, HttpServerConfig};
 use golem_worker_service::ingress::TrustedIngress;
@@ -215,7 +215,7 @@ fn with_management_middleware(
                 .allow_credentials(true),
         )
         .with(CliClientInfoMiddleware::new())
-        .with(OpenTelemetryMetrics::new())
+        .with(HttpMetrics)
         .with(Tracing)
         .boxed()
 }

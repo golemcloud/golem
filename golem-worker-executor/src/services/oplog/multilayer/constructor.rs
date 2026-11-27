@@ -76,7 +76,6 @@ impl OplogConstructor for CreateOplogConstructor {
             Err(error)
         };
         let agent_mode = self.agent_mode;
-        let account_id = self.initial_worker_metadata.created_by;
         let fingerprint = self.initial_worker_metadata.fingerprint;
 
         match agent_mode {
@@ -137,7 +136,6 @@ impl OplogConstructor for CreateOplogConstructor {
                 MultiLayerOplog::new(
                     self.owned_agent_id,
                     agent_mode,
-                    account_id,
                     primary,
                     self.service,
                     close,
@@ -153,7 +151,6 @@ impl OplogConstructor for CreateOplogConstructor {
                     &self.service.lower,
                     &self.owned_agent_id,
                     agent_mode,
-                    account_id,
                     self.service.entry_count_limit,
                     &tx,
                     &self.service,

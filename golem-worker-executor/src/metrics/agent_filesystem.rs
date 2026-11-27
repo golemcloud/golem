@@ -12,41 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 use std::time::Duration;
 
 lazy_static! {
-    static ref PRESSURE_RECOVERY_SECONDS: HistogramVec = register_histogram_vec!(
-        "filesystem_pressure_recovery_seconds",
-        "Time of a recovery of free space on the agent filesystem volume after a write failed for space, by outcome",
-        &["outcome"],
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref PRESSURE_UNLOAD_ATTEMPTS: IntCounterVec = register_int_counter_vec!(
-        "filesystem_pressure_unload_attempts_total",
-        "Unloads of idle agents that a recovery of free space on the agent filesystem volume tried, by outcome",
-        &["outcome"]
-    )
-    .unwrap();
-    static ref STORAGE_REFUSALS: IntCounterVec = register_int_counter_vec!(
-        "filesystem_storage_refusals_total",
-        "Agent filesystem calls that failed because no space was left, by cause",
-        &["cause"]
-    )
-    .unwrap();
-    static ref PROJECT_CLEANUP_FAILURES: IntCounterVec = register_int_counter_vec!(
-        "filesystem_project_cleanup_failures_total",
-        "Failed cleanups of managed XFS projects, which stay reserved until a later cleanup, by operation",
-        &["operation"]
-    )
-    .unwrap();
-    static ref PROJECT_STALE_RECLAIMS: IntCounter = register_int_counter!(
-        "filesystem_project_stale_reclaims_total",
-        "Managed XFS projects that a new agent filesystem found left over at its path and cleaned"
-    )
-    .unwrap();
+    static ref PRESSURE_RECOVERY_SECONDS: HistogramVec =
+        catalog::FILESYSTEM_PRESSURE_RECOVERY_SECONDS.register();
+    static ref PRESSURE_UNLOAD_ATTEMPTS: IntCounterVec =
+        catalog::FILESYSTEM_PRESSURE_UNLOAD_ATTEMPTS_TOTAL.register();
+    static ref STORAGE_REFUSALS: IntCounterVec =
+        catalog::FILESYSTEM_STORAGE_REFUSALS_TOTAL.register();
+    static ref PROJECT_CLEANUP_FAILURES: IntCounterVec =
+        catalog::FILESYSTEM_PROJECT_CLEANUP_FAILURES_TOTAL.register();
+    static ref PROJECT_STALE_RECLAIMS: IntCounter =
+        catalog::FILESYSTEM_PROJECT_STALE_RECLAIMS_TOTAL.register();
 }
 
 label_values! {

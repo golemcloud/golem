@@ -494,7 +494,7 @@ async fn with_error_log<T>(future: impl Future<Output = T>) -> (T, Vec<String>) 
     (output, lines.retry_ops())
 }
 
-/// Gives the number of failures that the metric `external_call_failure_total` counts for the
+/// Gives the number of failures that the metric `golem_external_call_failure_total` counts for the
 /// given operation, on every target.
 ///
 /// The counter is cumulative over the process, so a test reads it before and after the
@@ -502,7 +502,7 @@ async fn with_error_log<T>(future: impl Future<Output = T>) -> (T, Vec<String>) 
 fn external_call_failures(op_label: &str) -> f64 {
     prometheus::gather()
         .iter()
-        .filter(|family| family.name() == "external_call_failure_total")
+        .filter(|family| family.name() == "golem_external_call_failure_total")
         .flat_map(|family| family.get_metric())
         .filter(|metric| {
             metric

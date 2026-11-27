@@ -19,7 +19,7 @@ test("disconnect open uploads before and after headers, then serve another invoc
     ).text();
     return Number(
       snapshot.match(
-        /^http_session_explicit_cancellations_total (\d+)$/m,
+        /^golem_http_session_explicit_cancellations_total (\d+)$/m,
       )?.[1] ?? 0,
     );
   };

@@ -242,20 +242,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                let account_id = self.created_by().to_string();
-                let environment_id_str = environment_id.to_string();
-                record_storage_bytes_written(
-                    STORAGE_TYPE_KV,
-                    &account_id,
-                    &environment_id_str,
-                    length,
-                );
-                record_storage_objects_written(
-                    STORAGE_TYPE_KV,
-                    &account_id,
-                    &environment_id_str,
-                    1,
-                );
+                record_storage_bytes_written(STORAGE_TYPE_KV, length);
+                record_storage_objects_written(STORAGE_TYPE_KV, 1);
             }
             handle.complete(self, HostResponseKVUnit { result }).await?
         };
@@ -344,14 +332,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                let account_id = self.created_by().to_string();
-                let environment_id_str = environment_id.to_string();
-                record_storage_objects_deleted(
-                    STORAGE_TYPE_KV,
-                    &account_id,
-                    &environment_id_str,
-                    1,
-                );
+                record_storage_objects_deleted(STORAGE_TYPE_KV, 1);
             }
             handle.complete(self, HostResponseKVUnit { result }).await?
         };
