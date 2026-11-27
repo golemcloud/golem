@@ -162,18 +162,58 @@ impl ForwardingOplogState {
             status.active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
         });
 
-        self.plugin_state
+        let mut flush_set: Vec<_> = self
+            .plugin_state
             .iter()
             .filter(|(id, state)| {
                 status.active_plugins.contains(id) || state.sending_up_to > state.confirmed_up_to
             })
             .map(|(id, _)| *id)
-            .collect()
+            .collect();
+        if let Some(tool) = &self.initial_worker_metadata.standalone_tool {
+            let mut ordered: Vec<_> = tool
+                .activation
+                .processor_plugins()
+                .map(|plugin| plugin.environment_plugin_grant_id)
+                .filter(|grant| flush_set.contains(grant))
+                .collect();
+            flush_set.retain(|grant| !ordered.contains(grant));
+            ordered.extend(flush_set);
+            ordered
+        } else {
+            flush_set
+        }
+    }
+
+    fn installed_plugin(
+        &self,
+        grant_id: EnvironmentPluginGrantId,
+        component_metadata: Option<&Component>,
+    ) -> Option<InstalledPlugin> {
+        if let Some(tool) = &self.initial_worker_metadata.standalone_tool {
+            tool.activation
+                .processor_plugins()
+                .find(|plugin| plugin.environment_plugin_grant_id == grant_id)
+                .cloned()
+        } else {
+            component_metadata?
+                .metadata
+                .owner_plugins(
+                    self.initial_worker_metadata.owner_kind,
+                    self.initial_worker_metadata.agent_type_name.as_ref(),
+                )?
+                .iter()
+                .find(|plugin| plugin.environment_plugin_grant_id == grant_id)
+                .cloned()
+        }
     }
 
     /// Fetch component metadata needed for the flush.
     /// Returns `None` if component metadata cannot be retrieved.
     async fn get_component_metadata(&self, status: &AgentStatusRecord) -> Option<Component> {
+        if self.initial_worker_metadata.standalone_tool.is_some() {
+            return None;
+        }
         match self
             .while_forwarding(self.components.get_metadata(
                 self.initial_worker_metadata.component_id,
@@ -216,23 +256,10 @@ impl ForwardingOplogState {
         let plugin = if let Some((plugin, _)) = &pinned_delivery {
             plugin.clone()
         } else {
-            let Some(component_metadata) = component_metadata else {
+            let Some(plugin) = self.installed_plugin(grant_id, component_metadata) else {
                 return;
             };
-            match component_metadata
-                .metadata
-                .owner_plugins(
-                    self.initial_worker_metadata.owner_kind,
-                    self.initial_worker_metadata.agent_type_name.as_ref(),
-                )
-                .and_then(|plugins| {
-                    plugins
-                        .iter()
-                        .find(|p| p.environment_plugin_grant_id == grant_id)
-                }) {
-                Some(p) => p.clone(),
-                None => return,
-            }
+            plugin
         };
 
         let batch = if live.sending_up_to > live.confirmed_up_to {
@@ -774,10 +801,7 @@ impl ForwardingOplogState {
             return;
         }
 
-        let component_metadata = match self.get_component_metadata(&status).await {
-            Some(cm) => cm,
-            None => return,
-        };
+        let component_metadata = self.get_component_metadata(&status).await;
 
         for (grant_id, old_target) in candidates {
             // Check if the target is already local
@@ -800,18 +824,8 @@ impl ForwardingOplogState {
                 }
             }
 
-            let plugin = match component_metadata
-                .metadata
-                .owner_plugins(
-                    self.initial_worker_metadata.owner_kind,
-                    self.initial_worker_metadata.agent_type_name.as_ref(),
-                )
-                .and_then(|plugins| {
-                    plugins
-                        .iter()
-                        .find(|p| p.environment_plugin_grant_id == grant_id)
-                }) {
-                Some(p) => p.clone(),
+            let plugin = match self.installed_plugin(grant_id, component_metadata.as_ref()) {
+                Some(plugin) => plugin,
                 None => continue,
             };
 

@@ -24,13 +24,29 @@ use golem_api_grpc::proto::golem::worker::RawOplogEntry;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::caller::Caller;
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{
+    ComponentId, ComponentRevision, InstalledPlugin, PluginPriority,
+};
+use golem_common::model::entity::FilesystemCapability;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
+use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::oplog::{
     CreateParameters, CreateRequest, CreateRequestKind, OplogEntry, StandaloneToolInvocation,
 };
+use golem_common::model::tool::{
+    CompiledToolBinding, ToolActivationSnapshot, ToolBindingOwner, ToolFilesystemAccess,
+    ToolProvisionConfig, ToolRegistration, ToolSource,
+};
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+    ToolMiddlewareSource,
+};
 use golem_common::model::{AgentId, IdempotencyKey, InvocationId, Timestamp};
+use golem_common::schema::tool::{
+    CommandBody, CommandIndex, CommandNode, CommandTree, Tool, ToolMiddleware, ToolMiddlewareScope,
+};
+use golem_common::schema::{IntoTypedSchemaValue, SchemaGraph, SchemaType};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::io::Write;
@@ -38,9 +54,160 @@ use std::path::Path;
 use test_r::test;
 use uuid::Uuid;
 
+fn standalone_tool_activation() -> ToolActivationSnapshot {
+    let definition = Tool {
+        version: "1.2.0".to_string(),
+        requires_filesystem: false,
+        http_mount: None,
+        commands: CommandTree {
+            nodes: ["report", "daily", "send"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| CommandNode {
+                    name: name.to_string(),
+                    aliases: vec![],
+                    doc: Default::default(),
+                    http: None,
+                    globals: Default::default(),
+                    subcommands: if index < 2 {
+                        vec![CommandIndex(index as i32 + 1)]
+                    } else {
+                        vec![]
+                    },
+                    body: (index == 2).then(|| CommandBody {
+                        positionals: Default::default(),
+                        options: vec![],
+                        flags: vec![],
+                        constraints: vec![],
+                        stdin: None,
+                        stdout: None,
+                        stderr: None,
+                        result: None,
+                        errors: vec![],
+                        annotations: None,
+                    }),
+                })
+                .collect(),
+        },
+        schema: SchemaGraph::empty(),
+    };
+    let source = ToolSource::Component {
+        component_id: ComponentId(Uuid::from_u128(1)),
+        component_revision: 5u64.try_into().unwrap(),
+        component_name: "test:report".try_into().unwrap(),
+    };
+    let plugin = |grant, destination: &str| InstalledPlugin {
+        environment_plugin_grant_id: Uuid::from_u128(grant).into(),
+        priority: PluginPriority(0),
+        parameters: [("destination".to_string(), destination.to_string())].into(),
+        plugin_registration_id: Uuid::from_u128(20).into(),
+        plugin_name: "audit-processor".to_string(),
+        plugin_version: "1.0.0".to_string(),
+        oplog_processor_component_id: Some(ComponentId(Uuid::from_u128(21))),
+        oplog_processor_component_revision: Some(2u64.try_into().unwrap()),
+        installed_by: AccountId(Uuid::from_u128(4)),
+    };
+    let binding = CompiledToolBinding {
+        deployment_revision: 8u64.try_into().unwrap(),
+        release_id: Some(Uuid::from_u128(22).into()),
+        owner: ToolBindingOwner::ComponentBaseline {
+            component_id: ComponentId(Uuid::from_u128(1)),
+        },
+        tool_name: "report".try_into().unwrap(),
+        version: definition.version.clone(),
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: Default::default(),
+        account_id: AccountId(Uuid::from_u128(4)),
+        account_email: "report-owner@example.com".into(),
+        parameters: NormalizedJsonValue::new(serde_json::json!({"region": "eu"})),
+        config_keys_readable: Default::default(),
+        secret_keys_readable: Default::default(),
+        secret_keys_revealable: Default::default(),
+        filesystem_access: ToolFilesystemAccess::Denied,
+        source: source.clone(),
+        shell: false,
+    };
+    let middleware_chain = CompiledToolMiddlewareChain {
+        deployment_revision: binding.deployment_revision,
+        owner: binding.owner.clone(),
+        tool_name: binding.tool_name.clone(),
+        effective_definition: definition.clone(),
+        occurrences: [("audit", plugin(32, "c")), ("metrics", plugin(33, "d"))]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, processor))| {
+                let provision = ToolProvisionConfig {
+                    config: NormalizedJsonValue::new(serde_json::json!({"enabled": true})),
+                    env: [("PIPELINE_STAGE".to_string(), name.to_string())].into(),
+                    plugins: vec![processor],
+                    files: vec![],
+                };
+                CompiledToolMiddlewareOccurrence {
+                    middleware: RegisteredToolMiddleware {
+                        deployment_revision: binding.deployment_revision,
+                        release_id: Some(Uuid::from_u128(40 + index as u128).into()),
+                        definition: ToolMiddleware {
+                            name: name.to_string(),
+                            version: "2.0.0".to_string(),
+                            aliases: vec![],
+                            doc: Default::default(),
+                            scope: ToolMiddlewareScope::Universal,
+                            parameter_schema: SchemaGraph::anonymous(SchemaType::string()),
+                        },
+                        provision: provision.clone(),
+                        source: ToolMiddlewareSource::Component {
+                            component_id: ComponentId(Uuid::from_u128(50 + index as u128)),
+                            component_revision: 7u64.try_into().unwrap(),
+                            component_name: format!("test:{name}").try_into().unwrap(),
+                        },
+                        owner_account_id: binding.account_id,
+                        owner_account_email: binding.account_email.clone(),
+                        metadata_version: "0.1.0".to_string(),
+                        metadata_digest: Default::default(),
+                    },
+                    parameters: name.to_string().into_typed_schema_value().unwrap(),
+                    provision,
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: Default::default(),
+                    secret_keys_revealable: Default::default(),
+                    filesystem_access: ToolFilesystemAccess::Denied,
+                    expected_definition: Some(definition.clone()),
+                    presented_definition: Some(definition.clone()),
+                    next_effective_definition: definition.clone(),
+                    compatibility: None,
+                }
+            })
+            .collect(),
+    };
+    ToolActivationSnapshot {
+        registered_tool: ToolRegistration {
+            deployment_revision: binding.deployment_revision,
+            release_id: binding.release_id,
+            definition,
+            provision: ToolProvisionConfig {
+                config: NormalizedJsonValue::new(serde_json::json!({"format": "json"})),
+                env: [("REPORT_BUCKET".to_string(), "daily-reports".to_string())].into(),
+                plugins: vec![plugin(30, "a"), plugin(31, "b")],
+                files: vec![],
+            },
+            component_bindings: Default::default(),
+            source,
+            owner_account_id: binding.account_id,
+            owner_account_email: binding.account_email.clone(),
+            metadata_version: binding.metadata_version.clone(),
+            metadata_digest: binding.metadata_digest,
+        },
+        binding,
+        filesystem: FilesystemCapability::Incapable,
+        middleware_chain: Some(middleware_chain),
+        mcp_import: None,
+    }
+}
+
 #[test]
 fn standalone_tool_create_roundtrips() {
     let invocation_id = InvocationId(Uuid::from_u128(13));
+    let activation = standalone_tool_activation();
     let metadata = CreateParameters {
         component_id: ComponentId(Uuid::from_u128(1)),
         agent_type_name: None,
@@ -72,6 +239,7 @@ fn standalone_tool_create_roundtrips() {
             command_path: vec!["daily".to_string(), "send".to_string()],
             invocation_id,
             caller: Caller::anonymous(),
+            activation,
         })),
         never_live: false,
     };
@@ -80,7 +248,19 @@ fn standalone_tool_create_roundtrips() {
         parameters: Box::new(metadata),
     };
     let encoded = serialize(&entry).unwrap();
-    assert_eq!(deserialize::<OplogEntry>(&encoded).unwrap(), entry);
+    let decoded = deserialize::<OplogEntry>(&encoded).unwrap();
+    assert_eq!(decoded, entry);
+    let OplogEntry::Create { parameters, .. } = &decoded else {
+        panic!("expected Create");
+    };
+    let pinned = &parameters.standalone_tool.as_ref().unwrap().activation;
+    assert_eq!(
+        pinned
+            .processor_plugins()
+            .map(|plugin| plugin.parameters["destination"].as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b", "c", "d"]
+    );
     let proto: RawOplogEntry = entry.clone().try_into().unwrap();
     assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
     let mut mint = Mint::new("tests/goldenfiles");

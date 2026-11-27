@@ -136,8 +136,11 @@ struct RecordingOplogProcessorPlugin {
     send_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     target_agent_id: AgentId,
     resolve_count: std::sync::atomic::AtomicUsize,
+    resolved_plugins: std::sync::Mutex<Vec<InstalledPlugin>>,
+    lookup_status: std::sync::Mutex<InvocationStatus>,
     failed_sends_remaining: std::sync::atomic::AtomicUsize,
     target_is_local: std::sync::atomic::AtomicBool,
+    local_target: std::sync::Mutex<Option<AgentId>>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,8 +167,11 @@ impl RecordingOplogProcessorPlugin {
             send_gate: None,
             target_agent_id: AgentId::from_parts(7, 1),
             resolve_count: std::sync::atomic::AtomicUsize::new(0),
+            resolved_plugins: std::sync::Mutex::new(Vec::new()),
+            lookup_status: std::sync::Mutex::new(InvocationStatus::Unknown),
             failed_sends_remaining: std::sync::atomic::AtomicUsize::new(0),
             target_is_local: std::sync::atomic::AtomicBool::new(true),
+            local_target: std::sync::Mutex::new(None),
         }
     }
 
@@ -195,8 +201,9 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
     async fn resolve_target(
         &self,
         _environment_id: EnvironmentId,
-        _plugin: &InstalledPlugin,
+        plugin: &InstalledPlugin,
     ) -> Result<AgentId, WorkerExecutorError> {
+        self.resolved_plugins.lock().unwrap().push(plugin.clone());
         self.resolve_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(self.target_agent_id)
@@ -240,7 +247,10 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
         // no-op in tests
     }
 
-    async fn is_local(&self, _agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
+    async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
+        if let Some(local) = *self.local_target.lock().unwrap() {
+            return Ok(local == *agent_id);
+        }
         Ok(self
             .target_is_local
             .load(std::sync::atomic::Ordering::Relaxed))
@@ -261,7 +271,7 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
             .lock()
             .await
             .push(RecordedLookup { caller_account_id });
-        Ok(InvocationStatus::Unknown)
+        Ok(*self.lookup_status.lock().unwrap())
     }
 }
 
@@ -489,11 +499,15 @@ async fn ordinary_drain_keeps_forwarding_available_for_the_next_worker() {
 /// A fake ComponentService that returns a component with one installed oplog processor plugin
 struct FakeComponentService {
     installed_plugins: Vec<InstalledPlugin>,
+    unavailable: bool,
+    metadata_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeComponentService {
     fn with_one_oplog_processor_plugin(grant_id: EnvironmentPluginGrantId) -> Self {
         Self {
+            unavailable: false,
+            metadata_calls: std::sync::atomic::AtomicUsize::new(0),
             installed_plugins: vec![InstalledPlugin {
                 environment_plugin_grant_id: grant_id,
                 priority: golem_common::model::component::PluginPriority(0),
@@ -511,6 +525,8 @@ impl FakeComponentService {
     fn empty() -> Self {
         Self {
             installed_plugins: Vec::new(),
+            unavailable: false,
+            metadata_calls: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -538,6 +554,10 @@ impl ComponentService for FakeComponentService {
         use golem_common::model::component::AgentTypeInitialPermissions;
         use std::collections::BTreeMap;
 
+        self.metadata_calls.fetch_add(1, Ordering::Relaxed);
+        if self.unavailable {
+            return Err(WorkerExecutorError::unknown("metadata unavailable"));
+        }
         let provision_configs = if self.installed_plugins.is_empty() {
             BTreeMap::new()
         } else {
@@ -581,6 +601,13 @@ impl ComponentService for FakeComponentService {
                 vec![],
                 vec![],
                 provision_configs,
+            )
+            .with_component_config(
+                Default::default(),
+                golem_common::base_model::component_metadata::ComponentProvisionConfig {
+                    plugins: self.installed_plugins.clone(),
+                    ..Default::default()
+                },
             ),
             created_at: jiff::Timestamp::now(),
             wasm_hash: diff::Hash::empty(),
@@ -1899,4 +1926,451 @@ async fn direct_checkpoint_commits_are_returned_even_after_cache_pruning() {
         3
     );
     assert!(oplog.commit(CommitLevel::Always).await.unwrap().is_empty());
+}
+
+fn standalone_metadata(
+    tool_plugins: Vec<InstalledPlugin>,
+    middleware_plugins: Vec<Vec<InstalledPlugin>>,
+) -> AgentMetadata {
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::entity::FilesystemCapability;
+    use golem_common::model::json::NormalizedJsonValue;
+    use golem_common::model::tool::*;
+    use golem_common::model::tool_middleware::*;
+    use golem_common::schema::IntoTypedSchemaValue;
+    use golem_common::schema::SchemaGraph;
+    use golem_common::schema::tool::{CommandTree, Tool, ToolMiddleware, ToolMiddlewareScope};
+
+    let definition = Tool {
+        version: "1.0.0".into(),
+        requires_filesystem: false,
+        http_mount: None,
+        commands: CommandTree { nodes: Vec::new() },
+        schema: SchemaGraph::empty(),
+    };
+    let source = ToolSource::Component {
+        component_id: ComponentId::new(),
+        component_revision: ComponentRevision::INITIAL,
+        component_name: "test:tool".try_into().unwrap(),
+    };
+    let binding = CompiledToolBinding {
+        deployment_revision: DeploymentRevision::INITIAL,
+        release_id: None,
+        owner: ToolBindingOwner::ComponentBaseline {
+            component_id: ComponentId::new(),
+        },
+        tool_name: "report".try_into().unwrap(),
+        version: "1.0.0".into(),
+        metadata_version: String::new(),
+        metadata_digest: Default::default(),
+        account_id: AccountId::new(),
+        account_email: "owner@example.com".into(),
+        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        config_keys_readable: Default::default(),
+        secret_keys_readable: Default::default(),
+        secret_keys_revealable: Default::default(),
+        filesystem_access: ToolFilesystemAccess::Denied,
+        source: source.clone(),
+        shell: false,
+    };
+    let occurrences = middleware_plugins
+        .into_iter()
+        .map(|plugins| CompiledToolMiddlewareOccurrence {
+            middleware: RegisteredToolMiddleware {
+                deployment_revision: binding.deployment_revision,
+                release_id: None,
+                definition: ToolMiddleware {
+                    name: "audit".into(),
+                    version: "1.0.0".into(),
+                    aliases: vec![],
+                    doc: Default::default(),
+                    scope: ToolMiddlewareScope::Universal,
+                    parameter_schema: SchemaGraph::empty(),
+                },
+                provision: Default::default(),
+                source: ToolMiddlewareSource::Component {
+                    component_id: ComponentId::new(),
+                    component_revision: ComponentRevision::INITIAL,
+                    component_name: "test:audit".try_into().unwrap(),
+                },
+                owner_account_id: binding.account_id,
+                owner_account_email: binding.account_email.clone(),
+                metadata_version: String::new(),
+                metadata_digest: Default::default(),
+            },
+            parameters: 0u32.into_typed_schema_value().unwrap(),
+            provision: ToolProvisionConfig {
+                plugins,
+                ..Default::default()
+            },
+            config_keys_readable: Default::default(),
+            secret_keys_readable: Default::default(),
+            secret_keys_revealable: Default::default(),
+            filesystem_access: ToolFilesystemAccess::Denied,
+            expected_definition: None,
+            presented_definition: None,
+            next_effective_definition: definition.clone(),
+            compatibility: None,
+        })
+        .collect();
+    let activation = ToolActivationSnapshot {
+        registered_tool: ToolRegistration {
+            deployment_revision: binding.deployment_revision,
+            release_id: None,
+            definition: definition.clone(),
+            provision: ToolProvisionConfig {
+                plugins: tool_plugins,
+                ..Default::default()
+            },
+            component_bindings: Default::default(),
+            source,
+            owner_account_id: binding.account_id,
+            owner_account_email: binding.account_email.clone(),
+            metadata_version: String::new(),
+            metadata_digest: Default::default(),
+        },
+        middleware_chain: Some(CompiledToolMiddlewareChain {
+            deployment_revision: binding.deployment_revision,
+            owner: binding.owner.clone(),
+            tool_name: binding.tool_name.clone(),
+            effective_definition: definition,
+            occurrences,
+        }),
+        binding,
+        filesystem: FilesystemCapability::Incapable,
+        mcp_import: None,
+    };
+    let active = activation
+        .processor_plugins()
+        .map(|p| p.environment_plugin_grant_id)
+        .collect();
+    let (mut metadata, _) = test_worker_metadata(active);
+    metadata.owner_kind = golem_common::model::agent::OwnerKind::StandaloneTool;
+    metadata.agent_mode = AgentMode::Ephemeral;
+    metadata.agent_type_name = None;
+    metadata.canonical_key = None;
+    metadata.standalone_tool = Some(Box::new(
+        golem_common::model::oplog::StandaloneToolInvocation {
+            tool_name: activation.binding.tool_name.clone(),
+            command_path: vec![],
+            invocation_id: InvocationId::new(),
+            caller: golem_common::model::caller::Caller::anonymous(),
+            activation,
+        },
+    ));
+    metadata
+}
+
+fn named_processor(name: &str) -> InstalledPlugin {
+    let mut plugin =
+        FakeComponentService::with_one_oplog_processor_plugin(EnvironmentPluginGrantId::new())
+            .installed_plugins
+            .remove(0);
+    plugin.plugin_name = name.into();
+    plugin.parameters.insert("descriptor".into(), name.into());
+    plugin
+}
+
+fn standalone_state(
+    metadata: AgentMetadata,
+    processor: Arc<RecordingOplogProcessorPlugin>,
+    components: Arc<FakeComponentService>,
+    inner: Arc<InMemoryOplog>,
+) -> ForwardingOplogState {
+    let status = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+        arc_swap::ArcSwap::from_pointee(metadata.last_known_status.clone()),
+    ));
+    ForwardingOplogState {
+        forwarding_retired: CancellationToken::new(),
+        forwarding_activity: ActivityGate::new(),
+        pending_checkpoint_activity: None,
+        buffer: None,
+        buffer_start_idx: OplogIndex::INITIAL,
+        commit_count: 0,
+        last_send: Instant::now(),
+        oplog_plugins: processor,
+        initial_worker_metadata: metadata,
+        last_known_status: status,
+        last_oplog_idx: OplogIndex::NONE,
+        last_committed_idx: OplogIndex::NONE,
+        components,
+        inner,
+        plugin_state: HashMap::new(),
+        pending_direct_commits: BTreeMap::new(),
+        worker_event_service: None,
+        monitor_tasks: vec![],
+    }
+}
+
+#[test]
+async fn standalone_sends_tool_then_middleware_distinct_grants_without_metadata() {
+    for unavailable in [false, true] {
+        let a = named_processor("a");
+        let b = named_processor("b");
+        let c = named_processor("c");
+        let d = named_processor("d");
+        let mut duplicate = a.clone();
+        duplicate
+            .parameters
+            .insert("descriptor".into(), "wrong".into());
+        let mut duplicate_c = c.clone();
+        duplicate_c
+            .parameters
+            .insert("descriptor".into(), "wrong middleware".into());
+        let metadata = standalone_metadata(
+            vec![a.clone(), b.clone(), duplicate.clone()],
+            vec![vec![duplicate, c.clone()], vec![duplicate_c, d.clone()]],
+        );
+        let mut components = FakeComponentService::empty();
+        components.installed_plugins = vec![named_processor("x")];
+        components.unavailable = unavailable;
+        let components = Arc::new(components);
+        let processor = Arc::new(RecordingOplogProcessorPlugin::new());
+        processor.fail_next_send_from_remote_target();
+        let inner = Arc::new(InMemoryOplog::new());
+        inner.add(grow_memory(42)).await.unwrap();
+        inner.commit(CommitLevel::Always).await.unwrap();
+        let mut state = standalone_state(
+            metadata,
+            processor.clone(),
+            components.clone(),
+            inner.clone(),
+        );
+        state.last_oplog_idx = OplogIndex::INITIAL;
+        state.last_committed_idx = OplogIndex::INITIAL;
+        state.try_flush().await;
+        let sends = processor.sends().await;
+        assert_eq!(
+            sends.iter().map(|s| s.plugin.clone()).collect::<Vec<_>>(),
+            vec![a.clone(), b, c, d]
+        );
+        assert!(sends.iter().all(|s| s.entries == sends[0].entries));
+        assert_eq!(memory_deltas(&sends[0].entries), vec![42]);
+        assert_eq!(state.plugin_state.len(), 4);
+        assert!(
+            state.plugin_state[&a.environment_plugin_grant_id]
+                .delivery
+                .is_some()
+        );
+        state.try_flush().await;
+        let sends = processor.sends().await;
+        assert_eq!(
+            sends.len(),
+            5,
+            "only the failed recipient retries; checkpoint-only suffixes do not send"
+        );
+        assert_eq!(sends[4].plugin, a);
+        assert_eq!(sends[4].entries, sends[0].entries);
+        state.try_flush().await;
+        assert_eq!(processor.send_count().await, 5);
+        assert_eq!(components.metadata_calls.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[test]
+async fn standalone_reconstructed_new_batches_keep_activation_despite_current_metadata_changes() {
+    for removed in [false, true] {
+        let plugin = named_processor("pinned");
+        let grant = plugin.environment_plugin_grant_id;
+        let metadata = standalone_metadata(vec![plugin.clone()], vec![]);
+        let inner = Arc::new(InMemoryOplog::new());
+        let processor = Arc::new(RecordingOplogProcessorPlugin::new());
+        let mut state = standalone_state(
+            metadata.clone(),
+            processor.clone(),
+            Arc::new(FakeComponentService::empty()),
+            inner.clone(),
+        );
+        inner.add(grow_memory(1)).await.unwrap();
+        inner.commit(CommitLevel::Always).await.unwrap();
+        state.last_oplog_idx = OplogIndex::INITIAL;
+        state.last_committed_idx = OplogIndex::INITIAL;
+        state.try_flush().await;
+        let committed = std::mem::take(&mut state.pending_direct_commits);
+        let mut metadata = metadata;
+        metadata.last_known_status = crate::worker::status::update_status_with_new_entries(
+            AgentMode::Ephemeral,
+            metadata.last_known_status.clone(),
+            committed,
+            &golem_common::model::RetryConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            metadata.last_known_status.oplog_processor_checkpoints[&grant].confirmed_up_to,
+            OplogIndex::INITIAL
+        );
+        drop(state);
+        let mut current = FakeComponentService::empty();
+        if !removed {
+            let mut changed = plugin.clone();
+            changed
+                .parameters
+                .insert("descriptor".into(), "current, not pinned".into());
+            current.installed_plugins = vec![changed];
+        }
+        let current = Arc::new(current);
+        let status = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+            arc_swap::ArcSwap::from_pointee(metadata.last_known_status.clone()),
+        ));
+        let recovered = ForwardingOplog::new(
+            inner.clone(),
+            processor.clone(),
+            current.clone(),
+            metadata,
+            status,
+            inner.current_oplog_index().await,
+            Box::new(|| {}),
+            usize::MAX,
+            Duration::from_secs(3600),
+        )
+        .await;
+        recovered.add(grow_memory(2)).await.unwrap();
+        recovered.commit(CommitLevel::Always).await.unwrap();
+        recovered.tick().await;
+        let sends = processor.sends().await;
+        assert_eq!(sends.len(), 2);
+        assert_eq!(sends[1].plugin, plugin);
+        assert_eq!(sends[1].target_agent_id, sends[0].target_agent_id);
+        assert_eq!(sends[1].initial_oplog_index, OplogIndex::INITIAL.next());
+        assert!(matches!(
+            sends[1].entries.last(),
+            Some(OplogEntry::GrowMemory { delta: 2, .. })
+        ));
+        assert_eq!(current.metadata_calls.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[test]
+async fn standalone_inflight_checkpoint_snapshot_overrides_changed_activation() {
+    for local in [false, true] {
+        let plugin = named_processor("delivery pin");
+        let mut metadata = standalone_metadata(vec![plugin.clone()], vec![]);
+        metadata.created_at = "2026-11-27T12:00:00Z".parse().unwrap();
+        let processor = Arc::new(RecordingOplogProcessorPlugin::new());
+        processor.failed_sends_remaining.store(1, Ordering::Relaxed);
+        processor.target_is_local.store(local, Ordering::Relaxed);
+        let inner = Arc::new(InMemoryOplog::new());
+        let components = Arc::new(FakeComponentService::empty());
+        let mut state = standalone_state(
+            metadata.clone(),
+            processor.clone(),
+            components.clone(),
+            inner.clone(),
+        );
+        inner.add(grow_memory(17)).await.unwrap();
+        inner.commit(CommitLevel::Always).await.unwrap();
+        state.last_oplog_idx = OplogIndex::INITIAL;
+        state.last_committed_idx = OplogIndex::INITIAL;
+        state.try_flush().await;
+        let committed = std::mem::take(&mut state.pending_direct_commits);
+        let mut metadata = metadata;
+        metadata.last_known_status = crate::worker::status::update_status_with_new_entries(
+            AgentMode::Ephemeral,
+            metadata.last_known_status.clone(),
+            committed,
+            &golem_common::model::RetryConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+        metadata.last_known_status.active_plugins.clear();
+        metadata.env = vec![("CHANGED".into(), "environment".into())];
+        metadata
+            .standalone_tool
+            .as_mut()
+            .unwrap()
+            .activation
+            .registered_tool
+            .provision
+            .plugins[0]
+            .parameters
+            .insert("descriptor".into(), "not the delivery pin".into());
+        drop(state);
+        let status = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+            arc_swap::ArcSwap::from_pointee(metadata.last_known_status.clone()),
+        ));
+        let recovered = ForwardingOplog::new(
+            inner.clone(),
+            processor.clone(),
+            components.clone(),
+            metadata,
+            status,
+            inner.current_oplog_index().await,
+            Box::new(|| {}),
+            usize::MAX,
+            Duration::from_secs(3600),
+        )
+        .await;
+        recovered.tick().await;
+        let sends = processor.sends().await;
+        assert_eq!(sends.len(), 2);
+        assert_eq!(sends[0].plugin, plugin);
+        assert_eq!(sends[1].plugin, plugin);
+        assert_eq!(sends[1].metadata, sends[0].metadata);
+        assert_eq!(sends[1].entries, sends[0].entries);
+        assert_eq!(sends[1].target_agent_id, sends[0].target_agent_id);
+        assert_eq!(sends[1].initial_oplog_index, sends[0].initial_oplog_index);
+        assert_eq!(processor.resolve_count.load(Ordering::Relaxed), 1);
+        assert_eq!(components.metadata_calls.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[test]
+async fn standalone_locality_recovery_uses_pin_and_keeps_delivery_guards() {
+    for (in_progress, pending_batch, accepted, expected_resolves) in [
+        (false, false, InvocationStatus::Complete, 1),
+        (false, false, InvocationStatus::Pending, 1),
+        (false, false, InvocationStatus::Unknown, 0),
+        (true, false, InvocationStatus::Complete, 0),
+        (false, true, InvocationStatus::Complete, 0),
+    ] {
+        let plugin = named_processor("tool pin");
+        let grant = plugin.environment_plugin_grant_id;
+        let metadata = standalone_metadata(vec![plugin.clone()], vec![]);
+        let mut baseline = plugin.clone();
+        baseline
+            .parameters
+            .insert("descriptor".into(), "baseline".into());
+        let mut components = FakeComponentService::empty();
+        components.installed_plugins = vec![baseline];
+        let components = Arc::new(components);
+        let processor = Arc::new(RecordingOplogProcessorPlugin::new());
+        processor.target_is_local.store(false, Ordering::Relaxed);
+        *processor.local_target.lock().unwrap() = Some(processor.target_agent_id);
+        *processor.lookup_status.lock().unwrap() = accepted;
+        let inner = Arc::new(InMemoryOplog::new());
+        let mut state = standalone_state(metadata, processor.clone(), components.clone(), inner);
+        let old_target = AgentId::from_parts(7, 99);
+        state.plugin_state.insert(
+            grant,
+            LivePluginState {
+                target_agent_id: Some(old_target),
+                confirmed_up_to: OplogIndex::from_u64(2),
+                sending_up_to: OplogIndex::from_u64(if pending_batch { 3 } else { 2 }),
+                send_in_progress: in_progress,
+                last_batch_start: OplogIndex::INITIAL,
+                delivery: None,
+            },
+        );
+        state.try_locality_recovery().await;
+        assert_eq!(
+            processor.resolve_count.load(Ordering::Relaxed),
+            expected_resolves
+        );
+        let resolved = processor.resolved_plugins.lock().unwrap().clone();
+        assert_eq!(resolved, vec![plugin; expected_resolves]);
+        assert_eq!(
+            processor.lookups().await.len(),
+            usize::from(!in_progress && !pending_batch)
+        );
+        assert_eq!(
+            state.plugin_state[&grant].target_agent_id,
+            Some(if expected_resolves == 1 {
+                processor.target_agent_id
+            } else {
+                old_target
+            }),
+        );
+        assert_eq!(components.metadata_calls.load(Ordering::Relaxed), 0);
+    }
 }

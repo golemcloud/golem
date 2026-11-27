@@ -310,9 +310,20 @@ Tool owners use the resolved component baseline, never an arbitrary exported age
 component-implemented standalone invocation persists `OwnerKind::StandaloneTool` (wire value 3)
 and a non-reserved tool type tag. Its T3 address derives from the environment, registered tool
 type ID and invocation's unique part; that unique part is also its `InvocationId`. `Create`
-records the tool name, command path, invocation ID and caller. The accepted pending payload pins
-the activation, and `Create` pins the component revision. Another component or argument set at
-the same address is an idempotency conflict, not another invocation.
+records the tool name, command path, invocation ID, caller and full `ToolActivationSnapshot`,
+along with the component revision. Fresh creation validates the expected deployment and canonical
+command before Create. Pending derives its activation from the returned owner's winning Create
+pin, never an independently resolved candidate. Existing owners need no deployment or discovery
+lookup, including after a crash between Create and Pending. Acceptance still requires committed
+Pending. Another component or argument set at the same address is an idempotency conflict, not
+another invocation.
+
+Standalone processor selection uses that pin: tool installations, then each middleware occurrence's
+installations in chain order. Repeated environment grants share one checkpoint and use the first
+descriptor and parameters. Status records membership only. New forwarding batches and locality
+recovery use pinned descriptors, not component baseline plugins. Hosted tool entries stay with
+the agent's processors. Standalone activation and deactivation are refused. Public Create and
+confirmed checkpoint descriptions use the pin internally without exposing the activation.
 
 `RunningWorker::create_instance` reads owner
 metadata and instantiates that component through `InstanceHost::instantiate`, with normal executable,

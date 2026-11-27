@@ -26,6 +26,7 @@ use axum::extract::{Path, Request, State};
 use axum::response::Response;
 use axum::routing::{get, post};
 use futures::StreamExt;
+use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId as ProtoShardId};
 use golem_api_grpc::proto::golem::worker::AgentInvocationMode as ProtoInvocationMode;
 use golem_api_grpc::proto::golem::worker::InvocationRejectionReason;
 use golem_api_grpc::proto::golem::worker::invocation_session_result;
@@ -36,7 +37,7 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::worker::{InvocationSessionResult, InvocationStart};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    InvocationLifecycleState, InvocationSummary,
+    AssignShardsRequest, InvocationLifecycleState, InvocationSummary, assign_shards_response,
 };
 use golem_common::agent_key;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -112,11 +113,12 @@ use golem_worker_executor_test_utils::{
     AgentInvocationSuccessGateHandle, LastUniqueId, PrecompiledComponent, ReplayAdmissionStage,
     TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
     native_streaming_tool_metadata, native_test_tool_metadata, start_with_overrides,
+    take_agent_oplog_over_at_epoch,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
@@ -2068,6 +2070,7 @@ struct ReorderedToolActivationService {
     inner: TestEnvironmentStateService,
     first_deployment: std::sync::RwLock<Option<Arc<ToolDeploymentState>>>,
     activation_calls: AtomicUsize,
+    unavailable: AtomicBool,
     first_call_blocked: tokio::sync::Notify,
     release_first_call: tokio::sync::Notify,
 }
@@ -2078,6 +2081,7 @@ impl Default for ReorderedToolActivationService {
             inner: TestEnvironmentStateService::default(),
             first_deployment: std::sync::RwLock::new(None),
             activation_calls: AtomicUsize::new(0),
+            unavailable: AtomicBool::new(false),
             first_call_blocked: tokio::sync::Notify::new(),
             release_first_call: tokio::sync::Notify::new(),
         }
@@ -2179,6 +2183,12 @@ impl EnvironmentStateService for ReorderedToolActivationService {
         component_id: golem_common::model::component::ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Option<Arc<ToolDeploymentState>>, ToolDiscoveryError> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            self.activation_calls.fetch_add(1, Ordering::SeqCst);
+            return Err(ToolDiscoveryError::Retrieval(WorkerExecutorError::runtime(
+                "discovery unavailable",
+            )));
+        }
         match self.activation_calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
                 self.first_call_blocked.notify_one();
@@ -17248,6 +17258,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 owner_loads: Default::default(),
                 http_port: 0,
                 extra_env: Default::default(),
+                plugins: Default::default(),
             })
         })),
         ..Default::default()
@@ -23985,6 +23996,7 @@ async fn tool_guest_invocation_id_names_its_public_owner_and_can_call_an_agent(
                 owner_loads: Default::default(),
                 http_port: 0,
                 extra_env: Default::default(),
+                plugins: Default::default(),
             })
         })),
         ..Default::default()
@@ -24072,11 +24084,18 @@ async fn tool_guest_invocation_id_names_its_public_owner_and_can_call_an_agent(
     Ok(())
 }
 
+#[derive(Default)]
+struct BaselineOwnerPlugins {
+    baseline: Vec<golem_common::model::component::InstalledPlugin>,
+    agent: Vec<golem_common::model::component::InstalledPlugin>,
+}
+
 struct BaselineOwnerComponentService {
     inner: Arc<dyn ComponentService>,
     owner_loads: Arc<AtomicUsize>,
     http_port: u16,
     extra_env: BTreeMap<String, String>,
+    plugins: Arc<std::sync::RwLock<BaselineOwnerPlugins>>,
 }
 
 #[async_trait::async_trait]
@@ -24122,6 +24141,7 @@ impl ComponentService for BaselineOwnerComponentService {
                 Default::default(),
                 ComponentProvisionConfig {
                     initial_permissions: permissions,
+                    plugins: self.plugins.read().unwrap().baseline.clone(),
                     env: BTreeMap::from([
                         (
                             "NATIVE_ORDER_HTTP_PORT".to_string(),
@@ -24135,6 +24155,12 @@ impl ComponentService for BaselineOwnerComponentService {
                     ..Default::default()
                 },
             );
+            let mut provisions = component.metadata.agent_type_provision_configs().clone();
+            provisions
+                .get_mut(&AgentTypeName("ToolStreamingCaller".into()))
+                .unwrap()
+                .plugins = self.plugins.read().unwrap().agent.clone();
+            component.metadata = component.metadata.with_provision_configs(provisions);
         }
         Ok(component)
     }
@@ -24383,6 +24409,12 @@ async fn standalone_scheduled_and_cancelled_invocations_survive_restart(
     }
     // Schedule pending entry; restart before due → no execution before the deadline.
     assert_eq!(effects.load(Ordering::SeqCst), 0);
+    fixture.environment.set_tool_deployment(
+        fixture.context.default_environment_id,
+        fixture.tools.component.id,
+        fixture.tools.component.revision,
+        None,
+    );
     drop(executor);
     verify_scheduled_and_cancelled_after_restart(
         deps,
@@ -24510,7 +24542,7 @@ async fn verify_scheduled_and_cancelled_after_restart(
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
-async fn standalone_unaccepted_owner_rechecks_the_component_tool_activation(
+async fn standalone_invalid_activation_does_not_create_an_owner(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -24519,14 +24551,7 @@ async fn standalone_unaccepted_owner_rechecks_the_component_tool_activation(
 ) -> anyhow::Result<()> {
     let StandaloneSetup { fixture, executor } =
         StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
-    let context = &fixture.context;
-    let component = &fixture.tools.component;
-    let deployment = &fixture.tools.deployment;
-    let environment_state = &fixture.environment;
-    let tool_name = ToolName::try_from("streaming").unwrap();
-
-    // A rejected preparation can leave Create without an accepted payload. A retry must check
-    // the actual activation again, rather than admitting a newly deployed host implementation.
+    // Both deployment and canonical-command validation precede the durable Create pin.
     let StandaloneToolCall {
         owned: unaccepted_owner,
         request: mut unaccepted,
@@ -24537,53 +24562,157 @@ async fn standalone_unaccepted_owner_rechecks_the_component_tool_activation(
         .as_mut()
         .unwrap()
         .expected_deployment_revision = Some(999);
+    let error = executor
+        .invoke_agent_session(unaccepted.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error.downcast_ref::<InvocationSessionRejection>().expect("typed rejection").worker_error,
+            Some(WorkerExecutorError::InvalidRequest { details }) if details == "external tool deployment revision does not match"),
+        "{error:#}"
+    );
     assert!(
         executor
-            .invoke_agent_session(unaccepted.clone())
+            .get_worker_metadata(&unaccepted_owner)
             .await
             .is_err()
     );
-    let unaccepted_oplog = executor
-        .get_oplog(&unaccepted_owner, OplogIndex::INITIAL)
-        .await?;
-    assert_eq!(unaccepted_oplog.len(), 1);
-    assert!(matches!(
-        unaccepted_oplog[0].entry,
-        PublicOplogEntry::Create(_)
-    ));
-    let host_deployment = fixture.tools.replaced_by_host(&tool_name);
-    environment_state.set_tool_deployment(
-        context.default_environment_id,
-        component.id,
-        component.revision,
-        Some(host_deployment.clone()),
+    assert!(
+        executor
+            .stored_oplog(&unaccepted_owner.agent_id)
+            .await
+            .is_empty()
     );
     unaccepted
         .external_tool
         .as_mut()
         .unwrap()
         .expected_deployment_revision = None;
-    let rejected = executor.invoke_agent_session(unaccepted).await.unwrap_err();
+    unaccepted.external_tool.as_mut().unwrap().command_path = vec!["not-a-command".into()];
+    let error = executor.invoke_agent_session(unaccepted).await.unwrap_err();
     assert!(
-        matches!(
-            &rejected.downcast_ref::<InvocationSessionRejection>().expect("typed rejection").worker_error,
-            Some(WorkerExecutorError::InvalidRequest { details }) if details == "standalone durable owners require a component tool"
-        ),
-        "{rejected:#}"
+        matches!(&error.downcast_ref::<InvocationSessionRejection>().expect("typed rejection").worker_error,
+        Some(WorkerExecutorError::InvalidRequest { details }) if details.contains("canonical names")),
+        "{error:#}"
     );
-    assert_eq!(
+    assert!(
         executor
-            .get_oplog(&unaccepted_owner, OplogIndex::INITIAL)
-            .await?,
-        unaccepted_oplog
+            .get_worker_metadata(&unaccepted_owner)
+            .await
+            .is_err()
+    );
+    assert!(
+        executor
+            .stored_oplog(&unaccepted_owner.agent_id)
+            .await
+            .is_empty()
     );
     assert_eq!(fixture.effects.load(Ordering::SeqCst), 0);
-    environment_state.set_tool_deployment(
-        context.default_environment_id,
-        component.id,
-        component.revision,
-        Some(deployment.clone()),
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_create_pin_survives_loss_before_pending_and_unavailable_discovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let discovery = Arc::new(ReorderedToolActivationService::default());
+    let StandaloneSetup { fixture, executor } = StandaloneFixture::start_with_environment(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        Some(discovery.clone()),
+    )
+    .await?;
+    *discovery.first_deployment.write().unwrap() = Some(Arc::new(fixture.tools.deployment.clone()));
+    discovery.release_first_call();
+    let call = fixture.call(&executor, "create-before-pending", "native-order")?;
+    let mut gate = executor
+        .gate_before_next_oplog_commit(&call.owned.agent_id, |entry| {
+            matches!(entry, OplogEntry::PendingAgentInvocation { .. })
+        })
+        .await;
+    {
+        let accepting = call.attach(&executor);
+        tokio::pin!(accepting);
+        tokio::select! {
+            _ = gate.entered() => {}
+            _ = &mut accepting => panic!("acceptance escaped the Pending commit gate"),
+        }
+    }
+    let before = executor.stored_oplog(&call.owned.agent_id).await;
+    assert_eq!(
+        before.len(),
+        1,
+        "only Create may be durable before acceptance"
     );
+    let OplogEntry::Create { parameters, .. } = &before[0] else {
+        panic!("missing Create");
+    };
+    let pin = parameters
+        .standalone_tool
+        .as_ref()
+        .expect("standalone pin")
+        .activation
+        .clone();
+    assert_eq!(fixture.effects.load(Ordering::SeqCst), 0);
+    // Refuse the buffered Pending at storage, rather than letting shutdown drain it.
+    take_agent_oplog_over_at_epoch(deps, &fixture.context, &call.owned, 1).await?;
+    gate.release();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    assert_eq!(
+        executor.stored_oplog(&call.owned.agent_id).await,
+        before,
+        "shutdown must not commit the unaccepted Pending entry"
+    );
+    drop(executor);
+    discovery.unavailable.store(true, Ordering::SeqCst);
+    let executor = start_with_overrides(deps, &fixture.context, fixture.overrides.clone()).await?;
+    let assigned = executor
+        .client
+        .clone()
+        .assign_shards(AssignShardsRequest {
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ProtoShardId { value: 0 }),
+                epoch: 1,
+            }],
+            number_of_shards: 1,
+            revision: 1,
+            incarnation_id: "5eed0000-0000-4000-8000-000000000001".into(),
+            executor_count: 1,
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        assigned.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
+    call.result(&executor).await?;
+    assert_eq!(
+        discovery.activation_calls(),
+        1,
+        "the Create pin bypasses unavailable discovery"
+    );
+    assert_eq!(fixture.effects.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        standalone_middleware::accepted_activation(&executor, &call.owned).await?,
+        pin
+    );
+    let fresh = fixture.call(&executor, "no-pin-during-discovery-outage", "native-order")?;
+    assert!(fresh.result(&executor).await.is_err());
+    assert!(
+        executor
+            .stored_oplog(&fresh.owned.agent_id)
+            .await
+            .is_empty()
+    );
+    assert_eq!(fixture.effects.load(Ordering::SeqCst), 1);
     Ok(())
 }
 
@@ -25351,6 +25480,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
                 owner_loads: loads.clone(),
                 http_port,
                 extra_env: Default::default(),
+                plugins: Default::default(),
             })
         })),
         ..Default::default()

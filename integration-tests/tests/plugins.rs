@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Context;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -21,8 +22,9 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::model::agent::{AgentMode, AgentTypeName, OwnedAgentId, OwnerKind};
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
-    AgentTypeProvisionConfigUpdate, PluginInstallation, PluginInstallationAction,
-    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
+    AgentTypeProvisionConfigUpdate, ComponentProvisionConfigCreation, ComponentUpdate,
+    PluginInstallation, PluginInstallationAction, PluginInstallationUpdate, PluginPriority,
+    PluginUninstallation, ToolDeploymentConfigUpdate, ToolProvisionConfigUpdate,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::oplog::PublicOplogEntry;
@@ -32,13 +34,18 @@ use golem_common::model::permission_share::{
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
+use golem_common::model::tool::ToolBindingInput;
+use golem_common::model::tool_middleware::ToolMiddlewareInstallation;
 use golem_common::model::{AgentStatus, OplogIndex};
+use golem_common::schema::{ExternalTypedSchemaValue, IntoSchema, IntoTypedSchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, TestDependencies, WorkerExecutorClusterControl,
     WorkerExecutorClusterControlStub,
 };
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{
+    TestDsl, TestDslExtended, default_test_agent_initial_permissions_for_account,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -49,6 +56,13 @@ use tracing::Instrument;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 inherit_test_dep!(WorkerExecutorClusterControlStub);
+
+const STANDALONE_PROCESSOR_CALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(IntoSchema)]
+struct StandaloneProcessorInput {
+    value: String,
+}
 
 // ============================================================================
 // Helpers
@@ -1341,6 +1355,254 @@ async fn oplog_processor_in_different_env_after_unregistering(
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches);
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[test_r::timeout("4m")]
+async fn standalone_tool_oplog_processors_exclude_component_baseline(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let client = user.registry_service_client().await;
+    let (tool_url, tool_batches, _tool_server) = start_callback_server().await;
+    let (middleware_url, middleware_batches, _middleware_server) = start_callback_server().await;
+    let (baseline_url, baseline_batches, _baseline_server) = start_callback_server().await;
+    let processor = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
+    let mut installations = Vec::new();
+    for (name, url) in [
+        ("tool", tool_url),
+        ("middleware", middleware_url),
+        ("baseline", baseline_url),
+    ] {
+        let plugin = client
+            .create_plugin(
+                &user.account_id.0,
+                &PluginRegistrationCreation {
+                    name: format!("standalone-{name}"),
+                    version: "v1".into(),
+                    description: "Standalone processor recipient".into(),
+                    icon: Base64(Vec::new()),
+                    homepage: "none".into(),
+                    spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                        component_id: processor.id,
+                        component_revision: processor.revision,
+                    }),
+                },
+            )
+            .await?;
+        let grant = client
+            .create_environment_plugin_grant(
+                &env.id.0,
+                &EnvironmentPluginGrantCreation {
+                    plugin_registration_id: plugin.id,
+                },
+            )
+            .await?;
+        installations.push(PluginInstallation {
+            environment_plugin_grant_id: grant.id,
+            priority: PluginPriority(0),
+            parameters: BTreeMap::from([("callback-url".into(), url)]),
+        });
+    }
+    let provision = |installation| ToolProvisionConfigUpdate {
+        config: None,
+        env: None,
+        plugin_updates: vec![PluginInstallationAction::Install(installation)],
+        files_to_add_or_update: BTreeMap::new(),
+        files_to_remove: Vec::new(),
+        file_permission_updates: BTreeMap::new(),
+    };
+    let caller = user
+        .component(&env.id, "golem_it_tool_streaming_rust_caller_release")
+        .name("standalone-processors:caller")
+        .store()
+        .await?;
+    let provider = user
+        .component(&env.id, "golem_it_tool_streaming_rust_provider_release")
+        .name("standalone-processors:provider")
+        .with_tool_agent_binding("streaming", "ToolStreamingCaller")?
+        .store()
+        .await?;
+    let middleware = user
+        .component(&env.id, "golem_it_tool_streaming_rust_middleware_release")
+        .store()
+        .await?;
+    let middleware_name = "streaming-universal-pass-through";
+    let empty_update = |revision| ComponentUpdate {
+        current_revision: revision,
+        package_metadata: None,
+        config_schema: None,
+        component_provision_config: None,
+        agent_types: None,
+        agent_type_provision_config_updates: None,
+        tools: None,
+        tool_deployment_config_updates: None,
+        tool_middlewares: None,
+        tool_middleware_provision_config_updates: None,
+        allow_incompatible_config: false,
+    };
+    let mut update = empty_update(middleware.revision);
+    update.tool_middleware_provision_config_updates = Some(BTreeMap::from([(
+        middleware_name.try_into().unwrap(),
+        provision(installations[1].clone()),
+    )]));
+    client
+        .update_component(&middleware.id.0, &update, None::<Vec<u8>>, None::<Vec<u8>>)
+        .await?;
+    let mut update = empty_update(caller.revision);
+    update.component_provision_config = Some(ComponentProvisionConfigCreation {
+        initial_permissions: default_test_agent_initial_permissions_for_account(
+            user.account_email.clone(),
+        ),
+        plugin_installations: vec![installations[2].clone()],
+        ..Default::default()
+    });
+    client
+        .update_component(&caller.id.0, &update, None::<Vec<u8>>, None::<Vec<u8>>)
+        .await?;
+    let mut update = empty_update(provider.revision);
+    update.tool_deployment_config_updates = Some(BTreeMap::from([(
+        "streaming".try_into().unwrap(),
+        ToolDeploymentConfigUpdate {
+            provision: Some(provision(installations[0].clone())),
+            environment_binding: Default::default(),
+            component_bindings: Some(BTreeMap::from([(
+                caller.component_name.clone(),
+                ToolBindingInput {
+                    middleware: Some(vec![ToolMiddlewareInstallation {
+                        name: middleware_name.try_into().unwrap(),
+                        version: None,
+                        parameters: golem_common::model::json::NormalizedJsonValue::new(
+                            serde_json::json!({}),
+                        ),
+                        account: None,
+                        secret_keys_readable: None,
+                        secret_keys_revealable: None,
+                        filesystem_access: Default::default(),
+                    }]),
+                    ..Default::default()
+                },
+            )])),
+            agent_bindings: None,
+        },
+    )]));
+    client
+        .update_component(&provider.id.0, &update, None::<Vec<u8>>, None::<Vec<u8>>)
+        .await?;
+    user.deploy_environment(env.id).await?;
+
+    let input: ExternalTypedSchemaValue = StandaloneProcessorInput {
+        value: "processor-recipients".into(),
+    }
+    .into_typed_schema_value()?
+    .try_into()
+    .map_err(anyhow::Error::msg)?;
+    let service = deps.worker_service();
+    let response = service
+        .base_http_client()
+        .await
+        .post(format!(
+            "http://{}:{}/v1/runtime/envs/{}/invoke-tool",
+            service.http_host(),
+            service.http_port(),
+            env.id,
+        ))
+        .bearer_auth(user.token.secret())
+        .header("Idempotency-Key", "standalone-processors")
+        .json(&serde_json::json!({
+            "componentId": caller.id,
+            "toolName": "streaming", "commandPath": ["no-stream"],
+            "input": input, "mode": "await",
+        }))
+        .send()
+        .await?;
+    let status = response.status();
+    let invocation_id = response
+        .headers()
+        .get("Golem-Invocation-Id")
+        .context("standalone invocation receipt")?
+        .to_str()?
+        .parse::<golem_common::model::OwnedInvocationId>()
+        .map_err(anyhow::Error::msg)?;
+    let body = response.text().await?;
+    anyhow::ensure!(
+        status.is_success(),
+        "standalone invocation returned {status}: {body}"
+    );
+    assert!(body.contains("no-stream:processor-recipients"), "{body}");
+
+    wait_for_invocations(&tool_batches, 1, STANDALONE_PROCESSOR_CALLBACK_TIMEOUT).await;
+    wait_for_invocations(
+        &middleware_batches,
+        1,
+        STANDALONE_PROCESSOR_CALLBACK_TIMEOUT,
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let tool = tool_batches.lock().unwrap().clone();
+    let middleware = middleware_batches.lock().unwrap().clone();
+    assert_function_names(&tool, &["external-tool"]);
+    assert_function_names(&middleware, &["external-tool"]);
+    assert_unique_oplog_indices(&tool);
+    assert_unique_oplog_indices(&middleware);
+    assert_eq!(tool[0].source_worker_id, middleware[0].source_worker_id);
+    assert_eq!(tool[0].agent_type, None);
+    let source = OwnedAgentId {
+        environment_id: env.id,
+        agent_id: tool[0].source_worker_id.parse()?,
+    };
+    let oplog = user.get_oplog(&source, OplogIndex::INITIAL).await?;
+    let PublicOplogEntry::Create(create) = &oplog[0].entry else {
+        panic!("standalone source has no Create entry")
+    };
+    assert_eq!(create.owner_kind, OwnerKind::StandaloneTool);
+    assert_eq!(
+        create.standalone_tool.as_ref().unwrap().invocation_id,
+        invocation_id.id()
+    );
+    assert_eq!(
+        create
+            .initial_active_plugins
+            .iter()
+            .map(|plugin| plugin.environment_plugin_grant_id)
+            .collect::<HashSet<_>>(),
+        HashSet::from([
+            installations[0].environment_plugin_grant_id,
+            installations[1].environment_plugin_grant_id,
+        ])
+    );
+    let finishes: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| {
+            matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+                .then_some(entry.oplog_index.as_u64())
+        })
+        .collect();
+    for batches in [&tool, &middleware] {
+        assert!(batches.iter().all(|batch| {
+            batch.source_worker_id == tool[0].source_worker_id && batch.agent_type.is_none()
+        }));
+        assert_eq!(
+            batches
+                .iter()
+                .flat_map(|batch| batch
+                    .invocations
+                    .iter()
+                    .map(|invocation| invocation.oplog_index))
+                .collect::<Vec<_>>(),
+            finishes
+        );
+    }
+    assert!(
+        baseline_batches.lock().unwrap().is_empty(),
+        "component baseline must not receive standalone tool entries"
+    );
     Ok(())
 }
 

@@ -161,6 +161,16 @@ impl StandaloneFixture {
         provider: &PrecompiledComponent,
         caller: &PrecompiledComponent,
     ) -> anyhow::Result<StandaloneSetup> {
+        Self::start_with_environment(last_unique_id, deps, provider, caller, None).await
+    }
+
+    pub async fn start_with_environment(
+        last_unique_id: &LastUniqueId,
+        deps: &WorkerExecutorTestDependencies,
+        provider: &PrecompiledComponent,
+        caller: &PrecompiledComponent,
+        discovery: Option<Arc<dyn EnvironmentStateService>>,
+    ) -> anyhow::Result<StandaloneSetup> {
         let context = TestContext::new(last_unique_id);
         let environment = Arc::new(TestEnvironmentStateService::default());
         let effect_gate = Arc::new(NativeOrderEffectGate::default());
@@ -176,7 +186,7 @@ impl StandaloneFixture {
         let storage = Arc::new(std::sync::Mutex::new(None));
         let retention_insert = Arc::new(retention_storage::RetentionInsertGate::default());
         let overrides = TestExecutorOverrides {
-            environment_state_service: Some(environment.clone()),
+            environment_state_service: Some(discovery.unwrap_or_else(|| environment.clone())),
             wrap_scheduler_storage: Some(Arc::new({
                 let release = release_wakes.clone();
                 let storage = storage.clone();
@@ -199,6 +209,7 @@ impl StandaloneFixture {
                     inner,
                     owner_loads: Default::default(),
                     http_port,
+                    plugins: Default::default(),
                     extra_env: BTreeMap::from([
                         ("CRASH_CHECKPOINT_PORT".into(), checkpoint_port.to_string()),
                         ("CRASH_CHECKPOINT_GATE_PORT".into(), gate_port.to_string()),

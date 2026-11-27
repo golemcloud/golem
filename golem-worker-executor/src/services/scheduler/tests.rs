@@ -2025,10 +2025,19 @@ async fn retention_registration_rechecks_authority_after_recreation_and_repairs_
     use golem_common::model::agent::OwnerKind;
     use golem_common::model::caller::Caller;
     use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::entity::FilesystemCapability;
     use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::{
         CreateParameters, CreateRequest, CreateRequestKind, OplogEntry,
     };
+    use golem_common::model::tool::{
+        CompiledToolBinding, ToolActivationSnapshot, ToolBindingOwner, ToolFilesystemAccess,
+        ToolProvisionConfig, ToolRegistration, ToolSource,
+    };
+    use golem_common::schema::SchemaGraph;
+    use golem_common::schema::tool::{CommandTree, Tool};
 
     for pause_before_read in [true, false] {
         let owner = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(42, 3));
@@ -2041,8 +2050,61 @@ async fn retention_registration_rechecks_authority_after_recreation_and_repairs_
         };
         let indexed = Arc::new(InMemoryIndexedStorage::new());
         let create = |fingerprint: AgentFingerprint| {
+            let component_id = ComponentId::new();
+            let account_id = AccountId::new();
+            let source = ToolSource::Component {
+                component_id,
+                component_revision: ComponentRevision::INITIAL,
+                component_name: "test:registration-race".try_into().unwrap(),
+            };
+            let activation = ToolActivationSnapshot {
+                registered_tool: ToolRegistration {
+                    deployment_revision: DeploymentRevision::INITIAL,
+                    release_id: None,
+                    definition: Tool {
+                        version: "1.0.0".to_string(),
+                        requires_filesystem: false,
+                        http_mount: None,
+                        commands: CommandTree { nodes: vec![] },
+                        schema: SchemaGraph::empty(),
+                    },
+                    provision: ToolProvisionConfig {
+                        config: NormalizedJsonValue::new(
+                            serde_json::json!({"retention": "weekly"}),
+                        ),
+                        ..Default::default()
+                    },
+                    component_bindings: Default::default(),
+                    source: source.clone(),
+                    owner_account_id: account_id,
+                    owner_account_email: "owner@example.com".into(),
+                    metadata_version: "0.1.0".to_string(),
+                    metadata_digest: Default::default(),
+                },
+                binding: CompiledToolBinding {
+                    deployment_revision: DeploymentRevision::INITIAL,
+                    release_id: None,
+                    owner: ToolBindingOwner::ComponentBaseline { component_id },
+                    tool_name: "registration-race".try_into().unwrap(),
+                    version: "1.0.0".to_string(),
+                    metadata_version: "0.1.0".to_string(),
+                    metadata_digest: Default::default(),
+                    account_id,
+                    account_email: "owner@example.com".into(),
+                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: Default::default(),
+                    secret_keys_revealable: Default::default(),
+                    filesystem_access: ToolFilesystemAccess::Denied,
+                    source,
+                    shell: false,
+                },
+                filesystem: FilesystemCapability::Incapable,
+                middleware_chain: None,
+                mcp_import: None,
+            };
             OplogEntry::create(Box::new(CreateParameters {
-                component_id: ComponentId::new(),
+                component_id,
                 agent_type_name: None,
                 canonical_key: None,
                 constructor_parameters: None,
@@ -2052,7 +2114,7 @@ async fn retention_registration_rechecks_authority_after_recreation_and_repairs_
                 component_revision: ComponentRevision::INITIAL,
                 env: vec![],
                 environment_id: owner.environment_id,
-                created_by: AccountId::new(),
+                created_by: account_id,
                 parent: None,
                 component_size: 0,
                 initial_total_linear_memory_size: 0,
@@ -2071,6 +2133,7 @@ async fn retention_registration_rechecks_authority_after_recreation_and_repairs_
                         command_path: vec![],
                         invocation_id: InvocationId::new(),
                         caller: Caller::anonymous(),
+                        activation,
                     },
                 )),
                 never_live: false,
