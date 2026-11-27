@@ -93,11 +93,14 @@ build cold. The output Wasm is standalone and does not need this cache or extern
 The failure tests preinitialize small JavaScript sources, written inline in the Rust
 tests, in the TypeScript guest. They check the error that `golem build` prints when
 preinitialization fails: a module-level host call names the component and the
-qualified import, a module-level throw keeps its JavaScript message and stack, and
-a corrupt input keeps the optimizer's original error.
+qualified import, also after the guest wrote to stderr; a module-level throw keeps its
+JavaScript message and stack; and a corrupt input keeps the optimizer's original
+error. A top-level `await` of a host call fails with `Host error: WouldBlock` and does
+not name the import yet; its test records that behavior until module evaluation runs
+on the async executor.
 
 The tests do not call the agent's `get` method or cover worker execution, awaited
-I/O or source-map diagnostic accuracy. Source maps accompany the build outputs for
+I/O that completes or source-map diagnostic accuracy. Source maps accompany the build outputs for
 inspection; dependency paths omit pnpm's virtual-store prefix and use forward slashes.
 The separate CLI and worker-executor suites retain their existing coverage.
 

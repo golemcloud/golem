@@ -142,6 +142,50 @@ async fn module_level_throw_keeps_javascript_message_and_stack() -> anyhow::Resu
 
 #[test]
 #[timeout("120s")]
+async fn guest_stderr_before_host_call_keeps_cause_and_stderr() -> anyhow::Result<()> {
+    let text = preinitialization_failure(
+        "js-guest:stderr-host-call",
+        r#"import { getConfigValue } from 'golem:agent/host@2.0.0';
+process.stderr.write('raw stderr line\n');
+const metadata = { doc: undefined, aliases: [], examples: [], deprecated: undefined, role: undefined };
+const graph = { typeNodes: [{ body: { tag: 'bool-type' }, metadata }], defs: [], root: 0 };
+export default getConfigValue(['greeting'], graph);"#,
+    )
+    .await?;
+    assert_eq!(
+        text,
+        "Failed to pre-initialize component js-guest:stderr-host-call: wizer pre-initialization \
+         called unknown import `golem:agent/host@2.0.0#get-config-value` — this import is not \
+         available during pre-initialization\nraw stderr line"
+    );
+    Ok(())
+}
+
+/// A top-level `await` of host work cannot settle during preinitialization. The guest
+/// reports `WouldBlock` without the import, as for a promise that never settles.
+#[test]
+#[timeout("120s")]
+async fn module_level_await_fails_without_import_name() -> anyhow::Result<()> {
+    let text = preinitialization_failure(
+        "js-guest:await-async-import",
+        r#"import { beginCustomDurableInvocationAsync } from 'golem:durability/durability@1.6.0';
+const metadata = { doc: undefined, aliases: [], examples: [], deprecated: undefined, role: undefined };
+const graph = { typeNodes: [{ body: { tag: 'bool-type' }, metadata }], defs: [], root: 0 };
+const value = { valueNodes: [{ tag: 'bool-value', val: true }], root: 0 };
+export default await beginCustomDurableInvocationAsync('f', { graph, value }, { tag: 'read-local' });"#,
+    )
+    .await?;
+    assert_eq!(
+        text,
+        "Failed to pre-initialize component js-guest:await-async-import:\n\
+         Failed to finish module initialization:\n\
+         Host error: WouldBlock"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn non_trap_failure_keeps_original_error() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let input = Utf8Path::from_path(directory.path())
