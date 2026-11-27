@@ -244,6 +244,7 @@ async fn shard_revocation_leaves_an_open_input_session_unfinished(
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();

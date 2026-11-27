@@ -854,6 +854,7 @@ async fn an_await_ends_when_its_owner_loses_the_shard(
             }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -890,6 +891,7 @@ async fn an_await_ends_when_its_owner_loses_the_shard(
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
