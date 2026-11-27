@@ -732,7 +732,7 @@ impl ShardManagerService for GrpcShardManagerService {
         let (number_of_shards, lease) = self.register_granted(endpoint, pod_name).await?;
         Ok(ShardAssignment {
             number_of_shards,
-            executor_count: lease.executor_count.get(),
+            executor_count: lease.executor_count,
             shard_epochs: lease.shard_epochs.into_iter().collect(),
             expires_at: Some(lease.expires_at),
             revision: Some(lease.revision),

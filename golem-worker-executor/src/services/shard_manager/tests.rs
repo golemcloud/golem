@@ -407,7 +407,7 @@ async fn a_shutdown_during_an_in_flight_renewal_still_deregisters() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
 
     // The renewal has been sent and is parked in the gate.
@@ -507,7 +507,7 @@ async fn a_renewal_that_never_answers_times_out_and_the_loop_keeps_going() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
 
     // Cadence 1 s, deadline 200 ms, first backoff 1 s: a second renewal within a few seconds
@@ -574,7 +574,7 @@ async fn a_reply_that_arrives_after_its_renewal_was_given_up_on_is_never_applied
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
 
     let follows = |manager: Uuid| {
@@ -630,7 +630,7 @@ async fn a_re_registration_that_never_answers_times_out_and_is_tried_again() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
     mock.hang_next_registrations(1);
 
@@ -701,7 +701,7 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
 
     // The first renewal widens the set, so its announcement enters the hook and blocks
@@ -1084,7 +1084,7 @@ async fn a_registration_whose_lease_arrived_lapsed_is_recovered_by_the_renewal_t
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
     assert!(
         !shard_service.is_ready(),
@@ -1295,13 +1295,13 @@ async fn a_lost_lease_re_registers_with_a_fresh_uuid_and_announces_the_new_assig
     service.set_assignment_changed_hook(&hook);
 
     let assignment = service.register(ENDPOINT, None).await.unwrap();
-    assert_eq!(assignment.executor_count, 2);
+    assert_eq!(assignment.executor_count.get(), 2);
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
     let original_executor_id = mock.register_calls()[0];
 
@@ -1320,7 +1320,7 @@ async fn a_lost_lease_re_registers_with_a_fresh_uuid_and_announces_the_new_assig
     let assignment = shard_service.current_assignment().unwrap();
     assert_eq!(assignment.shard_epochs, epochs([(2, 5)]));
     assert_eq!(assignment.expires_at, Some(fresh_expiry));
-    assert_eq!(assignment.executor_count, 4);
+    assert_eq!(assignment.executor_count.get(), 4);
 }
 
 /// The re-registration after a lost lease names the executor at the same endpoint as the first
@@ -1345,7 +1345,7 @@ async fn a_re_registration_keeps_the_advertised_endpoint() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
     service.renew_shard_lease().await;
 
@@ -1378,7 +1378,7 @@ async fn a_re_registration_with_a_manager_that_lost_its_history_adopts_its_low_r
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
 
     service.renew_shard_lease().await;
@@ -1419,7 +1419,7 @@ async fn a_renewal_answered_by_a_manager_restored_from_a_backup_adopts_its_low_r
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
 
     service.renew_shard_lease().await;
@@ -1476,7 +1476,7 @@ async fn renew_now_runs_a_renewal_ahead_of_its_timer() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        NonZeroUsize::new(assignment.executor_count).unwrap(),
+        assignment.executor_count,
     );
     assert!(
         mock.renew_calls().is_empty(),

@@ -269,7 +269,7 @@ impl ShardService for ShardServiceDefault {
                 .is_none_or(|current| current.shard_epochs != *shard_epochs);
             let installed = shard_assignment.insert(ShardAssignment {
                 number_of_shards,
-                executor_count: 1,
+                executor_count: NonZeroUsize::MIN,
                 shard_epochs: shard_epochs.clone(),
                 expires_at: None,
                 revision: None,
@@ -356,7 +356,7 @@ impl ShardService for ShardServiceDefault {
             .read()
             .unwrap()
             .as_ref()
-            .map(|assignment| assignment.executor_count)
+            .map(|assignment| assignment.executor_count.get())
     }
 }
 
@@ -372,7 +372,7 @@ fn record_delivery(
     shard_assignment: &ShardAssignment,
 ) {
     record_assigned_shard_count(shard_assignment.len());
-    record_executor_count(shard_assignment.executor_count);
+    record_executor_count(shard_assignment.executor_count.get());
     if let Some(expires_at) = shard_assignment.expires_at {
         record_shard_lease_expiry(expires_at);
     }

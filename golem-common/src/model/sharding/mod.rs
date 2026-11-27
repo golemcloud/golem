@@ -204,11 +204,11 @@ pub enum ShardDeliveryOutcome {
 /// The shards this executor currently holds, with the epoch each was granted
 /// at, and when the lease over them lapses on this executor's own clock, if
 /// it lapses at all.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ShardAssignment {
     pub number_of_shards: usize,
     /// The executor lease count from the last accepted grant, assignment or revoke.
-    pub executor_count: usize,
+    pub executor_count: NonZeroUsize,
     /// Exactly the shards this executor holds. The shard manager pushes the
     /// complete set; anything absent from it has been dropped.
     pub shard_epochs: HashMap<ShardId, ShardEpoch>,
@@ -227,6 +227,18 @@ pub struct ShardAssignment {
     pub revision: Option<ShardLeaseRevision>,
 }
 
+impl Default for ShardAssignment {
+    fn default() -> Self {
+        Self {
+            number_of_shards: 0,
+            executor_count: NonZeroUsize::MIN,
+            shard_epochs: HashMap::new(),
+            expires_at: None,
+            revision: None,
+        }
+    }
+}
+
 impl ShardAssignment {
     /// An assignment that never expires, with every shard at epoch 0. Used by
     /// the single-shard implementations and by tests, which have no shard
@@ -237,7 +249,7 @@ impl ShardAssignment {
     ) -> Self {
         Self {
             number_of_shards,
-            executor_count: 1,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: shard_ids
                 .into_iter()
                 .map(|shard_id| (shard_id, ShardEpoch::default()))
@@ -400,7 +412,7 @@ impl ShardAssignment {
         }
         self.shard_epochs = shard_epochs.clone();
         self.revision = Some(revision);
-        self.executor_count = executor_count.get();
+        self.executor_count = executor_count;
         ShardDeliveryOutcome::Applied { set_changed }
     }
 
