@@ -10,6 +10,7 @@ use super::*;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
+use golem_common::model::card::parse_polymorphic_permission;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_worker_executor_test_utils::callers;
 use test_r::{test, timeout};
@@ -384,12 +385,19 @@ async fn run_resource_contract(
 
     let mut stored_callers = Vec::new();
     for caller in &callers {
-        stored_callers.push(
-            executor
-                .component_dep(&context.default_environment_id, caller.component)
-                .store()
-                .await?,
-        );
+        let mut component =
+            executor.component_dep(&context.default_environment_id, caller.component);
+        if matches!(contract, ResourceContract::Permission) {
+            // The Rust issuer tool derives its card from the calling agent's wallet.
+            component = component.update_agent_provision_config(caller.agent_type, |config| {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .push(parse_polymorphic_permission("card(*) @ * : derive : *").unwrap());
+            });
+        }
+        stored_callers.push(component.store().await?);
     }
 
     let mut failures = Vec::new();
@@ -953,6 +961,14 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         .await?;
     let caller_component = executor
         .component_dep(&context.default_environment_id, caller)
+        // The Rust issuer tool derives its card from the calling agent's wallet.
+        .update_agent_provision_config("RustResourceToolStreamingCaller", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(parse_polymorphic_permission("card(*) @ * : derive : *").unwrap());
+        })
         .store()
         .await?;
     let metadata = extract_component_metadata(
@@ -1358,6 +1374,13 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                         .retain(|grant| !matches!(grant, PolymorphicPermissionPattern::Config(_)));
                     grants.push(
                         parse_polymorphic_permission("config(?agent) @ * : read : control")
+                            .unwrap(),
+                    );
+                    // The entity tool runs on this agent's wallet: it revokes the queued card, or
+                    // installs it into the target.
+                    let card_verb = if revoke { "revoke" } else { "install" };
+                    grants.push(
+                        parse_polymorphic_permission(&format!("card(*) @ * : {card_verb} : *"))
                             .unwrap(),
                     );
                 })
