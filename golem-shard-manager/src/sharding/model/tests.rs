@@ -55,6 +55,37 @@ fn shard_state_with(number_of_shards: usize, executors: &[(u128, u8, &[i64])]) -
 }
 
 #[test]
+fn deliveries_count_all_executor_leases_after_join_and_leave() {
+    let mut state = shard_state_with(2, &[(1, 1, &[0]), (2, 2, &[1])]);
+    let check = |state: &ShardLeaseState, expected| {
+        state.get_executors().for_each(|executor_id| {
+            let grant = state
+                .lease_grant_for(*executor_id)
+                .unwrap()
+                .stamp(state.revision);
+            let push = state.assignment_push_for(*executor_id).unwrap();
+            assert_eq!(grant.executor_count, expected);
+            assert_eq!(push.executor_count, expected);
+            let wire = crate::sharding::worker_executor::assignment_to_proto(
+                &push,
+                "test-incarnation".to_string(),
+            )
+            .unwrap();
+            assert_eq!(wire.executor_count, expected as u32);
+            assert_eq!(wire.incarnation_id, "test-incarnation");
+        });
+    };
+
+    check(&state, 2);
+    state.add_executor(executor(3), addr(3), None, t0(), TTL);
+    state.bump_revision().unwrap();
+    check(&state, 3);
+    state.remove_executor(executor(1));
+    state.bump_revision().unwrap();
+    check(&state, 2);
+}
+
+#[test]
 fn new_state_is_empty_with_initial_revision() {
     let shard_state = ShardLeaseState::new(8);
     assert_eq!(shard_state.number_of_shards, 8);
@@ -112,7 +143,7 @@ fn add_executor_at_reused_address_replaces_lease_and_transfers_shards() {
     let mut later = t0() + jiff::SignedDuration::from_secs(10);
 
     // bump shard 1 once so we can tell "advanced" from "reset": moving it to executor 2 and
-    // back advances its epoch to 1
+    // back advances its epoch to 2
     shard_state.assign_shard(executor(2), shard(1));
     shard_state.assign_shard(executor(1), shard(1));
     assert_eq!(shard_state.epoch_for_shard(shard(1)), Some(ShardEpoch(2)));
@@ -526,12 +557,32 @@ fn housekeep_evicts_only_expired_leases() {
     shard_state.assign_shard(executor(1), shard(0));
     shard_state.assign_shard(executor(2), shard(1));
 
+    let check_delivered_count = |state: &ShardLeaseState, expected| {
+        let grant = state
+            .lease_grant_for(executor(2))
+            .unwrap()
+            .stamp(state.revision);
+        let push = state.assignment_push_for(executor(2)).unwrap();
+        assert_eq!(grant.executor_count, expected);
+        assert_eq!(push.executor_count, expected);
+        assert_eq!(
+            crate::sharding::worker_executor::assignment_to_proto(
+                &push,
+                "test-incarnation".to_string(),
+            )
+            .unwrap()
+            .executor_count,
+            expected as u32
+        );
+    };
+
     assert!(
         shard_state
             .housekeep(t0() + jiff::SignedDuration::from_secs(9))
             .is_empty()
     );
     assert_eq!(shard_state.executor_count(), 2);
+    check_delivered_count(&shard_state, 2);
 
     // expiry is inclusive
     let evicted = shard_state.housekeep(t0() + jiff::SignedDuration::from_secs(10));
@@ -539,6 +590,7 @@ fn housekeep_evicts_only_expired_leases() {
     assert!(!shard_state.has_executor(executor(1)));
     assert!(shard_state.has_executor(executor(2)));
     assert_eq!(shard_state.pending_rebalance, shards(&[0]));
+    check_delivered_count(&shard_state, 1);
     assert_eq!(
         shard_state.shards_for_executor(executor(2)),
         Some(shards(&[1]))

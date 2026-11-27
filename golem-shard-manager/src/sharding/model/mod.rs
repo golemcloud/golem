@@ -172,6 +172,7 @@ pub struct ExecutorShards {
 pub struct PendingGrant {
     shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     expires_at: Timestamp,
+    executor_count: usize,
 }
 
 impl PendingGrant {
@@ -180,6 +181,7 @@ impl PendingGrant {
         ShardLeaseGrant {
             shard_epochs: self.shard_epochs,
             expires_at: self.expires_at,
+            executor_count: self.executor_count,
             revision,
         }
     }
@@ -195,6 +197,8 @@ impl PendingGrant {
 pub struct ShardLeaseGrant {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     pub expires_at: Timestamp,
+    /// The number of executors with a lease in the state at `revision`.
+    pub executor_count: usize,
     /// The revision of the persisted state `shard_epochs` was read from. Every delivery of a
     /// shard set carries it, and the executor applies a delivery only if its revision is at least
     /// the last one it applied, so a renewal response and a push that cross on the network cannot
@@ -220,6 +224,8 @@ pub struct RegisterAck {
 pub struct ShardAssignmentPush {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     pub number_of_shards: usize,
+    /// The number of executors with a lease in the state at `revision`.
+    pub executor_count: usize,
     /// See [`ShardLeaseGrant::revision`].
     pub revision: ShardLeaseRevision,
 }
@@ -246,6 +252,8 @@ impl ShardLeaseState {
         self.executor_leases.contains_key(&executor_id)
     }
 
+    /// Counts stored executor leases, including executors with no shards.
+    /// Elapsed leases remain counted until housekeeping removes them.
     pub fn executor_count(&self) -> usize {
         self.executor_leases.len()
     }
@@ -302,6 +310,7 @@ impl ShardLeaseState {
         Some(PendingGrant {
             shard_epochs: self.owned_epochs(executor_id),
             expires_at: lease.expires_at,
+            executor_count: self.executor_count(),
         })
     }
 
@@ -325,6 +334,7 @@ impl ShardLeaseState {
         Some(ShardAssignmentPush {
             shard_epochs: self.owned_epochs(executor_id),
             number_of_shards: self.number_of_shards,
+            executor_count: self.executor_count(),
             // Read off a state that is already stored, so this state's own revision is the one
             // its set was stored under. The loop persists a rebalance before it pushes anything,
             // so the revision here is a real one and never a prediction.

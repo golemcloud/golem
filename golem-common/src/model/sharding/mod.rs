@@ -18,6 +18,7 @@ mod tests;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
+use std::num::NonZeroUsize;
 use std::time::Instant;
 
 use desert_rust::BinaryCodec;
@@ -203,9 +204,11 @@ pub enum ShardDeliveryOutcome {
 /// The shards this executor currently holds, with the epoch each was granted
 /// at, and when the lease over them lapses on this executor's own clock, if
 /// it lapses at all.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ShardAssignment {
     pub number_of_shards: usize,
+    /// The executor lease count from the last accepted grant, assignment or revoke.
+    pub executor_count: NonZeroUsize,
     /// Exactly the shards this executor holds. The shard manager pushes the
     /// complete set; anything absent from it has been dropped.
     pub shard_epochs: HashMap<ShardId, ShardEpoch>,
@@ -224,6 +227,18 @@ pub struct ShardAssignment {
     pub revision: Option<ShardLeaseRevision>,
 }
 
+impl Default for ShardAssignment {
+    fn default() -> Self {
+        Self {
+            number_of_shards: 0,
+            executor_count: NonZeroUsize::MIN,
+            shard_epochs: HashMap::new(),
+            expires_at: None,
+            revision: None,
+        }
+    }
+}
+
 impl ShardAssignment {
     /// An assignment that never expires, with every shard at epoch 0. Used by
     /// the single-shard implementations and by tests, which have no shard
@@ -234,6 +249,7 @@ impl ShardAssignment {
     ) -> Self {
         Self {
             number_of_shards,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: shard_ids
                 .into_iter()
                 .map(|shard_id| (shard_id, ShardEpoch::default()))
@@ -287,12 +303,14 @@ impl ShardAssignment {
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         self.apply(
             Some(number_of_shards),
             shard_epochs,
             revision,
             ShardDeliveryPath::Push,
+            executor_count,
         )
     }
 
@@ -324,6 +342,7 @@ impl ShardAssignment {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Instant,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         self.expires_at = Some(expires_at);
         self.apply(
@@ -331,6 +350,7 @@ impl ShardAssignment {
             shard_epochs,
             revision,
             ShardDeliveryPath::Reply,
+            executor_count,
         )
     }
 
@@ -365,6 +385,7 @@ impl ShardAssignment {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
         path: ShardDeliveryPath,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         if let Some(applied) = self.revision {
             if revision.incarnation != applied.incarnation {
@@ -391,6 +412,7 @@ impl ShardAssignment {
         }
         self.shard_epochs = shard_epochs.clone();
         self.revision = Some(revision);
+        self.executor_count = executor_count;
         ShardDeliveryOutcome::Applied { set_changed }
     }
 
@@ -407,10 +429,17 @@ impl ShardAssignment {
         &mut self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         let mut remaining = self.shard_epochs.clone();
         remaining.retain(|shard_id, _| !shard_ids.contains(shard_id));
-        self.apply(None, &remaining, revision, ShardDeliveryPath::Push)
+        self.apply(
+            None,
+            &remaining,
+            revision,
+            ShardDeliveryPath::Push,
+            executor_count,
+        )
     }
 
     /// Drops every shard, keeping `number_of_shards`, and leaves the lease

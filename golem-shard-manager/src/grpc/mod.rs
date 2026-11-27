@@ -17,10 +17,12 @@ use crate::error::{ShardLeaseTraceErrorKind, ShardManagerTraceErrorKind};
 use crate::quota::QuotaService;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
-use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch};
+use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch, ShardLeaseGrant};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
-use golem_common::model::protobuf::{ip_addr_from_proto, lease_ttl_to_proto};
+use golem_common::model::protobuf::{
+    executor_count_to_proto, ip_addr_from_proto, lease_ttl_to_proto,
+};
 use golem_common::model::{Pod, ShardId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::clients::shard_manager::canonical_advertised_ip;
@@ -116,18 +118,15 @@ impl ShardManagerService for ShardManagerServiceImpl {
         let response = self
             .register_internal(executor_id, pod, request.pod_name)
             .instrument(record.span.clone())
-            .await;
+            .await
+            .and_then(|ack| {
+                registration_to_proto(ack, Timestamp::now(), crate::sharding::incarnation_id())
+            });
 
         let result = match response {
-            Ok(ack) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
-                golem::shardmanager::v1::RegisterSuccess {
-                    number_of_shards: ack.number_of_shards as u32,
-                    shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
-                    lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, Timestamp::now())),
-                    revision: ack.grant.revision.0,
-                    incarnation_id: crate::sharding::incarnation_id(),
-                },
-            )),
+            Ok(registration) => record.succeed(
+                golem::shardmanager::v1::register_response::Result::Success(registration),
+            ),
             Err(error) => {
                 let error: golem::shardmanager::v1::ShardManagerError = error.into();
                 record.fail(
@@ -160,18 +159,14 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .shard_management
             .renew_shard_lease(executor_id, claimed)
             .instrument(record.span.clone())
-            .await;
+            .await
+            .and_then(|grant| {
+                lease_to_proto(grant, Timestamp::now(), crate::sharding::incarnation_id())
+            });
 
         let result = match response {
-            Ok(grant) => record.succeed(
-                golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
-                    golem::shardmanager::v1::ShardLease {
-                        shard_epochs: shard_epoch_entries(&grant.shard_epochs),
-                        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Timestamp::now())),
-                        revision: grant.revision.0,
-                        incarnation_id: crate::sharding::incarnation_id(),
-                    },
-                ),
+            Ok(lease) => record.succeed(
+                golem::shardmanager::v1::renew_shard_lease_response::Result::Success(lease),
             ),
             Err(error) => {
                 let error: golem::shardmanager::v1::ShardLeaseError = error.into();
@@ -512,6 +507,40 @@ fn resolve_pod(
     }
 
     Ok(Pod { ip, port })
+}
+
+fn registration_to_proto(
+    ack: RegisterAck,
+    now: Timestamp,
+    incarnation_id: String,
+) -> Result<golem::shardmanager::v1::RegisterSuccess, ShardManagerError> {
+    Ok(golem::shardmanager::v1::RegisterSuccess {
+        number_of_shards: ack.number_of_shards as u32,
+        shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
+        executor_count: executor_count_to_proto(
+            ack.grant.executor_count,
+            "RegisterSuccess.executor_count",
+        )
+        .map_err(ShardManagerError::Internal)?,
+        lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, now)),
+        revision: ack.grant.revision.0,
+        incarnation_id,
+    })
+}
+
+fn lease_to_proto(
+    grant: ShardLeaseGrant,
+    now: Timestamp,
+    incarnation_id: String,
+) -> Result<golem::shardmanager::v1::ShardLease, ShardManagerError> {
+    Ok(golem::shardmanager::v1::ShardLease {
+        shard_epochs: shard_epoch_entries(&grant.shard_epochs),
+        executor_count: executor_count_to_proto(grant.executor_count, "ShardLease.executor_count")
+            .map_err(ShardManagerError::Internal)?,
+        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, now)),
+        revision: grant.revision.0,
+        incarnation_id,
+    })
 }
 
 #[cfg(test)]

@@ -57,7 +57,13 @@ fn service_holding(
     expires_at: Option<Instant>,
 ) -> ShardServiceDefault {
     let service = ShardServiceDefault::new();
-    service.register(SHARDS, shard_epochs, expires_at, revision_of(MANAGER, 0));
+    service.register(
+        SHARDS,
+        shard_epochs,
+        expires_at,
+        revision_of(MANAGER, 0),
+        NonZeroUsize::MIN,
+    );
     service
 }
 
@@ -68,6 +74,118 @@ fn lapsed() -> Instant {
 
 fn live() -> Instant {
     Instant::now() + Duration::from_secs(60)
+}
+
+#[test]
+fn executor_count_follows_the_revision_not_delivery_order() {
+    let service = ShardServiceDefault::new();
+    let held = epochs([(0, 1)]);
+    assert_eq!(service.executor_count(), None);
+
+    service.register(
+        SHARDS,
+        &held,
+        Some(lapsed()),
+        revision_of(MANAGER, 4),
+        NonZeroUsize::new(2).unwrap(),
+    );
+    assert_eq!(service.executor_count(), Some(2));
+    let snapshot = service.try_get_current_assignment().unwrap();
+    assert_eq!(snapshot.executor_count.get(), 2);
+    assert_eq!(snapshot.shard_epochs, held);
+    service
+        .assign_shards(
+            SHARDS,
+            &held,
+            revision_of(MANAGER, 6),
+            NonZeroUsize::new(3).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(service.executor_count(), Some(3));
+    assert_eq!(
+        service
+            .assign_shards(
+                SHARDS,
+                &held,
+                revision_of(MANAGER, 6),
+                NonZeroUsize::new(4).unwrap()
+            )
+            .unwrap(),
+        ShardDeliveryOutcome::Applied { set_changed: false }
+    );
+    assert_eq!(service.executor_count(), Some(4));
+
+    let expiry = live();
+    service
+        .update_lease(
+            &held,
+            expiry,
+            revision_of(MANAGER, 5),
+            NonZeroUsize::new(2).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(service.executor_count(), Some(4));
+    assert_eq!(
+        service.current_assignment().unwrap().expires_at,
+        Some(expiry)
+    );
+
+    service
+        .update_lease(
+            &held,
+            expiry,
+            revision_of(MANAGER, 7),
+            NonZeroUsize::new(4).unwrap(),
+        )
+        .unwrap();
+    service
+        .assign_shards(
+            SHARDS,
+            &held,
+            revision_of(MANAGER, 6),
+            NonZeroUsize::new(3).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(service.executor_count(), Some(4));
+
+    let next_manager = Uuid::from_u128(0xbeef);
+    service
+        .assign_shards(
+            SHARDS,
+            &held,
+            revision_of(next_manager, 100),
+            NonZeroUsize::new(9).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(service.executor_count(), Some(4));
+    service.register(
+        SHARDS,
+        &held,
+        Some(expiry),
+        revision_of(next_manager, 1),
+        NonZeroUsize::new(2).unwrap(),
+    );
+    assert_eq!(service.executor_count(), Some(2));
+    service
+        .assign_shards(
+            SHARDS,
+            &held,
+            revision_of(MANAGER, 200),
+            NonZeroUsize::new(8).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(service.executor_count(), Some(2));
+
+    service
+        .revoke_shards(
+            &HashSet::from([ShardId::new(0)]),
+            revision_of(next_manager, 2),
+            NonZeroUsize::new(5).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(service.executor_count(), Some(5));
+    service.install_unexpiring(SHARDS, &held);
+    assert_eq!(service.executor_count(), Some(1));
 }
 
 /// Nothing is installed until a registration: a push, a renewal or a
@@ -81,9 +199,23 @@ fn a_delivery_before_registration_is_refused() {
     // `ShardingNotReady` by refreshing its routing table and retrying, and answers an opaque
     // error by failing the call.
     for refused in [
-        service.assign_shards(SHARDS, &epochs([(0, 1)]), revision_of(MANAGER, 1)),
-        service.update_lease(&epochs([(0, 1)]), live(), revision_of(MANAGER, 1)),
-        service.revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 1)),
+        service.assign_shards(
+            SHARDS,
+            &epochs([(0, 1)]),
+            revision_of(MANAGER, 1),
+            NonZeroUsize::MIN,
+        ),
+        service.update_lease(
+            &epochs([(0, 1)]),
+            live(),
+            revision_of(MANAGER, 1),
+            NonZeroUsize::MIN,
+        ),
+        service.revoke_shards(
+            &HashSet::from([ShardId::new(0)]),
+            revision_of(MANAGER, 1),
+            NonZeroUsize::MIN,
+        ),
     ] {
         assert!(
             matches!(refused, Err(WorkerExecutorError::ShardingNotReady)),
@@ -105,11 +237,17 @@ fn a_dropped_delivery_is_counted_and_not_only_logged() {
         &epochs([(0, 1), (1, 1)]),
         Some(live()),
         revision_of(MANAGER, 5),
+        NonZeroUsize::MIN,
     );
 
     let before = stale_shard_delivery_count(ShardDelivery::Renewal);
     let outcome = service
-        .update_lease(&epochs([(0, 1)]), live(), revision_of(MANAGER, 3))
+        .update_lease(
+            &epochs([(0, 1)]),
+            live(),
+            revision_of(MANAGER, 3),
+            NonZeroUsize::MIN,
+        )
         .expect("a registered executor can be renewed");
 
     assert!(
@@ -134,10 +272,15 @@ fn a_revoke_older_than_the_last_delivery_is_ignored() {
         &epochs([(0, 1), (1, 1)]),
         Some(live()),
         revision_of(MANAGER, 5),
+        NonZeroUsize::MIN,
     );
 
     let outcome = service
-        .revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 3))
+        .revoke_shards(
+            &HashSet::from([ShardId::new(0)]),
+            revision_of(MANAGER, 3),
+            NonZeroUsize::MIN,
+        )
         .expect("a registered executor can be revoked from");
 
     assert_eq!(
@@ -159,7 +302,11 @@ fn a_revoke_older_than_the_last_delivery_is_ignored() {
 
     // ...while one at or above the applied revision does take the shard.
     let outcome = service
-        .revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 5))
+        .revoke_shards(
+            &HashSet::from([ShardId::new(0)]),
+            revision_of(MANAGER, 5),
+            NonZeroUsize::MIN,
+        )
         .expect("a registered executor can be revoked from");
     assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
     assert_eq!(
@@ -169,7 +316,7 @@ fn a_revoke_older_than_the_last_delivery_is_ignored() {
 }
 
 /// `AssignShards` says "your shards are exactly these". Anything
-/// absent is dropped, and the sweep in `assign_shards_internal` restarts
+/// absent is dropped, and the sweep in `assign_shards_internal` retires
 /// exactly the agents the new set rejects.
 #[test]
 fn a_full_replace_push_drops_unlisted_shards_and_their_agents() {
@@ -180,7 +327,12 @@ fn a_full_replace_push_drops_unlisted_shards_and_their_agents() {
     assert!(service.check_worker(&on_kept).is_ok());
 
     service
-        .assign_shards(SHARDS, &epochs([(1, 1)]), revision_of(MANAGER, 1))
+        .assign_shards(
+            SHARDS,
+            &epochs([(1, 1)]),
+            revision_of(MANAGER, 1),
+            NonZeroUsize::MIN,
+        )
         .unwrap();
 
     assert_eq!(
@@ -190,7 +342,7 @@ fn a_full_replace_push_drops_unlisted_shards_and_their_agents() {
     );
     assert!(
         service.check_worker(&on_dropped).is_err(),
-        "an agent on a dropped shard is what the restart sweep picks up"
+        "an agent on a dropped shard is what the retirement sweep picks up"
     );
     assert!(service.check_worker(&on_kept).is_ok());
 }
@@ -205,7 +357,12 @@ fn admission_is_refused_once_the_lease_has_lapsed() {
     assert!(service.check_admission(&agent).is_ok());
 
     service
-        .update_lease(&epochs([(0, 3)]), lapsed(), revision_of(MANAGER, 1))
+        .update_lease(
+            &epochs([(0, 3)]),
+            lapsed(),
+            revision_of(MANAGER, 1),
+            NonZeroUsize::MIN,
+        )
         .unwrap();
 
     assert!(
@@ -235,7 +392,7 @@ fn routing_checks_are_not_fenced_by_a_lapsed_lease() {
     );
 }
 
-/// `None` means "never expires": the single binary must not fence itself at boot.
+/// `None` means "never expires": the single-shard adapter has no lease to renew.
 #[test]
 fn a_lease_without_an_expiry_never_fences() {
     let agent = agent_on_shard(0);
@@ -280,11 +437,17 @@ fn a_stale_renewal_still_moves_the_lease_clock() {
         &epochs([(0, 1), (1, 1)]),
         Some(lapsed()),
         revision_of(MANAGER, 5),
+        NonZeroUsize::MIN,
     );
     assert!(!service.is_ready());
 
     let outcome = service
-        .update_lease(&epochs([(0, 1)]), live(), revision_of(MANAGER, 3))
+        .update_lease(
+            &epochs([(0, 1)]),
+            live(),
+            revision_of(MANAGER, 3),
+            NonZeroUsize::MIN,
+        )
         .expect("a registered executor can be renewed");
 
     assert_eq!(

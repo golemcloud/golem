@@ -19,6 +19,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 lazy_static! {
     static ref ASSIGNED_SHARD_COUNT: Gauge =
         register_gauge!("assigned_shard_count", "Current number of assigned shards").unwrap();
+    static ref EXECUTOR_COUNT: Gauge = register_gauge!(
+        "executor_count",
+        "Number of executor leases in the last accepted shard assignment"
+    )
+    .unwrap();
     static ref STALE_SHARD_DELIVERY_TOTAL: CounterVec = register_counter_vec!(
         "stale_shard_delivery_total",
         "Number of shard deliveries dropped for naming a revision older than the last applied",
@@ -46,6 +51,10 @@ lazy_static! {
 
 pub fn record_assigned_shard_count(size: usize) {
     ASSIGNED_SHARD_COUNT.set(size as f64);
+}
+
+pub(crate) fn record_executor_count(count: usize) {
+    EXECUTOR_COUNT.set(count as f64);
 }
 
 /// The outcome of one shard lease renewal attempt, as the `outcome` label.

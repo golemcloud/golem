@@ -197,10 +197,10 @@ pub(crate) struct TestWorkerExecutors {
     local_assignments: Arc<Mutex<HashMap<Pod, BTreeSet<ShardId>>>>,
     failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
-    /// Every full-replace push, in order, with the epochs and expiry it carried. `commands`
+    /// Every full-replace push, in order, with its epochs, revision and executor count. `commands`
     /// records only the shard ids, so this is where a test looks at what else travelled.
     pushes: Arc<Mutex<Vec<(Pod, ShardAssignmentPush)>>>,
-    /// Every revoke, in order, with the revision it carried.
+    /// Every revoke, in order, with the revision and executor count it carried.
     revokes: Arc<Mutex<Vec<RecordedRevoke>>>,
     /// Every command sent to an executor, in order, whether or not it succeeded.
     ///
@@ -217,8 +217,8 @@ pub(crate) struct TestWorkerExecutors {
 }
 
 type Claim = BTreeMap<ShardId, ShardEpoch>;
-/// A revoke as the double received it: the pod, the shards, and the revision it carried.
-type RecordedRevoke = (Pod, BTreeSet<ShardId>, ShardLeaseRevision);
+/// A revoke as received: the pod, shards, revision and executor count.
+type RecordedRevoke = (Pod, BTreeSet<ShardId>, ShardLeaseRevision, usize);
 
 impl TestWorkerExecutors {
     async fn set_local_assignment(&self, pod: Pod, shard_ids: &[i64]) {
@@ -259,17 +259,17 @@ impl TestWorkerExecutors {
         self.grant_during_revoke.lock().await.clone()
     }
 
-    async fn revokes_to(&self, pod: Pod) -> Vec<(BTreeSet<ShardId>, ShardLeaseRevision)> {
+    async fn revokes_to(&self, pod: Pod) -> Vec<(BTreeSet<ShardId>, ShardLeaseRevision, usize)> {
         self.revokes
             .lock()
             .await
             .iter()
-            .filter(|(revoked_from, _, _)| *revoked_from == pod)
-            .map(|(_, shard_ids, revision)| (shard_ids.clone(), *revision))
+            .filter(|(revoked_from, _, _, _)| *revoked_from == pod)
+            .map(|(_, shard_ids, revision, count)| (shard_ids.clone(), *revision, *count))
             .collect()
     }
 
-    async fn pushes_to(&self, pod: Pod) -> Vec<ShardAssignmentPush> {
+    pub(crate) async fn pushes_to(&self, pod: Pod) -> Vec<ShardAssignmentPush> {
         self.pushes
             .lock()
             .await
@@ -331,12 +331,13 @@ impl WorkerExecutorService for TestWorkerExecutors {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<(), ShardManagerError> {
         self.record("revoke", *pod, shard_ids).await;
         self.revokes
             .lock()
             .await
-            .push((*pod, shard_ids.clone(), revision));
+            .push((*pod, shard_ids.clone(), revision, executor_count));
 
         // Serve an executor's renewal in the middle of the fan-out, which is when a real one
         // would arrive, and keep what it was granted for the test to look at.
@@ -951,20 +952,24 @@ async fn a_renewal_served_during_the_revoke_fan_out_does_not_hand_the_shard_back
         .await
         .expect("the push must name a revision the store really held");
     assert_eq!(shards_at(&stored, new_pod), shard_ids(&[0, 1]));
+    assert_eq!(last_push.executor_count, stored.executor_count());
 
     // ...as does the revoke: it names the revision the move was stored under, so on the executor
     // it outranks any grant read before the shard moved, however late that grant arrives.
-    let (revoked, revoke_revision) = worker_executors
+    let (revoked, revoke_revision, executor_count) = worker_executors
         .revokes_to(old_pod)
         .await
         .pop()
         .expect("the losing executor should have been revoked from");
     assert_eq!(revoked, shard_ids(&[0, 1]));
+    assert_eq!(executor_count, 2);
+    assert_eq!(grant.executor_count, 2);
     let stored = persistence
         .state_at(revoke_revision)
         .await
         .expect("the revoke must name a revision the store really held");
     assert_eq!(shards_at(&stored, old_pod), shard_ids(&[2, 3]));
+    assert_eq!(executor_count, stored.executor_count());
 
     // ...and, in the same pass, its full set at that same revision. A revoke is a delta: writing
     // the latest revision on the executor asserts that the rest of its picture is current too,
@@ -1101,17 +1106,19 @@ async fn a_loser_that_misses_both_the_revoke_and_its_push_is_repaired_by_a_later
     );
 
     // The revoke it missed named a revision the store really held, with the shards already moved.
-    let (revoked, revoke_revision) = worker_executors
+    let (revoked, revoke_revision, executor_count) = worker_executors
         .revokes_to(old_pod)
         .await
         .pop()
         .expect("the losing executor should have been revoked from");
     assert_eq!(revoked, shard_ids(&[0, 1]));
+    assert_eq!(executor_count, 2);
     let stored = persistence
         .state_at(revoke_revision)
         .await
         .expect("the revoke must name a revision the store really held");
     assert_eq!(shards_at(&stored, old_pod), shard_ids(&[2, 3]));
+    assert_eq!(executor_count, stored.executor_count());
 
     join_set.abort_all();
 }

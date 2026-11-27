@@ -27,7 +27,8 @@ use golem_api_grpc::proto::golem::shardmanager::v1::{
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::protobuf::{
-    ip_addr_to_proto, lease_expiry_from_ttl, shard_epochs_from_proto, shard_epochs_to_proto,
+    executor_count_from_proto, ip_addr_to_proto, lease_expiry_from_ttl, shard_epochs_from_proto,
+    shard_epochs_to_proto,
 };
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId, ShardLeaseRevision};
@@ -40,6 +41,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::future::Future;
 use std::net::IpAddr;
+use std::num::NonZeroUsize;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -181,6 +183,8 @@ pub struct ShardRegistration {
 #[derive(Debug, Clone)]
 pub struct ShardLease {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    /// The number of executors with a lease in the state at `revision`.
+    pub executor_count: NonZeroUsize,
     /// On this executor's own monotonic clock, anchored at the moment the
     /// request this lease answers was sent - see [`shard_lease_from_wire`].
     pub expires_at: Instant,
@@ -200,8 +204,11 @@ fn shard_lease_from_wire(
     lease: golem_api_grpc::proto::golem::shardmanager::v1::ShardLease,
     sent_at: Instant,
 ) -> Result<ShardLease, String> {
+    let executor_count =
+        executor_count_from_proto(lease.executor_count, "ShardLease.executor_count")?;
     Ok(ShardLease {
         shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
+        executor_count,
         expires_at: expires_at_from_ttl(lease.lease_ttl, sent_at)?,
         revision: ShardLeaseRevision::from_wire(&lease.incarnation_id, lease.revision)
             .map_err(|error| format!("ShardLease.{error}"))?,
@@ -365,6 +372,11 @@ impl ShardManager for GrpcShardManager {
                                 lease: ShardLease {
                                     shard_epochs: shard_epochs_from_proto(success.shard_epochs)
                                         .map_err(ShardManagerError::ConversionError)?,
+                                    executor_count: executor_count_from_proto(
+                                        success.executor_count,
+                                        "RegisterSuccess.executor_count",
+                                    )
+                                    .map_err(ShardManagerError::ConversionError)?,
                                     expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
                                         .map_err(ShardManagerError::ConversionError)?,
                                     revision: ShardLeaseRevision::from_wire(
@@ -879,6 +891,7 @@ mod tests {
         let incarnation = Uuid::new_v4();
         let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
             shard_epochs: vec![],
+            executor_count: 7,
             lease_ttl: Some(prost_types::Duration {
                 seconds: 60,
                 nanos: 0,
@@ -892,6 +905,7 @@ mod tests {
 
         let lease = shard_lease_from_wire(on_the_wire, sent_at).unwrap();
 
+        assert_eq!(lease.executor_count.get(), 7);
         assert_eq!(lease.expires_at, sent_at + Duration::from_secs(60));
         assert!(
             lease.expires_at < Instant::now() + Duration::from_secs(60),
@@ -911,6 +925,7 @@ mod tests {
     fn a_lease_without_its_manager_process_does_not_decode() {
         let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
             shard_epochs: vec![],
+            executor_count: 3,
             lease_ttl: Some(prost_types::Duration {
                 seconds: 60,
                 nanos: 0,

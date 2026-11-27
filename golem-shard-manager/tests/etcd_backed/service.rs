@@ -30,6 +30,7 @@ use crate::etcd_backed::persistence::{
     GetRoutingTablePersistence, LEASE_TTL, NUMBER_OF_SHARDS, PersistenceStore,
 };
 use crate::shard_management::{TestHealthCheck, TestWorkerExecutors, executor, pod, shard_ids};
+use futures::StreamExt;
 use golem_common::model::ShardId;
 use golem_shard_manager::{
     ExecutorAddr, ExecutorId, RoutingTablePersistence, ShardEpoch, ShardLeaseState,
@@ -42,6 +43,7 @@ use std::time::Duration;
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
+use tokio_stream::wrappers::IntervalStream;
 
 inherit_test_dep!(Arc<DockerEtcd>);
 inherit_test_dep!(#[tagged_as("sqlite")] Arc<dyn GetRoutingTablePersistence>);
@@ -208,14 +210,17 @@ async fn a_renewal_extends_the_stored_lease(
 ) {
     let store = persistence.new_store().await;
     let reader = client(&store).await;
+    let first = pod(1, 9000);
+    let second = pod(2, 9000);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let (shard_management, mut join_set) =
         start(client(&store).await, worker_executors.clone(), LEASE_TTL).await;
 
-    shard_management
-        .register_executor(executor(1), ExecutorAddr::from(pod(1, 9000)), None)
+    let registered = shard_management
+        .register_executor(executor(1), ExecutorAddr::from(first), None)
         .await
         .expect("the registration should have been persisted");
+    assert_eq!(registered.grant.executor_count, 1);
     let before = wait_for_stored(&reader, "the initial assignment", holds_every_shard).await;
     let claimed: BTreeMap<ShardId, ShardEpoch> = before
         .shard_assignments
@@ -230,6 +235,7 @@ async fn a_renewal_extends_the_stored_lease(
         .await
         .expect("a claim matching the manager's set should have been renewed");
 
+    assert_eq!(grant.executor_count, 1);
     assert_eq!(
         grant.shard_epochs, claimed,
         "the renewal moved an epoch for a shard the executor still owns"
@@ -241,6 +247,60 @@ async fn a_renewal_extends_the_stored_lease(
         "the renewal extended the returned grant but not the stored lease"
     );
     assert_eq!(after.shards_for_executor(executor(1)), Some(all_shards()));
+
+    let joined = shard_management
+        .register_executor(executor(2), ExecutorAddr::from(second), None)
+        .await
+        .unwrap();
+    assert_eq!(joined.grant.executor_count, 2);
+    let joined_state = wait_for_stored(&reader, "the shards to be split", split_between_both).await;
+    assert_eq!(joined_state.executor_count(), 2);
+    futures::stream::iter([(executor(1), first), (executor(2), second)])
+        .for_each(|(id, pod)| {
+            let worker_executors = &worker_executors;
+            let shard_management = &shard_management;
+            let joined_state = &joined_state;
+            let reader = &reader;
+            async move {
+                let pushes = IntervalStream::new(tokio::time::interval(Duration::from_millis(10)))
+                    .then(|_| worker_executors.pushes_to(pod))
+                    .filter_map(|pushes| {
+                        std::future::ready(
+                            pushes
+                                .into_iter()
+                                .rev()
+                                .find(|push| push.revision >= joined_state.revision),
+                        )
+                    });
+                tokio::pin!(pushes);
+                let push = tokio::time::timeout(Duration::from_secs(10), pushes.next())
+                    .await
+                    .unwrap_or_else(|_| panic!("missing push to {pod}"))
+                    .unwrap();
+                let expected: BTreeMap<_, _> = joined_state
+                    .shard_assignments
+                    .iter()
+                    .filter(|(_, entry)| entry.executor_id == id)
+                    .map(|(shard, entry)| (*shard, entry.epoch))
+                    .collect();
+                assert_eq!(push.executor_count, 2);
+                assert_eq!(push.revision, joined_state.revision);
+                assert_eq!(push.shard_epochs, expected);
+                assert_eq!(push.number_of_shards, NUMBER_OF_SHARDS);
+
+                let renewed = shard_management
+                    .renew_shard_lease(id, expected.clone())
+                    .await
+                    .unwrap();
+                assert_eq!(renewed.executor_count, 2);
+                assert_eq!(renewed.shard_epochs, expected);
+                let stored = stored(reader).await;
+                assert_eq!(stored.executor_count(), 2);
+                assert_eq!(stored.revision, renewed.revision);
+                assert_eq!(stored.executor_leases[&id].expires_at, renewed.expires_at);
+            }
+        })
+        .await;
 
     join_set.abort_all();
 }

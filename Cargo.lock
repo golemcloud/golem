@@ -6097,6 +6097,7 @@ dependencies = [
  "golem-common",
  "golem-schema",
  "golem-service-base",
+ "golem-shard-manager",
  "golem-test-framework",
  "h2",
  "headers",

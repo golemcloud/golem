@@ -21,6 +21,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::convert::identity;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tracing::debug;
@@ -40,6 +41,7 @@ pub trait ShardService: Send + Sync {
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// Pure set membership. Routing decisions only — never fenced, because a
     /// caller that reads "not mine" routes the call to another executor and a
@@ -58,6 +60,7 @@ pub trait ShardService: Send + Sync {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<Instant>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome;
     /// Installs the single-shard executor's assignment, which no shard manager
     /// delivers: it never expires, names no revision, and replaces whatever is
@@ -75,6 +78,7 @@ pub trait ShardService: Send + Sync {
         &self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// A granted lease renewal: the shard manager's set for this executor, at
     /// a new expiry anchored where the renewal was sent. Normally the set that
@@ -87,6 +91,7 @@ pub trait ShardService: Send + Sync {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Instant,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// Drops every shard and lapses the lease. Used when the shard
     /// manager no longer knows this executor's lease: it owns nothing and is
@@ -94,6 +99,8 @@ pub trait ShardService: Send + Sync {
     fn clear_assignment(&self);
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError>;
     fn try_get_current_assignment(&self) -> Option<ShardAssignment>;
+    /// The last accepted executor count, or `None` before registration.
+    fn executor_count(&self) -> Option<usize>;
 }
 
 pub struct ShardServiceDefault {
@@ -148,6 +155,7 @@ impl ShardService for ShardServiceDefault {
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
@@ -158,7 +166,12 @@ impl ShardService for ShardServiceDefault {
                     shard_ids_to_assign = shard_epochs.keys().join(", "),
                     "ShardService.assign_shards"
                 );
-                let outcome = shard_assignment.set_shards(number_of_shards, shard_epochs, revision);
+                let outcome = shard_assignment.set_shards(
+                    number_of_shards,
+                    shard_epochs,
+                    revision,
+                    executor_count,
+                );
                 record_delivery(ShardDelivery::Assign, &outcome, shard_assignment);
                 Ok(outcome)
             }
@@ -199,6 +212,7 @@ impl ShardService for ShardServiceDefault {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<Instant>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         self.with_write_shard_assignment(|shard_assignment| {
             let shard_assignment = match shard_assignment {
@@ -221,11 +235,17 @@ impl ShardService for ShardServiceDefault {
                     shard_epochs,
                     expires_at,
                     revision,
+                    executor_count,
                 ),
                 // The never-expires door, which no wire decode can open.
                 None => {
                     shard_assignment.expires_at = None;
-                    shard_assignment.set_shards(number_of_shards, shard_epochs, revision)
+                    shard_assignment.set_shards(
+                        number_of_shards,
+                        shard_epochs,
+                        revision,
+                        executor_count,
+                    )
                 }
             };
             record_delivery(ShardDelivery::Register, &outcome, shard_assignment);
@@ -249,6 +269,7 @@ impl ShardService for ShardServiceDefault {
                 .is_none_or(|current| current.shard_epochs != *shard_epochs);
             let installed = shard_assignment.insert(ShardAssignment {
                 number_of_shards,
+                executor_count: NonZeroUsize::MIN,
                 shard_epochs: shard_epochs.clone(),
                 expires_at: None,
                 revision: None,
@@ -263,6 +284,7 @@ impl ShardService for ShardServiceDefault {
         &self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
@@ -272,7 +294,7 @@ impl ShardService for ShardServiceDefault {
                     shard_ids_to_revoke = shard_ids.iter().join(", "),
                     "ShardService.revoke_shards"
                 );
-                let outcome = shard_assignment.revoke_shards(shard_ids, revision);
+                let outcome = shard_assignment.revoke_shards(shard_ids, revision, executor_count);
                 record_delivery(ShardDelivery::Revoke, &outcome, shard_assignment);
                 Ok(outcome)
             }
@@ -285,6 +307,7 @@ impl ShardService for ShardServiceDefault {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Instant,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
@@ -294,8 +317,13 @@ impl ShardService for ShardServiceDefault {
                     shard_ids_renewed = shard_epochs.keys().join(", "),
                     "ShardService.update_lease"
                 );
-                let outcome =
-                    shard_assignment.adopt_grant(None, shard_epochs, expires_at, revision);
+                let outcome = shard_assignment.adopt_grant(
+                    None,
+                    shard_epochs,
+                    expires_at,
+                    revision,
+                    executor_count,
+                );
                 record_delivery(ShardDelivery::Renewal, &outcome, shard_assignment);
                 Ok(outcome)
             }
@@ -322,6 +350,14 @@ impl ShardService for ShardServiceDefault {
     fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
         self.shard_assignment.read().unwrap().clone()
     }
+
+    fn executor_count(&self) -> Option<usize> {
+        self.shard_assignment
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|assignment| assignment.executor_count.get())
+    }
 }
 
 /// Records what every delivery updates: the resulting shard count, the lease expiry when the
@@ -336,6 +372,7 @@ fn record_delivery(
     shard_assignment: &ShardAssignment,
 ) {
     record_assigned_shard_count(shard_assignment.len());
+    record_executor_count(shard_assignment.executor_count.get());
     if let Some(expires_at) = shard_assignment.expires_at {
         record_shard_lease_expiry(expires_at);
     }
