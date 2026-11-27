@@ -571,6 +571,23 @@ impl ToolActivationSnapshot {
         &self.registered_tool
     }
 
+    /// One delivery stream per grant, in tool then middleware occurrence order.
+    /// A repeated grant keeps its first installation's parameters.
+    pub fn processor_plugins(&self) -> impl Iterator<Item = &InstalledPlugin> {
+        let mut seen = std::collections::HashSet::new();
+        self.registered_tool
+            .provision
+            .plugins
+            .iter()
+            .chain(
+                self.middleware_chain
+                    .iter()
+                    .flat_map(|chain| &chain.occurrences)
+                    .flat_map(|occurrence| &occurrence.provision.plugins),
+            )
+            .filter(move |plugin| seen.insert(plugin.environment_plugin_grant_id))
+    }
+
     pub fn binding(&self) -> &CompiledToolBinding {
         &self.binding
     }
@@ -1053,6 +1070,206 @@ mod tests {
         assert!(effective.contains(&a));
         assert!(!effective.contains(&CanonicalAgentConfigPath(vec!["b".to_string()])));
         assert_eq!(ConfigKeyScope::All.intersection(&agent), agent);
+    }
+
+    #[cfg(feature = "full")]
+    mod activation {
+        use crate::model::component::{InstalledPlugin, PluginPriority};
+        use crate::model::entity::FilesystemCapability;
+        use crate::model::tool::{
+            CompiledToolBinding, ToolActivationSnapshot, ToolBindingOwner, ToolFilesystemAccess,
+            ToolProvisionConfig, ToolRegistration, ToolSource,
+        };
+        use crate::model::tool_middleware::{
+            CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence,
+            RegisteredToolMiddleware, ToolMiddlewareSource,
+        };
+        use crate::schema::tool::{CommandTree, Tool, ToolMiddleware, ToolMiddlewareScope};
+        use crate::schema::{IntoTypedSchemaValue, SchemaGraph};
+        use test_r::test;
+        use uuid::Uuid;
+
+        fn plugin(grant: u128, parameter: &str) -> InstalledPlugin {
+            InstalledPlugin {
+                environment_plugin_grant_id: Uuid::from_u128(grant).into(),
+                priority: PluginPriority(0),
+                parameters: [("destination".to_string(), parameter.to_string())].into(),
+                plugin_registration_id: Uuid::from_u128(100).into(),
+                plugin_name: "processor".to_string(),
+                plugin_version: "1.0.0".to_string(),
+                oplog_processor_component_id: Some(Uuid::from_u128(101).into()),
+                oplog_processor_component_revision: Some(1u64.try_into().unwrap()),
+                installed_by: Uuid::from_u128(102).into(),
+            }
+        }
+
+        fn snapshot(
+            tool_plugins: Vec<InstalledPlugin>,
+            middleware_plugins: Option<Vec<Vec<InstalledPlugin>>>,
+        ) -> ToolActivationSnapshot {
+            let definition = Tool {
+                version: "1.0.0".to_string(),
+                requires_filesystem: false,
+                http_mount: None,
+                commands: CommandTree { nodes: Vec::new() },
+                schema: SchemaGraph::empty(),
+            };
+            let source = ToolSource::Component {
+                component_id: Uuid::from_u128(1).into(),
+                component_revision: 5u64.try_into().unwrap(),
+                component_name: "test:tool".try_into().unwrap(),
+            };
+            let binding = CompiledToolBinding {
+                deployment_revision: 3u64.try_into().unwrap(),
+                release_id: None,
+                owner: ToolBindingOwner::ComponentBaseline {
+                    component_id: Uuid::from_u128(1).into(),
+                },
+                tool_name: "report".try_into().unwrap(),
+                version: definition.version.clone(),
+                metadata_version: "0.1.0".to_string(),
+                metadata_digest: Default::default(),
+                account_id: Uuid::from_u128(2).into(),
+                account_email: "owner@example.com".into(),
+                parameters: crate::model::json::NormalizedJsonValue::new(serde_json::json!({})),
+                config_keys_readable: Default::default(),
+                secret_keys_readable: Default::default(),
+                secret_keys_revealable: Default::default(),
+                filesystem_access: ToolFilesystemAccess::Denied,
+                source: source.clone(),
+                shell: false,
+            };
+            let middleware_chain = middleware_plugins.map(|plugins| CompiledToolMiddlewareChain {
+                deployment_revision: binding.deployment_revision,
+                owner: binding.owner.clone(),
+                tool_name: binding.tool_name.clone(),
+                effective_definition: definition.clone(),
+                occurrences: plugins
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, plugins)| CompiledToolMiddlewareOccurrence {
+                        middleware: RegisteredToolMiddleware {
+                            deployment_revision: binding.deployment_revision,
+                            release_id: None,
+                            definition: ToolMiddleware {
+                                name: "audit".to_string(),
+                                version: "1.0.0".to_string(),
+                                aliases: vec![],
+                                doc: Default::default(),
+                                scope: ToolMiddlewareScope::Universal,
+                                parameter_schema: SchemaGraph::empty(),
+                            },
+                            provision: ToolProvisionConfig::default(),
+                            source: ToolMiddlewareSource::Component {
+                                component_id: Uuid::from_u128(3).into(),
+                                component_revision: 7u64.try_into().unwrap(),
+                                component_name: "test:audit".try_into().unwrap(),
+                            },
+                            owner_account_id: binding.account_id,
+                            owner_account_email: binding.account_email.clone(),
+                            metadata_version: "0.1.0".to_string(),
+                            metadata_digest: Default::default(),
+                        },
+                        parameters: (index as u32).into_typed_schema_value().unwrap(),
+                        provision: ToolProvisionConfig {
+                            plugins,
+                            ..Default::default()
+                        },
+                        config_keys_readable: Default::default(),
+                        secret_keys_readable: Default::default(),
+                        secret_keys_revealable: Default::default(),
+                        filesystem_access: ToolFilesystemAccess::Denied,
+                        expected_definition: None,
+                        presented_definition: None,
+                        next_effective_definition: definition.clone(),
+                        compatibility: None,
+                    })
+                    .collect(),
+            });
+            ToolActivationSnapshot {
+                registered_tool: ToolRegistration {
+                    deployment_revision: binding.deployment_revision,
+                    release_id: None,
+                    definition,
+                    provision: ToolProvisionConfig {
+                        plugins: tool_plugins,
+                        ..Default::default()
+                    },
+                    component_bindings: Default::default(),
+                    source,
+                    owner_account_id: binding.account_id,
+                    owner_account_email: binding.account_email.clone(),
+                    metadata_version: "0.1.0".to_string(),
+                    metadata_digest: Default::default(),
+                },
+                binding,
+                filesystem: FilesystemCapability::Incapable,
+                middleware_chain,
+                mcp_import: None,
+            }
+        }
+
+        #[test]
+        fn processor_plugins_follow_tool_then_middleware_occurrence_order() {
+            let a = plugin(1, "a");
+            let b = plugin(2, "b");
+            let c = plugin(3, "c");
+            let d = plugin(4, "d");
+            let activation = snapshot(
+                vec![a.clone(), b.clone()],
+                Some(vec![vec![c.clone()], vec![d.clone()]]),
+            );
+
+            assert_eq!(
+                activation.processor_plugins().cloned().collect::<Vec<_>>(),
+                vec![a, b, c, d]
+            );
+        }
+
+        #[test]
+        fn processor_plugins_keep_first_descriptor_for_repeated_grants() {
+            let a = plugin(1, "tool-first");
+            let b = plugin(2, "tool-second");
+            let c = plugin(3, "middleware-first");
+            let d = plugin(4, "middleware-second");
+            let activation = snapshot(
+                vec![a.clone(), b.clone(), plugin(1, "tool-duplicate")],
+                Some(vec![
+                    vec![plugin(2, "middleware-conflict"), c.clone()],
+                    vec![plugin(3, "later-occurrence-conflict"), d.clone()],
+                ]),
+            );
+
+            assert_eq!(
+                activation.processor_plugins().cloned().collect::<Vec<_>>(),
+                vec![a, b, c, d]
+            );
+        }
+
+        #[test]
+        fn processor_plugins_allow_empty_tool_and_middleware_lists() {
+            for middleware in [None, Some(vec![]), Some(vec![vec![], vec![]])] {
+                assert_eq!(snapshot(vec![], middleware).processor_plugins().count(), 0);
+            }
+            let a = plugin(1, "tool-only");
+            let c = plugin(3, "middleware-only");
+            for middleware in [None, Some(vec![]), Some(vec![vec![], vec![]])] {
+                assert_eq!(
+                    snapshot(vec![a.clone()], middleware)
+                        .processor_plugins()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    vec![a.clone()]
+                );
+            }
+            assert_eq!(
+                snapshot(vec![], Some(vec![vec![], vec![c.clone()]]))
+                    .processor_plugins()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![c]
+            );
+        }
     }
 }
 

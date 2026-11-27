@@ -42,6 +42,34 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
     ) -> Result<Self, String> {
+        let pinned_plugins = if owner_kind == OwnerKind::StandaloneTool
+            && matches!(
+                &value,
+                golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection { .. }
+                    | golem_common::model::oplog::OplogEnrichmentEntry::Other(
+                        OplogEntry::OplogProcessorCheckpoint { .. }
+                    )
+            ) {
+            let mut entries = oplog_service
+                .read_exact(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
+                .await
+                .map_err(|error| error.to_string())?;
+            let Some(OplogEntry::Create { parameters, .. }) = entries.remove(&OplogIndex::INITIAL)
+            else {
+                return Err("standalone owner has no Create entry".to_string());
+            };
+            let tool = parameters
+                .standalone_tool
+                .ok_or("standalone owner has no activation")?;
+            Some(
+                tool.activation
+                    .processor_plugins()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
         let value = match value {
             golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
                 timestamp,
@@ -80,10 +108,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let initial_plugins = metadata
-                    .metadata
-                    .owner_plugins(owner_kind, agent_type_name)
-                    .unwrap_or_default()
+                let initial_plugins = pinned_plugins
+                    .as_deref()
+                    .unwrap_or_else(|| {
+                        metadata
+                            .metadata
+                            .owner_plugins(owner_kind, agent_type_name)
+                            .unwrap_or_default()
+                    })
                     .iter()
                     .filter(|&p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
                     .cloned()
@@ -757,19 +789,21 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 last_batch_start,
                 ..
             } => {
-                let metadata = components
-                    .get_metadata(owner_component_id, Some(source_component_revision))
-                    .await
-                    .map_err(|err| err.to_string())?;
-
-                let plugin_installation = metadata
-                    .metadata
-                    .owner_plugins(owner_kind, agent_type_name)
-                    .and_then(|plugins| {
-                        plugins
-                            .iter()
-                            .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
-                    })
+                let plugins = if let Some(plugins) = pinned_plugins {
+                    plugins
+                } else {
+                    components
+                        .get_metadata(owner_component_id, Some(source_component_revision))
+                        .await
+                        .map_err(|err| err.to_string())?
+                        .metadata
+                        .owner_plugins(owner_kind, agent_type_name)
+                        .unwrap_or_default()
+                        .to_vec()
+                };
+                let plugin_installation = plugins
+                    .iter()
+                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
                     .cloned()
                     .ok_or("plugin not found in metadata".to_string())?;
 

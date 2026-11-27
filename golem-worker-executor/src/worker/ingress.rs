@@ -325,7 +325,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .and_then(|status| status.initial_pending_invocation_oplog_index);
         let accepted_payload = self.accepted_invocation_payload(&idempotency_key).await?;
         let already_accepted = accepted_payload.is_some() || accepted_index.is_some();
-        let activation = if let Some(payload) = accepted_payload {
+        let standalone = self.initial_worker_metadata.standalone_tool.as_ref();
+        let activation = if let Some(standalone) = standalone {
+            Box::new(standalone.activation.clone())
+        } else if let Some(payload) = accepted_payload {
             let AgentInvocationPayload::ExternalTool { activation, .. } = payload else {
                 return Err(WorkerExecutorError::invalid_request(
                     "IdempotencyConflict: invocation key is already bound to an agent method",
@@ -430,10 +433,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
         if !already_accepted {
-            require_expected_tool_deployment_revision(
-                expected_deployment_revision,
-                activation.registered_tool.deployment_revision,
-            )?;
+            if standalone.is_none() {
+                require_expected_tool_deployment_revision(
+                    expected_deployment_revision,
+                    activation.registered_tool.deployment_revision,
+                )?;
+            }
             require_canonical_command_path(&activation, &tool_name, &command_path)?;
             if let Some(scope_card) = &scope_card {
                 crate::services::card::validate_scope_card(

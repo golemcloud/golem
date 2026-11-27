@@ -78,6 +78,7 @@ pub struct StandaloneToolInvocation {
     pub command_path: Vec<String>,
     pub invocation_id: crate::model::InvocationId,
     pub caller: Caller,
+    pub activation: crate::model::tool::ToolActivationSnapshot,
 }
 
 impl StandaloneToolInvocation {

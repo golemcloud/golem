@@ -1658,19 +1658,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let created_at = Timestamp::now_utc();
                 let instance_id = Uuid::now_v7();
 
+                let active_plugins = if let Some(tool) = &new_owner.standalone_tool {
+                    tool.activation
+                        .processor_plugins()
+                        .map(|plugin| plugin.environment_plugin_grant_id)
+                        .collect()
+                } else {
+                    component
+                        .metadata
+                        .owner_plugins(owner_kind, agent_id.as_ref().map(|agent| &agent.agent_type))
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|plugin| plugin.environment_plugin_grant_id)
+                        .collect()
+                };
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
                 let initial_status = AgentStatusRecord {
                     component_revision: component.revision,
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
                     total_linear_memory_size: component.metadata.initial_linear_memory_bytes(),
-                    active_plugins: component
-                        .metadata
-                        .owner_plugins(owner_kind, agent_id.as_ref().map(|agent| &agent.agent_type))
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|i| i.environment_plugin_grant_id)
-                        .collect(),
+                    active_plugins,
                     invocation_results: this.config().invocation_results.membership(),
                     export_fork_admissions: golem_common::model::ExportForkAdmissions {
                         owner_fingerprint: Some(AgentFingerprint(instance_id)),

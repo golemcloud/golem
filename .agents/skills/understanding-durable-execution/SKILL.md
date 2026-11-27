@@ -4367,8 +4367,16 @@ state. Historical host indexes and processor checkpoints are excluded so snapsho
 grow with source history. Reconstruction reuses this snapshot rather than current source metadata, even
 when the plugin is no longer attached. Both local and remote ambiguous failures retain the recorded
 target: a missing response does not prove that admission failed. Confirmation clears the snapshot
-but retains `source_component_revision`; public rendering resolves the installation at that revision,
-even after an update removes it. Request equality still compares the full delivered request; it has no processor-specific exemption.
+but retains `source_component_revision`; public rendering resolves an agent's installation at that
+revision even after an update removes it. Standalone owners instead select installations from the
+full activation pinned in `Create.standalone_tool`: tool list then middleware occurrence lists,
+distinct grants with the first descriptor and parameters winning. New batches and locality recovery
+use that pin without component-plugin lookup; status sets record membership only. Pending execution
+also derives from the returned owner's winning Create pin, so Create-before-Pending recovery never
+rediscovers activation. Public standalone Create and confirmed checkpoints use the pin internally
+without exposing activation or secrets. Hosted entries stay with their agent's processors, and
+standalone activate/deactivate is refused. Request equality still compares the full delivered request;
+it has no processor-specific exemption.
 The batch caller is part of that request: the installed plugin's `installed_by` account as original
 and the source agent as immediate, both pinned by the delivery snapshot. The first batch also
 creates the processor owner, so its caller is the owner's recorded creator.

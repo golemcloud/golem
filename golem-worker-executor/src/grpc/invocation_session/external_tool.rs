@@ -354,6 +354,35 @@ where
                         "standalone owner identity does not match the invocation",
                     ));
                 }
+                let owner =
+                    golem_common::model::tool::ToolBindingOwner::ComponentBaseline { component_id };
+                let activation = match crate::services::environment_state::get_tool_activation_from_deployment(
+                    Some(&deployment),
+                    &owner,
+                    &tool_name,
+                )
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                {
+                    crate::services::environment_state::ToolActivationOutcome::Ready(activation) => activation,
+                    crate::services::environment_state::ToolActivationOutcome::NotBound => {
+                        return Err(WorkerExecutorError::permission_denied("tool is not bound to component owner"));
+                    }
+                    crate::services::environment_state::ToolActivationOutcome::NotRegistered => {
+                        return Err(WorkerExecutorError::invalid_request("tool is not registered"));
+                    }
+                };
+                crate::worker::require_expected_tool_deployment_revision(
+                    tool.expected_deployment_revision
+                        .map(golem_common::model::deployment::DeploymentRevision::try_from)
+                        .transpose()
+                        .map_err(WorkerExecutorError::invalid_request)?,
+                    activation.registered_tool.deployment_revision,
+                )?;
+                crate::worker::require_canonical_command_path(
+                    &activation,
+                    &tool_name,
+                    &tool.command_path,
+                )?;
                 self.active_agents()
                     .get_or_add_standalone_tool(
                         self,
@@ -365,6 +394,7 @@ where
                             command_path: tool.command_path.clone(),
                             invocation_id,
                             caller: caller.clone(),
+                            activation: *activation,
                         },
                         &context,
                     )

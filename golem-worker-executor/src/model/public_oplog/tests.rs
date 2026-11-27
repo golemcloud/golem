@@ -3409,6 +3409,240 @@ fn external_tool_activation(
     }
 }
 
+#[test]
+async fn standalone_create_and_confirmed_checkpoint_use_persisted_activation() {
+    use crate::preview2::golem_api_1_x::oplog as wit;
+    use golem_common::base_model::component_metadata::ComponentProvisionConfig;
+    use golem_common::model::component::PluginPriority;
+    use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+    use golem_common::model::oplog::{
+        CreateParameters, OplogEnrichmentEntry, StandaloneToolInvocation,
+    };
+    use golem_common::model::plugin_registration::PluginRegistrationId;
+
+    let (oplog_service, owner, _) = open_test_oplog("standalone-pinned-plugins").await;
+    let plugin = InstalledPlugin {
+        environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
+        priority: PluginPriority(7),
+        parameters: BTreeMap::from([("destination".to_string(), "recorded".to_string())]),
+        plugin_registration_id: PluginRegistrationId::new(),
+        plugin_name: "recorded-processor".to_string(),
+        plugin_version: "1.0".to_string(),
+        oplog_processor_component_id: Some(ComponentId::new()),
+        oplog_processor_component_revision: Some(ComponentRevision::INITIAL),
+        installed_by: AccountId::new(),
+    };
+    let tool_name = ToolName::try_from("grep").unwrap();
+    let mut activation = external_tool_activation(&tool_name);
+    activation.registered_tool.provision.plugins = vec![plugin.clone()];
+    activation.registered_tool.provision.config =
+        NormalizedJsonValue::new(serde_json::json!({"secret": "activation-config-marker"}));
+    activation.registered_tool.provision.env =
+        BTreeMap::from([("TOKEN".to_string(), "activation-secret-marker".to_string())]);
+    let standalone = StandaloneToolInvocation {
+        tool_name,
+        command_path: vec!["search".to_string()],
+        invocation_id: Uuid::new_v4().into(),
+        caller: crate::test_callers::sample_caller(),
+        activation,
+    };
+    let mut metadata = make_agent_metadata(owner.agent_id, AccountId::new(), owner.environment_id);
+    metadata.owner_kind = OwnerKind::StandaloneTool;
+    metadata.agent_mode = AgentMode::Ephemeral;
+    metadata.standalone_tool = Some(Box::new(standalone.clone()));
+    let create = OplogEntry::Create {
+        timestamp: Timestamp::from(1_000),
+        parameters: Box::new(CreateParameters {
+            component_id: test_component_id(),
+            agent_type_name: None,
+            canonical_key: None,
+            constructor_parameters: None,
+            agent_id: owner.agent_id,
+            owner_kind: OwnerKind::StandaloneTool,
+            agent_mode: AgentMode::Ephemeral,
+            component_revision: ComponentRevision::INITIAL,
+            env: Vec::new(),
+            environment_id: owner.environment_id,
+            created_by: metadata.created_by,
+            parent: None,
+            component_size: 100,
+            initial_total_linear_memory_size: 0,
+            initial_active_plugins: [plugin.environment_plugin_grant_id].into_iter().collect(),
+            local_agent_config: Vec::new(),
+            instance_id: metadata.fingerprint.0,
+            create_request: metadata.create_request.clone(),
+            standalone_tool: Some(Box::new(standalone.clone())),
+            never_live: false,
+        }),
+    };
+    let oplog = oplog_service
+        .create(
+            &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
+            &owner,
+            AgentMode::Ephemeral,
+            create.clone(),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+            None,
+        )
+        .await
+        .unwrap();
+    let checkpoint = OplogEntry::OplogProcessorCheckpoint {
+        timestamp: Timestamp::from(2_000),
+        plugin_grant_id: plugin.environment_plugin_grant_id,
+        source_component_revision: ComponentRevision::INITIAL,
+        target_agent_id: AgentId::random_reserved(),
+        confirmed_up_to: OplogIndex::INITIAL,
+        sending_up_to: OplogIndex::INITIAL,
+        last_batch_start: OplogIndex::INITIAL,
+        delivery: None,
+    };
+    let checkpoint_index = oplog.add(checkpoint.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let expected_plugin = PluginInstallationDescription {
+        environment_plugin_grant_id: plugin.environment_plugin_grant_id,
+        plugin_priority: plugin.priority,
+        plugin_name: plugin.plugin_name.clone(),
+        plugin_version: plugin.plugin_version.clone(),
+        parameters: plugin.parameters.clone(),
+    };
+
+    for changed_installation in [false, true] {
+        let mut component = metadata_component_service(&owner)
+            .get_metadata(test_component_id(), Some(ComponentRevision::INITIAL))
+            .await
+            .unwrap();
+        let mut replacement = plugin.clone();
+        replacement.plugin_name = "replacement-processor".to_string();
+        replacement.plugin_version = "2.0".to_string();
+        replacement.parameters.clear();
+        component.metadata = component.metadata.with_component_config(
+            Default::default(),
+            ComponentProvisionConfig {
+                plugins: if changed_installation {
+                    vec![replacement]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            },
+        );
+        let components = Arc::new(MetadataComponentService(component));
+        for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+            let page = get_public_oplog_page(
+                components.clone(),
+                oplog_service.clone(),
+                &owner,
+                AgentMode::Ephemeral,
+                test_component_id(),
+                OwnerKind::StandaloneTool,
+                None,
+                ComponentRevision::INITIAL,
+                OplogIndex::INITIAL,
+                PublicOplogPageLimits {
+                    count: 10,
+                    max_bytes: 1_000_000,
+                    max_entry_bytes: 1_000_000,
+                },
+                claims,
+            )
+            .await
+            .unwrap();
+            let entries = public_page_entries(&page.entries);
+            assert_eq!(entries.len(), 2);
+            let PublicOplogPageEntry::Included(created) = &entries[0] else {
+                panic!("expected Create");
+            };
+            let PublicOplogEntry::Create(params) = &created.entry else {
+                panic!("expected Create");
+            };
+            assert_eq!(
+                params.initial_active_plugins,
+                [expected_plugin.clone()].into_iter().collect()
+            );
+            assert_eq!(params.standalone_tool, Some(standalone.public(claims)));
+            let wire: wit::PublicOplogEntry = created.entry.clone().try_into().unwrap();
+            let wit::PublicOplogEntry::Create(wire) = wire else {
+                panic!("expected WIT Create");
+            };
+            let identity = wire.standalone_tool.unwrap();
+            assert_eq!(identity.tool_name, standalone.tool_name.to_string());
+            assert_eq!(identity.command_path, standalone.command_path);
+            let wit::PublicPrincipal::User(user) = identity.caller.original else {
+                panic!("expected the original user");
+            };
+            assert_eq!(user.pair.subject, "user-1");
+            assert_eq!(identity.caller.tokens.len(), 2);
+            assert_eq!(
+                params
+                    .standalone_tool
+                    .as_ref()
+                    .unwrap()
+                    .caller
+                    .original
+                    .claims()
+                    .is_some(),
+                claims.is_shown()
+            );
+            let json = serde_json::to_string(&created.entry).unwrap();
+            for forbidden in [
+                "activation-config-marker",
+                "activation-secret-marker",
+                "registeredTool",
+            ] {
+                assert!(
+                    !json.contains(forbidden),
+                    "public Create exposes {forbidden}"
+                );
+            }
+            let PublicOplogPageEntry::Included(confirmed) = &entries[1] else {
+                panic!("expected checkpoint");
+            };
+            let PublicOplogEntry::OplogProcessorCheckpoint(params) = &confirmed.entry else {
+                panic!("expected checkpoint");
+            };
+            assert_eq!(params.plugin, expected_plugin);
+
+            // A checkpoint read needs only the persisted activation, not component metadata.
+            let single = get_public_oplog_entry(
+                Arc::new(PanicComponentService),
+                oplog_service.clone(),
+                &owner,
+                AgentMode::Ephemeral,
+                test_component_id(),
+                OwnerKind::StandaloneTool,
+                None,
+                checkpoint_index,
+                Some(ComponentRevision::new(9).unwrap()),
+                claims,
+            )
+            .await
+            .unwrap();
+            assert_eq!(single.entry, confirmed.entry);
+            let wire: wit::PublicOplogEntry = single.entry.clone().try_into().unwrap();
+            let wit::PublicOplogEntry::OplogProcessorCheckpoint(wire) = wire else {
+                panic!("expected WIT checkpoint");
+            };
+            assert_eq!(wire.plugin.plugin_name, plugin.plugin_name);
+            let restored: OplogEnrichmentEntry = single.entry.try_into().unwrap();
+            assert_eq!(restored, checkpoint.clone().into());
+        }
+    }
+
+    // Raw guest projections preserve the identity but cannot carry activation or caller claims.
+    let raw: wit::OplogEntry = create.try_into().unwrap();
+    let OplogEnrichmentEntry::CreateProjection { parameters, .. } =
+        OplogEnrichmentEntry::try_from(raw).unwrap()
+    else {
+        panic!("expected raw Create projection");
+    };
+    assert_eq!(
+        parameters.standalone_tool,
+        Some(standalone.public(ClaimVisibility::Hidden))
+    );
+}
+
 /// The recorded invocation kinds that carry a caller, each with `caller`.
 fn invocation_payloads_with_caller(
     owned_agent_id: &OwnedAgentId,

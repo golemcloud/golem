@@ -292,14 +292,22 @@ use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker;
 use golem_client::api::RegistryServiceClient;
 
+use golem_common::model::agent::{OwnedAgentId, OwnerKind};
 use golem_common::model::base64::Base64;
-use golem_common::model::component::ComponentDto;
+use golem_common::model::component::{
+    ComponentDto, ComponentProvisionConfigCreation, ComponentUpdate, PluginInstallation,
+    PluginInstallationAction, PluginPriority, PluginUninstallation, ToolDeploymentConfigUpdate,
+    ToolProvisionConfigUpdate,
+};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
+use golem_common::model::tool::{ToolBindingInput, ToolFilesystemAccess};
+use golem_common::model::tool_middleware::ToolMiddlewareInstallation;
+use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex, PromiseId};
+use golem_common::schema::{ExternalTypedSchemaValue, IntoSchema, IntoTypedSchemaValue};
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_common::{agent_key, data_value};
@@ -309,12 +317,15 @@ use golem_test_framework::config::{
     WorkerExecutorClusterControl, WorkerExecutorClusterControlDispatch,
     WorkerExecutorClusterControlStub,
 };
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{
+    TestDsl, TestDslExtended, default_test_agent_initial_permissions_for_account,
+};
 
 use golem_common::model::agent::ParsedAgentKey;
 use rand::prelude::*;
 use rand::rng;
 use std::collections::{BTreeMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{flaky, test, test_dep, timeout};
@@ -1354,6 +1365,420 @@ async fn wait_for_oplog_completions(
 // ========================================================================
 // I1: Shard reassignment — no entry loss
 // ========================================================================
+
+const STANDALONE_PROCESSOR_CALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(IntoSchema)]
+struct StandaloneProcessorInput {
+    value: String,
+}
+
+async fn restart_executors_and_complete_tool_promise(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    source: &OwnedAgentId,
+    promise: &PromiseId,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CompletePromiseRequest, complete_promise_response,
+        worker_executor_client::WorkerExecutorClient,
+    };
+    use golem_service_base::model::auth::AuthCtx;
+
+    deps.stop_all_worker_executors(cluster_control).await;
+    deps.start_all_worker_executors(cluster_control).await;
+    let routing = deps.shard_manager().get_routing_table().await?;
+    let pod = routing
+        .lookup(&source.agent_id)
+        .context("standalone source has no executor assignment")?;
+    let mut executor =
+        WorkerExecutorClient::connect(format!("http://{}:{}", pod.ip, pod.port)).await?;
+    let response = executor
+        .complete_promise(CompletePromiseRequest {
+            promise_id: Some(promise.clone().into()),
+            data: Vec::new(),
+            environment_id: Some(source.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+        })
+        .await?
+        .into_inner();
+    ensure!(
+        matches!(response.result, Some(complete_promise_response::Result::Success(ref success)) if success.completed),
+        "standalone promise completion failed: {response:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout(360000)]
+async fn standalone_tool_oplog_processors_survive_executor_reconstruction(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    deps.reset(cluster_control, 16).await;
+    let user = deps.admin().await;
+    let (_, env) = user.app_and_env().await?;
+    let client = user.registry_service_client().await;
+    let (tool_url, tool_batches, _tool_server) = start_callback_server().await;
+    let (middleware_url, middleware_batches, _middleware_server) = start_callback_server().await;
+    let (baseline_url, baseline_batches, _baseline_server) = start_callback_server().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let checkpoint_port = listener.local_addr()?.port();
+    let (checkpoint_tx, mut checkpoint_rx) = mpsc::unbounded_channel();
+    let effects = Arc::new(AtomicUsize::new(0));
+    let received_effects = effects.clone();
+    let checkpoint_server = tokio::spawn(async move {
+        let app = Router::new()
+            .route(
+                "/standalone-promise",
+                post(move |body: Bytes| {
+                    let tx = checkpoint_tx.clone();
+                    async move {
+                        let index = std::str::from_utf8(&body).unwrap().parse::<u64>().unwrap();
+                        tx.send(OplogIndex::from_u64(index)).unwrap();
+                        axum::http::StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .route(
+                "/",
+                post(move || {
+                    let effects = received_effects.clone();
+                    async move {
+                        effects.fetch_add(1, Ordering::SeqCst);
+                        axum::http::StatusCode::NO_CONTENT
+                    }
+                }),
+            );
+        axum::serve(listener, app).await.unwrap();
+    });
+    let processor = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
+    let mut installations = Vec::new();
+    for (name, url) in [
+        ("tool", tool_url),
+        ("middleware", middleware_url),
+        ("baseline", baseline_url),
+    ] {
+        let plugin = client
+            .create_plugin(
+                &user.account_id.0,
+                &PluginRegistrationCreation {
+                    name: format!("standalone-{name}-{}", Uuid::new_v4()),
+                    version: "v1".into(),
+                    description: "Standalone processor recipient".into(),
+                    icon: Base64(Vec::new()),
+                    homepage: "none".into(),
+                    spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                        component_id: processor.id,
+                        component_revision: processor.revision,
+                    }),
+                },
+            )
+            .await?;
+        let grant = client
+            .create_environment_plugin_grant(
+                &env.id.0,
+                &EnvironmentPluginGrantCreation {
+                    plugin_registration_id: plugin.id,
+                },
+            )
+            .await?;
+        installations.push(PluginInstallation {
+            environment_plugin_grant_id: grant.id,
+            priority: PluginPriority(0),
+            parameters: BTreeMap::from([("callback-url".into(), url)]),
+        });
+    }
+    let provision = |action| ToolProvisionConfigUpdate {
+        config: None,
+        env: None,
+        plugin_updates: vec![action],
+        files_to_add_or_update: BTreeMap::new(),
+        files_to_remove: Vec::new(),
+        file_permission_updates: BTreeMap::new(),
+    };
+    let caller = user
+        .component(&env.id, "golem_it_tool_streaming_rust_caller_release")
+        .name("standalone-processors:caller")
+        .store()
+        .await?;
+    let provider = user
+        .component(&env.id, "golem_it_tool_streaming_rust_provider_release")
+        .name("standalone-processors:provider")
+        .with_tool_agent_binding("streaming", "ToolStreamingCaller")?
+        .store()
+        .await?;
+    let middleware = user
+        .component(&env.id, "golem_it_tool_streaming_rust_middleware_release")
+        .store()
+        .await?;
+    let middleware_name = "streaming-universal-pass-through";
+    let empty_update = |revision| ComponentUpdate {
+        current_revision: revision,
+        package_metadata: None,
+        config_schema: None,
+        component_provision_config: None,
+        agent_types: None,
+        agent_type_provision_config_updates: None,
+        tools: None,
+        tool_deployment_config_updates: None,
+        tool_middlewares: None,
+        tool_middleware_provision_config_updates: None,
+        allow_incompatible_config: false,
+    };
+    let mut update = empty_update(middleware.revision);
+    update.tool_middleware_provision_config_updates = Some(BTreeMap::from([(
+        middleware_name.try_into().unwrap(),
+        provision(PluginInstallationAction::Install(installations[1].clone())),
+    )]));
+    let middleware = client
+        .update_component(&middleware.id.0, &update, None::<Vec<u8>>, None::<Vec<u8>>)
+        .await?;
+    let mut update = empty_update(caller.revision);
+    update.component_provision_config = Some(ComponentProvisionConfigCreation {
+        initial_permissions: default_test_agent_initial_permissions_for_account(
+            user.account_email.clone(),
+        ),
+        env: BTreeMap::from([
+            (
+                "PROVIDER_PROMISE_CHECKPOINT_PORT".into(),
+                checkpoint_port.to_string(),
+            ),
+            ("NATIVE_ORDER_HTTP_PORT".into(), checkpoint_port.to_string()),
+        ]),
+        plugin_installations: vec![installations[2].clone()],
+        ..Default::default()
+    });
+    client
+        .update_component(&caller.id.0, &update, None::<Vec<u8>>, None::<Vec<u8>>)
+        .await?;
+    let mut update = empty_update(provider.revision);
+    let tool_provision = provision(PluginInstallationAction::Install(installations[0].clone()));
+    update.tool_deployment_config_updates = Some(BTreeMap::from([(
+        "streaming".try_into().unwrap(),
+        ToolDeploymentConfigUpdate {
+            provision: Some(tool_provision),
+            environment_binding: Default::default(),
+            component_bindings: Some(BTreeMap::from([(
+                caller.component_name.clone(),
+                ToolBindingInput {
+                    middleware: Some(vec![ToolMiddlewareInstallation {
+                        name: middleware_name.try_into().unwrap(),
+                        version: None,
+                        parameters: golem_common::model::json::NormalizedJsonValue::new(
+                            serde_json::json!({}),
+                        ),
+                        account: None,
+                        secret_keys_readable: None,
+                        secret_keys_revealable: None,
+                        filesystem_access: ToolFilesystemAccess::Allowed,
+                    }]),
+                    filesystem_access: ToolFilesystemAccess::Allowed,
+                    ..Default::default()
+                },
+            )])),
+            agent_bindings: None,
+        },
+    )]));
+    let provider = client
+        .update_component(&provider.id.0, &update, None::<Vec<u8>>, None::<Vec<u8>>)
+        .await?;
+    user.deploy_environment(env.id).await?;
+
+    let input: ExternalTypedSchemaValue = StandaloneProcessorInput {
+        value: "standalone-promise".into(),
+    }
+    .into_typed_schema_value()?
+    .try_into()
+    .map_err(anyhow::Error::msg)?;
+    let service = deps.worker_service();
+    let response = service
+        .base_http_client()
+        .await
+        .post(format!(
+            "http://{}:{}/v1/runtime/envs/{}/invoke-tool",
+            service.http_host(),
+            service.http_port(),
+            env.id,
+        ))
+        .bearer_auth(user.token.secret())
+        .header("Idempotency-Key", "standalone-processors")
+        .json(&serde_json::json!({
+            "componentId": caller.id,
+            "toolName": "streaming", "commandPath": ["no-stream"],
+            "input": input, "mode": "schedule",
+        }))
+        .send()
+        .await?;
+    let status = response.status();
+    let invocation_id = response
+        .headers()
+        .get("Golem-Invocation-Id")
+        .context("standalone invocation receipt")?
+        .to_str()?
+        .parse::<golem_common::model::OwnedInvocationId>()
+        .map_err(anyhow::Error::msg)?;
+    let body = response.text().await?;
+    ensure!(
+        status.is_success(),
+        "standalone invocation returned {status}: {body}"
+    );
+    let promise_index =
+        tokio::time::timeout(STANDALONE_PROCESSOR_CALLBACK_TIMEOUT, checkpoint_rx.recv())
+            .await?
+            .context("promise checkpoint server stopped")?;
+    let source_id = tokio::time::timeout(STANDALONE_PROCESSOR_CALLBACK_TIMEOUT, async {
+        loop {
+            if let Some(batch) = tool_batches.lock().unwrap().first() {
+                break batch.source_worker_id.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await?;
+    let source = OwnedAgentId {
+        environment_id: env.id,
+        agent_id: source_id.parse()?,
+    };
+    let oplog = user.get_oplog(&source, OplogIndex::INITIAL).await?;
+    let PublicOplogEntry::Create(create) = &oplog[0].entry else {
+        panic!("standalone source has no Create entry")
+    };
+    let fingerprint = golem_common::model::AgentFingerprint(create.instance_id);
+    assert_eq!(create.owner_kind, OwnerKind::StandaloneTool);
+    assert_eq!(
+        create.standalone_tool.as_ref().unwrap().invocation_id,
+        invocation_id.id()
+    );
+    assert_eq!(
+        create
+            .initial_active_plugins
+            .iter()
+            .map(|plugin| plugin.environment_plugin_grant_id)
+            .collect::<HashSet<_>>(),
+        HashSet::from([
+            installations[0].environment_plugin_grant_id,
+            installations[1].environment_plugin_grant_id,
+        ])
+    );
+    assert_eq!(invocation_count(&tool_batches.lock().unwrap()), 0);
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+
+    // Remove both live installations before reconstructing the accepted owner.
+    // Its remaining batches must still use the descriptors pinned at acceptance.
+    let uninstall = |installation: &PluginInstallation| {
+        PluginInstallationAction::Uninstall(PluginUninstallation {
+            environment_plugin_grant_id: installation.environment_plugin_grant_id,
+        })
+    };
+    let mut update = empty_update(provider.revision);
+    update.tool_deployment_config_updates = Some(BTreeMap::from([(
+        "streaming".try_into().unwrap(),
+        ToolDeploymentConfigUpdate {
+            provision: Some(provision(uninstall(&installations[0]))),
+            environment_binding: Default::default(),
+            component_bindings: None,
+            agent_bindings: None,
+        },
+    )]));
+    client
+        .update_component(&provider.id.0, &update, None::<Vec<u8>>, None::<Vec<u8>>)
+        .await?;
+    let mut update = empty_update(middleware.revision);
+    update.tool_middleware_provision_config_updates = Some(BTreeMap::from([(
+        middleware_name.try_into().unwrap(),
+        provision(uninstall(&installations[1])),
+    )]));
+    client
+        .update_component(&middleware.id.0, &update, None::<Vec<u8>>, None::<Vec<u8>>)
+        .await?;
+    user.deploy_environment(env.id).await?;
+    restart_executors_and_complete_tool_promise(
+        deps,
+        cluster_control,
+        &source,
+        &PromiseId {
+            agent_id: source.agent_id,
+            fingerprint,
+            oplog_idx: promise_index,
+        },
+    )
+    .await?;
+
+    let response = service
+        .base_http_client()
+        .await
+        .post(format!(
+            "http://{}:{}/v1/runtime/envs/{}/invoke-tool",
+            service.http_host(),
+            service.http_port(),
+            env.id,
+        ))
+        .bearer_auth(user.token.secret())
+        .header("Idempotency-Key", "standalone-processors")
+        .json(&serde_json::json!({
+            "componentId": caller.id,
+            "toolName": "streaming", "commandPath": ["no-stream"],
+            "input": input, "mode": "await",
+        }))
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    ensure!(
+        status.is_success(),
+        "reconstructed invocation returned {status}: {body}"
+    );
+    assert!(body.contains("no-stream:standalone-promise"), "{body}");
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    wait_for_invocations(&tool_batches, 1, STANDALONE_PROCESSOR_CALLBACK_TIMEOUT).await;
+    wait_for_invocations(
+        &middleware_batches,
+        1,
+        STANDALONE_PROCESSOR_CALLBACK_TIMEOUT,
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let tool = tool_batches.lock().unwrap().clone();
+    let middleware = middleware_batches.lock().unwrap().clone();
+    let oplog = user.get_oplog(&source, OplogIndex::INITIAL).await?;
+    let finishes: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| {
+            matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+                .then_some(entry.oplog_index.as_u64())
+        })
+        .collect();
+    assert_eq!(finishes.len(), 1);
+    for batches in [&tool, &middleware] {
+        assert!(
+            batches
+                .iter()
+                .all(|batch| batch.source_worker_id == source_id && batch.agent_type.is_none())
+        );
+        let delivered: Vec<_> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .invocations
+                    .iter()
+                    .map(|invocation| invocation.oplog_index)
+            })
+            .collect();
+        assert_eq!(delivered, finishes);
+        assert_unique_oplog_indices(batches);
+    }
+    assert!(
+        baseline_batches.lock().unwrap().is_empty(),
+        "component baseline must not receive standalone tool entries"
+    );
+    checkpoint_server.abort();
+    Ok(())
+}
 
 #[test]
 #[timeout(240000)]
