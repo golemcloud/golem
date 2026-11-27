@@ -1584,6 +1584,14 @@ impl IndexedStorage for ReadCountingIndexedStorage {
     }
 }
 
+type PausedBlobOperation<T> = StdMutex<
+    Option<(
+        T,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
+>;
+
 /// `BlobStorage` decorator counting read-type operations and optionally failing a raw write.
 #[derive(Debug)]
 pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
@@ -1603,20 +1611,8 @@ pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
             tokio::sync::oneshot::Receiver<()>,
         )>,
     >,
-    pause_seal_list: std::sync::Mutex<
-        Option<(
-            usize,
-            tokio::sync::oneshot::Sender<()>,
-            tokio::sync::oneshot::Receiver<()>,
-        )>,
-    >,
-    pause_read: std::sync::Mutex<
-        Option<(
-            Option<BlobStorageNamespace>,
-            tokio::sync::oneshot::Sender<()>,
-            tokio::sync::oneshot::Receiver<()>,
-        )>,
-    >,
+    pause_seal_list: PausedBlobOperation<usize>,
+    pause_read: PausedBlobOperation<Option<BlobStorageNamespace>>,
 }
 
 impl ReadCountingBlobStorage {

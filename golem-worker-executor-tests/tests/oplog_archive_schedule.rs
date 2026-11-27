@@ -3318,19 +3318,19 @@ async fn assert_no_seal_records(
     Ok(())
 }
 
+type RecordedBlobList = (
+    &'static str,
+    &'static str,
+    &'static str,
+    BlobStorageNamespace,
+    PathBuf,
+);
+
 #[derive(Debug, Default)]
 struct SealWriteFault {
     target: OnceLock<OwnedAgentId>,
     hits: AtomicUsize,
-    lists: Mutex<
-        Vec<(
-            &'static str,
-            &'static str,
-            &'static str,
-            BlobStorageNamespace,
-            PathBuf,
-        )>,
-    >,
+    lists: Mutex<Vec<RecordedBlobList>>,
     fail_lists: AtomicBool,
 }
 

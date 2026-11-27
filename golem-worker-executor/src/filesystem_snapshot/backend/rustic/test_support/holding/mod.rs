@@ -106,48 +106,6 @@ impl Debug for HoldingBlobStorage {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use golem_common::model::environment::EnvironmentId;
-    use golem_service_base::storage::blob::BlobStorage;
-    use std::time::Duration;
-    use test_r::test;
-
-    #[test]
-    async fn conditional_put_deadline_includes_the_wrapper_gate() {
-        let inner = Arc::new(InMemoryBlobStorage::new());
-        let (storage, gate, _) = holding_storage(inner.clone(), |_, _| true);
-        let namespace = BlobStorageNamespace::SealRecords {
-            environment_id: EnvironmentId(uuid::Uuid::nil()),
-            type_tag: 9,
-            agent_mode: golem_common::model::agent::AgentMode::Durable,
-        };
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            storage.put_raw_if_absent_once(
-                "test",
-                "held-put",
-                namespace.clone(),
-                Path::new("seal"),
-                b"seal",
-                Duration::from_millis(20),
-            ),
-        )
-        .await
-        .expect("the client deadline must include time waiting at the gate");
-        assert!(reached_deadline(result.unwrap_err().as_ref()));
-        drop(gate);
-        assert!(
-            inner
-                .get_raw("test", "read", namespace, Path::new("seal"))
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-}
-
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl BlobStorageBackend for HoldingBlobStorage {
@@ -419,5 +377,47 @@ impl BlobStorageBackend for HoldingBlobStorage {
                 .exists_at(target_label, op_label, namespace, path),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::storage::blob::BlobStorage;
+    use std::time::Duration;
+    use test_r::test;
+
+    #[test]
+    async fn conditional_put_deadline_includes_the_wrapper_gate() {
+        let inner = Arc::new(InMemoryBlobStorage::new());
+        let (storage, gate, _) = holding_storage(inner.clone(), |_, _| true);
+        let namespace = BlobStorageNamespace::SealRecords {
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            type_tag: 9,
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            storage.put_raw_if_absent_once(
+                "test",
+                "held-put",
+                namespace.clone(),
+                Path::new("seal"),
+                b"seal",
+                Duration::from_millis(20),
+            ),
+        )
+        .await
+        .expect("the client deadline must include time waiting at the gate");
+        assert!(reached_deadline(result.unwrap_err().as_ref()));
+        drop(gate);
+        assert!(
+            inner
+                .get_raw("test", "read", namespace, Path::new("seal"))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

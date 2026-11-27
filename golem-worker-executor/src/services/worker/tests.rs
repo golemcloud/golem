@@ -606,8 +606,10 @@ impl ColdSealFixture {
             pending_promises: Default::default(),
             rejected_periodic_snapshots: Default::default(),
         };
-        let mut config = crate::services::golem_config::OplogConfig::default();
-        config.blob_storage_layers = blob_layers;
+        let config = crate::services::golem_config::OplogConfig {
+            blob_storage_layers: blob_layers,
+            ..Default::default()
+        };
         let scheduler = Arc::new(UnusedSealScheduler);
         let scheduler_ref: Arc<dyn crate::services::scheduler::SchedulerService> =
             scheduler.clone();
@@ -872,14 +874,14 @@ async fn cold_reads_do_not_list_seal_records_for_stable_presence_or_disabled_sea
     );
     pool.close().await;
     // RedisPool::configured constructs a lazy pool; disabled reads must not connect to Redis.
-    let redis = Arc::new(RedisIndexedStorage::new(
+    let redis: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(RedisIndexedStorage::new(
         golem_common::redis::RedisPool::configured(&Default::default())
             .await
             .unwrap(),
     ));
     let directory = tempfile::tempdir().unwrap();
     let multi_sqlite = Arc::new(MultiSqliteIndexedStorage::new(directory.path(), 1, false));
-    let cases: [(usize, Option<Arc<dyn IndexedStorage + Send + Sync>>, bool); 4] = [
+    let cases = [
         (0, None, false),
         (1, Some(redis), false),
         (1, Some(multi_sqlite), false),
@@ -1124,15 +1126,13 @@ async fn cold_metadata_and_identity_authority_churn_remains_retryable() {
                 .service
                 .get(&fixture.id())
                 .await
-                .err()
-                .expect("authority churn must refuse metadata")
+                .expect_err("authority churn must refuse metadata")
         } else {
             fixture
                 .service
                 .resolve_agent_identity(&fixture.id())
                 .await
-                .err()
-                .expect("authority churn must refuse identity")
+                .expect_err("authority churn must refuse identity")
         };
         assert!(matches!(
             error,
