@@ -133,14 +133,13 @@ macro_rules! setup_k3_rate_limit_chain_with_checkpoint {
             .expect("K3 pre-leaf checkpoint middleware metadata");
         let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
         let tool_name = ToolName::try_from("middleware-probe").unwrap();
-        let mut deployment = deployment_state(
+        let mut deployment = rust_provider_deployment(
             $context.account_id,
-            $provider_component.id,
-            $provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            agent_type.0.as_str(),
+            &$provider_component,
             provider_metadata.tools,
-        );
+        )
+        .bound_to(agent_type.0.as_str())
+        .build();
         install_middleware_chain(
             &mut deployment,
             &agent_type,

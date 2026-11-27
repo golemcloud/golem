@@ -59,14 +59,11 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "gol40-rust-sdk-conformance");

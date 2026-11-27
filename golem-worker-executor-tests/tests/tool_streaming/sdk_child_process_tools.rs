@@ -77,14 +77,11 @@ async fn sdk_templates_dispatch_child_processes_to_bound_tools(
             context.default_environment_id,
             caller.id,
             caller.revision,
-            Some(deployment_state(
-                context.account_id,
-                provider.id,
-                provider.revision,
-                "golem-it:tool-streaming-rust-provider",
-                agent_type,
-                provider_tools.clone(),
-            )),
+            Some(
+                rust_provider_deployment(context.account_id, &provider, provider_tools.clone())
+                    .bound_to(agent_type)
+                    .build(),
+            ),
         );
 
         let agent_id = agent_key!(agent_type, format!("child-process-{language}"));

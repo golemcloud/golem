@@ -145,14 +145,12 @@ async fn completed_entity_writer_disposal_replays_its_attachment_terminals(
             context.default_environment_id,
             component.id,
             component.revision,
-            Some(deployment_state(
-                context.account_id,
-                provider_component.id,
-                provider_component.revision,
-                "golem-it:tool-streaming-rust-provider",
-                "ToolStreamingCaller",
-                metadata.tools,
-            )),
+            Some(
+                rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                    .provider_name("golem-it:tool-streaming-rust-provider")
+                    .bound_to("ToolStreamingCaller")
+                    .build(),
+            ),
         );
         let agent = agent_key!("ToolStreamingCaller", "completed-entity-writer-disposal");
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
@@ -274,14 +272,11 @@ async fn cancelled_stdin_disposal_replay_consumes_historical_finish(
         context.default_environment_id,
         component.id,
         component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let agent = agent_key!("ToolStreamingCaller", "cancelled-stdin-disposal-replay");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;

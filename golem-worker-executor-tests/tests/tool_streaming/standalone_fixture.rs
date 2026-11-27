@@ -93,14 +93,10 @@ impl BaselineToolDeployment {
             true,
         )
         .await?;
-        let mut deployment = deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        );
+        let mut deployment =
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build();
         rebind_to_baseline(&mut deployment, component.id);
         Ok(Self {
             provider: provider_component,

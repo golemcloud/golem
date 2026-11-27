@@ -46,14 +46,10 @@ async fn builtin_node_tcp_replays_after_restart(
             true,
         )
         .await?;
-        let mut deployment = deployment_state(
-            context.account_id,
-            provider.id,
-            provider.revision,
-            "golem:javascript-tools",
-            "ToolStreamingCaller",
-            metadata.tools,
-        );
+        let mut deployment = ToolDeployment::new(context.account_id, &provider)
+            .tools(metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
         for bindings in deployment.tool_bindings.values_mut() {
             for binding in bindings.values_mut() {
                 binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -196,14 +192,10 @@ async fn builtin_node_tcp_send_parks_between_writes_and_replays(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider.id,
-        provider.revision,
-        "golem:javascript-tools",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -612,14 +604,15 @@ async fn builtin_tool_deployment(
             true,
         )
         .await?;
-        let next = deployment_state(
-            context.account_id,
-            provider.id,
-            provider.revision,
-            package,
-            "ToolStreamingCaller",
-            metadata.tools,
-        );
+        let mut next = ToolDeployment::new(context.account_id, &provider)
+            .tools(metadata.tools)
+            .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
+            .bound_to("ToolStreamingCaller");
+        // The registry marks the built-in `bash` release as the shell.
+        if package == "golem:bash" {
+            next = next.shell("bash");
+        }
+        let next = next.build();
         if let Some(current) = deployment.as_mut() {
             current.registered_tools.extend(next.registered_tools);
             for (owner, bindings) in next.tool_bindings {

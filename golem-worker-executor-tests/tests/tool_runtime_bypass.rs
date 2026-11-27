@@ -26,15 +26,13 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::component::{ComponentName, ComponentRevision};
-use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::quota::{Reservation, ReserveResult, ResourceName};
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingOwner, ToolDeploymentState,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    SecretKeyScope, ToolBindingOwner, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig,
 };
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
@@ -50,7 +48,7 @@ use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironment
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
+    TestWorkerExecutor, ToolDeployment, WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -247,8 +245,7 @@ async fn fixture(
     ] {
         let mut deployment = deployment_state(
             context.account_id,
-            provider_component.id,
-            provider_component.revision,
+            &provider_component,
             provider_metadata.tools.clone(),
         );
         install_chain(
@@ -773,92 +770,20 @@ async fn record_effect(
     StatusCode::NO_CONTENT
 }
 
+/// The provider's tools, bound to `ToolRuntimeBypassOwner`, with the publisher's provision env and
+/// read access to every config key.
 fn deployment_state(
     account_id: AccountId,
-    provider_id: golem_common::model::component::ComponentId,
-    provider_revision: ComponentRevision,
+    provider: &golem_common::model::component::ComponentDto,
     definitions: Vec<golem_common::schema::tool::Tool>,
 ) -> ToolDeploymentState {
-    let deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
-    let owner = ToolBindingOwner::AgentType {
-        agent_type_name: AgentTypeName("ToolRuntimeBypassOwner".to_string()),
-    };
-    let email = AccountEmail::new("e2@golem");
-    let registered_tools = definitions
-        .into_iter()
-        .enumerate()
-        .map(|(index, definition)| {
-            let name = ToolName::try_from(definition.commands.nodes[0].name.clone()).unwrap();
-            (
-                name,
-                RegisteredTool {
-                    type_id: golem_common::model::type_id::TypeId::try_from(
-                        u32::try_from(index + 1).unwrap(),
-                    )
-                    .unwrap(),
-                    registration: golem_common::model::tool::ToolRegistration {
-                        deployment_revision,
-                        release_id: None,
-                        metadata_digest: Default::default(),
-                        definition,
-                        provision: ToolProvisionConfig {
-                            env: BTreeMap::from([
-                                ("OWNER_MARKER".to_string(), "publisher-config".to_string()),
-                                ("EFFECT_PORT".to_string(), "1".to_string()),
-                            ]),
-                            ..Default::default()
-                        },
-                        component_bindings: Default::default(),
-                        source: ToolSource::Component {
-                            component_id: provider_id,
-                            component_revision: provider_revision,
-                            component_name: ComponentName(
-                                "golem-it:tool-runtime-bypass-provider".to_string(),
-                            ),
-                        },
-                        owner_account_id: account_id,
-                        owner_account_email: email.clone(),
-                        metadata_version: "0.1.0".to_string(),
-                    },
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let bindings = registered_tools
-        .iter()
-        .map(|(name, tool)| {
-            (
-                name.clone(),
-                CompiledToolBinding {
-                    deployment_revision,
-                    release_id: None,
-                    metadata_digest: Default::default(),
-                    owner: owner.clone(),
-                    tool_name: name.clone(),
-                    version: tool.registration.definition.version.clone(),
-                    metadata_version: tool.registration.metadata_version.clone(),
-                    account_id,
-                    account_email: email.clone(),
-                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
-                    config_keys_readable: golem_common::model::tool::ConfigKeyScope::All,
-                    secret_keys_readable: SecretKeyScope::All,
-                    secret_keys_revealable: SecretKeyScope::All,
-                    filesystem_access: ToolFilesystemAccess::Unset,
-                    source: tool.registration.source.clone(),
-                    shell: false,
-                },
-            )
-        })
-        .collect();
-    ToolDeploymentState {
-        deployment_revision,
-        registered_tools,
-        tool_bindings: BTreeMap::from([(owner, bindings)]),
-        mcp_imports: Vec::new(),
-        tool_middleware_configuration: Default::default(),
-        registered_tool_middlewares: BTreeMap::new(),
-        tool_middleware_chains: BTreeMap::new(),
-    }
+    ToolDeployment::new(account_id, provider)
+        .account_email("e2@golem")
+        .tools(definitions)
+        .bound_to("ToolRuntimeBypassOwner")
+        .provision_env([("OWNER_MARKER", "publisher-config"), ("EFFECT_PORT", "1")])
+        .config_keys_readable(golem_common::model::tool::ConfigKeyScope::All)
+        .build()
 }
 
 fn install_chain(

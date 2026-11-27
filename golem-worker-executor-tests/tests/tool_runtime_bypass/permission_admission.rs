@@ -296,8 +296,7 @@ async fn permission_fixture_with_overrides(
         .ok_or_else(|| anyhow::anyhow!("the provider does not define {PERMISSION_PROBE}"))?;
     let mut deployment = deployment_state(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
+        &provider_component,
         provider_metadata.tools.clone(),
     );
     install_chain(

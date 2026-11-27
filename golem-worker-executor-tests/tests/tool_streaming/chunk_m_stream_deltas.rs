@@ -152,14 +152,10 @@ async fn effect_stream_runtime_middleware_replay_and_cleanup(
     .await?;
     let agent_type = AgentTypeName("EffectToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("chunk-m-effect-streaming").unwrap();
-    let bare_deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-effect-provider",
-        agent_type.0.as_str(),
-        provider_metadata.tools.clone(),
-    );
+    let bare_deployment = ToolDeployment::new(context.account_id, &provider_component)
+        .tools(provider_metadata.tools.clone())
+        .bound_to(agent_type.0.as_str())
+        .build();
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
@@ -213,14 +209,10 @@ async fn effect_stream_runtime_middleware_replay_and_cleanup(
         .iter()
         .find(|definition| definition.name == "streaming-universal-pass-through")
         .expect("universal stream middleware fixture");
-    let mut middleware_deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-effect-provider",
-        agent_type.0.as_str(),
-        provider_metadata.tools,
-    );
+    let mut middleware_deployment = ToolDeployment::new(context.account_id, &provider_component)
+        .tools(provider_metadata.tools)
+        .bound_to(agent_type.0.as_str())
+        .build();
     install_middleware_chain(
         &mut middleware_deployment,
         &agent_type,
@@ -392,14 +384,10 @@ async fn effect_stream_explicit_cancellation_through_universal_middleware_settle
         .expect("universal stream middleware fixture");
     let agent_type = AgentTypeName("EffectToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("chunk-m-effect-streaming").unwrap();
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-effect-provider",
-        agent_type.0.as_str(),
-        provider_metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider_component)
+        .tools(provider_metadata.tools)
+        .bound_to(agent_type.0.as_str())
+        .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,

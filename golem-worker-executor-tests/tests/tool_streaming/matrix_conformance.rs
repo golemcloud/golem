@@ -31,7 +31,6 @@ struct MatrixObservation {
 struct MatrixFixture<'a> {
     language: &'static str,
     component: &'a PrecompiledComponent,
-    package: &'static str,
     agent_type: &'static str,
     method: &'static str,
 }
@@ -120,42 +119,36 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
         MatrixFixture {
             language: "rust",
             component: rust_provider,
-            package: "golem-it:tool-streaming-rust-provider",
             agent_type: "",
             method: "",
         },
         MatrixFixture {
             language: "typescript",
             component: typescript_provider,
-            package: "golem-it:tool-streaming-ts-provider",
             agent_type: "",
             method: "",
         },
         MatrixFixture {
             language: "scala",
             component: scala,
-            package: "scala:examples",
             agent_type: "",
             method: "",
         },
         MatrixFixture {
             language: "moonbit",
             component: moonbit,
-            package: "golem:moonbit-examples",
             agent_type: "",
             method: "",
         },
         MatrixFixture {
             language: "effect",
             component: effect_provider,
-            package: "golem-it:tool-streaming-effect-provider",
             agent_type: "",
             method: "",
         },
         MatrixFixture {
             language: "go",
             component: go_provider,
-            package: "golem-it:tool-streaming-go-provider",
             agent_type: "",
             method: "",
         },
@@ -164,42 +157,36 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
         MatrixFixture {
             language: "rust",
             component: rust_caller,
-            package: "",
             agent_type: "ToolStreamingCaller",
             method: "matrix_core_observation",
         },
         MatrixFixture {
             language: "typescript",
             component: typescript_caller,
-            package: "",
             agent_type: "TsToolStreamingCaller",
             method: "matrix_core_observation",
         },
         MatrixFixture {
             language: "scala",
             component: scala,
-            package: "",
             agent_type: "ScalaToolStreamingCaller",
             method: "matrix_core_observation",
         },
         MatrixFixture {
             language: "moonbit",
             component: moonbit,
-            package: "",
             agent_type: "MoonBitToolStreamingCaller",
             method: "matrix_core_observation",
         },
         MatrixFixture {
             language: "effect",
             component: effect_caller,
-            package: "",
             agent_type: "EffectToolStreamingCaller",
             method: "matrix_core_observation",
         },
         MatrixFixture {
             language: "go",
             component: go_caller,
-            package: "",
             agent_type: "GoToolStreamingCaller",
             method: "matrix_core_observation",
         },
@@ -238,14 +225,13 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
                 context.default_environment_id,
                 caller_component.id,
                 caller_component.revision,
-                Some(deployment_state(
-                    context.account_id,
-                    provider_component.id,
-                    provider_component.revision,
-                    provider.package,
-                    caller.agent_type,
-                    provider_tools[provider_index].clone(),
-                )),
+                Some(
+                    ToolDeployment::new(context.account_id, provider_component)
+                        .tools(provider_tools[provider_index].clone())
+                        .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
+                        .bound_to(caller.agent_type)
+                        .build(),
+                ),
             );
 
             let agent_id = agent_key!(
@@ -381,14 +367,12 @@ async fn go_caller_closes_the_stdin_a_tool_does_not_read(
         context.default_environment_id,
         caller.id,
         caller.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider.id,
-            provider.revision,
-            "golem-it:tool-streaming-go-provider",
-            "GoToolStreamingCaller",
-            provider_tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &provider)
+                .tools(provider_tools)
+                .bound_to("GoToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("GoToolStreamingCaller", "stdin-released");

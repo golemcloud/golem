@@ -127,14 +127,10 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
     .await?;
     let agent_type = AgentTypeName("ToolStreamingCaller".into());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        &agent_type.0,
-        metadata.tools,
-    );
+    let mut deployment =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to(&agent_type.0)
+            .build();
     let lifecycle = middleware_metadata
         .tool_middlewares
         .iter()

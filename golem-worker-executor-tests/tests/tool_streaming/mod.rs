@@ -111,8 +111,8 @@ use golem_worker_executor_test_utils::{
     AgentInvocationSuccessGateHandle, CrashCheckpoint, CrashCheckpointServer, InvocationError,
     InvocationErrorExt, LastUniqueId, OplogShape, PrecompiledComponent, PromiseCheckpoint,
     PromiseCheckpointServer, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
-    native_test_tool_metadata, start_with_overrides,
+    TestWorkerExecutor, ToolDeployment, WorkerExecutorTestDependencies,
+    native_streaming_tool_metadata, native_test_tool_metadata, start_with_overrides,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
@@ -911,103 +911,16 @@ struct SecretPolicyEvidence {
     leaf_revealed: bool,
 }
 
-pub(crate) fn deployment_state(
-    owner_account_id: AccountId,
-    provider_component_id: golem_common::model::component::ComponentId,
-    provider_revision: ComponentRevision,
-    provider_component_name: &str,
-    caller_agent_type: &str,
-    definitions: Vec<golem_common::schema::tool::Tool>,
-) -> ToolDeploymentState {
-    let deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
-    let account_email = AccountEmail::new("test@golem");
-    let mut registered_tools = BTreeMap::new();
-
-    for (index, definition) in definitions.into_iter().enumerate() {
-        let root_name = definition
-            .commands
-            .nodes
-            .first()
-            .expect("tool definition has a root command")
-            .name
-            .clone();
-        let name = ToolName::try_from(root_name).expect("valid discovered tool name");
-        registered_tools.insert(
-            name,
-            RegisteredTool {
-                type_id: golem_common::model::type_id::TypeId::try_from(
-                    u32::try_from(index + 1).unwrap(),
-                )
-                .unwrap(),
-                registration: golem_common::model::tool::ToolRegistration {
-                    deployment_revision,
-                    release_id: None,
-                    metadata_digest: Default::default(),
-                    definition,
-                    provision: ToolProvisionConfig::default(),
-                    component_bindings: Default::default(),
-                    source: ToolSource::Component {
-                        component_id: provider_component_id,
-                        component_revision: provider_revision,
-                        component_name: ComponentName(provider_component_name.to_string()),
-                    },
-                    owner_account_id,
-                    owner_account_email: account_email.clone(),
-                    metadata_version: "0.1.0".to_string(),
-                },
-            },
-        );
-    }
-
-    let agent_type = AgentTypeName(caller_agent_type.to_string());
-    let bindings = registered_tools
-        .iter()
-        .map(|(name, tool)| {
-            let filesystem_access = if name.as_str() == "capable-streaming" {
-                ToolFilesystemAccess::Allowed
-            } else {
-                ToolFilesystemAccess::Unset
-            };
-            (
-                name.clone(),
-                CompiledToolBinding {
-                    deployment_revision,
-                    release_id: tool.registration.release_id,
-                    metadata_digest: tool.registration.metadata_digest,
-                    owner: ToolBindingOwner::AgentType {
-                        agent_type_name: agent_type.clone(),
-                    },
-                    tool_name: name.clone(),
-                    version: tool.registration.definition.version.clone(),
-                    metadata_version: tool.registration.metadata_version.clone(),
-                    account_id: owner_account_id,
-                    account_email: account_email.clone(),
-                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
-                    config_keys_readable: Default::default(),
-                    secret_keys_readable: SecretKeyScope::All,
-                    secret_keys_revealable: SecretKeyScope::All,
-                    filesystem_access,
-                    source: tool.registration.source.clone(),
-                    // The registry marks the built-in `bash` release as the shell; the tests
-                    // deploy the built-in `bash` component in its place.
-                    shell: provider_component_name == "golem:bash" && name.as_str() == "bash",
-                },
-            )
-        })
-        .collect();
-
-    let owner = ToolBindingOwner::AgentType {
-        agent_type_name: agent_type,
-    };
-    ToolDeploymentState {
-        deployment_revision,
-        registered_tools,
-        tool_bindings: BTreeMap::from([(owner, bindings)]),
-        mcp_imports: Vec::new(),
-        tool_middleware_configuration: Default::default(),
-        registered_tool_middlewares: BTreeMap::new(),
-        tool_middleware_chains: BTreeMap::new(),
-    }
+/// A deployment of the Rust provider's tools. The Rust provider defines `capable-streaming`,
+/// whose binding gets filesystem access.
+pub(crate) fn rust_provider_deployment(
+    account_id: AccountId,
+    provider: &golem_common::model::component::ComponentDto,
+    tools: Vec<golem_common::schema::tool::Tool>,
+) -> ToolDeployment {
+    ToolDeployment::new(account_id, provider)
+        .tools(tools)
+        .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
 }
 
 fn filesystem_tool_input(fields: Vec<(&str, SchemaType, SchemaValue)>) -> TypedSchemaValue {
@@ -1180,7 +1093,6 @@ async fn invoke_cli_tool_version(
     environment_state: &TestEnvironmentStateService,
     caller_component: &golem_common::model::component::ComponentDto,
     provider: &PrecompiledComponent,
-    package_name: &str,
     tool_name: &str,
     expected_version: &str,
     expected_stdout: &str,
@@ -1197,14 +1109,11 @@ async fn invoke_cli_tool_version(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        package_name,
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider_component)
+        .tools(metadata.tools)
+        .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -2875,14 +2784,10 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
     )
     .await?;
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        &agent_type.0,
-        metadata.tools,
-    );
+    let mut deployment =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to(&agent_type.0)
+            .build();
     let definition = metadata
         .tool_middlewares
         .iter()
@@ -3087,14 +2992,13 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
     let parameterized = definition("streaming-parameterized");
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
-    let deployment = deployment_state(
+    let deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools.clone(),
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
@@ -3125,14 +3029,13 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
         "uploaded discoverable middleware metadata must not install itself"
     );
 
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools.clone(),
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -3275,14 +3178,13 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
     }
 
     let short_circuit = definition("streaming-short-circuit");
-    let mut redeployed = deployment_state(
+    let mut redeployed = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut redeployed,
         &agent_type,
@@ -3425,14 +3327,13 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
         .unwrap();
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools.clone(),
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -3800,14 +3701,13 @@ async fn run_cancelled_mcp_body_probe(
         .unwrap();
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools.clone(),
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -4517,14 +4417,11 @@ async fn cancelled_wasm_tool_body_with_an_open_websocket_receive_recovers_after_
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "cancelled-open-receive");
@@ -4857,14 +4754,13 @@ async fn dynamic_mcp_executes_genuine_monomorphic_middleware_and_replays_offline
 
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools.clone(),
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     deployment.registered_tool_middlewares.insert(
         ToolMiddlewareName::try_from(projection.name.as_str()).unwrap(),
         RegisteredToolMiddleware {
@@ -5079,14 +4975,13 @@ async fn overlapping_middleware_exposes_public_ancestry_across_replay(
         .unwrap();
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools.clone(),
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -5187,14 +5082,13 @@ async fn overlapping_middleware_exposes_public_ancestry_across_replay(
         .iter()
         .find(|definition| definition.name == "streaming-short-circuit")
         .unwrap();
-    let mut redeployed = deployment_state(
+    let mut redeployed = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut redeployed,
         &agent_type,
@@ -5334,14 +5228,13 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
         .unwrap();
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -5516,14 +5409,13 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     .await?;
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("typed-output-stream").unwrap();
-    let plain_deployment = deployment_state(
+    let plain_deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools.clone(),
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
@@ -5891,14 +5783,13 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         .unwrap();
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("typed-output-stream").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -6113,14 +6004,13 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
     .await?;
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("typed-input-stream").unwrap();
-    let plain_deployment = deployment_state(
+    let plain_deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     let universal = middleware_metadata
         .tool_middlewares
         .iter()
@@ -6339,14 +6229,11 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "attempt-identity-replay");
@@ -6492,14 +6379,10 @@ async fn native_entity_vetoes_owner_suspension_until_cancelled(
         true,
     )
     .await?;
-    let mut state = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut state =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
     let native = native_deployment_state(
         context.account_id,
         "ToolStreamingCaller",
@@ -7176,14 +7059,11 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "rust-live");
@@ -7885,14 +7765,11 @@ async fn rust_generated_client_interrupt_releases_held_tool_streams(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     for (name, method, calls) in [
@@ -8002,14 +7879,11 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
             context.default_environment_id,
             caller_component.id,
             caller_component.revision,
-            Some(deployment_state(
-                context.account_id,
-                provider_component.id,
-                provider_component.revision,
-                "golem-it:tool-streaming-rust-provider",
-                "ToolStreamingCaller",
-                metadata.tools,
-            )),
+            Some(
+                rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                    .bound_to("ToolStreamingCaller")
+                    .build(),
+            ),
         );
 
         let (effect_port, mut effects, effect_server) =
@@ -8272,14 +8146,11 @@ async fn guest_trap_preserves_a_blocked_same_tool_sibling_and_drains_cleanup(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     // Observe Store context destruction without re-entering a poisoned guest event loop.
@@ -8486,14 +8357,11 @@ async fn run_isolated_trap_sibling_lifecycle_case(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", format!("trap-{lifecycle}"));
@@ -8684,14 +8552,11 @@ async fn detached_and_fire_and_forget_traps_settle_without_failing_the_owner(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     for (name, method) in [
@@ -9236,14 +9101,11 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "piped-unread");
@@ -9673,14 +9535,11 @@ async fn large_tool_output_reconstructs_with_one_chunk_capacity(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let agent = agent_key!("ToolStreamingCaller", "one-chunk-capacity");
     let worker = executor
@@ -9779,14 +9638,11 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "crash-while-consumed");
@@ -9954,14 +9810,11 @@ async fn tool_stdin_closed_wait_survives_a_crash_while_stdin_is_open(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = CrashCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "crash-in-stdin-closed-wait");
@@ -10153,14 +10006,11 @@ async fn retained_tool_output_fork(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let parent_name = agent_key!("ToolStreamingCaller", "retained-output-fork-parent");
     let parent = executor
@@ -10443,14 +10293,11 @@ async fn retained_tool_output_reconstruction(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = PromiseCheckpointServer::start().await?;
     for (cancel_read, cancel_ready, cancel_positive) in [
@@ -10804,14 +10651,11 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "capable-limits");
@@ -11332,14 +11176,11 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let mut checkpoints = CrashCheckpointServer::start().await?;
@@ -11514,14 +11355,11 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let mut checkpoints = CrashCheckpointServer::start().await?;
@@ -11814,14 +11652,11 @@ async fn capable_stdout_poll_does_not_launch_before_result_await(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "capable-stdout-before-result");
@@ -11935,14 +11770,11 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let agent = agent_key!("ToolStreamingCaller", "scope-interest-before-store");
     let worker = executor
@@ -12157,14 +11989,11 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let env = checkpoints.agent_env("");
 
@@ -12551,14 +12380,11 @@ async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_ca
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let agent = agent_key!("ToolStreamingCaller", "stop-while-staged-child-result");
     let worker_id = executor
@@ -12729,14 +12555,11 @@ async fn active_stream_crash_replays_pinned_activation_with_fresh_attachments(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "active-stream-crash");
@@ -12860,14 +12683,10 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         .component_directory
         .join(format!("{}.wasm", provider.wasm_name));
     let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -13258,14 +13077,10 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         .component_directory
         .join(format!("{}.wasm", provider.wasm_name));
     let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    let deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let deployment =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
@@ -13751,14 +13566,11 @@ async fn completed_reconstruction_validates_before_delivering_result(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let mut provider_checkpoints = CrashCheckpointServer::start().await?;
@@ -13896,14 +13708,11 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let mut caller_checkpoints = CrashCheckpointServer::start().await?;
@@ -14082,14 +13891,11 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let mut provider_checkpoints = CrashCheckpointServer::start().await?;
@@ -14289,14 +14095,11 @@ async fn run_clocked_stream_recovery(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "clocked-incomplete-stream");
@@ -14637,14 +14440,11 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let checkpoints = [
@@ -15123,14 +14923,11 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = CrashCheckpointServer::start().await?;
     let (effect_port, mut effects, effect_server) =
@@ -15308,14 +15105,11 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "capable-terminal-crash");
@@ -15665,14 +15459,11 @@ async fn entity_http_key_recovery(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "entity-idempotency-recovery");
@@ -16191,14 +15982,12 @@ async fn typescript_generated_client_streams_live(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-ts-provider",
-            "TsToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &provider_component)
+                .tools(metadata.tools)
+                .bound_to("TsToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("TsToolStreamingCaller", "ts-live");
@@ -16335,14 +16124,12 @@ async fn scala_generated_client_streams_live(
         context.default_environment_id,
         stored_component.id,
         stored_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            stored_component.id,
-            stored_component.revision,
-            "scala:examples",
-            "ScalaToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &stored_component)
+                .tools(metadata.tools)
+                .bound_to("ScalaToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("ScalaToolStreamingCaller", "scala-live");
@@ -16467,14 +16254,12 @@ async fn moonbit_generated_client_streams_live(
         context.default_environment_id,
         stored_component.id,
         stored_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            stored_component.id,
-            stored_component.revision,
-            "golem:moonbit-examples",
-            "MoonBitToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &stored_component)
+                .tools(metadata.tools)
+                .bound_to("MoonBitToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("MoonBitToolStreamingCaller", "moonbit-live");
@@ -16968,14 +16753,10 @@ async fn exercise_filesystem_tools(
             (ToolName::try_from(name).unwrap(), definition.clone())
         })
         .collect::<BTreeMap<_, _>>();
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem:filesystem-tools",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider_component)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -17766,14 +17547,10 @@ async fn exercise_guest_invoked_filesystem_tools(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem:filesystem-tools",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider_component)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -17899,14 +17676,10 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
             (ToolName::try_from(name).unwrap(), definition.clone())
         })
         .collect::<BTreeMap<_, _>>();
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem:filesystem-tools",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider_component)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -18393,10 +18166,7 @@ async fn builtin_node_recursive_rm_removes_typescript_output(
         .store()
         .await?;
     let mut deployment: Option<ToolDeploymentState> = None;
-    for (provider, package) in [
-        (javascript_tools, "golem:javascript-tools"),
-        (typescript_tools, "golem:typescript-tools"),
-    ] {
+    for provider in [javascript_tools, typescript_tools] {
         let component = executor
             .component_dep(&context.default_environment_id, provider)
             .store()
@@ -18409,14 +18179,11 @@ async fn builtin_node_recursive_rm_removes_typescript_output(
             true,
         )
         .await?;
-        let provider_deployment = deployment_state(
-            context.account_id,
-            component.id,
-            component.revision,
-            package,
-            "ToolStreamingCaller",
-            metadata.tools,
-        );
+        let provider_deployment = ToolDeployment::new(context.account_id, &component)
+            .tools(metadata.tools)
+            .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
+            .bound_to("ToolStreamingCaller")
+            .build();
         if let Some(deployment) = &mut deployment {
             deployment
                 .registered_tools
@@ -18576,14 +18343,10 @@ async fn builtin_node_eval_resolves_modules_from_working_directory(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        javascript_component.id,
-        javascript_component.revision,
-        "golem:javascript-tools",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &javascript_component)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -18744,14 +18507,10 @@ async fn builtin_node_and_npx_run_typescript(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        javascript_component.id,
-        javascript_component.revision,
-        "golem:javascript-tools",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &javascript_component)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -19031,14 +18790,10 @@ async fn typescript_guest_recursive_rm_removes_tool_created_output(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider.id,
-        provider.revision,
-        "golem:typescript-tools",
-        "TsToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider)
+        .tools(metadata.tools)
+        .bound_to("TsToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -19105,14 +18860,10 @@ async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        javascript_component.id,
-        javascript_component.revision,
-        "golem:javascript-tools",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &javascript_component)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -19291,29 +19042,11 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct
         .store()
         .await?;
 
-    for (provider, package, tool, version, stdout) in [
-        (javascript_tools, "golem:javascript-tools", "node", "", ""),
-        (
-            javascript_tools,
-            "golem:javascript-tools",
-            "npm",
-            "10.9.9",
-            "10.9.9\n",
-        ),
-        (
-            javascript_tools,
-            "golem:javascript-tools",
-            "npx",
-            "10.9.9",
-            "10.9.9\n",
-        ),
-        (
-            typescript_tools,
-            "golem:typescript-tools",
-            "tsc",
-            "5.9.2",
-            "Version 5.9.2\n",
-        ),
+    for (provider, tool, version, stdout) in [
+        (javascript_tools, "node", "", ""),
+        (javascript_tools, "npm", "10.9.9", "10.9.9\n"),
+        (javascript_tools, "npx", "10.9.9", "10.9.9\n"),
+        (typescript_tools, "tsc", "5.9.2", "Version 5.9.2\n"),
     ] {
         invoke_cli_tool_version(
             &executor,
@@ -19322,7 +19055,6 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct
             &environment_state,
             &caller_component,
             provider,
-            package,
             tool,
             version,
             stdout,
@@ -19371,22 +19103,14 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct
             tool.name()
         );
     }
-    let mut deployment = deployment_state(
-        context.account_id,
-        javascript_component.id,
-        javascript_component.revision,
-        "golem:javascript-tools",
-        "ToolStreamingCaller",
-        javascript_metadata.tools,
-    );
-    let typescript_deployment = deployment_state(
-        context.account_id,
-        typescript_component.id,
-        typescript_component.revision,
-        "golem:typescript-tools",
-        "ToolStreamingCaller",
-        typescript_metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &javascript_component)
+        .tools(javascript_metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
+    let typescript_deployment = ToolDeployment::new(context.account_id, &typescript_component)
+        .tools(typescript_metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     deployment
         .registered_tools
         .extend(typescript_deployment.registered_tools);
@@ -19815,22 +19539,14 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         })
         .collect::<BTreeMap<_, _>>();
 
-    let mut deployment = deployment_state(
-        context.account_id,
-        git_component.id,
-        git_component.revision,
-        "golem:git-tool",
-        "ToolStreamingCaller",
-        git_metadata.tools,
-    );
-    let filesystem_deployment = deployment_state(
-        context.account_id,
-        filesystem_component.id,
-        filesystem_component.revision,
-        "golem:filesystem-tools",
-        "ToolStreamingCaller",
-        filesystem_metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &git_component)
+        .tools(git_metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
+    let filesystem_deployment = ToolDeployment::new(context.account_id, &filesystem_component)
+        .tools(filesystem_metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     deployment
         .registered_tools
         .extend(filesystem_deployment.registered_tools);
@@ -20386,22 +20102,14 @@ async fn start_git_tool_harness(
         })
         .collect::<BTreeMap<_, _>>();
 
-    let mut deployment = deployment_state(
-        context.account_id,
-        git_component.id,
-        git_component.revision,
-        "golem:git-tool",
-        "ToolStreamingCaller",
-        git_metadata.tools,
-    );
-    let filesystem_deployment = deployment_state(
-        context.account_id,
-        filesystem_component.id,
-        filesystem_component.revision,
-        "golem:filesystem-tools",
-        "ToolStreamingCaller",
-        filesystem_metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &git_component)
+        .tools(git_metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
+    let filesystem_deployment = ToolDeployment::new(context.account_id, &filesystem_component)
+        .tools(filesystem_metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     deployment
         .registered_tools
         .extend(filesystem_deployment.registered_tools);
@@ -22155,14 +21863,11 @@ async fn clock_races_complete_through_tool_entity_without_suspending_owner(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent = agent_key!("ToolStreamingCaller", "clock-race-tool-owner");
@@ -22236,14 +21941,11 @@ async fn tool_bodies_read_pending_card_events_without_scanning_the_invocation_op
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent = agent_key!("ToolStreamingCaller", "card-boundary-tool-owner");
@@ -22333,14 +22035,11 @@ async fn long_clock_through_tool_entity_suspends_and_reconstructs_owner(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent = agent_key!("ToolStreamingCaller", "long-clock-tool-owner");
@@ -22427,14 +22126,11 @@ async fn aggregate_clocks_through_tool_entities_suspend_after_short_result(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let agent = agent_key!("ToolStreamingCaller", "aggregate-clock-tool-owner");
     let worker = executor
@@ -22580,14 +22276,10 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         conversion_field.body,
         SchemaType::option(SchemaType::bool())
     );
-    let deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem:web-fetch",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let deployment = ToolDeployment::new(context.account_id, &provider_component)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
@@ -22967,14 +22659,10 @@ async fn native_external_tool_scalar_admission(
         .component_directory
         .join(format!("{}.wasm", provider.wasm_name));
     let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
     for bindings in deployment.tool_bindings.values_mut() {
         bindings
             .get_mut(&ToolName::try_from("streaming").unwrap())
@@ -24698,14 +24386,10 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
     let agent_owner = ToolBindingOwner::AgentType {
         agent_type_name: AgentTypeName("ToolStreamingCaller".to_string()),
     };
@@ -25153,14 +24837,11 @@ async fn native_tool_secret_permissions_and_completed_replay(
             context.default_environment_id,
             caller_component.id,
             caller_component.revision,
-            Some(deployment_state(
-                context.account_id,
-                provider_component.id,
-                provider_component.revision,
-                "golem-it:tool-streaming-rust-provider",
-                "ToolStreamingCaller",
-                metadata.tools,
-            )),
+            Some(
+                rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                    .bound_to("ToolStreamingCaller")
+                    .build(),
+            ),
         );
         let agent = agent_key!("ToolStreamingCaller", "native-secret");
         let worker_id = executor
@@ -25316,14 +24997,11 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = PromiseCheckpointServer::start().await?;
     for (acknowledged, crash, markerless_crash, storage_failure) in [
@@ -25749,14 +25427,11 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "accepted-uncommitted");
@@ -26283,14 +25958,10 @@ async fn start_an_agent_with_the_streaming_tool(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
     // The tool may use the files of the agent, as bash may. Only a call from outside gives such
     // a tool a live stdin: an agent's call hands the stdin over when it has ended.
     for bindings in deployment.tool_bindings.values_mut() {
@@ -27508,14 +27179,10 @@ async fn tool_calls_after_the_return_settle_between_the_result_and_settled(
         .component_directory
         .join(format!("{}.wasm", provider.wasm_name));
     let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment =
+        rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;

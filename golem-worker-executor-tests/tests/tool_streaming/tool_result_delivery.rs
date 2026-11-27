@@ -184,14 +184,11 @@ async fn raw_tool_return_boundary(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let commands: &[&str] = if matches!(boundary, RawReturnBoundary::HeldStart { .. }) {
         &["unpadded"]
@@ -525,14 +522,11 @@ async fn tool_return_stops_guest_tails_and_reconstructs_incomplete_imports(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let agent = agent_key!("ToolStreamingCaller", "return-cutoff");
     let worker = executor
@@ -704,14 +698,11 @@ async fn output_producer_can_await_tools_live_and_after_reconstruction(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let collector = agent_key!("ToolStreamingCaller", "output-tool-collector");
     let mut targets = Vec::new();
@@ -1029,14 +1020,11 @@ async fn yielding_guest_receives_tool_result_only_at_a_blocked_wait(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let agent = agent_key!("ToolStreamingCaller", "yielding-tool-result");
     let worker_id = executor

@@ -108,14 +108,12 @@ async fn transaction_drop_disposal(
         context.default_environment_id,
         component.id,
         component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .provider_name("golem-it:tool-streaming-rust-provider")
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let address = postgres_drop.public_connection_string();
     let pool = sqlx::PgPool::connect(&address).await?;

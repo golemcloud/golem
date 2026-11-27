@@ -88,14 +88,15 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(crate::tool_streaming::deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            crate::tool_streaming::rust_provider_deployment(
+                context.account_id,
+                &provider_component,
+                metadata.tools,
+            )
+            .bound_to("ToolStreamingCaller")
+            .build(),
+        ),
     );
     let id = executor
         .start_agent(

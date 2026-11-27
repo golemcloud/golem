@@ -416,14 +416,10 @@ async fn exercise_named_fork_tool_replay(
         .store()
         .await?;
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
-    let mut deployment = deployment_state(
-        context.account_id,
-        filesystem_component.id,
-        filesystem_component.revision,
-        "golem:filesystem-tools",
-        agent_type.0.as_str(),
-        filesystem_metadata.tools.clone(),
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &filesystem_component)
+        .tools(filesystem_metadata.tools.clone())
+        .bound_to(agent_type.0.as_str())
+        .build();
     for tool_name in ["write-file", "read-file"] {
         install_audit_path_policy_chain(
             &mut deployment,
@@ -696,14 +692,10 @@ async fn path_1_audit_path_policy_real_file_tool_allows_and_denies(
         .store()
         .await?;
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
-    let mut deployment = deployment_state(
-        context.account_id,
-        filesystem_component.id,
-        filesystem_component.revision,
-        "golem:filesystem-tools",
-        agent_type.0.as_str(),
-        filesystem_metadata.tools.clone(),
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &filesystem_component)
+        .tools(filesystem_metadata.tools.clone())
+        .bound_to(agent_type.0.as_str())
+        .build();
     install_audit_path_policy_chain(
         &mut deployment,
         &agent_type,
@@ -845,14 +837,10 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
             .unique()
             .store()
             .await?;
-        let mut deployment = deployment_state(
-            context.account_id,
-            filesystem_component.id,
-            filesystem_component.revision,
-            "golem:filesystem-tools",
-            agent_type.0.as_str(),
-            filesystem_metadata.tools.clone(),
-        );
+        let mut deployment = ToolDeployment::new(context.account_id, &filesystem_component)
+            .tools(filesystem_metadata.tools.clone())
+            .bound_to(agent_type.0.as_str())
+            .build();
         for tool_name in ["write-file", "read-file"] {
             install_audit_path_policy_chain(
                 &mut deployment,

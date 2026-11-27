@@ -168,14 +168,11 @@ async fn open_body_with_open_call(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("ToolStreamingCaller")
+                .build(),
+        ),
     );
     let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", mode);

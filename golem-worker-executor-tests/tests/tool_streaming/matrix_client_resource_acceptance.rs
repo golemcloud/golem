@@ -42,7 +42,6 @@ struct ResourceObservation {
 struct Provider<'a> {
     language: &'static str,
     component: &'a PrecompiledComponent,
-    package: &'static str,
     supports_secret: bool,
     supports_named_quota: bool,
 }
@@ -296,35 +295,30 @@ async fn run_resource_contract(
         Provider {
             language: "rust",
             component: rust_provider,
-            package: "golem-it:tool-streaming-rust-provider",
             supports_secret: true,
             supports_named_quota: true,
         },
         Provider {
             language: "typescript",
             component: typescript_provider,
-            package: "golem-it:tool-streaming-ts-provider",
             supports_secret: true,
             supports_named_quota: false,
         },
         Provider {
             language: "scala",
             component: scala,
-            package: "scala:examples",
             supports_secret: true,
             supports_named_quota: true,
         },
         Provider {
             language: "moonbit",
             component: moonbit,
-            package: "golem:moonbit-examples",
             supports_secret: true,
             supports_named_quota: true,
         },
         Provider {
             language: "effect",
             component: effect_provider,
-            package: "golem-it:tool-streaming-effect-provider",
             supports_secret: true,
             supports_named_quota: true,
         },
@@ -419,18 +413,17 @@ async fn run_resource_contract(
             let path = format!("{}->{}", caller.language, provider.language);
             let caller_component = &stored_callers[caller_index];
             let provider_component = &stored_providers[provider_index];
-            let mut deployment = deployment_state(
-                context.account_id,
-                provider_component.id,
-                provider_component.revision,
-                provider.package,
-                caller.agent_type,
-                provider_tools[provider_index]
-                    .iter()
-                    .filter(|tool| root_tool_name(tool) != "matrix-permission-issuer")
-                    .cloned()
-                    .collect(),
-            );
+            let mut deployment = ToolDeployment::new(context.account_id, provider_component)
+                .tools(
+                    provider_tools[provider_index]
+                        .iter()
+                        .filter(|tool| root_tool_name(tool) != "matrix-permission-issuer")
+                        .cloned()
+                        .collect(),
+                )
+                .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
+                .bound_to(caller.agent_type)
+                .build();
             if matches!(contract, ResourceContract::Permission) {
                 let issuer_definition = provider_tools[0]
                     .iter()
@@ -438,14 +431,13 @@ async fn run_resource_contract(
                     .expect("Rust provider exports matrix-permission-issuer")
                     .clone();
                 let rust_provider_component = &stored_providers[0];
-                let mut issuer_deployment = deployment_state(
+                let mut issuer_deployment = rust_provider_deployment(
                     context.account_id,
-                    rust_provider_component.id,
-                    rust_provider_component.revision,
-                    providers[0].package,
-                    caller.agent_type,
+                    rust_provider_component,
                     vec![issuer_definition],
-                );
+                )
+                .bound_to(caller.agent_type)
+                .build();
                 for (index, tool) in issuer_deployment.registered_tools.values_mut().enumerate() {
                     tool.type_id = golem_common::model::type_id::TypeId::try_from(
                         u32::try_from(deployment.registered_tools.len() + index + 1).unwrap(),
@@ -640,7 +632,6 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
             "rust",
             rust_provider,
             rust_caller,
-            "golem-it:tool-streaming-rust-provider",
             "ToolStreamingCaller",
             "rust_provider_terminal_rows",
         ),
@@ -648,7 +639,6 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
             "typescript",
             typescript_provider,
             typescript_caller,
-            "golem-it:tool-streaming-ts-provider",
             "TsToolStreamingCaller",
             "dualOutputDeclaredError",
         ),
@@ -656,7 +646,6 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
             "scala",
             scala,
             scala,
-            "scala:examples",
             "ScalaToolStreamingCaller",
             "dualOutputDeclaredError",
         ),
@@ -664,14 +653,13 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
             "moonbit",
             moonbit,
             moonbit,
-            "golem:moonbit-examples",
             "MoonBitToolStreamingCaller",
             "dual_output_declared_error",
         ),
     ];
 
     let mut failures = Vec::new();
-    for (language, provider, caller, package, agent_type, method) in pairs {
+    for (language, provider, caller, agent_type, method) in pairs {
         let provider_component = executor
             .component_dep(&context.default_environment_id, provider)
             .store()
@@ -693,14 +681,13 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
             context.default_environment_id,
             caller_component.id,
             caller_component.revision,
-            Some(deployment_state(
-                context.account_id,
-                provider_component.id,
-                provider_component.revision,
-                package,
-                agent_type,
-                tools,
-            )),
+            Some(
+                ToolDeployment::new(context.account_id, &provider_component)
+                    .tools(tools)
+                    .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
+                    .bound_to(agent_type)
+                    .build(),
+            ),
         );
 
         let agent_id = agent_key!(agent_type, format!("byte-acceptance-{language}"));
@@ -984,14 +971,11 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "RustResourceToolStreamingCaller",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &provider_component, metadata.tools)
+                .bound_to("RustResourceToolStreamingCaller")
+                .build(),
+        ),
     );
     let agent = agent_key!(
         "RustResourceToolStreamingCaller",
@@ -1394,14 +1378,15 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                 context.default_environment_id,
                 component.id,
                 component.revision,
-                Some(deployment_state(
-                    context.account_id,
-                    provider_component.id,
-                    provider_component.revision,
-                    "golem-it:tool-streaming-rust-provider",
-                    "WalletRecoveryProbe",
-                    metadata.tools,
-                )),
+                Some(
+                    rust_provider_deployment(
+                        context.account_id,
+                        &provider_component,
+                        metadata.tools,
+                    )
+                    .bound_to("WalletRecoveryProbe")
+                    .build(),
+                ),
             );
             let agent = agent_key!(
                 "WalletRecoveryProbe",

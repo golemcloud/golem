@@ -33,14 +33,10 @@ async fn exercise_python_sidecar(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider.id,
-        provider.revision,
-        "golem:python",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;

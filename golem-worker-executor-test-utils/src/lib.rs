@@ -33,6 +33,7 @@ pub mod oplog_shape;
 pub mod oplog_view;
 pub mod restart;
 pub mod standalone_tool;
+pub mod tool_deployment;
 
 pub use blob_storage_decorator::{
     BlobStorageDecorator, BlobStorageInner, DecoratedBlobStorage, WrappedBlobStorage,
@@ -45,14 +46,15 @@ pub use emulated_worker_service::{
     EmulatedWorkerService, RecordedCardTransfer, RemoteRpcEvidence, WorkerServiceOptions,
 };
 pub use invocation_error::{InvocationError, InvocationErrorExt};
-pub use local_http_server::LocalHttpServer;
 pub use invocation_session::{
     InvocationSession, InvocationSessionResultExt, InvocationStartBuilder, SessionOutcome,
     SessionTerminal, id_target, key_target, resume_attach, start_target_id, stream_reference,
 };
+pub use local_http_server::LocalHttpServer;
 pub use oplog_shape::OplogShape;
 pub use oplog_view::{CallRecord, InvocationRecord, OplogView};
 pub use restart::Teardown;
+pub use tool_deployment::ToolDeployment;
 
 use self::agent_deployments_service::{
     ConfiguredRetryPoliciesEnvironmentStateService, DisabledEnvironmentStateService,
