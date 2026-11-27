@@ -151,7 +151,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
     );
     let account = AccountId::new();
     let stage_id = Uuid::new_v4();
-    let stage = service
+    let (stage, mut cleanup) = service
         .create_staged(
             &target,
             AgentMode::Durable,
@@ -261,6 +261,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
             .await
             .unwrap()
     );
+    cleanup.disarm();
     let live = fingerprint;
     // Each read of the `Create` gives the instance id of the target, also for another request.
     assert_eq!(

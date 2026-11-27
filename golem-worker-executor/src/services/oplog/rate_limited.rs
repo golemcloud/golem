@@ -425,6 +425,10 @@ impl std::fmt::Debug for RateLimitedOplogService {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl OplogService for RateLimitedOplogService {
+    fn stage_cleanup_tracker(&self) -> Option<Arc<super::StageCleanupTracker>> {
+        self.inner.stage_cleanup_tracker()
+    }
+
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.inner.lock_lifecycle(agent_id).await
     }
@@ -451,7 +455,8 @@ impl OplogService for RateLimitedOplogService {
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
         initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, crate::services::oplog::CreateStagedError> {
+    ) -> Result<(Arc<dyn Oplog>, super::StageCleanupGuard), crate::services::oplog::CreateStagedError>
+    {
         self.inner
             .create_staged(
                 owned_agent_id,

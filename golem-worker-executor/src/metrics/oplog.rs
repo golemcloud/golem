@@ -17,6 +17,8 @@ use lazy_static::lazy_static;
 use prometheus::*;
 
 lazy_static! {
+    static ref STAGE_RESERVATION_CLEANUP_FAILED: Counter =
+        catalog::STAGE_RESERVATION_CLEANUP_FAILED_TOTAL.register();
     static ref OPLOG_SVC_CALL_TOTAL: CounterVec = catalog::OPLOG_SVC_CALL_TOTAL.register();
     static ref SCHEDULED_ARCHIVE_TIME: HistogramVec =
         catalog::OPLOG_SCHEDULED_ARCHIVE_SECONDS.register();
@@ -35,6 +37,10 @@ lazy_static! {
 
 pub fn record_oplog_call(api_name: &'static str) {
     OPLOG_SVC_CALL_TOTAL.with_label_values(&[api_name]).inc();
+}
+
+pub fn record_stage_reservation_cleanup_failed() {
+    STAGE_RESERVATION_CLEANUP_FAILED.inc();
 }
 
 pub fn record_oplog_rate_limited() {

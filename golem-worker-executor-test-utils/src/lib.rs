@@ -1792,6 +1792,26 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Pauses this agent's next lifecycle acquisition before taking its guard.
+    /// Dropping the release sender also unblocks it.
+    pub fn gate_next_oplog_lifecycle(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let gate = self.gate_lifecycle_after_next_successful_open(agent_id);
+        self.additional_test_deps
+            .oplog_lifecycle_after_open_gates
+            .lock()
+            .unwrap()
+            .get_mut(agent_id)
+            .expect("lifecycle gate was just installed")
+            .0 = true;
+        gate
+    }
+
     /// Holds one external-payload download in the oplog dependency wrapper. The receipt
     /// follows an actual Pending poll of the withheld delivery, not a native filesystem poll.
     pub fn gate_next_oplog_payload_read(

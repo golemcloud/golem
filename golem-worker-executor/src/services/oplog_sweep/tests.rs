@@ -536,10 +536,10 @@ impl IndexedStorage for FixedPages {
         svc_name: &'static str,
         api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
-        stage_id: uuid::Uuid,
+        token: i64,
     ) -> Result<Option<i64>, IndexedStorageError> {
         self.inner
-            .reserve_stage(svc_name, api_name, owned_agent_id, stage_id)
+            .reserve_stage(svc_name, api_name, owned_agent_id, token)
             .await
     }
 

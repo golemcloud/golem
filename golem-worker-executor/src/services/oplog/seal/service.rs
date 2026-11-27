@@ -125,11 +125,11 @@ impl SealService {
     pub(crate) async fn admit_stage(
         &self,
         id: &OwnedAgentId,
-        stage: Uuid,
+        token: i64,
     ) -> Result<i64, CreateStagedError> {
         let token = self
             .indexed
-            .reserve_stage("oplog_seal", "reserve_stage", id, stage)
+            .reserve_stage("oplog_seal", "reserve_stage", id, token)
             .await
             .map_err(|error| Self::indexed_error(id, error))?
             .ok_or(CreateStagedError::TargetPresent)?;
@@ -138,10 +138,6 @@ impl SealService {
             Ok(Some(_)) => CreateStagedError::TargetSealed,
             Err(error) => CreateStagedError::Retryable(error.to_string()),
         };
-        self.indexed
-            .remove_stage_reservation("oplog_seal", "refuse_stage", id, Some(token))
-            .await
-            .map_err(|error| CreateStagedError::Retryable(error.to_string()))?;
         Err(refusal)
     }
 

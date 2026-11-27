@@ -1139,6 +1139,10 @@ async fn create_worker_executor_impl<
 
     let promise_service = Arc::new(LazyPromiseService::new());
 
+    if let Some(tracker) = oplog_service.stage_cleanup_tracker() {
+        tracker.track_shutdown(&shutdown);
+    }
+
     let scheduler_service = SchedulerServiceDefault::new(
         scheduler_storage,
         shard_service.clone(),

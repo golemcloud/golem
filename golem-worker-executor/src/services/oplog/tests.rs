@@ -960,10 +960,10 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
-        stage_id: uuid::Uuid,
+        token: i64,
     ) -> Result<Option<i64>, IndexedStorageError> {
         self.inner
-            .reserve_stage(svc_name, api_name, owned_agent_id, stage_id)
+            .reserve_stage(svc_name, api_name, owned_agent_id, token)
             .await
     }
 
@@ -2438,7 +2438,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .await
             .is_err()
     );
-    let stage = service
+    let (stage, mut stage_cleanup) = service
         .create_staged(&owned, AgentMode::Durable, stage_id, metadata.clone())
         .await
         .unwrap();
@@ -2523,6 +2523,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .await
             .unwrap()
     );
+    stage_cleanup.disarm();
     assert!(
         !service
             .staged_exists(&owned, AgentMode::Durable, stage_id)
@@ -14418,7 +14419,7 @@ async fn a_staged_oplog_asserts_its_reservation_not_the_shard_epoch(_tracing: &T
     let forking_executor = fencing_oplog_service(&tempdir, "staged-fence").await;
     let owning_executor = fencing_oplog_service(&tempdir, "staged-fence").await;
 
-    let stage = forking_executor
+    let (stage, _stage_cleanup) = forking_executor
         .create_staged(
             &owned_agent_id,
             AgentMode::Durable,
@@ -16589,7 +16590,7 @@ fn test_invocation_id(value: String) -> InvocationId {
 #[test]
 #[test_r::timeout("30s")]
 async fn indeterminate_stage_commit_preserves_reservation_refusals() {
-    for reuse_stage_id in [false, true] {
+    {
         let indexed = Arc::new(ReadCountingIndexedStorage::new());
         let service = append_reconciliation_service(indexed.clone()).await;
         let metadata = make_agent_metadata(
@@ -16599,7 +16600,7 @@ async fn indeterminate_stage_commit_preserves_reservation_refusals() {
         );
         let id = metadata.owned_agent_id();
         let stage_id = Uuid::new_v4();
-        let old = service
+        let (old, _old_cleanup) = service
             .create_staged(&id, AgentMode::Durable, stage_id, metadata.clone())
             .await
             .unwrap();
@@ -16615,17 +16616,8 @@ async fn indeterminate_stage_commit_preserves_reservation_refusals() {
         old.add(OplogEntry::suspend()).await.unwrap();
         let committing = tokio::spawn(async move { old.commit(CommitLevel::Always).await });
         waiting.await.unwrap();
-        let replacement = service
-            .create_staged(
-                &id,
-                AgentMode::Durable,
-                if reuse_stage_id {
-                    stage_id
-                } else {
-                    Uuid::new_v4()
-                },
-                metadata,
-            )
+        let (replacement, _replacement_cleanup) = service
+            .create_staged(&id, AgentMode::Durable, Uuid::new_v4(), metadata)
             .await
             .unwrap();
         replacement.add(OplogEntry::exited()).await.unwrap();
@@ -16660,7 +16652,7 @@ async fn discarded_stage_report_returns_invalidation_instead_of_a_gap_panic() {
     );
     let id = metadata.owned_agent_id();
     let stage_id = Uuid::new_v4();
-    let stage = service
+    let (stage, _stage_cleanup) = service
         .create_staged(&id, AgentMode::Durable, stage_id, metadata)
         .await
         .unwrap();

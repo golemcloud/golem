@@ -434,10 +434,9 @@ impl IndexedStorage for SqliteIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
-        _stage_id: uuid::Uuid,
+        token: i64,
     ) -> Result<Option<i64>, IndexedStorageError> {
         let key = owned_agent_id.storage_key();
-        let token = super::fresh_stage_token();
         self.pool.with_tx_err::<Option<i64>, FencedTxError, _>(svc_name, api_name, |tx| {
             Box::pin(async move {
                 if Self::agent_has_data_in_tx(tx, &key).await? {
@@ -1779,12 +1778,7 @@ mod tests {
         let key = state.owned_agent_id.storage_key();
         let epoch = ShardEpoch(5);
         let stage_token = storage
-            .reserve_stage(
-                "test",
-                "reserve",
-                &state.owned_agent_id,
-                uuid::Uuid::from_u128(55),
-            )
+            .reserve_stage("test", "reserve", &state.owned_agent_id, 55)
             .await
             .unwrap()
             .unwrap();
@@ -2258,7 +2252,7 @@ mod tests {
                 );
                 let stage_id = uuid::Uuid::new_v4();
                 let token = store
-                    .reserve_stage("test", "reserve", &owned, stage_id)
+                    .reserve_stage("test", "reserve", &owned, index as i64)
                     .await
                     .unwrap()
                     .unwrap();
@@ -2878,7 +2872,7 @@ mod tests {
                 );
 
                 let token = storage
-                    .reserve_stage("test", "reserve", agent, uuid::Uuid::from_u128(42))
+                    .reserve_stage("test", "reserve", agent, 42)
                     .await
                     .unwrap()
                     .unwrap();

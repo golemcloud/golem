@@ -459,12 +459,11 @@ impl IndexedStorage for PostgresIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
-        _stage_id: Uuid,
+        token: i64,
     ) -> Result<Option<i64>, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let env = owned_agent_id.environment_id.0;
         let agent = owned_agent_id.agent_id.as_uuid();
-        let token = super::fresh_stage_token();
         self.pool.with_tx_err::<Option<i64>, FencedTxError, _>(svc_name, api_name, |tx| {
             async move {
                 Self::lock_agent(tx, env, agent).await?;

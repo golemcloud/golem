@@ -103,17 +103,27 @@ impl OplogService for OplogFixtureService {
         self.inner.stream_session_index()
     }
 
+    fn stage_cleanup_tracker(
+        &self,
+    ) -> Option<Arc<golem_worker_executor::services::oplog::StageCleanupTracker>> {
+        self.inner.stage_cleanup_tracker()
+    }
+
     async fn create_staged(
         &self,
         id: &OwnedAgentId,
         mode: AgentMode,
         stage: uuid::Uuid,
         metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, golem_worker_executor::services::oplog::CreateStagedError> {
-        Ok(self.handle(
-            id,
-            self.inner.create_staged(id, mode, stage, metadata).await?,
-        ))
+    ) -> Result<
+        (
+            Arc<dyn Oplog>,
+            golem_worker_executor::services::oplog::StageCleanupGuard,
+        ),
+        golem_worker_executor::services::oplog::CreateStagedError,
+    > {
+        let (writer, cleanup) = self.inner.create_staged(id, mode, stage, metadata).await?;
+        Ok((self.handle(id, writer), cleanup))
     }
 
     async fn staged_exists(

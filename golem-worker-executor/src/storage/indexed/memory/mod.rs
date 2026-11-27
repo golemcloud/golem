@@ -27,7 +27,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
-use uuid::Uuid;
 
 #[derive(Debug, Default)]
 struct MemoryState {
@@ -217,7 +216,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
-        _stage_id: Uuid,
+        token: i64,
     ) -> Result<Option<i64>, IndexedStorageError> {
         let mut state = self.state.lock().await;
         let key = owned_agent_id.storage_key();
@@ -228,7 +227,6 @@ impl IndexedStorage for InMemoryIndexedStorage {
         {
             return Ok(None);
         }
-        let token = super::fresh_stage_token();
         state.stage_reservations.insert(key, token);
         Ok(Some(token))
     }

@@ -194,6 +194,10 @@ impl Debug for ForwardingOplogService {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl OplogService for ForwardingOplogService {
+    fn stage_cleanup_tracker(&self) -> Option<Arc<crate::services::oplog::StageCleanupTracker>> {
+        self.inner.stage_cleanup_tracker()
+    }
+
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.inner.lock_lifecycle(agent_id).await
     }
@@ -220,7 +224,10 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
         initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, crate::services::oplog::CreateStagedError> {
+    ) -> Result<
+        (Arc<dyn Oplog>, crate::services::oplog::StageCleanupGuard),
+        crate::services::oplog::CreateStagedError,
+    > {
         self.inner
             .create_staged(
                 owned_agent_id,

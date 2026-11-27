@@ -67,6 +67,7 @@ impl PrimaryOplogService {
             oplogs: OpenOplogs::new("primary oplog"),
             stream_session_index: Arc::new(std::sync::OnceLock::new()),
             seal_service: Arc::new(std::sync::OnceLock::new()),
+            stage_cleanup: Arc::new(super::super::StageCleanupTracker::default()),
         }
     }
 
@@ -331,6 +332,10 @@ impl PrimaryOplogService {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl OplogService for PrimaryOplogService {
+    fn stage_cleanup_tracker(&self) -> Option<Arc<super::super::StageCleanupTracker>> {
+        Some(self.stage_cleanup.clone())
+    }
+
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.oplogs.lock_lifecycle(agent_id).await
     }
@@ -368,51 +373,82 @@ impl OplogService for PrimaryOplogService {
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
         initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, crate::services::oplog::CreateStagedError> {
+    ) -> Result<
+        (Arc<dyn Oplog>, super::super::StageCleanupGuard),
+        crate::services::oplog::CreateStagedError,
+    > {
         record_oplog_call("create_staged");
         if agent_mode != AgentMode::Durable {
             return Err(crate::services::oplog::CreateStagedError::Storage(
                 "Only durable agents can have staged oplogs".into(),
             ));
         }
-        let stage_token =
-            if let Some(service) = self.seal_service().filter(|service| service.enabled()) {
-                Some(service.admit_stage(owned_agent_id, stage_id).await?)
-            } else {
-                Some(
-                    self.indexed_storage
-                        .reserve_stage("oplog", "reserve_stage", owned_agent_id, stage_id)
-                        .await
-                        .map_err(|error| {
-                            crate::services::oplog::CreateStagedError::Storage(error.to_string())
-                        })?
-                        .ok_or(crate::services::oplog::CreateStagedError::TargetPresent)?,
-                )
-            };
-        let key = Self::staged_oplog_key(owned_agent_id, stage_id);
-        let namespace = Self::staged_namespace(owned_agent_id, agent_mode);
-        Ok(Arc::new(PrimaryOplog::new(
-            // The stage's reservation, not an epoch, admits its one writer. Publication moves
-            // only committed entries; release or discard invalidates subsequent writes.
-            None,
-            None,
-            stage_token,
+        let mut cleanup = super::super::StageCleanupGuard::new(
             self.indexed_storage.clone(),
-            self.blob_storage.clone(),
-            self.replicas,
-            self.max_operations_before_commit,
-            self.max_payload_size,
-            self.max_retained_auto_commit_batches,
-            self.retry_config.clone(),
-            namespace,
-            key,
-            OplogIndex::NONE,
             owned_agent_id.clone(),
             agent_mode,
-            initial_worker_metadata.fingerprint,
-            None,
-            Box::new(|| {}),
-        )))
+            stage_id,
+            self.stage_cleanup.clone(),
+        )?;
+        let token = cleanup.token();
+        let admission =
+            if let Some(service) = self.seal_service().filter(|service| service.enabled()) {
+                service.admit_stage(owned_agent_id, token).await
+            } else {
+                self.indexed_storage
+                    .reserve_stage("oplog", "reserve_stage", owned_agent_id, token)
+                    .await
+                    .map_err(|error| {
+                        crate::services::oplog::CreateStagedError::Storage(error.to_string())
+                    })
+                    .and_then(|token| {
+                        token.ok_or(crate::services::oplog::CreateStagedError::TargetPresent)
+                    })
+            };
+        if let Err(error) = admission {
+            if matches!(
+                error,
+                crate::services::oplog::CreateStagedError::TargetPresent
+            ) {
+                // The transaction refused before reserving anything. In particular, a refused
+                // retry must not discard the stage whose data made the target present.
+                cleanup.disarm();
+                return Err(error);
+            }
+            cleanup
+                .discard()
+                .await
+                .map_err(crate::services::oplog::CreateStagedError::Retryable)?;
+            return Err(error);
+        }
+        let stage_token = Some(token);
+        let key = Self::staged_oplog_key(owned_agent_id, stage_id);
+        let namespace = Self::staged_namespace(owned_agent_id, agent_mode);
+        Ok((
+            Arc::new(PrimaryOplog::new(
+                // The stage's reservation, not an epoch, admits its one writer. Publication moves
+                // only committed entries; release or discard invalidates subsequent writes.
+                None,
+                None,
+                stage_token,
+                self.indexed_storage.clone(),
+                self.blob_storage.clone(),
+                self.replicas,
+                self.max_operations_before_commit,
+                self.max_payload_size,
+                self.max_retained_auto_commit_batches,
+                self.retry_config.clone(),
+                namespace,
+                key,
+                OplogIndex::NONE,
+                owned_agent_id.clone(),
+                agent_mode,
+                initial_worker_metadata.fingerprint,
+                None,
+                Box::new(|| {}),
+            )),
+            cleanup,
+        ))
     }
 
     async fn staged_exists(

@@ -272,7 +272,7 @@ async fn execute<Ctx: WorkerCtx>(
         return Ok(success);
     }
     let mut stage_id = Uuid::new_v4();
-    let mut stage_token = None;
+    let mut stage_cleanup = None;
     let result = async {
         // Stage before charging limits. A rejected byte budget never consumes admission.
         let staged = stage(
@@ -285,7 +285,7 @@ async fn execute<Ctx: WorkerCtx>(
             &candidate,
             request.max_copied_bytes,
             &fork_request,
-            &mut stage_token,
+            &mut stage_cleanup,
         )
         .await?;
         let (mut oplog, copied_bytes, mut target_fingerprint, mut baseline) = match staged {
@@ -338,16 +338,14 @@ async fn execute<Ctx: WorkerCtx>(
         };
         if winner != candidate {
             drop(oplog);
-            super::discard_stage(
-                service.oplog_service.as_ref(),
-                &target,
-                stage_id,
-                stage_token,
-            )
-            .await
-            .map_err(WorkerExecutorError::runtime)?;
+            stage_cleanup
+                .as_mut()
+                .expect("stage was admitted")
+                .discard()
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
             stage_id = Uuid::new_v4();
-            stage_token = None;
+            stage_cleanup = None;
             candidate = winner;
             let staged = stage(
                 service,
@@ -359,7 +357,7 @@ async fn execute<Ctx: WorkerCtx>(
                 &candidate,
                 request.max_copied_bytes,
                 &fork_request,
-                &mut stage_token,
+                &mut stage_cleanup,
             )
             .await?;
             (oplog, _, target_fingerprint, baseline) = match staged {
@@ -441,6 +439,7 @@ async fn execute<Ctx: WorkerCtx>(
         let candidate = &candidate;
         let target = &target;
         let source_id = &source_id;
+        let cleanup = stage_cleanup.as_mut().expect("stage was admitted");
         let published = copied
             .publish(
                 |publication| {
@@ -455,6 +454,7 @@ async fn execute<Ctx: WorkerCtx>(
                             )
                             .await;
                         if let Ok(true) = outcome {
+                            cleanup.disarm();
                             return PublishFound::Published(Ok(response(
                                 &candidate.export,
                                 candidate.cut,
@@ -505,15 +505,13 @@ async fn execute<Ctx: WorkerCtx>(
         &source_id,
     )
     .await;
-    let cleanup = super::discard_stage(
-        service.oplog_service.as_ref(),
-        &target,
-        stage_id,
-        stage_token,
-    )
-    .await;
+    let cleanup = match stage_cleanup.as_mut() {
+        Some(cleanup) => cleanup.discard().await,
+        None => Ok(()),
+    };
     let success = result?;
     cleanup.map_err(WorkerExecutorError::runtime)?;
+    drop(stage_cleanup);
     resume(service, &target, &auth).await?;
     Ok(success)
 }
@@ -692,7 +690,7 @@ async fn stage<Ctx: WorkerCtx>(
     candidate: &Candidate,
     max_bytes: u64,
     fork_request: &CreateRequest,
-    stage_token: &mut Option<i64>,
+    stage_cleanup: &mut Option<super::StageCleanupGuard>,
 ) -> Result<StageAdmission<CopiedSourceOplog>, Error> {
     service
         .copy_source_oplog(
@@ -707,7 +705,7 @@ async fn stage<Ctx: WorkerCtx>(
             Some(max_bytes),
             Some(candidate),
             fork_request,
-            stage_token,
+            stage_cleanup,
         )
         .await
         .map_err(|error| match error {
@@ -1285,7 +1283,7 @@ mod tests {
                     initial: None,
                 };
                 let answer = if let Some(write) = write {
-                    let (stage_id, stage) = race.hidden_stage().await;
+                    let (stage_id, stage, _cleanup) = race.hidden_stage().await;
                     stage.add(OplogEntry::suspend()).await.unwrap();
                     race.discard(stage_id, stage.stage_token()).await;
                     race.publish(hash, Some(export), Some(initialized)).await;
@@ -1364,7 +1362,8 @@ mod tests {
     async fn export_stage_admission_without_a_visible_target_remains_retryable() {
         use super::super::tests::StageRace;
         let race = StageRace::new().await;
-        let StageAdmission::Created(hidden) = race.admit_after(async {}).await.unwrap() else {
+        let StageAdmission::Created((hidden, _cleanup)) = race.admit_after(async {}).await.unwrap()
+        else {
             panic!("the first stage must be admitted");
         };
         hidden.add(OplogEntry::suspend()).await.unwrap();
@@ -1391,7 +1390,7 @@ mod tests {
     async fn export_stage_invalidation_without_a_visible_target_remains_retryable() {
         use super::super::tests::StageRace;
         let race = StageRace::new().await;
-        let (stage_id, stage) = race.hidden_stage().await;
+        let (stage_id, stage, _cleanup) = race.hidden_stage().await;
         stage.add(OplogEntry::suspend()).await.unwrap();
         race.discard(stage_id, stage.stage_token()).await;
         let error = stage.commit(CommitLevel::Always).await.unwrap_err();

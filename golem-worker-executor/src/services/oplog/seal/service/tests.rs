@@ -1780,7 +1780,7 @@ async fn staging_refuses_sealed_targets_and_accepts_absent_targets() {
             let mut metadata = f.metadata.clone();
             metadata.agent_id = AgentId::from_parts(7, 2126);
             let target = metadata.owned_agent_id();
-            let stage = service
+            let (stage, mut cleanup) = service
                 .create_staged(&target, AgentMode::Durable, stage_id, metadata.clone())
                 .await
                 .unwrap();
@@ -1814,10 +1814,8 @@ async fn staging_refuses_sealed_targets_and_accepts_absent_targets() {
             let actual = service
                 .read_exact(&f.id(), AgentMode::Durable, OplogIndex::INITIAL, 9)
                 .await;
-            service
-                .discard_staged(&target, AgentMode::Durable, stage_id, stage.stage_token())
-                .await
-                .unwrap();
+            drop(stage);
+            cleanup.discard().await.unwrap();
             assert_eq!(
                 service
                     .read_exact(&f.id(), AgentMode::Durable, OplogIndex::INITIAL, 9)
@@ -1850,7 +1848,7 @@ async fn plain_initial_create_invalidates_an_admitted_stages_first_write_before_
         let target = f.id();
         let service = Arc::new(f.oplog_service().await);
         let stage_id = Uuid::new_v4();
-        let stage = service
+        let (stage, mut cleanup) = service
             .create_staged(&target, AgentMode::Durable, stage_id, f.metadata.clone())
             .await
             .unwrap();
@@ -1972,6 +1970,7 @@ async fn plain_initial_create_invalidates_an_admitted_stages_first_write_before_
                 .unwrap(),
             f.original
         );
+        cleanup.discard().await.unwrap();
     }
 }
 
@@ -2026,19 +2025,34 @@ async fn staging_reservation_keeps_sealed_history_readable_during_admission() {
 
 #[test]
 #[test_r::timeout("30s")]
-async fn failed_admission_removes_its_token_and_cancellation_leaves_no_shard_epoch() {
+async fn cancelled_admission_list_removes_reservations_on_sealed_and_absent_targets() {
+    assert_admission_list_cleanup(true).await;
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn failed_admission_list_removes_reservations_on_sealed_and_absent_targets() {
+    assert_admission_list_cleanup(false).await;
+}
+
+async fn assert_admission_list_cleanup(cancel: bool) {
     let root = tempfile::TempDir::new().unwrap();
     for indexed in storages(&root).await {
-        for cancel in [false, true] {
-            let f = Fixture::new(indexed.clone()).await;
-            let seal = f.service();
-            let pending = seal
-                .prepare(f.metadata.clone(), ShardEpoch(6))
-                .await
-                .unwrap()
-                .unwrap();
-            assert!(seal.release(&pending).await.unwrap());
+        for sealed in [false, true] {
+            let mut f = Fixture::new(indexed.clone()).await;
+            if sealed {
+                let seal = f.service();
+                let pending = seal
+                    .prepare(f.metadata.clone(), ShardEpoch(6))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(seal.release(&pending).await.unwrap());
+            } else {
+                f.metadata.agent_id = AgentId::from_parts(7, 2280);
+            }
             let service = Arc::new(f.oplog_service().await);
+            let stage_id = Uuid::new_v4();
             if cancel {
                 let (reserved, resume) = f.blobs.pause_seal_list_after(0);
                 let admission = {
@@ -2049,61 +2063,237 @@ async fn failed_admission_removes_its_token_and_cancellation_leaves_no_shard_epo
                             .create_staged(
                                 &metadata.owned_agent_id(),
                                 AgentMode::Durable,
-                                Uuid::new_v4(),
+                                stage_id,
                                 metadata.clone(),
                             )
                             .await
                     })
                 };
                 reserved.await.unwrap();
+                if sealed {
+                    assert_eq!(
+                        service
+                            .read_exact(&f.id(), AgentMode::Durable, OplogIndex::INITIAL, 9)
+                            .await
+                            .unwrap(),
+                        f.original
+                    );
+                }
                 admission.abort();
-                assert!(admission.await.unwrap_err().is_cancelled());
+                assert!(matches!(admission.await, Err(error) if error.is_cancelled()));
                 assert!(resume.is_closed());
             } else {
                 f.blobs.fail_next_seal_list();
                 assert!(matches!(
                     service
-                        .create_staged(
-                            &f.id(),
-                            AgentMode::Durable,
-                            Uuid::new_v4(),
-                            f.metadata.clone()
-                        )
+                        .create_staged(&f.id(), AgentMode::Durable, stage_id, f.metadata.clone())
                         .await,
                     Err(CreateStagedError::Retryable(_))
                 ));
             }
             assert!(
-                !f.indexed
-                    .observe_agent("test", "admission_absent", &f.id())
+                service
+                    .stage_cleanup_tracker()
+                    .expect("production stage cleanup tracker")
+                    .drain(Duration::from_secs(5))
                     .await
-                    .unwrap()
-                    .has_data
             );
-            f.assert_epoch(&pending.state, None).await;
-            if cancel {
-                assert!(
-                    f.indexed
-                        .remove_stage_reservation("test", "cancelled_reservation", &f.id(), None)
+            assert_no_stage_rows(&f, service.as_ref(), stage_id).await;
+            if sealed {
+                assert_eq!(
+                    service
+                        .read_exact(&f.id(), AgentMode::Durable, OplogIndex::INITIAL, 9)
                         .await
-                        .unwrap()
-                );
-            } else {
-                assert!(
-                    !f.indexed
-                        .remove_stage_reservation("test", "cleanup_complete", &f.id(), None)
-                        .await
-                        .unwrap()
+                        .unwrap(),
+                    f.original
                 );
             }
-            assert_eq!(
-                service
-                    .read_exact(&f.id(), AgentMode::Durable, OplogIndex::INITIAL, 9)
-                    .await
-                    .unwrap(),
-                f.original
-            );
         }
+    }
+}
+
+async fn assert_no_stage_rows(f: &Fixture, service: &dyn OplogService, stage_id: Uuid) {
+    assert!(
+        !service
+            .staged_exists(&f.id(), AgentMode::Durable, stage_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !f.indexed
+            .observe_agent("test", "stage_cleanup_absent", &f.id())
+            .await
+            .unwrap()
+            .has_data
+    );
+    let state = f
+        .service()
+        .indexed_state(
+            &f.id(),
+            AgentMode::Durable,
+            &BTreeMap::from([(0, BTreeMap::new()), (1, BTreeMap::new())]),
+        )
+        .unwrap();
+    f.assert_epoch(&state, None).await;
+    assert!(
+        !f.indexed
+            .remove_stage_reservation("test", "stage_cleanup_complete", &f.id(), None)
+            .await
+            .unwrap()
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn dropping_staged_writer_keeps_stage_usable_for_publication() {
+    use crate::services::oplog::{CommitLevel, StagePublication};
+
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        let mut f = Fixture::new(indexed).await;
+        f.metadata.agent_id = AgentId::from_parts(7, 2281);
+        let target = f.id();
+        let service = f.oplog_service().await;
+        let stage_id = Uuid::new_v4();
+        let (stage, mut cleanup) = service
+            .create_staged(&target, AgentMode::Durable, stage_id, f.metadata.clone())
+            .await
+            .unwrap();
+        let initial = Fixture::initial_entry(&f.metadata);
+        stage.add(initial.clone()).await.unwrap();
+        stage.commit(CommitLevel::Always).await.unwrap();
+        stage.stop_and_wait().await.unwrap();
+        let token = stage.stage_token();
+        assert_eq!(token, Some((stage_id.as_u128() & i64::MAX as u128) as i64));
+        drop(stage);
+        // Give any erroneous writer-drop cleanup a chance to run before publication.
+        tokio::task::yield_now().await;
+        assert!(
+            service
+                .staged_exists(&target, AgentMode::Durable, stage_id)
+                .await
+                .unwrap()
+        );
+        {
+            let _lifecycle = service.lock_lifecycle(&target.agent_id).await;
+            assert!(
+                service
+                    .publish_staged(
+                        &target,
+                        AgentMode::Durable,
+                        StagePublication::for_tests(stage_id, token),
+                        OplogIndex::INITIAL,
+                    )
+                    .await
+                    .unwrap()
+            );
+            cleanup.disarm();
+        }
+        drop(cleanup);
+        assert!(
+            service
+                .stage_cleanup_tracker()
+                .unwrap()
+                .drain(Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(
+            service
+                .read_exact(&target, AgentMode::Durable, OplogIndex::INITIAL, 1)
+                .await
+                .unwrap(),
+            BTreeMap::from([(OplogIndex::INITIAL, initial)])
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn stage_cleanup_drain_waits_for_active_guard_drop_and_cleanup() {
+    use crate::services::oplog::CommitLevel;
+
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        let mut f = Fixture::new(indexed).await;
+        f.metadata.agent_id = AgentId::from_parts(7, 2282);
+        let service = f.oplog_service().await;
+        let stage_id = Uuid::new_v4();
+        let (stage, cleanup) = service
+            .create_staged(&f.id(), AgentMode::Durable, stage_id, f.metadata.clone())
+            .await
+            .unwrap();
+        stage.add(OplogEntry::suspend()).await.unwrap();
+        stage.commit(CommitLevel::Always).await.unwrap();
+        stage.stop_and_wait().await.unwrap();
+        drop(stage);
+
+        let tracker = service.stage_cleanup_tracker().unwrap();
+        let draining = tracker.drain(Duration::from_secs(5));
+        tokio::pin!(draining);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut draining)
+                .await
+                .is_err(),
+            "shutdown must wait for the active guard even after its writer is dropped"
+        );
+        assert!(
+            service
+                .staged_exists(&f.id(), AgentMode::Durable, stage_id)
+                .await
+                .unwrap()
+        );
+        drop(cleanup);
+        assert!(draining.await);
+        assert_no_stage_rows(&f, &service, stage_id).await;
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn stage_cleanup_drain_cutoff_records_failure_while_stage_remains_active() {
+    use crate::services::oplog::CommitLevel;
+
+    fn cleanup_failures() -> f64 {
+        prometheus::gather()
+            .into_iter()
+            .filter(|family| family.name() == "golem_stage_reservation_cleanup_failed_total")
+            .flat_map(|family| family.get_metric().to_vec())
+            .map(|metric| metric.get_counter().value())
+            .sum()
+    }
+
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        let mut f = Fixture::new(indexed).await;
+        f.metadata.agent_id = AgentId::from_parts(7, 2283);
+        let service = f.oplog_service().await;
+        let stage_id = Uuid::new_v4();
+        let (stage, mut cleanup) = service
+            .create_staged(&f.id(), AgentMode::Durable, stage_id, f.metadata.clone())
+            .await
+            .unwrap();
+        stage.add(OplogEntry::suspend()).await.unwrap();
+        stage.commit(CommitLevel::Always).await.unwrap();
+        let tracker = service.stage_cleanup_tracker().unwrap();
+        let before = cleanup_failures();
+        assert!(!tracker.drain(Duration::ZERO).await);
+        // Other tests may report independent failures to this process-wide counter.
+        assert!(cleanup_failures() >= before + 1.0);
+        assert!(
+            service
+                .staged_exists(&f.id(), AgentMode::Durable, stage_id)
+                .await
+                .unwrap()
+        );
+        // The cutoff reports unfinished ownership; it must not invalidate a live writer.
+        stage.add(OplogEntry::exited()).await.unwrap();
+        stage.commit(CommitLevel::Always).await.unwrap();
+        stage.stop_and_wait().await.unwrap();
+        drop(stage);
+        cleanup.discard().await.unwrap();
+        drop(cleanup);
+        assert!(tracker.drain(Duration::from_secs(5)).await);
+        assert_no_stage_rows(&f, &service, stage_id).await;
     }
 }
 
@@ -2121,26 +2311,27 @@ async fn discard_superseded_empty_stage_preserves_current_stage_writer() {
         metadata.agent_id = AgentId::from_parts(7, 2199);
         let target = metadata.owned_agent_id();
         let old_id = Uuid::new_v4();
-        let old = service
+        let (old, mut old_cleanup) = service
             .create_staged(&target, AgentMode::Durable, old_id, metadata.clone())
             .await
             .unwrap();
-        let current = service
+        let (current, mut current_cleanup) = service
             .create_staged(&target, AgentMode::Durable, Uuid::new_v4(), metadata)
             .await
             .unwrap();
         // An empty reservation may be superseded. Cleanup of its old attempt must
         // not withdraw the independent, successfully admitted replacement.
-        service
-            .discard_staged(&target, AgentMode::Durable, old_id, old.stage_token())
-            .await
-            .unwrap();
+        old.stop_and_wait().await.unwrap();
+        drop(old);
+        old_cleanup.discard().await.unwrap();
         current.add(OplogEntry::suspend()).await.unwrap();
         let result = current.commit(CommitLevel::Always).await;
         if let Err(error) = result {
             failures.push(format!("backend={backend}: {error:?}"));
         }
-        drop(old);
+        current.stop_and_wait().await.unwrap();
+        drop(current);
+        current_cleanup.discard().await.unwrap();
     }
     assert!(
         failures.is_empty(),
@@ -2280,7 +2471,7 @@ async fn failed_stage_admission_does_not_fence_a_competing_create() {
                 creating.await.unwrap()
             } else {
                 tokio::select! {
-                    result = &mut admission => panic!("admission did not pause: {result:?}"),
+                    _ = &mut admission => panic!("admission did not pause"),
                     _ = probed => {}
                 }
                 // Create must finish before the admission LIST is allowed to resume.

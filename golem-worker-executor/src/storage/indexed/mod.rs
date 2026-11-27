@@ -37,10 +37,6 @@ pub const MAX_INDEXED_ID: u64 = i64::MAX as u64;
 
 pub(crate) const STAGE_RESERVATION_NAMESPACE: &str = "stage-reservation";
 
-fn fresh_stage_token() -> i64 {
-    rand::random::<i64>() & i64::MAX
-}
-
 /// The epoch change made by a successful claim, before optional absent-insert cleanup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyEpochChange {
@@ -500,20 +496,22 @@ pub trait IndexedStorage: Debug + Sync {
 
     /// Replaces the agent's stage token if no data exists, without claiming a shard epoch.
     /// Tokens are not data presence or shard epochs. Refused admission returns `None`.
-    /// Backends without release support return `Some(0)` without writing a reservation.
+    /// The caller supplies a non-negative token before starting the transaction so cancellation
+    /// can clean up even if the commit reply is lost. Backends without release support return
+    /// the token without writing a reservation.
     async fn reserve_stage(
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
         _owned_agent_id: &OwnedAgentId,
-        _stage_id: Uuid,
+        token: i64,
     ) -> Result<Option<i64>, IndexedStorageError> {
         if self.supports_release() {
             Err(IndexedStorageError::Other(
                 "stage reservations are unsupported".into(),
             ))
         } else {
-            Ok(Some(0))
+            Ok(Some(token))
         }
     }
 
@@ -920,11 +918,11 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
     pub async fn reserve_stage(
         &self,
         owned_agent_id: &OwnedAgentId,
-        stage_id: Uuid,
+        token: i64,
     ) -> Result<Option<i64>, IndexedStorageError> {
         self.record("reserve_stage");
         self.storage
-            .reserve_stage(self.svc_name, self.api_name, owned_agent_id, stage_id)
+            .reserve_stage(self.svc_name, self.api_name, owned_agent_id, token)
             .await
     }
 

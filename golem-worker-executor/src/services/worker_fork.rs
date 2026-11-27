@@ -38,7 +38,7 @@ use crate::services::agent_filesystem_snapshots::{
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{
-    CommitLevel, CreateStagedError, Oplog, OplogError, OplogOps, UnreadableOplog,
+    CommitLevel, CreateStagedError, Oplog, OplogError, OplogOps, StageCleanupGuard, UnreadableOplog,
 };
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
@@ -169,6 +169,7 @@ fn refused_stage_answer(
     }
 }
 
+#[cfg(test)]
 async fn discard_stage(
     service: &dyn oplog::OplogService,
     target: &OwnedAgentId,
@@ -712,7 +713,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         max_copied_bytes: Option<u64>,
         export: Option<&export::Candidate>,
         fork_request: &CreateRequest,
-        stage_token: &mut Option<i64>,
+        stage_cleanup: &mut Option<StageCleanupGuard>,
     ) -> Result<StageAdmission<CopiedSourceOplog>, StageError> {
         record_worker_call("fork");
 
@@ -781,7 +782,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             standalone_tool: None,
         };
 
-        let new_oplog = match stage_admission(
+        let (new_oplog, cleanup) = match stage_admission(
             &owned_target_agent_id,
             self.oplog_service
                 .create_staged(
@@ -795,7 +796,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             StageAdmission::Created(oplog) => oplog,
             StageAdmission::Refused => return Ok(StageAdmission::Refused),
         };
-        *stage_token = new_oplog.stage_token();
+        *stage_cleanup = Some(cleanup);
 
         let mut source_lifecycle = self
             .oplog_service
@@ -1281,7 +1282,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let reconcile =
             || publication::existing_fork(self.oplog_service.as_ref(), target, cut, hash);
         let stage_id = Uuid::new_v4();
-        let mut stage_token = None;
+        let mut stage_cleanup = None;
         let result: Result<(), StageError> = async {
             let staged = self
                 .copy_source_oplog(
@@ -1296,7 +1297,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     None,
                     None,
                     fork_request,
-                    &mut stage_token,
+                    &mut stage_cleanup,
                 )
                 .await?;
             let (oplog, _, _, baseline) = match staged {
@@ -1330,6 +1331,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 return answer.map_err(StageError::from);
             }
             let target_lifecycle = self.oplog_service.lock_lifecycle(&target.agent_id).await;
+            let cleanup = stage_cleanup.as_mut().expect("stage was admitted");
             let published = copied
                 .publish(
                     |publication| {
@@ -1343,6 +1345,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                                     last,
                                 )
                                 .await;
+                            if matches!(outcome, Ok(true)) {
+                                cleanup.disarm();
+                            }
                             match outcome {
                                 Ok(true) => PublishFound::Published(Ok(())),
                                 outcome => {
@@ -1364,8 +1369,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             reconcile_invalidated_stage(result, self.oplog_service.as_ref(), target, cut, hash)
                 .await;
         // Each attempt has its own writer. Cleanup must never remove the winner's payloads.
-        let cleanup =
-            discard_stage(self.oplog_service.as_ref(), target, stage_id, stage_token).await;
+        let cleanup = match stage_cleanup.as_mut() {
+            Some(cleanup) => cleanup.discard().await,
+            None => Ok(()),
+        };
         if let Err(error) = cleanup {
             tracing::warn!(
                 agent_id = %target,
@@ -1695,6 +1702,7 @@ mod tests {
         pub(super) service: crate::services::oplog::PrimaryOplogService,
         pub(super) target: OwnedAgentId,
         metadata: AgentMetadata,
+        indexed: Arc<crate::storage::indexed::memory::InMemoryIndexedStorage>,
         _scheduler: Arc<UnusedScheduler>,
     }
 
@@ -1765,7 +1773,7 @@ mod tests {
             let scheduler_ref: Arc<dyn crate::services::scheduler::SchedulerService> =
                 scheduler.clone();
             service.set_seal_service(Arc::new(SealService::new(
-                indexed,
+                indexed.clone(),
                 blobs,
                 Arc::new(crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new()),
                 shard,
@@ -1807,6 +1815,7 @@ mod tests {
                 service,
                 target,
                 metadata,
+                indexed,
                 _scheduler: scheduler,
             }
         }
@@ -1814,7 +1823,8 @@ mod tests {
         pub(super) async fn admit_after(
             &self,
             before_admission: impl std::future::Future<Output = ()>,
-        ) -> Result<StageAdmission<Arc<dyn Oplog>>, WorkerExecutorError> {
+        ) -> Result<StageAdmission<(Arc<dyn Oplog>, StageCleanupGuard)>, WorkerExecutorError>
+        {
             use crate::services::oplog::OplogService;
             before_admission.await;
             let stage_id = Uuid::new_v4();
@@ -1828,17 +1838,17 @@ mod tests {
             )
         }
 
-        pub(super) async fn hidden_stage(&self) -> (Uuid, Arc<dyn Oplog>) {
+        pub(super) async fn hidden_stage(&self) -> (Uuid, Arc<dyn Oplog>, StageCleanupGuard) {
             use crate::services::oplog::OplogService;
             let stage_id = Uuid::new_v4();
             let mut metadata = self.metadata.clone();
             metadata.fingerprint = AgentFingerprint(stage_id);
-            let stage = self
+            let (stage, cleanup) = self
                 .service
                 .create_staged(&self.target, AgentMode::Durable, stage_id, metadata)
                 .await
                 .unwrap();
-            (stage_id, stage)
+            (stage_id, stage, cleanup)
         }
 
         pub(super) async fn discard(&self, stage_id: Uuid, stage_token: Option<i64>) {
@@ -1875,7 +1885,7 @@ mod tests {
             use golem_common::model::durable_stream::StreamForkCutRecord;
             let metadata = &self.metadata;
             let stage_id = metadata.fingerprint.0;
-            let stage = self
+            let (stage, mut cleanup) = self
                 .service
                 .create_staged(&self.target, AgentMode::Durable, stage_id, metadata.clone())
                 .await
@@ -1949,6 +1959,7 @@ mod tests {
                     .await
                     .unwrap()
             );
+            cleanup.disarm();
         }
     }
 
@@ -1991,7 +2002,8 @@ mod tests {
     #[test]
     async fn fork_stage_refusal_without_a_visible_target_remains_retryable() {
         let race = StageRace::new().await;
-        let StageAdmission::Created(hidden) = race.admit_after(async {}).await.unwrap() else {
+        let StageAdmission::Created((hidden, _cleanup)) = race.admit_after(async {}).await.unwrap()
+        else {
             panic!("the first stage must be admitted");
         };
         hidden.add(OplogEntry::suspend()).await.unwrap();
@@ -2064,44 +2076,143 @@ mod tests {
     }
 
     #[test]
-    async fn stale_empty_stage_cleanup_keeps_replacement_token_including_reused_stage_id() {
-        use crate::services::oplog::OplogService;
-
-        for same_stage_id in [false, true] {
-            let race = StageRace::new().await;
-            let (first_id, first) = race.hidden_stage().await;
-            let first_token = first.stage_token();
-            let second_id = if same_stage_id {
-                first_id
-            } else {
-                Uuid::new_v4()
-            };
-            let mut metadata = race.metadata.clone();
-            metadata.fingerprint = AgentFingerprint(second_id);
-            let second = race
-                .service
-                .create_staged(&race.target, AgentMode::Durable, second_id, metadata)
-                .await
-                .unwrap();
-            assert!(first_token.is_some());
-            assert_ne!(first_token, second.stage_token());
-            race.discard(first_id, first_token).await;
-            second.add(OplogEntry::suspend()).await.unwrap();
-            second.commit(CommitLevel::Always).await.unwrap();
-            race.discard(first_id, first_token).await;
-            second.add(OplogEntry::suspend()).await.unwrap();
-            second.commit(CommitLevel::Always).await.unwrap();
-            let stale_write: Result<(), OplogError> = async {
-                first.add(OplogEntry::suspend()).await?;
-                first.commit(CommitLevel::Always).await?;
-                Ok(())
-            }
-            .await;
-            assert!(matches!(
-                stale_write,
-                Err(OplogError::StageInvalidated { .. })
-            ));
+    async fn stale_empty_stage_cleanup_keeps_replacement_token() {
+        let race = StageRace::new().await;
+        let (first_id, first, mut first_cleanup) = race.hidden_stage().await;
+        let first_token = first.stage_token();
+        let (second_id, second, mut second_cleanup) = race.hidden_stage().await;
+        assert_ne!(first_id, second_id);
+        assert!(first_token.is_some());
+        assert_ne!(first_token, second.stage_token());
+        first_cleanup.discard().await.unwrap();
+        second.add(OplogEntry::suspend()).await.unwrap();
+        second.commit(CommitLevel::Always).await.unwrap();
+        race.discard(first_id, first_token).await;
+        second.add(OplogEntry::suspend()).await.unwrap();
+        second.commit(CommitLevel::Always).await.unwrap();
+        let stale_write: Result<(), OplogError> = async {
+            first.add(OplogEntry::suspend()).await?;
+            first.commit(CommitLevel::Always).await?;
+            Ok(())
         }
+        .await;
+        assert!(matches!(
+            stale_write,
+            Err(OplogError::StageInvalidated { .. })
+        ));
+        second_cleanup.discard().await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cancellation_waiting_for_target_guard_cleans_stage_after_writer_drop() {
+        use crate::services::oplog::OplogService;
+        use std::time::Duration;
+
+        let race = StageRace::new().await;
+        let target_guard = race.service.lock_lifecycle(&race.target.agent_id).await;
+        let (stage_id, stage, cleanup) = race.hidden_stage().await;
+        stage.add(OplogEntry::suspend()).await.unwrap();
+        stage.commit(CommitLevel::Always).await.unwrap();
+        let closed = stage.closed();
+        drop(stage);
+        closed.await.unwrap();
+        assert!(
+            race.service
+                .staged_exists(&race.target, AgentMode::Durable, stage_id)
+                .await
+                .unwrap()
+        );
+
+        let service = &race.service;
+        let target = &race.target;
+        let mut waiting = Box::pin(async move {
+            let mut cleanup = cleanup;
+            let _target_guard = service.lock_lifecycle(&target.agent_id).await;
+            cleanup.discard().await.unwrap();
+        });
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        assert!(
+            race.service
+                .staged_exists(&race.target, AgentMode::Durable, stage_id)
+                .await
+                .unwrap()
+        );
+        drop(waiting);
+        assert!(
+            race.service
+                .stage_cleanup_tracker()
+                .unwrap()
+                .drain(Duration::from_secs(5))
+                .await
+        );
+        assert!(
+            !race
+                .service
+                .staged_exists(&race.target, AgentMode::Durable, stage_id)
+                .await
+                .unwrap()
+        );
+        assert!(matches!(
+            race.service
+                .create_staged(
+                    &race.target,
+                    AgentMode::Durable,
+                    Uuid::new_v4(),
+                    race.metadata.clone()
+                )
+                .await,
+            Err(crate::services::oplog::CreateStagedError::Retryable(_))
+        ));
+        drop(target_guard);
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn superseded_stage_guard_drop_keeps_replacement_writable_and_publishable() {
+        use crate::services::oplog::{OplogService, PrimaryOplogService};
+        use std::time::Duration;
+
+        let race = StageRace::new().await;
+        // Independent services share reservations, but track their own cleanup tasks.
+        let old_service = PrimaryOplogService::new(
+            race.indexed.clone(),
+            Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new()),
+            1,
+            1,
+            1,
+            32,
+            golem_common::model::RetryConfig::default(),
+        )
+        .await;
+        let old_id = Uuid::new_v4();
+        let mut metadata = race.metadata.clone();
+        metadata.fingerprint = AgentFingerprint(old_id);
+        let (old, old_cleanup) = old_service
+            .create_staged(&race.target, AgentMode::Durable, old_id, metadata)
+            .await
+            .unwrap();
+        let old_token = old.stage_token();
+        let closed = old.closed();
+        drop(old);
+        closed.await.unwrap();
+        let tracker = old_service.stage_cleanup_tracker().unwrap();
+        let hash = [7; 32];
+        race.publish_after(hash, None, None, |replacement| async move {
+            assert_ne!(old_token, replacement.stage_token());
+            drop(old_cleanup);
+            assert!(tracker.drain(Duration::from_secs(5)).await);
+            replacement.add(OplogEntry::suspend()).await.unwrap();
+            replacement.commit(CommitLevel::Always).await.unwrap();
+        })
+        .await;
+        assert!(
+            publication::existing_fork(&race.service, &race.target, OplogIndex::from_u64(2), hash,)
+                .await
+                .unwrap()
+                .matches(&race.target)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -2109,7 +2220,7 @@ mod tests {
         use crate::services::oplog::{OplogService, seal::AgentSealState};
 
         let race = StageRace::new().await;
-        let (first_id, first) = race.hidden_stage().await;
+        let (first_id, first, _first_cleanup) = race.hidden_stage().await;
         let first_token = first.stage_token().expect("the stage has a reservation");
         assert!(matches!(
             race.service
@@ -2124,7 +2235,7 @@ mod tests {
             assert!(!race.service.exists(&race.target, mode).await.unwrap());
         }
 
-        let (second_id, second) = race.hidden_stage().await;
+        let (second_id, second, _second_cleanup) = race.hidden_stage().await;
         assert_ne!(first_id, second_id);
         let second_token = second.stage_token().expect("the stage has a reservation");
         assert_ne!(first_token, second_token);
@@ -2173,7 +2284,7 @@ mod tests {
         for winner in [None, Some(true), Some(false)] {
             for operation in ["append", "commit", "guest-result"] {
                 let race = StageRace::new().await;
-                let (stage_id, stage) = race.hidden_stage().await;
+                let (stage_id, stage, _cleanup) = race.hidden_stage().await;
                 stage.add(OplogEntry::suspend()).await.unwrap();
                 race.discard(stage_id, stage.stage_token()).await;
                 let hash = [7; 32];
@@ -2273,7 +2384,7 @@ mod tests {
         for input in [false, true] {
             for winner in [None, Some(true), Some(false)] {
                 let race = StageRace::new().await;
-                let (stage_id, stage) = race.hidden_stage().await;
+                let (stage_id, stage, _cleanup) = race.hidden_stage().await;
                 let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let commit: DurableStreamCommit = Arc::new({
                     let armed = armed.clone();

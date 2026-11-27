@@ -241,11 +241,13 @@ async fn refused_create_and_publication_preserve_equal_epoch_deletion_fence_befo
             assert_fence(&f, pending.state.fence_namespace(), Some(ShardEpoch(7))).await;
 
             let stage_id = Uuid::new_v4();
+            let mut cleanup = None;
             let token = if publication {
-                let stage = oplog
+                let (stage, guard) = oplog
                     .create_staged(&f.id(), AgentMode::Durable, stage_id, f.metadata.clone())
                     .await
                     .unwrap();
+                cleanup = Some(guard);
                 stage.stop_and_wait().await.unwrap();
                 let token = stage.stage_token();
                 drop(stage);
@@ -287,6 +289,9 @@ async fn refused_create_and_publication_preserve_equal_epoch_deletion_fence_befo
                         Err(WorkerExecutorError::AgentAlreadyExists { .. })
                     ));
                 }
+            }
+            if let Some(cleanup) = &mut cleanup {
+                cleanup.discard().await.unwrap();
             }
             assert_fence(&f, pending.state.fence_namespace(), Some(ShardEpoch(7))).await;
             assert!(stale.deadline(&f.id(), ShardEpoch(6)).is_some());

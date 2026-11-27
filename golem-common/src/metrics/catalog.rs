@@ -1054,6 +1054,9 @@ catalog! {
     }
 
     section "Worker executor: oplog" {
+        metric STAGE_RESERVATION_CLEANUP_FAILED_TOTAL: Counter = Metric::new(
+            "golem_stage_reservation_cleanup_failed_total", NoUnit, &[],
+            "Stage reservation cleanup failures after retries or at the shutdown cutoff");
         metric OPLOG_SVC_CALL_TOTAL: CounterVec = Metric::new(
             "golem_oplog_svc_call_total", NoUnit, &["api"],
             "Calls to the oplog layer");

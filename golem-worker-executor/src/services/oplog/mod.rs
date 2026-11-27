@@ -88,8 +88,10 @@ mod payload;
 mod scan;
 pub(crate) mod seal;
 pub(crate) mod sealed_reader;
+mod stage;
 
 pub use seal::{OplogReadAttempt, SealService};
+pub use stage::{StageCleanupGuard, StageCleanupTracker};
 
 #[derive(Clone, Copy)]
 pub enum OplogReadContext<'a> {
@@ -267,6 +269,10 @@ impl From<WorkerExecutorError> for CreateStagedError {
 ///
 #[async_trait]
 pub trait OplogService: Debug + Send + Sync {
+    fn stage_cleanup_tracker(&self) -> Option<Arc<StageCleanupTracker>> {
+        None
+    }
+
     /// Locks cold lifecycle operations for the entire logical oplog stack.
     /// Wrappers delegate to their inner service; normal oplog operations do not take this lock.
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard;
@@ -306,13 +312,15 @@ pub trait OplogService: Debug + Send + Sync {
     /// It bypasses visible oplog caches, archives and derived session indexes. Payloads use
     /// the final agent's blob namespace so publication needs no payload rewrite.
     /// Admission takes no lifecycle guard or shard-epoch claim.
+    /// The separate guard owns the entire stage lifetime and must survive dropping the writer
+    /// before publication. A new attempt must use a new stage id.
     async fn create_staged(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
         _stage_id: uuid::Uuid,
         _initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, CreateStagedError> {
+    ) -> Result<(Arc<dyn Oplog>, StageCleanupGuard), CreateStagedError> {
         Err(CreateStagedError::Storage(
             "staged oplogs are unsupported by this oplog service".to_string(),
         ))

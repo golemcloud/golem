@@ -108,6 +108,7 @@ pub struct PrimaryOplogService {
     oplogs: OpenOplogs,
     stream_session_index: Arc<std::sync::OnceLock<Arc<super::StreamSessionIndexService>>>,
     seal_service: Arc<std::sync::OnceLock<Arc<super::SealService>>>,
+    stage_cleanup: Arc<super::StageCleanupTracker>,
 }
 
 #[derive(Clone)]

@@ -773,10 +773,11 @@ async fn reserve_test_stage(storage: &dyn IndexedStorage) -> (String, i64) {
     let owned = crate::fresh_owned_agent_id();
     let stage = Uuid::new_v4();
     let token = storage
-        .reserve_stage("test", "reserve", &owned, stage)
+        .reserve_stage("test", "reserve", &owned, 17)
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(token, 17);
     (format!("{}#{stage}", owned.storage_key()), token)
 }
 
@@ -831,7 +832,7 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
             let stage_id = Uuid::new_v4();
             assert!(
                 storage
-                    .reserve_stage("test", "refuse", &owned, stage_id)
+                    .reserve_stage("test", "refuse", &owned, 11)
                     .await
                     .unwrap()
                     .is_none()
@@ -865,7 +866,7 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
             // Refused admission leaves the data and does not claim an epoch.
             assert!(
                 storage
-                    .reserve_stage("test", "repeat_refused", &owned, stage_id)
+                    .reserve_stage("test", "repeat_refused", &owned, 22)
                     .await
                     .unwrap()
                     .is_none()
@@ -876,7 +877,7 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
                 .unwrap();
             assert!(
                 storage
-                    .reserve_stage("test", "admit", &owned, stage_id)
+                    .reserve_stage("test", "admit", &owned, 33)
                     .await
                     .unwrap()
                     .is_some()
@@ -886,14 +887,13 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
 
     let owned = crate::fresh_owned_agent_id();
     let first = Uuid::new_v4();
-    let second = Uuid::new_v4();
     let (a, b) = tokio::join!(
-        storage.reserve_stage("test", "race", &owned, first),
-        storage.reserve_stage("test", "race", &owned, second),
+        storage.reserve_stage("test", "race", &owned, 11),
+        storage.reserve_stage("test", "race", &owned, 22),
     );
     let a = a.unwrap().unwrap();
     let b = b.unwrap().unwrap();
-    assert_ne!(a, b);
+    assert_eq!((a, b), (11, 22));
     let staged = IndexedStorageNamespace::StagedOpLog {
         owned_agent_id: owned.clone(),
         agent_mode: AgentMode::Durable,
@@ -923,7 +923,7 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
     );
     assert!(
         storage
-            .reserve_stage("test", "repeat", &owned, first)
+            .reserve_stage("test", "repeat", &owned, 33)
             .await
             .unwrap()
             .is_some()
@@ -998,7 +998,7 @@ async fn discarded_and_published_stages_cannot_be_recreated_by_old_writers(
             Err(IndexedStorageError::StageInvalidated { .. })
         ));
         let token = storage
-            .reserve_stage("test", "reserve", &owned, stage_id)
+            .reserve_stage("test", "reserve", &owned, 17)
             .await
             .unwrap()
             .unwrap();
@@ -1162,7 +1162,7 @@ async fn stage_discard_only_mutates_the_current_admission(
             agent_mode: mode,
         };
         let a_token = storage
-            .reserve_stage("test", "admit_a", &owned, a)
+            .reserve_stage("test", "admit_a", &owned, 11)
             .await
             .unwrap()
             .unwrap();
@@ -1182,7 +1182,7 @@ async fn stage_discard_only_mutates_the_current_admission(
             .unwrap();
         assert!(
             storage
-                .reserve_stage("test", "refuse_b", &owned, b)
+                .reserve_stage("test", "refuse_b", &owned, 22)
                 .await
                 .unwrap()
                 .is_none()
@@ -1252,12 +1252,12 @@ async fn stage_discard_only_mutates_the_current_admission(
             agent_mode: mode,
         };
         let a_token = storage
-            .reserve_stage("test", "empty_a", &owned, stage)
+            .reserve_stage("test", "empty_a", &owned, 11)
             .await
             .unwrap()
             .unwrap();
         let b_token = storage
-            .reserve_stage("test", "replacement_b", &owned, stage)
+            .reserve_stage("test", "replacement_b", &owned, 22)
             .await
             .unwrap()
             .unwrap();
@@ -1372,7 +1372,7 @@ async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
         agent_mode: AgentMode::Durable,
     };
     let first = storage
-        .reserve_stage("test", "first", &owned, stage_id)
+        .reserve_stage("test", "first", &owned, 11)
         .await
         .unwrap()
         .unwrap();
@@ -1396,13 +1396,13 @@ async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
             .unwrap()
             .has_data
     );
-    // The same stage UUID gets a fresh token; it cannot identify the admission by itself.
+    // The caller chooses a fresh token even when it reuses the stage UUID.
     let second = storage
-        .reserve_stage("test", "replace", &owned, stage_id)
+        .reserve_stage("test", "replace", &owned, 22)
         .await
         .unwrap()
         .unwrap();
-    assert!(first >= 0 && second >= 0);
+    assert_eq!((first, second), (11, 22));
     assert_ne!(first, second);
     assert!(
         !storage
@@ -1474,7 +1474,7 @@ async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
         .unwrap();
     assert!(
         storage
-            .reserve_stage("test", "staged_data_refuses", &owned, Uuid::new_v4())
+            .reserve_stage("test", "staged_data_refuses", &owned, 33)
             .await
             .unwrap()
             .is_none()
@@ -1534,7 +1534,7 @@ async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
     let owned = crate::fresh_owned_agent_id();
     let stage_key = format!("{}#{stage_id}", owned.storage_key());
     let token = storage
-        .reserve_stage("test", "cleanup", &owned, stage_id)
+        .reserve_stage("test", "cleanup", &owned, 44)
         .await
         .unwrap()
         .unwrap();
@@ -1594,7 +1594,7 @@ async fn initial_append_invalidates_the_stage_token_atomically(
                     agent_mode: mode,
                 };
                 let token = storage
-                    .reserve_stage("test", "reserve", &owned, stage_id)
+                    .reserve_stage("test", "reserve", &owned, 17)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1693,9 +1693,8 @@ async fn stranded_stage_tokens_are_not_shard_epochs_or_transition_presence(
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         let state = sealed_index_state(mode);
         let owned = &state.owned_agent_id;
-        let stage_id = Uuid::new_v4();
         let token = storage
-            .reserve_stage("test", "stranded", owned, stage_id)
+            .reserve_stage("test", "stranded", owned, 11)
             .await
             .unwrap()
             .unwrap();
@@ -1721,7 +1720,7 @@ async fn stranded_stage_tokens_are_not_shard_epochs_or_transition_presence(
         );
 
         let token = storage
-            .reserve_stage("test", "stranded_again", owned, stage_id)
+            .reserve_stage("test", "stranded_again", owned, 22)
             .await
             .unwrap()
             .unwrap();
@@ -1844,12 +1843,14 @@ async fn committed_oplog_records_survive_cold_reopen(
     let first = OplogEntry::suspend().rounded();
     let second = OplogEntry::restart().rounded();
     let stage_token;
+    let _cleanup;
     {
         let service = primary_oplog_service(open().await).await;
-        let writer = service
+        let (writer, cleanup) = service
             .create_staged(&owned, AgentMode::Durable, stage_id, metadata)
             .await
             .unwrap();
+        _cleanup = cleanup;
         stage_token = writer.stage_token();
         writer.add(first.clone()).await.unwrap();
         writer.add(second.clone()).await.unwrap();
@@ -3925,7 +3926,7 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
     let first = format!("{}#{first_id}", owned.storage_key());
     let second = format!("{}#{second_id}", owned.storage_key());
     let first_token = storage
-        .reserve_stage("test", "reserve", &owned, first_id)
+        .reserve_stage("test", "reserve", &owned, 11)
         .await
         .unwrap()
         .unwrap();
@@ -3976,7 +3977,7 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
         .await
         .unwrap();
     let second_token = storage
-        .reserve_stage("test", "reserve", &owned, second_id)
+        .reserve_stage("test", "reserve", &owned, 22)
         .await
         .unwrap()
         .unwrap();
@@ -6440,7 +6441,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
         let key = state.owned_agent_id.storage_key();
         let stage_id = Uuid::new_v4();
         let stage_token = storage
-            .reserve_stage("test", "reserve", &state.owned_agent_id, stage_id)
+            .reserve_stage("test", "reserve", &state.owned_agent_id, 17)
             .await
             .unwrap()
             .unwrap();
@@ -7459,6 +7460,293 @@ async fn wait_for_indexed_sql_wait(pool: &sqlx::PgPool, query_fragment: &str) {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.expect("indexed operation did not reach the expected lock wait");
+}
+
+async fn stage_cleanup_failure_count() -> f64 {
+    use axum::response::IntoResponse;
+
+    let response = golem_service_base::observability::prometheus_metrics(
+        golem_worker_executor::metrics::register_all(),
+    )
+    .into_response();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    std::str::from_utf8(&body)
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("golem_stage_reservation_cleanup_failed_total ")
+                .map(|value| value.parse::<f64>().unwrap())
+        })
+        .unwrap_or(0.0)
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn postgres_stage_guard_cleanup_exhausts_transient_retries_and_initial_append_clears_token() {
+    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::oplog::{CreateParameters, OplogEntry, OplogIndex};
+    use golem_worker_executor::services::oplog::{CommitLevel, OplogService};
+    use std::time::{Duration, Instant};
+
+    let wrapper = PostgresIndexedStorageWrapper {
+        postgres: DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await,
+    };
+    let config = wrapper.fresh_database().await;
+    let storage: Arc<dyn IndexedStorage + Send + Sync> =
+        Arc::new(PostgresIndexedStorage::configured(&config).await.unwrap());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(config.postgres.connect_options())
+        .await
+        .unwrap();
+    let service = primary_oplog_service(storage.clone()).await;
+    let metadata = test_agent_metadata();
+    let owned = metadata.owned_agent_id();
+    let initial = OplogEntry::create(Box::new(CreateParameters {
+        agent_id: owned.agent_id,
+        component_id: metadata.component_id,
+        agent_type_name: metadata.agent_type_name.clone(),
+        canonical_key: metadata.canonical_key.clone(),
+        constructor_parameters: metadata.constructor_parameters.clone(),
+        owner_kind: metadata.owner_kind,
+        agent_mode: AgentMode::Durable,
+        component_revision: ComponentRevision::INITIAL,
+        env: metadata.env.clone(),
+        environment_id: owned.environment_id,
+        created_by: metadata.created_by,
+        parent: metadata.parent,
+        component_size: 0,
+        initial_total_linear_memory_size: 0,
+        initial_active_plugins: Default::default(),
+        local_agent_config: vec![],
+        instance_id: metadata.fingerprint.0,
+        create_request: metadata.create_request.clone(),
+        never_live: false,
+        standalone_tool: metadata.standalone_tool.clone(),
+    }))
+    .rounded();
+    let initial = golem_common::serialization::serialize(&initial).unwrap();
+    let stage_id = Uuid::new_v4();
+    let (writer, cleanup) = service
+        .create_staged(&owned, AgentMode::Durable, stage_id, metadata)
+        .await
+        .unwrap();
+    let token = writer.stage_token().unwrap();
+    let entry = OplogEntry::suspend().rounded();
+    writer.add(entry.clone()).await.unwrap();
+    writer.commit(CommitLevel::Always).await.unwrap();
+    let closed = writer.closed();
+    drop(writer);
+    closed.await.unwrap();
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let key = owned.storage_key();
+    let stage_key = format!("{key}#{stage_id}");
+    let expected = vec![(1, golem_common::serialization::serialize(&entry).unwrap())];
+    sqlx::raw_sql(
+        "CREATE SEQUENCE cleanup_attempts;
+         CREATE FUNCTION reject_stage_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+         IF OLD.namespace = 'stage-reservation' THEN
+         PERFORM nextval('cleanup_attempts');
+         RAISE EXCEPTION 'transient stage cleanup failure' USING ERRCODE = '40001';
+         END IF; RETURN OLD; END $$;
+         CREATE TRIGGER reject_stage_cleanup BEFORE DELETE ON indexed_key_epoch
+         FOR EACH ROW EXECUTE FUNCTION reject_stage_cleanup();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let before = stage_cleanup_failure_count().await;
+    let started = Instant::now();
+    drop(cleanup);
+    assert!(
+        service
+            .stage_cleanup_tracker()
+            .unwrap()
+            .drain(Duration::from_secs(5))
+            .await
+    );
+    assert!(started.elapsed() >= Duration::from_millis(75));
+    let (attempts,): (i64,) = sqlx::query_as("SELECT last_value FROM cleanup_attempts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 3);
+    assert_eq!(stage_cleanup_failure_count().await, before + 1.0);
+    let (stored_token,): (i64,) = sqlx::query_as(
+        "SELECT epoch FROM indexed_key_epoch WHERE namespace = 'stage-reservation' AND env = $1 AND agent = $2",
+    )
+    .bind(owned.environment_id.0)
+    .bind(owned.agent_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_token, token);
+    assert_eq!(
+        read_records(storage.as_ref(), &staged, &stage_key).await,
+        expected
+    );
+
+    sqlx::query("DROP TRIGGER reject_stage_cleanup ON indexed_key_epoch")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let primary = IndexedStorageNamespace::OpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    storage
+        .append(
+            "test",
+            "authoritative_initial",
+            "entry",
+            primary.clone(),
+            &key,
+            u64::from(OplogIndex::INITIAL),
+            initial.clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let (reservations,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM indexed_key_epoch WHERE namespace = 'stage-reservation' AND env = $1 AND agent = $2",
+    )
+    .bind(owned.environment_id.0)
+    .bind(owned.agent_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reservations, 0);
+    assert_eq!(
+        read_records(storage.as_ref(), &primary, &key).await,
+        vec![(1, initial)]
+    );
+    assert_eq!(
+        read_records(storage.as_ref(), &staged, &stage_key).await,
+        expected
+    );
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn postgres_stage_publication_commit_wins_guard_cleanup_waiting_on_agent_lock() {
+    use golem_common::model::oplog::OplogEntry;
+    use golem_worker_executor::services::oplog::{CommitLevel, OplogService};
+    use std::time::Duration;
+
+    let wrapper = PostgresIndexedStorageWrapper {
+        postgres: DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await,
+    };
+    let config = wrapper.fresh_database().await;
+    let storage: Arc<dyn IndexedStorage + Send + Sync> =
+        Arc::new(PostgresIndexedStorage::configured(&config).await.unwrap());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .connect_with(config.postgres.connect_options())
+        .await
+        .unwrap();
+    let service = primary_oplog_service(storage.clone()).await;
+    let metadata = test_agent_metadata();
+    let owned = metadata.owned_agent_id();
+    let stage_id = Uuid::new_v4();
+    let (writer, cleanup) = service
+        .create_staged(&owned, AgentMode::Durable, stage_id, metadata)
+        .await
+        .unwrap();
+    let token = writer.stage_token();
+    let entry = OplogEntry::suspend().rounded();
+    writer.add(entry.clone()).await.unwrap();
+    writer.commit(CommitLevel::Always).await.unwrap();
+    let closed = writer.closed();
+    drop(writer);
+    closed.await.unwrap();
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let primary = IndexedStorageNamespace::OpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let key = owned.storage_key();
+    let stage_key = format!("{key}#{stage_id}");
+    sqlx::raw_sql(
+        "CREATE TABLE publication_gate (id INT PRIMARY KEY);
+         INSERT INTO publication_gate VALUES (1);
+         CREATE FUNCTION hold_stage_publication() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+         IF NEW.namespace = 'durable-worker-oplog-present' THEN
+         PERFORM id FROM publication_gate WHERE id = 1 FOR UPDATE;
+         END IF; RETURN NEW; END $$;
+         CREATE TRIGGER hold_stage_publication BEFORE INSERT ON index_storage
+         FOR EACH ROW EXECUTE FUNCTION hold_stage_publication();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM publication_gate WHERE id = 1 FOR UPDATE")
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let before = stage_cleanup_failure_count().await;
+    let publisher = storage.clone();
+    let source = staged.clone();
+    let target = primary.clone();
+    let source_key = stage_key.clone();
+    let target_key = key.clone();
+    let publication = tokio::spawn(async move {
+        publisher
+            .move_if_absent(
+                "test",
+                "publication",
+                source,
+                &source_key,
+                target,
+                &target_key,
+                1,
+                token,
+            )
+            .await
+    });
+    // The trigger runs after publication takes the production agent advisory lock.
+    wait_for_indexed_sql_wait(&pool, "INSERT INTO index_storage").await;
+    drop(cleanup);
+    wait_for_indexed_sql_wait(&pool, "pg_advisory_xact_lock").await;
+    gate.commit().await.unwrap();
+    assert!(publication.await.unwrap().unwrap());
+    assert!(
+        service
+            .stage_cleanup_tracker()
+            .unwrap()
+            .drain(Duration::from_secs(5))
+            .await
+    );
+    assert_eq!(stage_cleanup_failure_count().await, before);
+    assert_eq!(
+        read_records(storage.as_ref(), &primary, &key).await,
+        vec![(1, golem_common::serialization::serialize(&entry).unwrap())]
+    );
+    assert!(
+        !storage
+            .exists("test", "stage_moved", staged, &stage_key)
+            .await
+            .unwrap()
+    );
+    let (reservations,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM indexed_key_epoch WHERE namespace = 'stage-reservation' AND env = $1 AND agent = $2",
+    )
+    .bind(owned.environment_id.0)
+    .bind(owned.agent_id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reservations, 0);
 }
 
 #[test]
