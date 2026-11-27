@@ -36,7 +36,7 @@ use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
     BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
-    agent_path_segment,
+    agent_path_segment, join_blob_key,
 };
 use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::model::LookupResult;
@@ -615,7 +615,7 @@ impl ArchiveFault {
         if !self
             .agent_path
             .get()
-            .is_some_and(|agent| path.starts_with(agent))
+            .is_some_and(|agent| path.starts_with(join_blob_key("chunks", agent)))
         {
             return None;
         }
