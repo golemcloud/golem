@@ -13,6 +13,8 @@
 // limitations under the License.
 
 pub mod debug_render;
+pub mod invocation_error;
+pub mod invocation_session;
 
 use self::debug_render::debug_render_oplog_entry;
 use crate::components::redis::Redis;

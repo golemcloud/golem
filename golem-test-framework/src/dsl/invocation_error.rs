@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The typed error of an invocation that the executor rejected or failed.
+//! The typed error of an invocation that the executor or the worker service rejected or failed.
 
 use golem_api_grpc::proto::golem::worker::{
     InvocationFailure, InvocationRejected, InvocationRejectionReason,
@@ -20,19 +20,19 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::fmt::{Display, Formatter};
 
-/// The error of an invocation session that the executor rejected before acceptance, or that
-/// finished with a failure. The DSL returns it inside an [`anyhow::Error`]; read it with
-/// [`InvocationErrorExt`] or check it with [`crate::assert_worker_error!`].
+/// The error of an invocation session that the executor or the worker service rejected before
+/// acceptance, or that finished with a failure. The DSL returns it inside an [`anyhow::Error`];
+/// read it with [`InvocationErrorExt`] or check it with [`crate::assert_worker_error!`].
 #[derive(Debug)]
 pub enum InvocationError {
     Rejected {
         rejected: InvocationRejected,
-        /// The worker error of the rejection, when the executor sent one that converts.
+        /// The worker error of the rejection, when the session sent one that converts.
         worker_error: Option<WorkerExecutorError>,
     },
     Failed {
         failure: InvocationFailure,
-        /// The worker error of the failure, when the executor sent one that converts.
+        /// The worker error of the failure, when the session sent one that converts.
         worker_error: Option<WorkerExecutorError>,
     },
 }
@@ -83,7 +83,7 @@ impl Display for InvocationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Rejected { rejected, .. } => {
-                // The reason says as what the executor refused the invocation before acceptance.
+                // The reason says as what the session refused the invocation before acceptance.
                 let reason = InvocationRejectionReason::try_from(rejected.reason)
                     .map(|reason| reason.as_str_name())
                     .unwrap_or("UNKNOWN");
@@ -146,7 +146,7 @@ macro_rules! assert_worker_error {
     };
     ($error:expr, $($pattern:pat_param)|+ $(if $guard:expr)?, $($message:tt)+) => {{
         let error: &::anyhow::Error = &$error;
-        match $crate::InvocationErrorExt::worker_error(error) {
+        match $crate::dsl::invocation_error::InvocationErrorExt::worker_error(error) {
             ::std::option::Option::Some($($pattern)|+) $(if $guard)? => {}
             other => ::std::panic!(
                 "{}: expected a worker error matching `{}`, found {:?}; the error: {:#}",

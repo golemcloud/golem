@@ -14,6 +14,7 @@
 
 use crate::components::redis::Redis;
 use crate::config::TestDependencies;
+use crate::dsl::invocation_session::{InvocationSession, InvocationStartBuilder};
 use crate::dsl::{
     AgentResult, EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream,
     build_ifs_archive, default_agent_initial_permissions_without_card_grants,
@@ -25,7 +26,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::SplitStream;
 use futures::{SinkExt, StreamExt};
-use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
+use golem_api_grpc::proto::golem::worker::{
+    InvocationStart, LogEvent, ResumeAttach, invocation_request,
+};
 use golem_client::api::{
     AgentClient, InvocationClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient,
     WorkerClientLive, WorkerError,
@@ -66,6 +70,7 @@ use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
 use golem_common::schema::{ExternalSchemaValue, TypedSchemaValue};
+use golem_service_base::model::auth::AuthCtx;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -275,6 +280,49 @@ impl<Deps: TestDependencies> TestUserContext<Deps> {
             auto_deploy_enabled: enabled,
             ..self
         }
+    }
+
+    /// Starts an [`InvocationStartBuilder`] for `method` of an agent of `component`, with the
+    /// system auth context of the worker service's trusted gRPC API. The worker service fills in
+    /// the component owner. An ephemeral key target needs
+    /// [`InvocationStartBuilder::agent_type_id`], because the registry assigns the type IDs.
+    pub fn invocation<'a>(
+        &self,
+        component: &'a ComponentDto,
+        method: &str,
+    ) -> InvocationStartBuilder<'a> {
+        InvocationStartBuilder::new(component, method, AuthCtx::System)
+    }
+
+    /// Sends `start` to the worker service's `InvocationSession` RPC and opens its session.
+    /// Reads no response. The session validates every frame in both directions.
+    pub async fn open_session(&self, start: InvocationStart) -> anyhow::Result<InvocationSession> {
+        self.open_worker_service_session(invocation_request::Request::Start(start))
+            .await
+    }
+
+    /// Sends `resume` to the worker service's `InvocationSession` RPC and opens its session.
+    /// Reads no response. The session validates every frame in both directions.
+    pub async fn resume_session(&self, resume: ResumeAttach) -> anyhow::Result<InvocationSession> {
+        self.open_worker_service_session(invocation_request::Request::ResumeAttach(resume))
+            .await
+    }
+
+    async fn open_worker_service_session(
+        &self,
+        first: invocation_request::Request,
+    ) -> anyhow::Result<InvocationSession> {
+        let worker_service = self.deps.worker_service();
+        let address = format!(
+            "http://{}:{}",
+            worker_service.grpc_host(),
+            worker_service.gprc_port()
+        );
+        InvocationSession::open(first, true, |requests| async move {
+            let mut client = WorkerServiceClient::connect(address).await?;
+            Ok(client.invoke_agent_session(requests).await?.into_inner())
+        })
+        .await
     }
 }
 

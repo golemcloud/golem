@@ -14,7 +14,6 @@
 
 use super::TestWorkerExecutor;
 use crate::component_writer::CachedAnalysis;
-use crate::invocation_session::SessionTerminal;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
@@ -39,12 +38,12 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
+use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
 };
-use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
-use golem_common::model::agent::{AgentKey, OwnedAgentId};
+use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
@@ -65,6 +64,9 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
+use golem_test_framework::dsl::invocation_session::{
+    SessionTerminal, invocation_target, proto_agent_key,
+};
 use golem_test_framework::dsl::{AgentResult, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::services::agent_types::local_type_id;
@@ -72,51 +74,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::Streaming;
 use uuid::Uuid;
-
-pub(crate) fn proto_agent_key(key: &ParsedAgentKey) -> anyhow::Result<ProtoAgentKey> {
-    AgentKey::new(key.agent_type.clone(), key.parameters.clone())
-        .map_err(|err| anyhow!("Invalid agent key {key}: {err}"))?
-        .try_into()
-        .map_err(|err: String| anyhow!("Invalid agent key {key}: {err}"))
-}
-
-/// The target and the constructor of an invocation on the agent of `key`. A durable agent is
-/// the keyed agent of `key`. An ephemeral invocation runs on an instance of its own, whose ID
-/// derives from the invocation's owner key, and the executor creates it from `key`.
-pub(crate) fn invocation_target(
-    component: &ComponentDto,
-    key: &ParsedAgentKey,
-    owner_key: &IdempotencyKey,
-) -> anyhow::Result<(ProtoAgentTarget, Option<ProtoAgentKey>)> {
-    let is_ephemeral = component
-        .metadata
-        .agent_types
-        .iter()
-        .map(|agent| &agent.declaration)
-        .find(|agent| agent.type_name == key.agent_type)
-        .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
-    let constructor = proto_agent_key(key)?;
-    if is_ephemeral {
-        let agent_id = AgentId::ephemeral_invocation(
-            component.environment_id,
-            local_type_id(component.environment_id, &key.agent_type),
-            owner_key,
-        );
-        Ok((
-            ProtoAgentTarget {
-                target: Some(agent_target::Target::Id(agent_id.into())),
-            },
-            Some(constructor),
-        ))
-    } else {
-        Ok((
-            ProtoAgentTarget {
-                target: Some(agent_target::Target::Key(constructor)),
-            },
-            None,
-        ))
-    }
-}
 
 fn result_agent_id(
     environment_id: EnvironmentId,
@@ -808,8 +765,17 @@ impl TestDsl for TestWorkerExecutor {
     ) -> anyhow::Result<AgentResult> {
         let request_key =
             InvocationRequestKey::external(self.auth_ctx().idempotency_scope(), idempotency_key);
-        let (target, constructor) =
-            invocation_target(component, agent_id, &request_key.owner_key(method_name))?;
+        let (target, constructor) = invocation_target(
+            component,
+            agent_id,
+            &request_key.owner_key(method_name),
+            || {
+                Ok(local_type_id(
+                    component.environment_id,
+                    &agent_id.agent_type,
+                ))
+            },
+        )?;
         self.invoke_and_await_target(
             component,
             target,

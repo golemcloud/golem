@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::invocation_session::{InvocationSession, id_target};
 use crate::{TestWorkerExecutor, callers};
 use golem_api_grpc::proto::golem::worker::{
     AgentInvocationMode, ExternalToolInvocation, InvocationSessionResult, InvocationStart,
@@ -26,6 +25,7 @@ use golem_common::model::{
     StandaloneToolInvocation,
 };
 use golem_common::schema::TypedSchemaValue;
+use golem_test_framework::dsl::invocation_session::{InvocationSession, id_target};
 use uuid::Uuid;
 
 /// A standalone call and its derived public identity. The protobuf remains available for

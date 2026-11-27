@@ -13,18 +13,15 @@
 // limitations under the License.
 
 use futures::{SinkExt, StreamExt};
-use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
-    DurableStreamMapping, InputStreamItem, InvocationAccepted, InvocationFailure,
-    InvocationFailureKind, InvocationRejectionReason, InvocationRequest, InvocationResponse,
-    InvocationStart, ResumeAttach as PrivateResumeAttach,
-    ResumeOperation as PrivateResumeOperation, StreamDirection, StreamEnd, StreamTerminalAuthor,
-    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
+    InvocationAccepted, InvocationFailure, InvocationFailureKind, InvocationFreshnessDisposition,
+    InvocationRejectionReason, InvocationRequest, InvocationResponse,
+    ResumeAttach as PrivateResumeAttach, ResumeOperation as PrivateResumeOperation,
+    StreamDirection, StreamEnd, invocation_response, invocation_session_completion,
     invocation_session_result, stream_terminal,
 };
 use golem_client::model::ComponentDto;
-use golem_common::base_model::durable_stream::AttachmentId;
+use golem_common::base_model::durable_stream::{AttachmentId, StreamError, StreamTerminal};
 use golem_common::model::agent::{AgentMode, AgentTypeName, OwnedAgentId, ParsedAgentKey};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::environment::EnvironmentId;
@@ -34,7 +31,7 @@ use golem_common::model::invocation_session_public::{
     PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamOutcome,
     decode_server_text, encode_client_text,
 };
-use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, RoutingTable};
+use golem_common::model::{AgentId, IdempotencyKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_schema::proto::golem::schema::{
@@ -43,19 +40,20 @@ use golem_schema::proto::golem::schema::{
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use integration_tests::agents::{
-    agent_type_id, id_target, key_target, keyed_agent_id, proto_agent_key,
+use golem_test_framework::dsl::invocation_error::InvocationError;
+use golem_test_framework::dsl::invocation_session::{
+    InvocationSession, InvocationSessionResultExt, SessionTerminal, key_target,
 };
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::agents::{agent_type_id, keyed_agent_id};
 use test_r::{inherit_test_dep, test, timeout};
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, SEC_WEBSOCKET_PROTOCOL};
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -323,115 +321,54 @@ async fn invoke_agent_session(
     method_name: &str,
     params: TypedSchemaValue,
 ) -> anyhow::Result<Result<SchemaValue, InvocationFailure>> {
-    let target = key_target(agent_id)?;
-    let (_, input) = params.into_parts();
-    let input = input.try_into().map_err(anyhow::Error::msg)?;
-    let (frames, receiver) = mpsc::channel(8);
-    let request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            target: Some(target),
-            method_name: Some(method_name.to_string()),
-            input: Some(input),
-            captured_method_input: None,
-            allow_streams: true,
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
-            context: None,
-            auth_ctx: Some(AuthCtx::System.into()),
-            caller: Some(golem_common::model::caller::Caller::anonymous().into()),
-            environment_id: Some(component.environment_id.into()),
-            config: Vec::new(),
-            component_owner_account_id: None,
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            schedule_at: None,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: None,
-            durable_input_mappings: Vec::new(),
-            scope_card: None,
-            origin_invocation: None,
-            external_tool: None,
-            request_key: None,
-            constructor: None,
-            component_id: Some(component.id.into()),
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&request)
-        .map_err(anyhow::Error::msg)?;
-    frames.send(request).await?;
-
-    let worker_service = deps.worker_service();
-    let mut client = WorkerServiceClient::connect(format!(
-        "http://{}:{}",
-        worker_service.grpc_host(),
-        worker_service.gprc_port()
-    ))
-    .await?;
-    let mut inbound = client
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let mut result = None;
-    let mut terminal = None;
-    while let Some(response) = inbound.message().await? {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-        match response.response {
-            Some(
-                invocation_response::Response::Accepted(_)
-                | invocation_response::Response::Ready(_),
-            ) => {}
-            Some(invocation_response::Response::Rejected(rejected)) => {
-                anyhow::bail!("invocation session was rejected: {}", rejected.error);
-            }
-            Some(invocation_response::Response::Result(value)) => {
-                if result.is_some() {
-                    anyhow::bail!("invocation session returned more than one result");
-                }
-                result = match value.result {
-                    Some(invocation_session_result::Result::MethodResult(value)) => {
-                        Some(value.try_into().map_err(anyhow::Error::msg)?)
-                    }
-                    Some(invocation_session_result::Result::NoResult(_))
-                    | Some(invocation_session_result::Result::ToolResult(_))
-                    | None => {
-                        anyhow::bail!("invocation session returned no method result")
-                    }
-                };
-            }
-            Some(invocation_response::Response::Finished(finished)) => {
-                terminal = Some(match finished.outcome {
-                    Some(invocation_session_completion::Outcome::Success(_)) => {
-                        result.take().map(Ok).ok_or_else(|| {
-                            anyhow::anyhow!("invocation session ended without a result")
-                        })?
-                    }
-                    Some(invocation_session_completion::Outcome::Failure(failure)) => Err(failure),
-                    None => anyhow::bail!("invocation session completion has no outcome"),
-                });
-            }
-            Some(other) => {
-                anyhow::bail!("unexpected outer invocation session frame: {other:?}")
-            }
-            None => anyhow::bail!("empty outer invocation session frame"),
+    let user = deps.admin().await;
+    let start = user
+        .invocation(component, method_name)
+        .target(key_target(agent_id)?)
+        .input(params)?
+        .allow_streams()
+        .fresh_attempt()
+        .with_component_id()
+        .build()?;
+    let outcome = user.open_session(start).await?.collect().await?;
+    // A result frame must carry a method result whatever the terminal is.
+    let value = outcome
+        .result
+        .map(|result| {
+            result
+                .method_result()
+                .map_err(|_| anyhow::anyhow!("invocation session returned no method result"))
+        })
+        .transpose()?;
+    match outcome.terminal {
+        SessionTerminal::Succeeded => {
+            let value = value
+                .ok_or_else(|| anyhow::anyhow!("invocation session ended without a result"))?;
+            Ok(Ok(value))
         }
+        SessionTerminal::Failed(InvocationError::Failed { failure, .. }) => Ok(Err(failure)),
+        SessionTerminal::Rejected(InvocationError::Rejected { rejected, .. }) => {
+            anyhow::bail!("invocation session was rejected: {}", rejected.error)
+        }
+        other => anyhow::bail!("unexpected invocation session terminal: {other:?}"),
     }
-    terminal.ok_or_else(|| anyhow::anyhow!("invocation session response ended before completion"))
 }
 
+/// How long a trusted streaming session may wait for its next response.
+const TRUSTED_PROGRESS_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a completed trusted streaming session may take to close its endpoint.
+const TRUSTED_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The details of a stream that a test cancels.
+const STREAM_CANCELLATION_DETAILS: &str = "integration test cancelled the stream";
+
+/// A streaming session through the worker service that keeps the frames the RPC could not send,
+/// bounds the wait for each response, and records what it read into a
+/// [`TrustedInvocationReport`].
 struct TrustedInvocationSession {
     method_name: String,
-    requests: mpsc::Sender<InvocationRequest>,
-    responses: mpsc::Receiver<Result<InvocationResponse, String>>,
-    response_task: Option<tokio::task::JoinHandle<()>>,
-    state: InvocationSessionState,
+    session: InvocationSession,
+    /// The acceptance, or for a queued invocation, its readiness.
     acceptance: InvocationAccepted,
-    mappings: HashMap<u64, DurableStreamMapping>,
-    unsent_requests: Vec<InvocationRequest>,
 }
 
 impl TrustedInvocationSession {
@@ -445,6 +382,8 @@ impl TrustedInvocationSession {
         Self::start_with(deps, component, agent_id, method_name, input, true).await
     }
 
+    /// An ephemeral invocation runs on an instance of its own, whose ID derives from the
+    /// invocation's owner key, and the executor creates it from the constructor.
     async fn start_with(
         deps: &EnvBasedTestDependencies,
         component: &ComponentDto,
@@ -453,106 +392,37 @@ impl TrustedInvocationSession {
         input: ProtoSchemaValue,
         ephemeral: bool,
     ) -> anyhow::Result<Self> {
-        let idempotency_key = IdempotencyKey::fresh();
-        let request_key = InvocationRequestKey::external(
-            AuthCtx::System.idempotency_scope(),
-            Some(&idempotency_key),
-        );
-        // An ephemeral invocation runs on an instance of its own, whose ID derives from the
-        // invocation's owner key, and the executor creates it from the constructor.
-        let (target, constructor) = if ephemeral {
-            let type_id =
-                agent_type_id(&deps.admin().await, component, &agent_id.agent_type).await?;
-            let instance = AgentId::ephemeral_invocation(
-                component.environment_id,
-                type_id,
-                &request_key.owner_key(method_name),
-            );
-            (id_target(instance), Some(proto_agent_key(agent_id)?))
+        let user = deps.admin().await;
+        let mut start = user
+            .invocation(component, method_name)
+            .input_value(input)
+            .allow_streams()
+            .with_request_key()
+            .fresh_attempt()
+            .with_component_id();
+        start = if ephemeral {
+            let type_id = agent_type_id(&user, component, &agent_id.agent_type).await?;
+            start
+                .on_key(agent_id)
+                .agent_type_id(type_id)
+                .freshness(InvocationFreshnessDisposition::KnownFresh)
         } else {
-            (key_target(agent_id)?, None)
+            start.target(key_target(agent_id)?)
         };
-        let (requests, receiver) = mpsc::channel(32);
-        let request = InvocationRequest {
-            request: Some(invocation_request::Request::Start(InvocationStart {
-                target: Some(target),
-                method_name: Some(method_name.to_string()),
-                input: Some(input),
-                captured_method_input: None,
-                allow_streams: true,
-                idempotency_key: Some(idempotency_key.into()),
-                context: None,
-                auth_ctx: Some(AuthCtx::System.into()),
-                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
-                environment_id: Some(component.environment_id.into()),
-                config: Vec::new(),
-                component_owner_account_id: None,
-                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-                schedule_at: None,
-                freshness_disposition: if ephemeral {
-                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
-                        as i32
-                } else {
-                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                        as i32
-                },
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: None,
-                durable_input_mappings: Vec::new(),
-                scope_card: None,
-                origin_invocation: None,
-                external_tool: None,
-                request_key: Some(request_key.into()),
-                constructor,
-                component_id: Some(component.id.into()),
-            })),
-        };
-        let mut state = InvocationSessionState::default();
-        state
-            .validate_trusted_request(&request)
-            .map_err(anyhow::Error::msg)?;
-        requests.send(request).await?;
-
-        let worker_service = deps.worker_service();
-        let mut client = WorkerServiceClient::connect(format!(
-            "http://{}:{}",
-            worker_service.grpc_host(),
-            worker_service.gprc_port()
-        ))
-        .await?;
-        let mut inbound = client
-            .invoke_agent_session(ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let (response_sender, responses) = mpsc::channel(32);
-        let response_task = tokio::spawn(async move {
-            loop {
-                match inbound.message().await {
-                    Ok(Some(response)) => {
-                        if response_sender.send(Ok(response)).await.is_err() {
-                            return;
-                        }
-                    }
-                    Ok(None) => return,
-                    Err(error) => {
-                        let _ = response_sender.send(Err(error.to_string())).await;
-                        return;
-                    }
-                }
-            }
-        });
+        let start = start.build()?;
+        anyhow::ensure!(
+            !ephemeral || start.constructor.is_some(),
+            "{} is not an ephemeral agent type",
+            agent_id.agent_type
+        );
+        let mut session = user.open_session(start).await?;
+        session.keep_unsent_frames();
         let mut session = Self {
             method_name: method_name.to_string(),
-            requests,
-            responses,
-            response_task: Some(response_task),
-            state,
+            session,
             acceptance: InvocationAccepted::default(),
-            mappings: HashMap::new(),
-            unsent_requests: Vec::new(),
         };
-        let response = session.receive().await?;
-        let accepted = match response.response {
+        let accepted = match session.receive().await?.response {
             Some(invocation_response::Response::Accepted(accepted)) => accepted,
             Some(invocation_response::Response::Rejected(rejected)) => {
                 anyhow::bail!("trusted invocation was rejected: {}", rejected.error)
@@ -570,50 +440,33 @@ impl TrustedInvocationSession {
         Ok(session)
     }
 
+    fn is_complete(&self) -> bool {
+        self.session.is_complete()
+    }
+
     async fn receive(&mut self) -> anyhow::Result<InvocationResponse> {
-        let response =
-            tokio::time::timeout(std::time::Duration::from_secs(30), self.responses.recv())
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "trusted invocation session for {} made no progress for 30 seconds",
-                        self.method_name
-                    )
-                })?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("trusted invocation response ended before protocol completion")
-                })?
-                .map_err(anyhow::Error::msg)?;
-        self.state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-        self.remember_mappings(&response);
-        Ok(response)
+        tokio::time::timeout(TRUSTED_PROGRESS_TIMEOUT, self.session.message())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "trusted invocation session for {} made no progress for 30 seconds",
+                    self.method_name
+                )
+            })??
+            .ok_or_else(|| {
+                anyhow::anyhow!("trusted invocation response ended before protocol completion")
+            })
     }
 
-    fn remember_mappings(&mut self, response: &InvocationResponse) {
-        let mappings = match response.response.as_ref() {
-            Some(invocation_response::Response::Accepted(accepted))
-            | Some(invocation_response::Response::Ready(accepted)) => &accepted.stream_mappings,
-            Some(invocation_response::Response::Result(result)) => &result.new_stream_mappings,
-            Some(invocation_response::Response::OutputItem(item)) => &item.new_stream_mappings,
-            Some(invocation_response::Response::InputAck(ack)) => &ack.new_stream_mappings,
-            _ => return,
-        };
-        self.mappings.extend(
-            mappings
-                .iter()
-                .cloned()
-                .map(|mapping| (mapping.transport_stream_id, mapping)),
-        );
-    }
-
+    /// The durable stream ID of transport stream `transport_stream_id`. Fails when the session
+    /// announced none, because every stream frame must carry it.
     fn stream_identity(
         &self,
         transport_stream_id: u64,
     ) -> anyhow::Result<golem_schema::proto::golem::common::Uuid> {
-        self.mappings
-            .get(&transport_stream_id)
+        self.session
+            .stream_mapping(transport_stream_id)
+            .ok()
             .and_then(|mapping| mapping.handle.as_ref())
             .and_then(|handle| handle.stream_id)
             .ok_or_else(|| {
@@ -623,67 +476,23 @@ impl TrustedInvocationSession {
             })
     }
 
-    /// Sends a request frame unless the executor already finished the RPC.
-    ///
-    /// A gRPC server may complete a bidirectional call while the client is still streaming
-    /// requests; HTTP/2 then resets the stream with `NO_ERROR` after the complete response and
-    /// the request channel closes. Frames that could not be sent are recorded and the session
-    /// outcome is read from the responses in `finish`, which reports the unsent frames if the
-    /// invocation did not complete successfully.
-    async fn send(&mut self, request: InvocationRequest) -> anyhow::Result<()> {
-        self.state
-            .validate_trusted_request(&request)
-            .map_err(anyhow::Error::msg)?;
-        if !self.unsent_requests.is_empty() {
-            self.unsent_requests.push(request);
-            return Ok(());
-        }
-        if let Err(error) = self.requests.send(request).await {
-            self.unsent_requests.push(error.0);
-        }
-        Ok(())
-    }
-
     async fn send_input_value(
         &mut self,
         transport_stream_id: u64,
         sequence: u64,
         value: SchemaValue,
     ) -> anyhow::Result<()> {
-        let durable_stream_id = self.stream_identity(transport_stream_id)?;
-        self.send(InvocationRequest {
-            request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                transport_stream_id,
-                sequence,
-                payload: Some(input_stream_item::Payload::Value(
-                    value.try_into().map_err(anyhow::Error::msg)?,
-                )),
-                durable_stream_id: Some(durable_stream_id),
-                epoch: self.acceptance.epoch,
-            })),
-        })
-        .await
+        self.stream_identity(transport_stream_id)?;
+        self.session
+            .send_input(transport_stream_id, sequence, value)
+            .await
     }
 
     async fn end_input(&mut self, transport_stream_id: u64, sequence: u64) -> anyhow::Result<()> {
-        let durable_stream_id = self.stream_identity(transport_stream_id)?;
-        self.send(InvocationRequest {
-            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                transport_stream_id,
-                producer_sequence: sequence,
-                direction: StreamDirection::Input as i32,
-                authored_by: StreamTerminalAuthor::Guest as i32,
-                outcome: Some(
-                    golem_common::base_model::durable_stream::StreamTerminal::Finished
-                        .try_into()
-                        .map_err(anyhow::Error::msg)?,
-                ),
-                durable_stream_id: Some(durable_stream_id),
-                epoch: self.acceptance.epoch,
-                ..Default::default()
-            })),
-        })
-        .await
+        self.stream_identity(transport_stream_id)?;
+        self.session
+            .finish_input(transport_stream_id, sequence)
+            .await
     }
 
     async fn cancel_stream(
@@ -693,34 +502,32 @@ impl TrustedInvocationSession {
         direction: StreamDirection,
     ) -> anyhow::Result<()> {
         let durable_stream_id = self.stream_identity(transport_stream_id)?;
-        self.send(InvocationRequest {
-            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                transport_stream_id,
-                producer_sequence: if direction == StreamDirection::Output { 0 } else { producer_sequence },
-                direction: direction as i32,
-                authored_by: StreamTerminalAuthor::Guest as i32,
-                outcome: Some(if direction == StreamDirection::Output {
-                    golem_common::base_model::durable_stream::StreamTerminal::ConsumerCancelled {
-                        details: Some("integration test cancelled the stream".to_string()),
-                    }
-                } else {
-                    golem_common::base_model::durable_stream::StreamTerminal::Failed(
-                        golem_common::base_model::durable_stream::StreamError::Interrupted("integration test cancelled the stream".to_string()),
-                    )
-                }.try_into().map_err(anyhow::Error::msg)?),
-                durable_stream_id: Some(durable_stream_id),
-                epoch: self.acceptance.epoch,
-                durable_offset: Vec::new(),
-            })),
-        })
-        .await
+        if direction == StreamDirection::Output {
+            self.session
+                .cancel_output(
+                    transport_stream_id,
+                    Some(durable_stream_id),
+                    STREAM_CANCELLATION_DETAILS,
+                )
+                .await
+        } else {
+            self.session
+                .end_input(
+                    transport_stream_id,
+                    producer_sequence,
+                    StreamTerminal::Failed(StreamError::Interrupted(
+                        STREAM_CANCELLATION_DETAILS.to_string(),
+                    )),
+                )
+                .await
+        }
     }
 
     async fn finish(
         mut self,
         mut report: TrustedInvocationReport,
     ) -> anyhow::Result<TrustedInvocationReport> {
-        while !self.state.is_complete() {
+        while !self.is_complete() {
             let response = self.receive().await.map_err(|error| {
                 let error = error.context(format!(
                     "received result={}, output streams={}, stream cancellations={}",
@@ -728,31 +535,26 @@ impl TrustedInvocationSession {
                     report.outputs.len(),
                     report.stream_cancels.len()
                 ));
-                if self.unsent_requests.is_empty() {
+                if self.session.unsent_frames().is_empty() {
                     error
                 } else {
                     error.context(format!(
                         "the request channel closed before these frames were sent: {:#?}",
-                        self.unsent_requests
+                        self.session.unsent_frames()
                     ))
                 }
             })?;
             report.record(response)?;
         }
-        report.unsent_requests = std::mem::take(&mut self.unsent_requests);
-        let trailing =
-            tokio::time::timeout(std::time::Duration::from_secs(10), self.responses.recv())
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!("completed trusted invocation did not close its endpoint")
-                })?;
-        if let Some(trailing) = trailing {
+        report.unsent_requests = self.session.take_unsent_frames();
+        let trailing = tokio::time::timeout(TRUSTED_CLOSE_TIMEOUT, self.session.message())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("completed trusted invocation did not close its endpoint")
+            })?;
+        if let Some(trailing) = trailing? {
             anyhow::bail!("trusted invocation emitted a frame after completion: {trailing:?}");
         }
-        self.response_task
-            .take()
-            .expect("trusted invocation response task is present")
-            .await?;
         Ok(report)
     }
 }
@@ -1083,58 +885,36 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
 ) -> anyhow::Result<()> {
     let environment_id = EnvironmentId(uuid::Uuid::new_v4());
     let agent_id = AgentId::from_parts(1, uuid::Uuid::new_v4().as_u128() >> 38);
-    let worker_service = deps.worker_service();
-    let mut client = WorkerServiceClient::connect(format!(
-        "http://{}:{}",
-        worker_service.grpc_host(),
-        worker_service.gprc_port()
-    ))
-    .await?;
+    let user = deps.admin().await;
 
     for operation in [
         PrivateResumeOperation::Resume,
         PrivateResumeOperation::Takeover,
     ] {
         let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
-        let request = InvocationRequest {
-            request: Some(invocation_request::Request::ResumeAttach(
-                PrivateResumeAttach {
-                    idempotency_key: Some(idempotency_key.into()),
-                    agent_id: Some(agent_id.into()),
-                    environment_id: Some(environment_id.into()),
-                    attachment_id: Some(
-                        AttachmentId::primary(environment_id, &agent_id, &idempotency_key)?
-                            .0
-                            .into(),
-                    ),
-                    attempt_id: Some(uuid::Uuid::new_v4().into()),
-                    expected_callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
-                    expected_epoch: 1,
-                    operation: operation as i32,
-                    cursors: Vec::new(),
-                    auth_ctx: Some(AuthCtx::System.into()),
-                    caller: Some(golem_common::model::caller::Caller::anonymous().into()),
-                },
-            )),
+        let resume = PrivateResumeAttach {
+            idempotency_key: Some(idempotency_key.into()),
+            agent_id: Some(agent_id.into()),
+            environment_id: Some(environment_id.into()),
+            attachment_id: Some(
+                AttachmentId::primary(environment_id, &agent_id, &idempotency_key)?
+                    .0
+                    .into(),
+            ),
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
+            expected_epoch: 1,
+            operation: operation as i32,
+            cursors: Vec::new(),
+            auth_ctx: Some(AuthCtx::System.into()),
+            caller: Some(golem_common::model::caller::Caller::anonymous().into()),
         };
-        let mut state = InvocationSessionState::default();
-        state
-            .validate_trusted_request(&request)
-            .map_err(anyhow::Error::msg)?;
-        let (requests, receiver) = mpsc::channel(1);
-        requests.send(request).await?;
-        drop(requests);
-        let mut responses = client
-            .invoke_agent_session(ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let response = responses
+        let mut session = user.resume_session(resume).await?;
+        session.close_requests();
+        let response = session
             .message()
             .await?
             .ok_or_else(|| anyhow::anyhow!("resume endpoint returned no response"))?;
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
         let rejected = match response.response {
             Some(invocation_response::Response::Rejected(rejected)) => rejected,
             other => anyhow::bail!("resume endpoint returned an unexpected response: {other:?}"),
@@ -1145,8 +925,8 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
             "resume endpoint returned an unexpected rejection: {rejected:?}"
         );
         assert_eq!(rejected.error, format!("Worker not found: {agent_id}"));
-        assert!(responses.message().await?.is_none());
-        assert!(state.is_complete());
+        assert!(session.message().await?.is_none());
+        assert!(session.is_complete());
     }
     Ok(())
 }
@@ -1252,7 +1032,7 @@ async fn dropped_durable_input_discards_items_and_end_after_consumer_cancellatio
         if input_consumer_cancelled {
             break;
         }
-        if session.state.is_complete() {
+        if session.is_complete() {
             anyhow::bail!("invocation completed before cancelling its dropped durable input");
         }
     }
@@ -2439,8 +2219,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
     use golem_common::model::durable_stream::StreamSessionRecord;
     use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
     use golem_common::schema::FromSchema;
-    use integration_tests::invocation_session::InvocationSession;
-    use std::time::Duration;
+    use integration_tests::invocation_session::ReattachingSession;
 
     let user = deps.user().await?;
     let (_, environment) = user.app_and_env().await?;
@@ -2456,7 +2235,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
         agent_type_id(&user, &component, &agent.agent_type).await?,
         &agent,
     )?;
-    let checkpoint = InvocationSession::start(
+    let checkpoint = ReattachingSession::start(
         deps,
         &component,
         &agent,
@@ -2493,7 +2272,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
         }
     })
     .await??;
-    let report = InvocationSession::resume(
+    let report = ReattachingSession::resume(
         deps,
         checkpoint,
         PrivateResumeOperation::Resume,

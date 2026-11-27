@@ -30,7 +30,7 @@ mod tests {
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
     use integration_tests::agents::lookup_keyed_agent;
     use integration_tests::benchmarks::streaming_recovery::Topology;
-    use integration_tests::invocation_session::{InvocationSession, SessionCheckpoint, StreamId};
+    use integration_tests::invocation_session::{ReattachingSession, SessionCheckpoint, StreamId};
     use std::sync::Once;
     use std::time::Duration;
     use test_r::{test, timeout};
@@ -165,7 +165,7 @@ mod tests {
     }
 
     async fn prefix(
-        session: &mut InvocationSession,
+        session: &mut ReattachingSession,
         topology: Topology,
         expected: &[(u32, u32)],
     ) -> anyhow::Result<Vec<StreamId>> {
@@ -223,7 +223,7 @@ mod tests {
         for branch in 0..if topology == Topology::Flat { 2 } else { 1 } {
             let agent = agent_key!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
             for _ in 0..historical_sessions {
-                InvocationSession::start(
+                ReattachingSession::start(
                     &deps,
                     &component,
                     &agent,
@@ -260,7 +260,7 @@ mod tests {
             };
             gates.push(left);
             let mut session =
-                InvocationSession::start(&deps, &component, &agent, method, input, PHASE).await?;
+                ReattachingSession::start(&deps, &component, &agent, method, input, PHASE).await?;
             stream_ids.push(prefix(&mut session, topology, &expected).await?);
             expectations.push(expected);
             agents.push(agent);
@@ -270,11 +270,11 @@ mod tests {
         stop(&deps).await?;
         let checkpoints: Vec<_> = sessions
             .into_iter()
-            .map(InvocationSession::disconnect)
+            .map(ReattachingSession::disconnect)
             .collect();
         restart(&deps).await?;
         let resumed = futures::future::try_join_all(checkpoints.into_iter().map(|checkpoint| {
-            InvocationSession::resume(&deps, checkpoint, ResumeOperation::Takeover, PHASE)
+            ReattachingSession::resume(&deps, checkpoint, ResumeOperation::Takeover, PHASE)
         }))
         .await?;
         // Every Takeover has been accepted and its epoch checked before either gate is released.
@@ -283,7 +283,7 @@ mod tests {
                 .await?;
         }
         let reports =
-            futures::future::try_join_all(resumed.into_iter().map(InvocationSession::finish))
+            futures::future::try_join_all(resumed.into_iter().map(ReattachingSession::finish))
                 .await?;
         let mut histories = Vec::new();
         for (index, report) in reports.iter().enumerate() {

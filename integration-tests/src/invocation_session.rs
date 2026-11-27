@@ -20,22 +20,25 @@ use futures::{StreamExt, stream::BoxStream};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
-    AgentInvocationMode, DurableStreamHandle, DurableStreamMapping, ExternalToolInvocation,
-    InvocationAccepted, InvocationRejectionReason, InvocationRequest, InvocationResponse,
-    InvocationSessionCompletion, InvocationSessionResult, InvocationStart, OutputStreamItem,
-    ResumeAttach, ResumeOperation, StreamConsumerCancelled, StreamCursor, StreamDirection,
-    StreamEnd, StreamMappingRole, StreamTerminal, StreamTerminalAuthor, invocation_request,
-    invocation_response, invocation_session_completion, stream_terminal,
+    DurableStreamHandle, DurableStreamMapping, ExternalToolInvocation, InvocationAccepted,
+    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
+    InvocationSessionResult, OutputStreamItem, ResumeAttach, ResumeOperation,
+    StreamConsumerCancelled, StreamCursor, StreamDirection, StreamEnd, StreamMappingRole,
+    StreamTerminal, StreamTerminalAuthor, invocation_request, invocation_response,
+    invocation_session_completion, stream_terminal,
 };
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::{AgentKey, AgentTarget, ParsedAgentKey};
+use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
 use golem_common::model::tool::ToolName;
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_schema::proto::golem::common::Uuid;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoValue;
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::invocation_session::{
+    InvocationStartBuilder, id_target, key_target,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -331,7 +334,7 @@ impl SessionCheckpoint {
     }
 }
 
-pub struct InvocationSession {
+pub struct ReattachingSession {
     // Retain the request half until disconnect or completion, without sending cancellation.
     requests: mpsc::Sender<InvocationRequest>,
     responses: BoxStream<'static, anyhow::Result<InvocationResponse>>,
@@ -340,7 +343,7 @@ pub struct InvocationSession {
     checkpoint: SessionCheckpoint,
 }
 
-impl InvocationSession {
+impl ReattachingSession {
     /// Connect before the request timer starts; all remaining work shares one absolute deadline.
     pub async fn start(
         deps: &impl TestDependencies,
@@ -350,28 +353,15 @@ impl InvocationSession {
         input: TypedSchemaValue,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
-        let key = AgentKey::new(agent.agent_type.clone(), agent.parameters.clone())
-            .map_err(|err| anyhow!("Invalid agent key {agent}: {err}"))?;
-        let (_, value) = input.into_parts();
+        let start = InvocationStartBuilder::new(component, method, AuthCtx::System)
+            .target(key_target(agent)?)
+            .with_component_id()
+            .input(input)?
+            .allow_streams()
+            .fresh_attempt()
+            .build()?;
         let request = InvocationRequest {
-            request: Some(invocation_request::Request::Start(InvocationStart {
-                target: Some(
-                    AgentTarget::Key(key)
-                        .try_into()
-                        .map_err(anyhow::Error::msg)?,
-                ),
-                component_id: Some(component.id.into()),
-                method_name: Some(method.to_string()),
-                input: Some(value.try_into().map_err(anyhow::Error::msg)?),
-                allow_streams: true,
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
-                auth_ctx: Some(AuthCtx::System.into()),
-                environment_id: Some(component.environment_id.into()),
-                mode: AgentInvocationMode::Await as i32,
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
-                ..Default::default()
-            })),
+            request: Some(invocation_request::Request::Start(start)),
         };
         Self::connect(deps, request, SessionCheckpoint::default(), timeout).await
     }
@@ -428,33 +418,27 @@ impl InvocationSession {
             input.keys()
         );
         let input = TypedSchemaValue::new(model.record_schema, SchemaValue::Record { fields });
+        let tool = ExternalToolInvocation {
+            tool_name: tool_name.to_string(),
+            command_path,
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            stdin: false,
+            stdout: true,
+            stderr: false,
+            fresh_owner: false,
+            expected_deployment_revision: None,
+        };
+        let start = InvocationStartBuilder::for_tool(component, tool, AuthCtx::System)
+            .target(id_target(&OwnedAgentId::new(
+                component.environment_id,
+                &agent,
+            )))
+            .expect_fingerprint(fingerprint.0)
+            .allow_streams()
+            .fresh_attempt()
+            .build()?;
         let request = InvocationRequest {
-            request: Some(invocation_request::Request::Start(InvocationStart {
-                target: Some(
-                    AgentTarget::Id(agent)
-                        .try_into()
-                        .map_err(anyhow::Error::msg)?,
-                ),
-                expected_callee_fingerprint: Some(fingerprint.0.into()),
-                external_tool: Some(ExternalToolInvocation {
-                    tool_name: tool_name.to_string(),
-                    command_path,
-                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-                    stdin: false,
-                    stdout: true,
-                    stderr: false,
-                    fresh_owner: false,
-                    expected_deployment_revision: None,
-                }),
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
-                auth_ctx: Some(AuthCtx::System.into()),
-                environment_id: Some(component.environment_id.into()),
-                mode: AgentInvocationMode::Await as i32,
-                allow_streams: true,
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
-                ..Default::default()
-            })),
+            request: Some(invocation_request::Request::Start(start)),
         };
         Self::connect(deps, request, SessionCheckpoint::default(), timeout).await
     }
