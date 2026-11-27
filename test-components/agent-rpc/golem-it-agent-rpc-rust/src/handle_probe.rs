@@ -73,6 +73,11 @@ pub trait HandleProbe {
     async fn trigger_stream_output(&self, target_name: String) -> HandleAnswer;
     /// Schedules the stream-returning `StreamingRpcTarget.produce` with the raw host client.
     async fn schedule_stream_output(&self, target_name: String) -> HandleAnswer;
+    /// Schedules a method that `StreamingRpcTarget` does not have, with the raw host client.
+    async fn schedule_unknown_method(&self, target_name: String) -> HandleAnswer;
+    /// Schedules `StreamingRpcTarget.produce` with an input that does not match the method, with
+    /// the raw host client.
+    async fn schedule_mismatched_input(&self, target_name: String) -> HandleAnswer;
 
     async fn held_status(&self) -> HandleAnswer;
     async fn held_await(&self) -> HandleAnswer;
@@ -321,6 +326,32 @@ impl HandleProbe for HandleProbeImpl {
                 at(0, 0),
                 "produce".to_string(),
                 encode_single_parameter(vec![1u32, 2]),
+            )
+            .await,
+        )
+    }
+
+    async fn schedule_unknown_method(&self, target_name: String) -> HandleAnswer {
+        let rpc = WasmRpc::upsert("StreamingRpcTarget", encode_single_parameter(target_name))
+            .expect("failed to create the RPC client");
+        rpc_answer(
+            rpc.schedule(
+                at(0, 0),
+                "no-such-method".to_string(),
+                encode_single_parameter(vec![1u32, 2]),
+            )
+            .await,
+        )
+    }
+
+    async fn schedule_mismatched_input(&self, target_name: String) -> HandleAnswer {
+        let rpc = WasmRpc::upsert("StreamingRpcTarget", encode_single_parameter(target_name))
+            .expect("failed to create the RPC client");
+        rpc_answer(
+            rpc.schedule(
+                at(0, 0),
+                "produce".to_string(),
+                encode_single_parameter("not a list".to_string()),
             )
             .await,
         )

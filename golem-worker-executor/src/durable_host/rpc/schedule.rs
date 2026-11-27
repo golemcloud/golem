@@ -19,8 +19,8 @@
 
 use super::execution::{classify_rpc_error, known_fresh_dispatch_allowed};
 use super::{
-    InvocationEntry, RemoteCall, RpcCallTarget, WasmRpcEntry, activate_known_target,
-    dispatch_target, find_agent_method, interruptible, remote_method_uses_streams,
+    InvocationEntry, PreparedRpcInvocation, RemoteCall, RpcCallKind, RpcCallTarget, WasmRpcEntry,
+    activate_known_target, dispatch_target, interruptible, prepare_rpc_invocation,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
@@ -34,7 +34,8 @@ use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
+use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::card::PermissionTarget;
 use golem_common::model::invocation_context::{InvocationContextSpan, InvocationContextStack};
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcSchedule;
 use golem_common::model::oplog::payload::denied;
@@ -47,7 +48,6 @@ use golem_common::model::{
     AgentInvocation, IdempotencyKey, InvocationRequestKey, OwnedAgentId, OwnedInvocationId,
 };
 use golem_common::schema::schema_value::SchemaValue;
-use golem_schema::schema::wit::decode_value_with;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::component::{Accessor, HasSelf, Resource};
@@ -56,12 +56,8 @@ type ScheduleCall = DurableCallSession<GolemRpcWasmRpcSchedule, Cancellable>;
 
 /// What a schedule validated and captured in the guest's call, before its first `await`.
 struct PreparedSchedule {
-    ephemeral: Option<super::EphemeralRpcTarget>,
-    method_name: String,
-    input_value: SchemaValue,
+    rpc: PreparedRpcInvocation,
     scheduled_at: jiff::Timestamp,
-    env: Vec<(String, String)>,
-    config: Vec<AgentConfigEntryDto>,
     /// The context the scheduled invocation runs in: a child of the scheduling span.
     stack: InvocationContextStack,
     /// The remote steps of the schedule. Its stack is the context of the call that creates an
@@ -77,86 +73,17 @@ pub(super) async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
     input: core_wire::SchemaValueTree,
 ) -> anyhow::Result<Result<Resource<InvocationEntry>, RpcError>> {
     reserve_invocation_id_before_await(accessor, accessor.getter())?;
-    // A guest bug, such as an unknown method, an input that does not match the method or an
-    // invalid time, traps before the call opens a durable record.
-    let (prepared, target, call_target) = accessor.with(|mut access| {
-        let ctx = access.get();
-        ctx.check_read_only_allows("golem::rpc::wasm-rpc::schedule")
-            .map_err(wasmtime::Error::from)?;
-        let (
-            logical_remote_agent_id,
-            ephemeral,
-            remote_agent_type,
-            remote_method_streams,
-            span_id,
-            env,
-            config,
-        ) = {
-            let payload = &ctx.table().get(&this)?.payload;
-            let (env, config) = payload.target_activation.target_creation_data();
-            (
-                payload.remote_agent_id.clone(),
-                payload.ephemeral.clone(),
-                payload.remote_agent_type.clone(),
-                payload.remote_method_streams.clone(),
-                payload.span_id.clone(),
-                env,
-                config,
-            )
-        };
-        // Lifting the input first consumes the owned handles it carries, so none leaks when the
-        // method check fails.
-        let input_value = decode_value_with(input, ctx)
-            .map_err(|err| anyhow::anyhow!("Invalid RPC input: {err}"))?;
-        let method = find_agent_method(&remote_agent_type, &method_name)?;
-        method
-            .validate_input(&remote_agent_type.schema, &input_value)
-            .map_err(|error| anyhow::anyhow!("Invalid RPC input: {error}"))?;
-        if remote_method_uses_streams(&remote_method_streams, &method.name)? {
-            return Err(anyhow::anyhow!(
-                "live streams cannot be used in scheduled invocations"
-            ));
-        }
-        let scheduled_at = i32::try_from(datetime.nanoseconds)
-            .ok()
-            .and_then(|nanos| jiff::Timestamp::new(datetime.seconds, nanos).ok())
-            .ok_or_else(|| {
-                anyhow::Error::from(WorkerExecutorError::runtime(format!(
-                    "Received invalid datetime from wasi: seconds={}, nanoseconds={}",
-                    datetime.seconds, datetime.nanoseconds
-                )))
-            })?;
-        let target =
-            ctx.outbound_agent_method_target(&this, &logical_remote_agent_id, &method_name)?;
-        let call_target = RpcCallTarget::new(
-            ctx.idempotency_key_position(None),
-            &logical_remote_agent_id,
-            ephemeral.as_ref(),
-            &method_name,
-        );
-        let invocation_state = ctx.state.invocation_state();
-        let stack = InvocationContextStack::new(
-            invocation_state.invocation_context.trace_id.clone(),
-            InvocationContextSpan::external_parent(invocation_state.current_span_id.clone()),
-            invocation_state.invocation_context.trace_states.clone(),
-        );
-        let prepared = PreparedSchedule {
-            ephemeral,
-            method_name,
-            input_value,
-            scheduled_at,
-            env,
-            config,
-            stack,
-            remote: RemoteCall::of(ctx, &span_id),
-        };
-        Ok::<_, anyhow::Error>((prepared, target, call_target))
-    })?;
+    let request = accessor
+        .with(|mut access| prepare_schedule(access.get(), &this, datetime, method_name, input))?;
+    let (prepared, target, call_target) = match request {
+        Ok(request) => request,
+        Err(error) => return Ok(Err(error)),
+    };
 
     let (permission_check, decision) = AccessPermissionCheck::new(Ok(vec![target]));
     let request_target = call_target.clone();
-    let request_method_name = prepared.method_name.clone();
-    let request_input = prepared.input_value.clone();
+    let request_method_name = prepared.rpc.method_name.clone();
+    let request_input = prepared.rpc.input_value.clone();
     let request_datetime: SerializableDateTime = datetime.into();
     let mut handle = ScheduleCall::start_access_with_agent_authority_and_indexed_request(
         accessor,
@@ -238,6 +165,57 @@ pub(super) async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
     accepted(accessor, response)
 }
 
+/// Validates the request as `trigger` does, and captures what the schedule needs after its first
+/// await. An unknown method, an input that does not match the method, or a method with streams
+/// is the guest's error, which the call returns before it opens a durable record. An invalid
+/// time traps.
+fn prepare_schedule<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    this: &Resource<WasmRpcEntry>,
+    datetime: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
+    method_name: String,
+    input: core_wire::SchemaValueTree,
+) -> anyhow::Result<Result<(PreparedSchedule, PermissionTarget, RpcCallTarget), RpcError>> {
+    let rpc = match prepare_rpc_invocation(ctx, this, RpcCallKind::Scheduled, method_name, input)? {
+        Ok(rpc) => rpc,
+        Err(error) => return Ok(Err(error)),
+    };
+    let scheduled_at = i32::try_from(datetime.nanoseconds)
+        .ok()
+        .and_then(|nanos| jiff::Timestamp::new(datetime.seconds, nanos).ok())
+        .ok_or_else(|| {
+            anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                "Received invalid datetime from wasi: seconds={}, nanoseconds={}",
+                datetime.seconds, datetime.nanoseconds
+            )))
+        })?;
+    let target =
+        ctx.outbound_agent_method_target(this, &rpc.logical_remote_agent_id, &rpc.method_name)?;
+    let call_target = RpcCallTarget::new(
+        ctx.idempotency_key_position(None),
+        &rpc.logical_remote_agent_id,
+        rpc.ephemeral.as_ref(),
+        &rpc.method_name,
+    );
+    let invocation_state = ctx.state.invocation_state();
+    let stack = InvocationContextStack::new(
+        invocation_state.invocation_context.trace_id.clone(),
+        InvocationContextSpan::external_parent(invocation_state.current_span_id.clone()),
+        invocation_state.invocation_context.trace_states.clone(),
+    );
+    let remote = RemoteCall::of(ctx, &rpc.connection_span_id);
+    Ok(Ok((
+        PreparedSchedule {
+            rpc,
+            scheduled_at,
+            stack,
+            remote,
+        },
+        target,
+        call_target,
+    )))
+}
+
 /// Commits the scheduled invocation in the target's oplog and returns its final ID, or the
 /// target's permanent refusal. An interrupt and a transient failure trap and leave the call's
 /// `Start` incomplete for repair.
@@ -253,7 +231,7 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
     let auth_ctx = handle.agent_auth_ctx().clone();
     let remote = &prepared.remote;
 
-    let target_fingerprint = if prepared.ephemeral.is_some() {
+    let target_fingerprint = if prepared.rpc.is_ephemeral() {
         // The ephemeral target is created now, so the schedule commits in its oplog and the
         // wake pins this incarnation. The target runs nothing before the deadline. Only the
         // first live dispatch may create a fresh target; a repair may find it.
@@ -267,21 +245,21 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
             InvocationFreshnessDisposition::MayExist
         };
         let invocation = crate::worker::invocation::native_invocation_start(
-            &prepared.method_name,
-            &prepared.input_value,
+            &prepared.rpc.method_name,
+            &prepared.rpc.input_value,
             false,
         )
         .map_err(|error| handle.trap(anyhow::Error::from(error)))?;
         let demand = remote.rpc.create_demand(
-            dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
-            &prepared.method_name,
+            dispatch_target(remote_agent_id, prepared.rpc.ephemeral.as_ref()),
+            &prepared.rpc.method_name,
             Some(invocation),
             remote.created_by,
             &remote.agent_id,
-            &prepared.env,
+            &prepared.rpc.env,
             remote.stack.clone(),
             &remote.caller,
-            prepared.config.clone(),
+            prepared.rpc.config.clone(),
             &auth_ctx,
             Some(idempotency_key.clone()),
             freshness,
@@ -298,13 +276,14 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
     let invocation_id = request_key.finalize(
         remote_agent_id.agent_id(),
         target_fingerprint,
-        &prepared.method_name,
+        &prepared.rpc.method_name,
     );
     let invocation = AgentInvocation::AgentMethod {
         idempotency_key: invocation_id.id(),
-        method_name: prepared.method_name,
+        method_name: prepared.rpc.method_name,
         allow_streams: false,
         input: prepared
+            .rpc
             .input_value
             .try_into()
             .map_err(|error: String| handle.trap(anyhow::anyhow!(error)))?,

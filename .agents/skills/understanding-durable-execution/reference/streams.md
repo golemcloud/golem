@@ -5,9 +5,9 @@ Detailed mechanics behind the "Streaming invocations" section of `SKILL.md`. Pat
 
 
 A streaming RPC is an ordinary durable RPC whose method signature carries input or output streams
-(`remote_method_uses_streams` in `durable_host/rpc/mod.rs`). Live streams require
-invoke-and-await: `trigger` rejects a streaming method with `RpcError::ProtocolError`, and
-`schedule` traps on one.
+(`remote_method_uses_streams` in `durable_host/rpc/values.rs`). Live streams require
+invoke-and-await: `trigger` and `schedule` reject a streaming method with
+`RpcError::ProtocolError` before they open a durable call.
 
 ### Identity
 

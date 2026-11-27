@@ -28,7 +28,6 @@ use golem_common::model::durable_stream::StreamInvocationId;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::types::SerializableRpcError;
-use golem_common::schema::agent::AgentMethodSchema;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::schema_value::SchemaValue;
@@ -196,7 +195,10 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         )));
     }
 
-    if ephemeral.is_none() && logical_remote_agent_id == own_agent_id {
+    if kind != RpcCallKind::Scheduled
+        && ephemeral.is_none()
+        && logical_remote_agent_id == own_agent_id
+    {
         match ctx.runtime() {
             golem_common::model::entity::OwnerRuntime::Agent => {
                 return Err(anyhow::anyhow!(
@@ -239,26 +241,6 @@ pub(super) fn remote_method_uses_streams(
             "Streaming classification for remote agent method '{method_name}' is missing"
         )
     })
-}
-
-/// Look up an [`AgentMethodSchema`] by name from the cached remote agent type.
-/// Used on the schedule path, where a lookup failure is a guest bug that
-/// traps before the durable record of the schedule opens.
-pub(super) fn find_agent_method<'a>(
-    agent_type: &'a AgentTypeSchema,
-    method_name: &str,
-) -> anyhow::Result<&'a AgentMethodSchema> {
-    let method = agent_type
-        .methods
-        .iter()
-        .find(|m| m.name == method_name)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Method '{method_name}' not found on agent type '{}'",
-                agent_type.type_name
-            )
-        })?;
-    Ok(method)
 }
 
 /// Resolve and lift the guest-side input value tree into the schema-native

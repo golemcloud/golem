@@ -37,6 +37,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const HANDLE_AWAIT: &str = "golem::rpc::invocation::await";
 const HANDLE_STATUS: &str = "golem::rpc::invocation::status";
+const SCHEDULE: &str = "golem::rpc::wasm-rpc::schedule";
 
 #[derive(Debug, Clone, PartialEq, FromSchema)]
 enum RpcCallOutcome {
@@ -1127,7 +1128,6 @@ async fn a_schedule_recovers_from_committed_crash_prefixes(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    const SCHEDULE: &str = "golem::rpc::wasm-rpc::schedule";
     for (checkpoint, suffix) in [(RpcCheckpoint::Start, "start"), (RpcCheckpoint::End, "end")] {
         let context = TestContext::new(last_unique_id);
         let executor = start(deps, &context).await?;
@@ -1429,9 +1429,9 @@ async fn a_failed_invocation_reaches_the_guest_as_a_typed_error(
     Ok(())
 }
 
-/// The host keeps live streams to awaited calls: a guest `trigger` of a stream-returning method
-/// gets a typed protocol error and a guest `schedule` of it traps, and neither reaches the
-/// target. A read-only method may read a handle's status but traps on `cancel`, which leaves the
+/// The host keeps live streams to awaited calls: a guest `trigger` or `schedule` of a
+/// stream-returning method gets a typed protocol error, and neither reaches the target. A
+/// read-only method may read a handle's status but traps on `cancel`, which leaves the
 /// invocation running.
 #[test]
 #[timeout("3 minutes")]
@@ -1464,19 +1464,21 @@ async fn guest_handle_calls_keep_their_stream_and_read_only_restrictions(
     f.executor
         .start_agent(&f.component.id, scheduling_probe.clone())
         .await?;
-    let scheduled = f
-        .executor
-        .invoke_and_await_agent(
-            &f.component,
+    let scheduled: HandleAnswer = f
+        .call(
             &scheduling_probe,
             "schedule_stream_output",
             data_value!(stream_target),
         )
-        .await;
-    let error = scheduled.expect_err("a scheduled live stream traps");
+        .await?;
     assert!(
-        format!("{error:?}").contains("live streams cannot be used in scheduled invocations"),
-        "{error:?}"
+        matches!(
+            scheduled,
+            HandleAnswer::Error {
+                error: RpcCallOutcome::ProtocolError { .. }
+            }
+        ),
+        "{scheduled:?}"
     );
     let stream_target_id = f
         .executor
@@ -1540,5 +1542,57 @@ async fn guest_handle_calls_keep_their_stream_and_read_only_restrictions(
     f.complete(&promise).await?;
     let awaited: HandleAnswer = f.call(&probe, "held_await", data_value!()).await?;
     assert_eq!(awaited, HandleAnswer::Value { value: 7 });
+    Ok(())
+}
+
+/// A guest `schedule` checks the method and its input against the target's agent type when it
+/// is called, as `trigger` does: an unknown method and a mismatched input are typed errors, not
+/// traps, and the call records nothing.
+#[test]
+#[timeout("2 minutes")]
+async fn guest_schedule_returns_invalid_requests_as_rpc_errors(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let f = Fixture::start(deps, &context, fixture, TestExecutorOverrides::default()).await?;
+    let target = "invalid-schedule-target";
+    let probe = agent_key!("HandleProbe", "invalid-schedule-probe");
+    let probe_id = f
+        .executor
+        .start_agent(&f.component.id, probe.clone())
+        .await?;
+
+    let unknown_method: HandleAnswer = f
+        .call(&probe, "schedule_unknown_method", data_value!(target))
+        .await?;
+    let mismatched_input: HandleAnswer = f
+        .call(&probe, "schedule_mismatched_input", data_value!(target))
+        .await?;
+
+    // The fixture reports a remote agent error, here `invalid-method`, as this outcome.
+    assert_eq!(
+        unknown_method,
+        HandleAnswer::Error {
+            error: RpcCallOutcome::RemoteInternalError {
+                details: "remote agent error".to_string()
+            }
+        }
+    );
+    assert!(
+        matches!(
+            mismatched_input,
+            HandleAnswer::Error {
+                error: RpcCallOutcome::ProtocolError { .. }
+            }
+        ),
+        "{mismatched_input:?}"
+    );
+    assert!(
+        starts_of(&f.oplog(&probe_id).await?, SCHEDULE).is_empty(),
+        "a rejected schedule opens no durable call"
+    );
     Ok(())
 }

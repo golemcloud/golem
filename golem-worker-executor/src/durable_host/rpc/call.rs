@@ -48,6 +48,9 @@ pub(super) enum RpcCallKind {
     Awaited,
     /// `trigger`: an asynchronous call that returns the invocation's handle.
     Triggered,
+    /// `schedule`: an asynchronous call for a given time that returns the invocation's handle.
+    /// It may target the calling agent.
+    Scheduled,
 }
 
 impl RpcCallKind {
@@ -55,12 +58,14 @@ impl RpcCallKind {
         match self {
             Self::Awaited => "invoke-and-await",
             Self::Triggered => "trigger",
+            Self::Scheduled => "schedule",
         }
     }
     pub(super) fn host_function_name(self) -> &'static str {
         match self {
             Self::Awaited => "golem::rpc::wasm-rpc::invoke-and-await",
             Self::Triggered => "golem::rpc::wasm-rpc::trigger",
+            Self::Scheduled => "golem::rpc::wasm-rpc::schedule",
         }
     }
 }
