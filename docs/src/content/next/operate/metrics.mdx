@@ -191,8 +191,8 @@ Process-local observations of how long an executor takes to release the resource
 | `golem_invocation_listing_results_total` | counter |  | Invocation results read to list the invocations of one agent |
 | `golem_agent_identity_resolution_total` | counter | `event` | Mode-hint events observed during authoritative agent identity resolution; multiple events may occur per resolution |
 | `golem_stale_running_worker_total` | counter | `reason` | Stale recovery-index members removed by reason |
-| `golem_status_cache_publication_total` | counter | `cache`, `event` | Status cache publication events by cache and reconciliation path; fallback and eventual reconciliation are separate events |
-| `golem_derived_cache_publication_failed_total` | counter | `cache` | Derived-cache publications that failed while atomically applying expiry |
+| `golem_status_cache_publication_total` | counter | `cache`, `event` | Publication events of a status cache (`status`) or a status baseline (`checkpoint`) by reconciliation path; fallback and eventual reconciliation are separate events |
+| `golem_derived_cache_publication_failed_total` | counter | `cache` | Publications of a status cache, a status baseline (`checkpoint`) or a derived cache that failed |
 | `golem_foreign_stream_fingerprint_mismatch_total` | counter |  | Foreign durable-stream accesses rejected because the current agent fingerprint differs |
 
 ## Worker executor: invocations and the Wasm runtime
