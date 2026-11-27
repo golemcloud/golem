@@ -906,6 +906,7 @@ fn create_serialization_poem_serde_equivalence() {
         crate::model::agent::OwnerKind::ComponentAgent,
         crate::model::agent::OwnerKind::EphemeralExternalTool,
         crate::model::agent::OwnerKind::OplogProcessor,
+        crate::model::agent::OwnerKind::StandaloneTool,
     ] {
         let mut entry = entry.clone();
         let PublicOplogEntry::Create(parameters) = &mut entry else {
@@ -929,7 +930,7 @@ fn create_serialization_poem_serde_equivalence() {
             unreachable!()
         };
         assert_eq!(create.owner_kind, i32::from(owner_kind));
-        create.owner_kind = 3;
+        create.owner_kind = i32::MAX;
         assert!(super::OplogEnrichmentEntry::try_from(proto).is_err());
     }
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
@@ -1088,7 +1089,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     unreachable!()
                 };
                 assert_eq!(create.owner_kind, i32::from(owner_kind));
-                create.owner_kind = 3;
+                create.owner_kind = i32::MAX;
                 assert!(OplogEntry::try_from(proto).is_err());
             }
             let Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::Create(create)) =
