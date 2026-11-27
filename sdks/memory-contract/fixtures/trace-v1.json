@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "events": {
+    "member": {
+      "fields": ["member", "op", "outcome"],
+      "meaning": "A scripted member that belongs to a composite received a call. The member records it when the call ends. op is observe, recall, context or forget. outcome is ok, cancelled, or the error kind of the member's failure."
+    },
+    "model-start": {
+      "fields": ["role", "call", "source"],
+      "meaning": "A scripted model of this role received call number call (counted per role from 1). source is the observation ID being enriched; it is absent for query embeddings and classifier calls."
+    },
+    "model-end": {
+      "fields": ["role", "call", "outcome"],
+      "meaning": "The call ended. outcome is ok, empty, malformed, error or cancelled."
+    },
+    "diagnostic": {
+      "fields": ["member", "source", "role", "cause"],
+      "meaning": "A member reported a nonfatal enrichment failure for source. cause is the model-end outcome (error or malformed)."
+    }
+  },
+  "rules": [
+    "Only test devices emit events: the scripted members and the scripted models. The vocabulary is a test vocabulary, not a public Memory API.",
+    "A case with expectTrace compares the complete ordered event list of that case.",
+    "Derivation commits and stale skips are not events. Cases observe them through expectState."
+  ]
+}

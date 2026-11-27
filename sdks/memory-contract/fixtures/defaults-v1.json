@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "limits": {
+    "candidateRows": { "default": 1000, "unit": "rows", "scope": "operation, shared across composite members" },
+    "candidateBytes": { "default": 4194304, "unit": "UTF-8 bytes of candidate text", "scope": "operation, shared across composite members" },
+    "vectorRows": { "default": 10000, "unit": "rows scanned", "scope": "operation, per member" },
+    "vectorDimensions": { "default": 4096, "unit": "dimensions", "scope": "per vector" },
+    "graphHops": { "default": 2, "unit": "hops", "scope": "traversal, per member" },
+    "graphVisits": { "default": 1000, "unit": "nodes visited", "scope": "traversal, per member" },
+    "graphEdges": { "default": 10000, "unit": "edges examined", "scope": "traversal, per member" },
+    "memberFanOut": { "default": 8, "unit": "members in one composite tree, nested composites and their members included", "scope": "construction" }
+  },
+  "boundaries": [
+    { "id": "candidate-rows/at-limit", "limit": "candidateRows", "value": 1000, "expect": "ok" },
+    { "id": "candidate-rows/over-limit", "limit": "candidateRows", "value": 1001, "expect": { "error": { "kind": "limit", "limit": "candidateRows" } } },
+    { "id": "candidate-bytes/at-limit", "limit": "candidateBytes", "value": 4194304, "expect": "ok" },
+    { "id": "candidate-bytes/over-limit", "limit": "candidateBytes", "value": 4194305, "expect": { "error": { "kind": "limit", "limit": "candidateBytes" } } },
+    { "id": "vector-rows/at-limit", "limit": "vectorRows", "value": 10000, "expect": "ok" },
+    { "id": "vector-rows/over-limit", "limit": "vectorRows", "value": 10001, "expect": { "error": { "kind": "limit", "limit": "vectorRows" } } },
+    { "id": "vector-dimensions/at-limit", "limit": "vectorDimensions", "value": 4096, "expect": "ok" },
+    { "id": "vector-dimensions/over-limit", "limit": "vectorDimensions", "value": 4097, "expect": { "error": { "kind": "limit", "limit": "vectorDimensions" } } },
+    { "id": "graph-hops/path-at-bound", "limit": "graphHops", "value": 2, "expect": "returned" },
+    { "id": "graph-hops/path-beyond-bound", "limit": "graphHops", "value": 3, "expect": "not-returned" },
+    { "id": "graph-visits/at-limit", "limit": "graphVisits", "value": 1000, "expect": "ok" },
+    { "id": "graph-visits/over-limit", "limit": "graphVisits", "value": 1001, "expect": { "error": { "kind": "limit", "limit": "graphVisits" } } },
+    { "id": "graph-edges/at-limit", "limit": "graphEdges", "value": 10000, "expect": "ok" },
+    { "id": "graph-edges/over-limit", "limit": "graphEdges", "value": 10001, "expect": { "error": { "kind": "limit", "limit": "graphEdges" } } },
+    { "id": "member-fan-out/at-limit", "limit": "memberFanOut", "value": 8, "expect": "ok" },
+    { "id": "member-fan-out/over-limit", "limit": "memberFanOut", "value": 9, "expect": { "error": { "kind": "limit", "limit": "memberFanOut" } } }
+  ]
+}

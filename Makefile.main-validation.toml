@@ -547,6 +547,11 @@ failed = exec --get-exit-code node --test .github/scripts/release-channel.test.m
 if not eq ${CI} true
     assert_eq ${failed} 0 "Schema and release tooling validation failed"
 end
+code = exec --get-exit-code node --test sdks/memory-contract/check.test.mjs
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
 code = exec --get-exit-code cargo test --locked --manifest-path .github/scripts/release-tooling-tests/Cargo.toml
 failed = calc ${failed} + ${code}
 if not eq ${CI} true

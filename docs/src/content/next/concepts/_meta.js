@@ -5,5 +5,6 @@ export default {
   permissions: "Permissions",
   communication: "Agent communication",
   artifacts: "Artifacts",
+  memory: "Memory",
   "agent-lifecycle": "Agent lifecycle",
 }
