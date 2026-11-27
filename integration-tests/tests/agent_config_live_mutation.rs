@@ -101,7 +101,7 @@ fn test_context_rust() -> Arc<dyn TestContext> {
             "reveal_secret_then_await_replay_gate"
         }
         fn case_config_path_segment(&self, segment: &str) -> String {
-            ccase!(kebab -> snake, segment)
+            ccase!(kebab -> camel, segment)
         }
     }
 

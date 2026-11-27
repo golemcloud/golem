@@ -1556,13 +1556,12 @@ mod tests {
         use golem_rust::golem_agentic::golem::agent::common::HttpMethod;
         use golem_schema::http::wit::wire as http;
         SelectedQueryAgentImpl::__register_agent_type();
-        let mut agent = golem_rust::agentic::get_all_agent_types()
+        let agent = golem_rust::agentic::get_all_agent_types()
             .into_iter()
             .find(|agent| agent.type_name == "SelectedQueryAgent")
             .unwrap();
         assert!(golem_rust::agentic::validate_wire_agent_http(&agent).is_ok());
-        let extended =
-            golem_rust::agentic::ExtendedAgentType::from_agent_type(agent.clone()).unwrap();
+        let extended = golem_rust::agentic::ExtendedAgentType::from_agent_type(agent).unwrap();
         let stream = extended
             .methods
             .iter()
@@ -1576,8 +1575,11 @@ mod tests {
             )
             .is_ok()
         );
-        let mut explicit = agent.clone();
-        explicit
+        let mut agent = golem_rust::agentic::get_all_agent_types()
+            .into_iter()
+            .find(|agent| agent.type_name == "SelectedQueryAgent")
+            .unwrap();
+        agent
             .methods
             .iter_mut()
             .find(|method| method.name == "stream")
@@ -1588,7 +1590,15 @@ mod tests {
                 query_param_name: "instance".into(),
                 variable_name: "instance".into(),
             });
-        assert!(golem_rust::agentic::validate_wire_agent_http(&explicit).is_err());
+        assert!(golem_rust::agentic::validate_wire_agent_http(&agent).is_err());
+        let _ = agent
+            .methods
+            .iter_mut()
+            .find(|method| method.name == "stream")
+            .unwrap()
+            .http_endpoint[0]
+            .query_vars
+            .pop();
         for method in [
             http::HttpMethod::Get,
             http::HttpMethod::Head,
@@ -2462,12 +2472,12 @@ mod tests {
                 ),
                 (
                     AgentConfigSource::Secret,
-                    vec!["nested".to_string(), "nested_secret".to_string(),],
+                    vec!["nested".to_string(), "nestedSecret".to_string(),],
                     "Secret(SchemaTypeBody::BoolType)".to_string()
                 ),
                 (
                     AgentConfigSource::Secret,
-                    vec!["api_key".to_string()],
+                    vec!["apiKey".to_string()],
                     "Secret(SchemaTypeBody::StringType)".to_string()
                 )
             ]

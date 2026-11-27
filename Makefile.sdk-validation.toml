@@ -220,7 +220,7 @@ if not ${targets_ok}
     trigger_error "Could not parse Rust SDK test targets"
 end
 actual = trim ${targets.stdout}
-expected = set "agent,caller,http_router,reflection_recipe_compile,rich_tool_conformance,schema_reexport,tool,tool_canonical,ui"
+expected = set "agent,caller,config_conformance,http_router,reflection_recipe_compile,rich_tool_conformance,schema_reexport,tool,tool_canonical,ui"
 covered = eq ${actual} ${expected}
 if not ${covered}
     echo "Test targets of sdks/rust changed; update validate-sdk-rust-check:"
@@ -228,7 +228,7 @@ if not ${covered}
     echo "Actual: ${actual}"
     trigger_error "Rust SDK test target coverage changed"
 end
-code = exec --get-exit-code cargo test --all-features --lib --bins --test agent --test caller --test http_router --test rich_tool_conformance --test tool_canonical --test schema_reexport --test reflection_recipe_compile
+code = exec --get-exit-code cargo test --all-features --lib --bins --test agent --test caller --test config_conformance --test http_router --test rich_tool_conformance --test tool_canonical --test schema_reexport --test reflection_recipe_compile
 failed = calc ${failed} + ${code}
 if not eq ${CI} true
     assert_eq ${failed} 0 "Rust SDK validation failed"

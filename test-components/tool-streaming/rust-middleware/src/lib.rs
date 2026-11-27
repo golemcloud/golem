@@ -110,7 +110,7 @@ impl SecretPolicyProbeMiddleware for SecretPolicyAudit {
         {
             wait_at_middleware_promise_checkpoint("secret-policy-before-access").await;
         }
-        let configured = Secret::<String>::new(vec!["tool_secret".to_string()]).handle();
+        let configured = Secret::<String>::new(vec!["toolSecret".to_string()]).handle();
         let config_resolved = configured.is_ok();
         let configured_secret_revealed = configured
             .as_ref()
@@ -687,7 +687,7 @@ async fn universal_secret_policy_audit(
             .await;
     }
 
-    let configured = Secret::<String>::new(vec!["tool_secret".to_string()]).handle();
+    let configured = Secret::<String>::new(vec!["toolSecret".to_string()]).handle();
     let config_resolved = configured.is_ok();
     let configured_secret_revealed = configured
         .as_ref()

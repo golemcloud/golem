@@ -26,84 +26,160 @@ pub enum StaticDefaultChoice {
 
 #[derive(ConfigSchema, Serialize)]
 pub struct StaticDefaultFields {
+    #[config_schema(default = r#"{"label":"code-default","count":31}"#)]
     pub settings: StaticDefaultSettings,
+    #[config_schema(default = r#""selected:value""#)]
     pub choice: StaticDefaultChoice,
+    #[config_schema(default = r#"[null,7,"retained"]"#)]
     pub slots: (Option<i32>, Option<i32>, String),
     pub omitted: Option<String>,
 }
 
-pub struct StaticDefaults(StaticDefaultFields);
-
-fn static_default(path: &[String]) -> Option<String> {
-    match path.last()?.as_str() {
-        "settings" => Some(r#"{"label":"code-default","count":31}"#),
-        "choice" => Some(r#""selected:value""#),
-        "slots" => Some(r#"[null,7,"retained"]"#),
-        _ => None,
-    }
-    .map(str::to_string)
-}
-
-impl golem_rust::agentic::ConfigSchema for StaticDefaults {
-    type RpcType = StaticDefaultFieldsRpc;
-
-    fn describe_config(
-        path: &[String],
-    ) -> Vec<golem_rust::agentic::ExtendedAgentConfigDeclaration> {
-        let mut declarations = StaticDefaultFields::describe_config(path);
-        for declaration in &mut declarations {
-            declaration.default_value = static_default(&declaration.path).map(|default| {
-                golem_rust::schema::render::from_json_value(
-                    &declaration.value_type,
-                    &declaration.value_type.root,
-                    &serde_json::from_str(&default).unwrap(),
-                )
-                .unwrap()
-            });
-        }
-        declarations
-    }
-
-    fn describe_wire_config(
-        path: &[String],
-        builder: &mut golem_rust::schema::wit::direct::WireSchemaBuilder,
-    ) -> Vec<golem_rust::golem_agentic::golem::agent::common::AgentConfigDeclaration> {
-        let mut declarations = StaticDefaultFields::describe_wire_config(path, builder);
-        for (declaration, native) in declarations.iter_mut().zip(Self::describe_config(path)) {
-            declaration.default_value = native
-                .default_value
-                .as_ref()
-                .map(|value| golem_rust::schema::wit::encode_value(value).unwrap());
-        }
-        declarations
-    }
-
-    fn load(path: &[String]) -> Result<Self, golem_rust::agentic::ConfigValueError> {
-        StaticDefaultFields::load(path).map(Self)
-    }
-}
-
 #[agent_definition]
 pub trait StaticDefaultsAgent {
-    fn new(name: String, #[agent_config] config: Config<StaticDefaults>) -> Self;
+    fn new(name: String, #[agent_config] config: Config<StaticDefaultFields>) -> Self;
 
     fn read(&self) -> String;
 }
 
 struct StaticDefaultsAgentImpl {
-    config: Config<StaticDefaults>,
+    config: Config<StaticDefaultFields>,
 }
 
 #[agent_implementation]
 impl StaticDefaultsAgent for StaticDefaultsAgentImpl {
-    fn new(_name: String, #[agent_config] config: Config<StaticDefaults>) -> Self {
+    fn new(_name: String, #[agent_config] config: Config<StaticDefaultFields>) -> Self {
         Self { config }
     }
 
     fn read(&self) -> String {
-        serde_json::to_string(&self.config.get().expect("static config is stored").0).unwrap()
+        serde_json::to_string(&self.config.get().expect("static config is stored")).unwrap()
     }
 }
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema, Serialize)]
+pub struct StaticMail {
+    pub kind: String,
+    pub address: String,
+    pub attempts: u32,
+}
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema, Serialize)]
+#[schema(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct StaticQueue {
+    pub kind: String,
+    pub queue_name: String,
+}
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema, Serialize)]
+#[schema(union)]
+#[serde(untagged)]
+pub enum StaticDelivery {
+    #[schema(rename = "mail", field_equals(field = "kind", literal = "mail"))]
+    Mail(StaticMail),
+    #[schema(rename = "queue", field_equals(field = "kind", literal = "queue"))]
+    Queue(StaticQueue),
+}
+
+#[derive(ConfigSchema, Serialize)]
+pub struct StaticDeliveryFields {
+    #[config_schema(default = r#"{"kind":"mail","address":"ops@example.test","attempts":3}"#)]
+    pub delivery: StaticDelivery,
+}
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema, Serialize)]
+#[schema(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct StaticNode {
+    pub display_name: String,
+    pub next: Option<Box<StaticNode>>,
+}
+
+#[derive(ConfigSchema, Serialize)]
+pub struct StaticRecursiveFields {
+    #[config_schema(
+        default = r#"{"displayName":"outer","next":{"displayName":"inner","next":null}}"#
+    )]
+    pub tree: StaticNode,
+}
+
+#[derive(ConfigSchema, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaticNamedFields {
+    #[config_schema(default = "19")]
+    pub max_chars: u32,
+}
+
+#[derive(ConfigSchema, Serialize)]
+pub struct StaticRequiredFields {
+    pub required: String,
+}
+
+#[derive(ConfigSchema, Serialize)]
+pub struct StaticOptionalFields {
+    #[config_schema(default = r#""from-code""#)]
+    pub optional: Option<String>,
+}
+
+#[derive(ConfigSchema, Serialize)]
+pub struct StaticEmptyFields {
+    #[config_schema(default = "true")]
+    pub enabled: bool,
+    #[config_schema(default = r#"["from-code"]"#)]
+    pub names: Vec<String>,
+    #[config_schema(default = r#""from-code""#)]
+    pub label: String,
+}
+
+macro_rules! static_config_agent {
+    ($agent:ident, $implementation:ident, $config:ty) => {
+        #[agent_definition]
+        pub trait $agent {
+            fn new(name: String, #[agent_config] config: Config<$config>) -> Self;
+            fn read(&self) -> String;
+        }
+
+        struct $implementation {
+            config: Config<$config>,
+        }
+
+        #[agent_implementation]
+        impl $agent for $implementation {
+            fn new(_name: String, #[agent_config] config: Config<$config>) -> Self {
+                Self { config }
+            }
+
+            fn read(&self) -> String {
+                serde_json::to_string(&self.config.get().expect("static config is captured"))
+                    .unwrap()
+            }
+        }
+    };
+}
+
+static_config_agent!(
+    StaticDeliveryAgent,
+    StaticDeliveryAgentImpl,
+    StaticDeliveryFields
+);
+static_config_agent!(
+    StaticRecursiveAgent,
+    StaticRecursiveAgentImpl,
+    StaticRecursiveFields
+);
+static_config_agent!(StaticNamedAgent, StaticNamedAgentImpl, StaticNamedFields);
+static_config_agent!(
+    StaticRequiredAgent,
+    StaticRequiredAgentImpl,
+    StaticRequiredFields
+);
+static_config_agent!(
+    StaticOptionalAgent,
+    StaticOptionalAgentImpl,
+    StaticOptionalFields
+);
+static_config_agent!(StaticEmptyAgent, StaticEmptyAgentImpl, StaticEmptyFields);
 
 #[derive(ConfigSchema)]
 pub struct NestedConfig {

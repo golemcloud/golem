@@ -77,7 +77,7 @@ agents:
         b: [1, 2, 3]
 ```
 
-Regular config keys in `golem.yaml` retain Rust field names, including `snake_case`. Secret paths have separate canonicalization rules.
+Config keys default to lowerCamelCase: a Rust field named `request_timeout` uses `requestTimeout` in `golem.yaml` and CLI paths. `#[config_schema(rename = "...")]` and `#[config_schema(rename_all = "...")]` can override this mapping. Secret paths use the same declared config names. Generated Rust RPC override fields retain Rust identifiers.
 
 ## 4. Pass Config via CLI
 

@@ -4,6 +4,74 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Static agent config
+
+Enable `export_golem_agentic`, derive `ConfigSchema`, and inject `Config<T>` with
+`#[agent_config]` on the agent constructor parameter:
+
+```rust
+use golem_rust::{ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
+use golem_rust::agentic::{Config, ConfigValueError};
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+struct Settings {
+    label: String,
+    count: u32,
+}
+
+#[derive(ConfigSchema)]
+#[config_schema(rename_all = "camelCase")]
+struct AppConfig {
+    #[config_schema(default = r#"{"label":"code-default","count":31}"#)]
+    settings: Settings,
+    #[config_schema(rename = "maxChars", default = "19")]
+    max_chars: u32,
+    #[config_schema(default = "null")]
+    optional_label: Option<String>,
+}
+
+fn read(config: &Config<AppConfig>) -> Result<u32, ConfigValueError> {
+    Ok(config.get()?.max_chars)
+}
+```
+
+`Config::get()` reads the host's captured values. It does not evaluate a factory
+or supply an SDK-local default. A `default` attribute is a string containing
+canonical schema JSON data. Metadata discovery validates it against the field's
+schema and exports it in both native and wire declarations. An invalid default
+fails discovery explicitly. Serde enum tagging is not the canonical schema codec;
+for a prefix-discriminated union, use a JSON string such as `"selected:value"`.
+Defaults cannot contain capabilities, streams or futures, or supply managed
+bindings. Do not put a default on a `secret` or `nested` field.
+
+Code defaults complete absent static values below deployment and creation fills.
+They do not repair an invalid supplied value or a broken catalog selector. An
+omitted optional default differs from `default = "null"`. A supplied null clears
+an optional default; false, zero, empty strings and empty lists are supplied
+values, not absence. Optional tuple elements retain their positions.
+
+Field names default to lowerCamelCase at metadata production; `rename` or
+`rename_all` can supply an explicit mapping. For example, `request_timeout`
+becomes `requestTimeout` in manifest keys, CLI paths and Secret paths; the Rust
+field remains `request_timeout`.
+`rename_all` accepts `preserve`, `camelCase`, `PascalCase`, `snake_case`,
+`kebab-case` and `SCREAMING_SNAKE_CASE`; a field's `rename` wins. Names must be
+nonempty, cannot contain dots or start with `$`, and cannot collide after
+renaming. The same canonical paths appear in metadata, host reads and creation
+parameters. Catalog lookup uses its exact path; these attributes do not recase
+catalog selectors. Within a field's record or union schema, use the ordinary
+`#[schema(...)]` attributes, independently of Serde output names.
+
+The generated `AppConfigRpc` carries creation fills. Its fields retain Rust
+identifiers and use `Option<T>`: `None` omits a fill, while `Some(None)` supplies
+null for an optional field. `#[config_schema(nested)]` flattens another config
+schema under the field's canonical path. Static record fields, recursive types
+and discriminated unions use the existing schema and wire derives.
+
+The runnable [`agent-sdk-rust` config agents](../../../test-components/agent-sdk-rust/src/config.rs)
+and the SDK's `config_conformance` tests use the independent
+[`config-conformance` corpus](../../../test-data/config-conformance/README.md).
+
 ## Saga transactions
 
 `fallible_transaction` returns after one attempt and compensation. Use
