@@ -389,6 +389,10 @@ impl ShardManager for SpawnedShardManager {
         self.grpc_port
     }
 
+    fn http_port(&self) -> u16 {
+        self.http_port
+    }
+
     async fn kill(&self) {
         {
             let mut process = self.process.lock().unwrap();

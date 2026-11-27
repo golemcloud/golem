@@ -240,6 +240,7 @@ async fn stale_writer_takeover(
             number_of_shards: 1,
             revision: 1,
             incarnation_id: "5eed0000-0000-4000-8000-000000000001".into(),
+            executor_count: 1,
         })
         .await?
         .into_inner();

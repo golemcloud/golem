@@ -1096,7 +1096,7 @@ where
         // the caller waits for: a call that failed to connect, backed off and
         // succeeded on its third attempt cost them all three. Establishment used
         // to happen inside the RPC, so timing from any point below here drops a
-        // whole `connect_timeout` out of `internal_grpc_success_seconds` on
+        // whole `connect_timeout` out of `golem_internal_grpc_success_seconds` on
         // exactly the reconnecting calls this is about.
         let started = Instant::now();
         loop {

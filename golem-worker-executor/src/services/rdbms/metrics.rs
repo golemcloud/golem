@@ -15,24 +15,13 @@
 use std::time::{Duration, Instant};
 
 use crate::services::rdbms::RdbmsType;
-use golem_common::metrics::DEFAULT_TIME_BUCKETS;
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 
 lazy_static! {
-    static ref RDBMS_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
-        "rdbms_success_seconds",
-        "Duration of successful rdbms calls",
-        &["rdbms_type", "api"],
-        DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref RDBMS_FAILURE_TOTAL: CounterVec = register_counter_vec!(
-        "rdbms_failure_total",
-        "Number of failed rdbms calls",
-        &["rdbms_type", "api"]
-    )
-    .unwrap();
+    static ref RDBMS_SUCCESS_SECONDS: HistogramVec = catalog::RDBMS_SUCCESS_SECONDS.register();
+    static ref RDBMS_FAILURE_TOTAL: CounterVec = catalog::RDBMS_FAILURE_TOTAL.register();
 }
 
 pub fn record_rdbms_success<T: RdbmsType>(rdbms_type: &T, api_name: &str, duration: Duration) {

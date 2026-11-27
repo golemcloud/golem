@@ -19,15 +19,20 @@ use tracing::info;
 
 pub struct ProvidedComponentCompilationService {
     host: String,
+    http_port: u16,
     grpc_port: u16,
 }
 
 impl ProvidedComponentCompilationService {
-    pub fn new(host: String, grpc_port: u16) -> Self {
+    pub fn new(host: String, http_port: u16, grpc_port: u16) -> Self {
         info!(
-            "Using already running golem-compilation-component-service on {host}, grpc port: {grpc_port}"
+            "Using already running golem-compilation-component-service on {host}, http port: {http_port}, grpc port: {grpc_port}"
         );
-        Self { host, grpc_port }
+        Self {
+            host,
+            http_port,
+            grpc_port,
+        }
     }
 }
 
@@ -38,6 +43,10 @@ impl ComponentCompilationService for ProvidedComponentCompilationService {
     }
     fn grpc_port(&self) -> u16 {
         self.grpc_port
+    }
+
+    fn http_port(&self) -> u16 {
+        self.http_port
     }
 
     async fn kill(&self) {}

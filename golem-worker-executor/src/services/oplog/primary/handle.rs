@@ -40,13 +40,10 @@ impl PrimaryOplog {
         last_oplog_idx: OplogIndex,
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
-        account_id: AccountId,
         fingerprint: AgentFingerprint,
         stream_session_index: Option<Arc<crate::services::oplog::StreamSessionIndexService>>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
-        let account_id_label = account_id.to_string();
-        let environment_id_label = owned_agent_id.environment_id().to_string();
         let fence = Arc::new(match fence {
             Some(fence) => std::sync::OnceLock::from(fence),
             None => std::sync::OnceLock::new(),
@@ -72,10 +69,7 @@ impl PrimaryOplog {
             last_oplog_idx,
             owned_agent_id,
             agent_mode,
-            account_id,
             fingerprint,
-            account_id_label,
-            environment_id_label,
             last_added_non_hint_entry: None,
             pending_uploads: Vec::new(),
             durable_stream_sessions: crate::services::oplog::raw_session::RawSessionCache::default(
@@ -287,15 +281,7 @@ impl PrimaryOplog {
                             let remaining = state.reader().try_length().await?;
                             let dropped = before - remaining;
                             if dropped > 0 {
-                                let account_id = state.account_id.to_string();
-                                let environment_id =
-                                    state.owned_agent_id.environment_id().to_string();
-                                record_storage_objects_deleted(
-                                    STORAGE_TYPE_OPLOG,
-                                    &account_id,
-                                    &environment_id,
-                                    dropped,
-                                );
+                                record_storage_objects_deleted(STORAGE_TYPE_OPLOG, dropped);
                             }
                             Ok(dropped)
                         }
@@ -356,7 +342,6 @@ impl PrimaryOplog {
                             blob_storage: state.blob_storage.clone(),
                             owned_agent_id: state.owned_agent_id.clone(),
                             agent_mode: state.agent_mode,
-                            account_id: state.account_id,
                             max_payload_size: state.max_payload_size,
                         });
                     }
@@ -667,12 +652,7 @@ impl Oplog for PrimaryOplog {
         .await;
         if let Ok(RawOplogPayload::External { .. }) = &result {
             // Only count bytes that were actually uploaded externally
-            record_storage_bytes_written(
-                STORAGE_TYPE_OPLOG,
-                &ctx.account_id.to_string(),
-                &ctx.owned_agent_id.environment_id().to_string(),
-                data_len,
-            );
+            record_storage_bytes_written(STORAGE_TYPE_OPLOG, data_len);
         }
         result
     }

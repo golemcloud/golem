@@ -1,0 +1,10 @@
+{
+  "agents": { "main": { "agentType": "CounterAgent", "arguments": ["${run}"] } },
+  "calls": [
+    { "target": { "kind": "invoke", "agent": "main", "method": "value" }, "arguments": [], "expected": 0 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "add" }, "arguments": [7], "expected": 7 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "add" }, "arguments": [11], "expected": 18 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "value" }, "arguments": [], "expected": 18 },
+    { "target": { "kind": "http", "method": "GET", "path": "/counters/${run}/value" }, "arguments": null, "expected": { "status": 200, "body": 18 } }
+  ]
+}

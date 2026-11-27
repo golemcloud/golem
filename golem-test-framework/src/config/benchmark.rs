@@ -208,6 +208,8 @@ pub enum TestMode {
         registry_service_low_rpc_calls_plan_id: Uuid,
         #[arg(long, default_value = "localhost")]
         component_compilation_service_host: String,
+        #[arg(long, default_value = "8082")]
+        component_compilation_service_http_port: u16,
         #[arg(long, default_value = "9092")]
         component_compilation_service_grpc_port: u16,
         #[arg(long, default_value = "localhost")]
@@ -569,6 +571,7 @@ impl BenchmarkTestDependencies {
                 registry_service_low_http_calls_plan_id,
                 registry_service_low_rpc_calls_plan_id,
                 component_compilation_service_host,
+                component_compilation_service_http_port,
                 component_compilation_service_grpc_port,
                 worker_service_host,
                 worker_service_http_port,
@@ -628,6 +631,7 @@ impl BenchmarkTestDependencies {
                 let component_compilation_service: Arc<dyn ComponentCompilationService> =
                     Arc::new(ProvidedComponentCompilationService::new(
                         component_compilation_service_host.clone(),
+                        *component_compilation_service_http_port,
                         *component_compilation_service_grpc_port,
                     ));
 

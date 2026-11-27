@@ -25,6 +25,8 @@ extend = [{ path = "Makefile.sdk-validation.toml" }, { path = "Makefile.main-val
 # - `cargo make check-docs-openapi`: regenerates the docs/src/content/next/rest-api/ MDX in place and fails if the checked-in version is stale (for CI)
 # - `cargo make generate-docs-skills`: regenerates docs/src/content/next/how-to-guides/ MDX from golem-skills/skills/
 # - `cargo make check-docs-skills`: regenerates the docs/src/content/next/how-to-guides/ MDX in place and fails if the checked-in version is stale (for CI)
+# - `cargo make generate-docs-metrics`: regenerates docs/src/content/next/operate/metrics.mdx from the metric catalog in golem-common
+# - `cargo make check-docs-metrics`: fails if docs/src/content/next/operate/metrics.mdx is stale vs. the metric catalog (for CI)
 # - `cargo make check-diff-model-fingerprint`: verifies golem-common diff model fingerprint against goldenfile
 # - `cargo make update-diff-model-fingerprint`: updates golem-common diff model fingerprint goldenfile
 # - `cargo make publish-shared-crates`: publishes the shared Rust crates from their exact release tag
@@ -1251,7 +1253,7 @@ dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
 [tasks.unit-tests-and-checks]
 description = "Runs unit tests and source drift checks in one cargo-make invocation"
-dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-ai-contract", "check-builtin-artifacts", "check-wit", "test-javascript-tool-process-backend", "unit-tests"]
+dependencies = ["check-openapi", "check-docs-skills", "check-docs-metrics", "check-reflection-conformance", "check-ai-contract", "check-builtin-artifacts", "check-wit", "test-javascript-tool-process-backend", "unit-tests"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
@@ -1409,6 +1411,22 @@ script = '''
       git --no-pager diff -- docs/src/content/next/how-to-guides/ docs/src/content/next/how-to-guides.mdx 1>&2
       exit 1
   fi
+'''
+
+[tasks.generate-docs-metrics]
+description = "Regenerates docs/src/content/next/operate/metrics.mdx from the metric catalog in golem-common"
+script_runner = "@duckscript"
+script = '''
+set_env UPDATE_GOLDENFILES 1
+exec --fail-on-error cargo test -p golem-common --lib -- metrics::catalog::tests::docs_page_matches_the_catalog
+'''
+
+[tasks.check-docs-metrics]
+description = "Fails if docs/src/content/next/operate/metrics.mdx is stale vs. the metric catalog in golem-common"
+script_runner = "@duckscript"
+script = '''
+unset_env UPDATE_GOLDENFILES
+exec --fail-on-error cargo test -p golem-common --lib -- metrics::catalog::tests::docs_page_matches_the_catalog
 '''
 
 [tasks.sync-reflection-conformance]

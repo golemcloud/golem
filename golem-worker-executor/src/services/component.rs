@@ -396,7 +396,6 @@ impl ComponentServiceDefault {
             id: component_id,
             revision: component_revision,
             wasm_hash,
-            environment_id,
             ..
         } = *metadata;
         match self
@@ -430,7 +429,7 @@ impl ComponentServiceDefault {
             record_compilation_time(compilation_time);
             debug!(%component_id, compilation_time_ms = compilation_time.as_millis(), "Compiled component");
 
-            if let Err(error) = self.compiled_component_service.put(environment_id, wasm_hash, component_id, component_revision, &component).await {
+            if let Err(error) = self.compiled_component_service.put(wasm_hash, component_id, component_revision, &component).await {
                 warn!(%component_id, %component_revision, %error, "Failed to upload compiled component");
             }
             Ok(component)
@@ -890,9 +889,11 @@ mod tests {
         async fn get_agent_secret_revision(
             &self,
             _environment_id: EnvironmentId,
+            _owner: golem_common::model::agent_secret::AgentSecretOwner,
             _agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
             _path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
-            _revision: golem_common::model::agent_secret::AgentSecretRevision,
+            _selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+            _mode: golem_common::model::agent_secret::AgentSecretReadMode,
         ) -> Result<
             Option<golem_service_base::model::agent_secret::AgentSecret>,
             RegistryServiceError,
@@ -986,7 +987,6 @@ mod tests {
             let artifact = wasmtime::component::Component::from_binary(&engine, bytes)?;
             compiled
                 .put(
-                    metadata.environment_id,
                     metadata.wasm_hash,
                     metadata.id,
                     metadata.revision,

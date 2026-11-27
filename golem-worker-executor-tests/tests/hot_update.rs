@@ -1290,6 +1290,12 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
                 grants.push(
                     parse_polymorphic_permission("config(?agent) @ * : read : control").unwrap(),
                 );
+                // The save hook revokes the queued card, or installs it into the target.
+                let card_verb = if revoke { "revoke" } else { "install" };
+                grants.push(
+                    parse_polymorphic_permission(&format!("card(*) @ * : {card_verb} : *"))
+                        .unwrap(),
+                );
             })
             .store()
             .await?;

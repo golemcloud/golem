@@ -93,7 +93,7 @@ pub(crate) enum SnapshotSkip {
     /// An upload of the agent runs now. The loop skips the snapshot.
     UploadInFlight,
     /// The volume has less free space than the pressure target. The loop skips the snapshot.
-    VolumeUnderPressure,
+    DiskUnderPressure,
     /// A delete of all snapshots of the agent is queued or runs. The loop skips the snapshot.
     DeletingAllSnapshots,
 }
@@ -106,7 +106,7 @@ impl SnapshotSkip {
             kind.label(),
             match self {
                 Self::UploadInFlight => SkipReason::UploadInFlight,
-                Self::VolumeUnderPressure => SkipReason::VolumeUnderPressure,
+                Self::DiskUnderPressure => SkipReason::DiskUnderPressure,
                 Self::DeletingAllSnapshots => SkipReason::DeletingAllSnapshots,
             },
         );
@@ -117,7 +117,7 @@ impl std::fmt::Display for SnapshotSkip {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::UploadInFlight => "an upload of a filesystem snapshot of the agent runs now",
-            Self::VolumeUnderPressure => "the volume of the agent filesystems is under pressure",
+            Self::DiskUnderPressure => "the disk of the agent filesystems is under pressure",
             Self::DeletingAllSnapshots => "the filesystem snapshots of the agent are being deleted",
         })
     }

@@ -1681,6 +1681,8 @@ fn stored_agent_secret(
 ) -> AgentSecret {
     AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: EnvironmentId::new(),
         path: CanonicalAgentSecretPath::from_path_in_unknown_casing(path),
         revision: AgentSecretRevision::INITIAL,

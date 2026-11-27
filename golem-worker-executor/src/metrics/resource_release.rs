@@ -14,16 +14,13 @@
 
 //! Process-local observations of release facts. None of these handles owns cleanup work.
 
+use golem_common::metrics::catalog;
 use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
-use prometheus::{CounterVec, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry};
+use prometheus::{CounterVec, GaugeVec, HistogramVec, Registry};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
-
-pub(crate) const BUCKETS: &[f64] = &[
-    0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
-];
 
 macro_rules! labels {
     ($name:ident { $($variant:ident => $label:literal),+ $(,)? }) => {
@@ -174,58 +171,18 @@ impl Default for ReleaseScope {
 }
 impl ReleaseMetrics {
     fn register(registry: &Registry, clock: Arc<dyn Clock>) -> Self {
-        let histogram = |name, help, labels: &[&str]| {
-            HistogramVec::new(
-                HistogramOpts::new(name, help).buckets(BUCKETS.to_vec()),
-                labels,
-            )
-            .unwrap()
-        };
         let metrics = Self(Arc::new(Metrics {
             events: std::sync::atomic::AtomicU64::new(0),
             clock,
             ledger: Mutex::new(Ledger::default()),
-            release: histogram(
-                "golem_agent_resource_release_seconds",
-                "Elapsed seconds from accepted stop or ordinary unload to physical owner facts",
-                &["origin", "stage", "cause", "outcome"],
-            ),
-            host: histogram(
-                "golem_agent_stop_host_operation_exit_seconds",
-                "Elapsed seconds from accepted stop to actual tracked driver exit",
-                &["operation", "outcome"],
-            ),
-            filesystem: histogram(
-                "golem_agent_filesystem_lifecycle_seconds",
-                "Elapsed seconds from owning filesystem deletion acceptance through verified deletion, including repair",
-                &["operation", "outcome"],
-            ),
-            failures: CounterVec::new(
-                Opts::new(
-                    "golem_agent_resource_cleanup_failures_total",
-                    "Distinct bounded failure facts per logical cleanup obligation",
-                ),
-                &["stage", "reason"],
-            )
-            .unwrap(),
-            unfinished: GaugeVec::new(
-                Opts::new(
-                    "golem_agent_resource_release_unfinished",
-                    "Outstanding applicable release receipts; end_to_end counts episodes",
-                ),
-                &["origin", "stage", "cause", "health"],
-            )
-            .unwrap(),
-            oldest: GaugeVec::new(
-                Opts::new(
-                    "golem_agent_resource_release_oldest_unfinished_age_seconds",
-                    "Oldest process-local unfinished release age in seconds",
-                ),
-                &["origin", "stage", "cause", "health"],
-            )
-            .unwrap(),
+            release: catalog::AGENT_RESOURCE_RELEASE_SECONDS.build(),
+            host: catalog::AGENT_STOP_HOST_OPERATION_EXIT_SECONDS.build(),
+            filesystem: catalog::AGENT_FILESYSTEM_LIFECYCLE_SECONDS.build(),
+            failures: catalog::AGENT_RESOURCE_CLEANUP_FAILURES_TOTAL.build(),
+            unfinished: catalog::AGENT_RESOURCE_RELEASE_UNFINISHED.build(),
+            oldest: catalog::AGENT_RESOURCE_RELEASE_OLDEST_UNFINISHED_AGE_SECONDS.build(),
         }));
-        registry.register(Box::new(metrics.clone())).unwrap();
+        catalog::register_collector(registry, Box::new(metrics.clone())).unwrap();
         metrics
     }
     pub(crate) fn scope(&self) -> ReleaseScope {
@@ -916,7 +873,7 @@ pub(crate) mod tests {
         );
         scope.freeze_cause(Cause::MonthlyMemory);
         let export = metrics.export();
-        for boundary in BUCKETS {
+        for boundary in catalog::RESOURCE_RELEASE_BUCKETS {
             assert!(
                 export.contains(&format!("le=\"{boundary}\"")),
                 "missing {boundary}: {export}"
@@ -1062,8 +1019,12 @@ pub(crate) mod tests {
                 .lines()
                 .filter(|line| line.starts_with(&format!("{family}_bucket")))
                 .collect();
-            assert_eq!(lines.len(), BUCKETS.len() + 1, "{export}");
-            for boundary in BUCKETS {
+            assert_eq!(
+                lines.len(),
+                catalog::RESOURCE_RELEASE_BUCKETS.len() + 1,
+                "{export}"
+            );
+            for boundary in catalog::RESOURCE_RELEASE_BUCKETS {
                 assert!(
                     lines
                         .iter()

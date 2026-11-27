@@ -3252,6 +3252,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             shard_ids: vec![shard],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -3281,6 +3282,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     );
     let assigned = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,
@@ -3305,6 +3307,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     faults.clear();
     let assigned = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,
@@ -12600,6 +12603,7 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -12620,6 +12624,7 @@ async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
         .client
         .clone()
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),
                 epoch: 0,
@@ -12857,6 +12862,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             shard_ids: vec![shard],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -12882,6 +12888,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             async move {
                 client
                     .assign_shards(AssignShardsRequest {
+                        executor_count: 1,
                         shard_epochs: vec![ShardEpochEntry {
                             shard_id: Some(shard),
                             epoch: 0,
@@ -12903,6 +12910,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             shard_ids: vec![shard],
             revision: 3,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -13750,12 +13758,16 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
     ] {
         let mut fresh = lookup(fingerprint);
         fresh.mode = mode as i32;
+        fresh.component_id = Some(component.id.into());
         if let Some(tool) = fresh.external_tool.as_mut() {
             tool.fresh_owner = true;
         }
         let fresh = answer(executor.invoke_agent_session(fresh).await);
         assert!(
-            fresh.contains("VALIDATION") && fresh.contains("fresh external tool owner"),
+            fresh.contains("VALIDATION")
+                && fresh.contains(
+                    "a fresh external tool owner cannot have an expected agent fingerprint",
+                ),
             "{mode:?}: {fresh}"
         );
     }

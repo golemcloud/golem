@@ -978,6 +978,8 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     let secret_path = CanonicalAgentSecretPath(vec!["toolSecret".to_string()]);
     let plaintext = "gol606-runtime-secret";
     environment.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
         path: secret_path.clone(),
@@ -1405,6 +1407,8 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
     let environment = Arc::new(TestEnvironmentStateService::default());
     let plaintext = "audit-must-never-record-this-plaintext";
     environment.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["toolSecret".to_string()]),

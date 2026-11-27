@@ -389,7 +389,7 @@ pub(super) fn admit(
         .get(agent)
         .is_some_and(|job| replaceable(&state, agent, job));
     let skip = if !room {
-        Some(SnapshotSkip::VolumeUnderPressure)
+        Some(SnapshotSkip::DiskUnderPressure)
     } else if all_requested(&state, agent) {
         Some(SnapshotSkip::DeletingAllSnapshots)
     } else if running.is_some() && !replaceable {

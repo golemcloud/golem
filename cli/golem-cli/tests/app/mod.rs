@@ -70,6 +70,7 @@ mod server_config;
 #[cfg(unix)]
 mod server_restart;
 mod service_config_failure;
+mod size_fixtures;
 mod ssh;
 // The platform TLS verifier honours SSL_CERT_FILE on Linux.
 #[cfg(target_os = "linux")]
@@ -135,6 +136,7 @@ tag_suite!(quantity_interop, agents_guest_bridge_sources);
 tag_suite!(uuid_interop, agents_guest_bridge_sources);
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
+tag_suite!(size_fixtures, deploy);
 tag_suite!(builtin_bash, deploy);
 tag_suite!(cards, deploy);
 tag_suite!(initial_cards, deploy);
@@ -1005,17 +1007,6 @@ impl TestContext {
         tokio::time::sleep(pause_after_match).await;
         forward_stdout(stdout);
 
-        child
-    }
-
-    /// Spawns a long-running golem-cli command without waiting for any of its output.
-    fn cli_process<I, S>(&self, command_args: I) -> Child
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let (child, stdout) = self.spawn_cli_process(command_args);
-        forward_stdout(stdout);
         child
     }
 

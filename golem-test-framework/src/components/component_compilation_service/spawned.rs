@@ -25,6 +25,7 @@ use tracing::Level;
 use tracing::info;
 
 pub struct SpawnedComponentCompilationService {
+    http_port: u16,
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
@@ -75,6 +76,7 @@ impl SpawnedComponentCompilationService {
         .await;
 
         Self {
+            http_port,
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
@@ -90,6 +92,10 @@ impl ComponentCompilationService for SpawnedComponentCompilationService {
 
     fn grpc_port(&self) -> u16 {
         self.grpc_port
+    }
+
+    fn http_port(&self) -> u16 {
+        self.http_port
     }
 
     async fn kill(&self) {

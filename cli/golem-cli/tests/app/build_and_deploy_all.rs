@@ -242,6 +242,118 @@ async fn moonbit_single_to_multi_component_upgrade_builds() {
     single_to_multi_component_upgrade_builds_for_lang(GuestLanguage::MoonBit).await;
 }
 
+#[test]
+async fn moonbit_root_and_nested_components_run_their_own_implementations() {
+    use golem_cli::model::component::ComponentGetView;
+    use golem_cli::model::invoke_result_view::InvokeResultView;
+    use golem_common::schema::render::to_json_value;
+
+    let mut ctx = TestContext::new();
+    fs::create_dir_all(ctx.cwd_path_join("moonbit-package-selection")).unwrap();
+    ctx.cd("moonbit-package-selection");
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "moonbit",
+            flag::COMPONENT_NAME,
+            "other-ns:first",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+
+    let package = fs::read_to_string(ctx.cwd_path_join("moon.pkg")).unwrap();
+    let source = fs::read_to_string(ctx.cwd_path_join("counter.mbt")).unwrap();
+    for (dir, agent, initial) in [
+        ("", "FirstCounter", 17),
+        ("nested/second", "SecondCounter", 43),
+    ] {
+        fs::create_dir_all(ctx.cwd_path_join(dir)).unwrap();
+        fs::write(ctx.cwd_path_join(dir).join("moon.pkg"), &package).unwrap();
+        fs::write(
+            ctx.cwd_path_join(dir).join("counter.mbt"),
+            source
+                .replace("CounterAgent", agent)
+                .replace("value: 0", &format!("value: {initial}")),
+        )
+        .unwrap();
+    }
+    fs::write(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc::formatdoc!(
+            r#"
+            manifestVersion: {version}
+            app: moonbit-package-selection
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+            components:
+              other-ns:first:
+                dir: ""
+                templates: moonbit
+              other-ns:second:
+                dir: nested/second
+                templates: moonbit
+            "#,
+            version = golem_cli::versions::sdk::MANIFEST
+        ),
+    )
+    .unwrap();
+
+    ctx.start_server().await;
+    for preset in ["debug", "release"] {
+        let output = ctx.cli([flag::YES, "-P", preset, cmd::DEPLOY]).await;
+        assert!(output.success_or_dump());
+        for (component, agent, initial) in [
+            ("other-ns:first", "FirstCounter", 17),
+            ("other-ns:second", "SecondCounter", 43),
+        ] {
+            let output = ctx
+                .cli([cmd::COMPONENT, cmd::GET, component, flag::FORMAT, "json"])
+                .await;
+            assert!(output.success_or_dump());
+            let components = output.stdout_json::<ComponentGetView>();
+            assert_eq!(components.len(), 1);
+            assert_eq!(
+                components[0]
+                    .0
+                    .agent_types
+                    .iter()
+                    .map(|agent| agent.type_name.as_str())
+                    .collect::<Vec<_>>(),
+                [agent],
+                "agent type in {component} ({preset})"
+            );
+            let key = format!("{agent}(\"{preset}\")");
+            for (method, expected) in [("value", initial), ("increment", initial + 1)] {
+                let output = ctx
+                    .cli([
+                        cmd::AGENT,
+                        cmd::INVOKE,
+                        "--no-stream",
+                        &key,
+                        method,
+                        flag::FORMAT,
+                        "json",
+                    ])
+                    .await;
+                assert!(output.success_or_dump());
+                let results = output.stdout_json::<InvokeResultView>();
+                assert_eq!(results.len(), 1);
+                let value = results[0].result_json.as_ref().unwrap();
+                assert_eq!(
+                    to_json_value(value.graph(), value.root_type(), value.value()).unwrap(),
+                    serde_json::json!(expected.to_string()),
+                    "{agent}.{method} in {preset}"
+                );
+            }
+        }
+    }
+}
+
 async fn single_to_multi_component_upgrade_builds_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
 

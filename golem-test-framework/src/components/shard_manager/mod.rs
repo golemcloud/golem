@@ -34,6 +34,8 @@ use tracing::{Level, warn};
 pub trait ShardManager: Send + Sync {
     fn grpc_host(&self) -> String;
     fn grpc_port(&self) -> u16;
+    /// The port of the HTTP interface, which serves `/metrics`.
+    fn http_port(&self) -> u16;
 
     async fn kill(&self);
 

@@ -181,7 +181,7 @@ fn a_manual_update_waits_only_for_a_running_upload() {
                 running: Some(running(4))
             }),
             waits_for(Refusal {
-                skip: SnapshotSkip::VolumeUnderPressure,
+                skip: SnapshotSkip::DiskUnderPressure,
                 running: Some(running(4))
             }),
             waits_for(Refusal {

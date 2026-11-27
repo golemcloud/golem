@@ -146,6 +146,16 @@ object WireMetadataParitySpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("WireMetadataParitySpec")(
+      test("method metadata and implementations use deterministic name order") {
+        val expected       = List("animal", "captioned", "load", "set", "text", "timed", "wide")
+        val wire           = AgentDefinitionMacro.generateWire[ParityAgent]
+        val implementation = AgentImplementationMacro.wireImplementationTypeFromClass[ParityAgent, ParityAgentImpl]
+        assertTrue(
+          metadata.methods.map(_.name) == expected,
+          wire.methods.map(_.name).toList == expected,
+          implementation.methods.map(_.name).toList == expected
+        )
+      },
       test("Set parameters are lists on every path") {
         assertTrue(agree("set", ConcreteCodec.derived[Set[Int]], List(Set.empty[Int], Set(3, 7))))
       },

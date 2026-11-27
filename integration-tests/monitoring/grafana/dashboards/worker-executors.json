@@ -120,7 +120,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(api_success_seconds_count{api_type=\"grpc\", job=~\"golem-worker-executor-.*\"}[5m])) by (api)",
+          "expr": "sum(rate(golem_api_success_seconds_count{api_type=\"grpc\", job=~\"golem-worker-executor-.*\"}[5m])) by (api)",
           "instant": false,
           "legendFormat": "{{api}}",
           "range": true,
@@ -128,7 +128,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "sum(rate(api_failure_seconds_count{api_type=\"grpc\", job=~\"golem-worker-executor-.*\"}[5m])) by (api)",
+          "expr": "sum(rate(golem_api_failure_seconds_count{api_type=\"grpc\", job=~\"golem-worker-executor-.*\"}[5m])) by (api)",
           "hide": false,
           "instant": false,
           "legendFormat": "{{api}}",
@@ -224,7 +224,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(grpc_active_stream}) by (pod)",
+          "expr": "sum(golem_grpc_api_active_streams) by (pod)",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -319,7 +319,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(api_success_seconds_bucket{job=~\"golem-worker-executor-.*\", api_type=\"grpc\"}[5m])) by (api, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_api_success_seconds_bucket{job=~\"golem-worker-executor-.*\", api_type=\"grpc\"}[5m])) by (api, le))",
           "instant": false,
           "legendFormat": "{{api}}",
           "range": true,
@@ -415,7 +415,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(api_failure_seconds{job=~\"golem-worker-executor-.*\", api_type=\"grpc\"}[5m])) by (api, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_api_failure_seconds_bucket{job=~\"golem-worker-executor-.*\", api_type=\"grpc\"}[5m])) by (api, le))",
           "instant": false,
           "legendFormat": "{{api}}",
           "range": true,
@@ -523,7 +523,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(label_join(rate(host_function_call_total[5m]), \"qname\", \"/\", \"interface\", \"name\")) by (qname)",
+          "expr": "sum(label_join(rate(golem_host_function_call_total[5m]), \"qname\", \"/\", \"interface\", \"name\")) by (qname)",
           "instant": false,
           "legendFormat": "{{qname}}",
           "range": true,
@@ -619,7 +619,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum(rate(create_worker_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(golem_create_worker_seconds_bucket[5m])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -627,7 +627,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(create_worker_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_create_worker_seconds_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -636,7 +636,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(create_worker_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_create_worker_seconds_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p95",
@@ -645,7 +645,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(create_worker_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_create_worker_seconds_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p99",
@@ -742,7 +742,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum(rate(resume_worker_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(golem_resume_worker_seconds_bucket[5m])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -750,7 +750,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(resume_worker_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_resume_worker_seconds_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -759,7 +759,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(resume_worker_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_resume_worker_seconds_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p95",
@@ -768,7 +768,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(resume_worker_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_resume_worker_seconds_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p99",
@@ -864,7 +864,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(replayed_functions_count_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_replayed_functions_bucket[5m])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -872,7 +872,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(replayed_functions_count_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_replayed_functions_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p95",
@@ -881,7 +881,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(replayed_functions_count_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_replayed_functions_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -890,7 +890,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum(rate(replayed_functions_count_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(golem_replayed_functions_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p50",
@@ -986,7 +986,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(create_worker_failure_total[5m])) by (error)",
+          "expr": "sum(rate(golem_create_worker_failure_total[5m])) by (error)",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -1080,7 +1080,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(invocation_total[5m])) by (pod)",
+          "expr": "sum(rate(golem_invocation_total[5m])) by (pod)",
           "instant": false,
           "legendFormat": "{{pod}}",
           "range": true,
@@ -1175,7 +1175,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(invocation_total[5m])) by (mode)",
+          "expr": "sum(rate(golem_invocation_total[5m])) by (mode)",
           "instant": false,
           "legendFormat": "{{pod}}",
           "range": true,
@@ -1266,7 +1266,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(invocation_total[5m])) by (outcome)",
+          "expr": "sum(rate(golem_invocation_total[5m])) by (outcome)",
           "instant": false,
           "legendFormat": "{{pod}}",
           "range": true,
@@ -1357,7 +1357,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(event_total[5m])) by (event)",
+          "expr": "sum(rate(golem_event_total[5m])) by (event)",
           "instant": false,
           "legendFormat": "{{event}}",
           "range": true,
@@ -1452,7 +1452,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(event_broadcast_total[5m])) by (event)",
+          "expr": "sum(rate(golem_event_broadcast_total[5m])) by (event)",
           "instant": false,
           "legendFormat": "{{event}}",
           "range": true,
@@ -1561,7 +1561,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(fuel_borrow_total[5m])) by (pod) - sum(rate(fuel_return_total[5m])) by (pod)",
+          "expr": "sum(rate(golem_fuel_borrow_total[5m])) by (pod) - sum(rate(golem_fuel_return_total[5m])) by (pod)",
           "instant": false,
           "legendFormat": "{{pod}}",
           "range": true,
@@ -1653,7 +1653,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(invocation_consumption_total_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_invocation_fuel_consumption_bucket[5m])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -1661,7 +1661,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(invocation_consumption_total_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_invocation_fuel_consumption_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p95",
@@ -1670,7 +1670,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(invocation_consumption_total_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_invocation_fuel_consumption_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -1679,7 +1679,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum(rate(invocation_consumption_total_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(golem_invocation_fuel_consumption_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p50",
@@ -1772,7 +1772,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(allocated_memory_bytes_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_allocated_memory_bytes_bucket[5m])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -1780,7 +1780,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(allocated_memory_bytes_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_allocated_memory_bytes_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p95",
@@ -1789,7 +1789,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(allocated_memory_bytes_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_allocated_memory_bytes_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -1798,7 +1798,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum(rate(allocated_memory_bytes_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(golem_allocated_memory_bytes_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p50",
@@ -1895,7 +1895,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_success_seconds_count{target=\"limit\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_success_seconds_count{target=\"limit\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -1991,7 +1991,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_failure_total{target=\"limit\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_failure_total{target=\"limit\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -2087,7 +2087,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(external_call_success_seconds_bucket{target=\"limit\"}[5m])) by (le, op))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_external_call_success_seconds_bucket{target=\"limit\"}[5m])) by (le, op))",
           "instant": false,
           "legendFormat": "{{op}} p95",
           "range": true,
@@ -2183,7 +2183,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_retry_total{target=\"limit\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_retry_total{target=\"limit\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -2287,7 +2287,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(assigned_shard_count) by (pod)",
+          "expr": "sum(golem_assigned_shard_count) by (pod)",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -2378,7 +2378,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_success_seconds_count{target=\"shard_manager\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_success_seconds_count{target=\"shard_manager\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -2474,7 +2474,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_failure_total{target=\"shard_manager\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_failure_total{target=\"shard_manager\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -2566,7 +2566,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(external_call_success_seconds_bucket{target=\"shard_manager\"}[5m])) by (le, op))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_external_call_success_seconds_bucket{target=\"shard_manager\"}[5m])) by (le, op))",
           "instant": false,
           "legendFormat": "{{op}} p95",
           "range": true,
@@ -2658,7 +2658,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_retry_total{target=\"shard_manager\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_retry_total{target=\"shard_manager\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -2762,7 +2762,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(compilation_time_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_compilation_time_seconds_bucket[5m])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -2770,7 +2770,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(compilation_time_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_compilation_time_seconds_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p99",
@@ -2779,7 +2779,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(compilation_time_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_compilation_time_seconds_bucket[5m])) by (le))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -2872,7 +2872,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(external_call_response_size_bytes_bucket{target=\"components\"}[5m])) by (le, op))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_external_call_response_size_bytes_bucket{target=\"components\"}[5m])) by (le, op))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -2964,7 +2964,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(external_call_success_seconds_bucket{target=\"components\"}[5m])) by (le, op))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_external_call_success_seconds_bucket{target=\"components\"}[5m])) by (le, op))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -3056,7 +3056,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_success_seconds_count{target=\"components\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_success_seconds_count{target=\"components\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -3148,7 +3148,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_failure_total{target=\"components\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_failure_total{target=\"components\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -3240,7 +3240,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(external_call_retry_total{target=\"components\"}[5m])) by (pod, op)",
+          "expr": "sum(rate(golem_external_call_retry_total{target=\"components\"}[5m])) by (pod, op)",
           "instant": false,
           "legendFormat": "{{pod}} {{op}}",
           "range": true,
@@ -3303,7 +3303,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "max(cache_capacity{cache=\"component\"})",
+          "expr": "max(golem_cache_capacity{cache=\"component\"})",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -3400,7 +3400,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "cache_size{cache=\"component\"}",
+          "expr": "golem_cache_size{cache=\"component\"}",
           "hide": false,
           "instant": false,
           "legendFormat": "{{pod}}",
@@ -3498,7 +3498,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(cache_hit_total{cache=\"component\"}[5m]))/(sum(rate(cache_hit_total{cache=\"component\"}[5m]))+sum(rate(cache_miss_total{cache=\"component\"}[5m])))",
+          "expr": "sum(rate(golem_cache_hit_total{cache=\"component\"}[5m]))/(sum(rate(golem_cache_hit_total{cache=\"component\"}[5m]))+sum(rate(golem_cache_miss_total{cache=\"component\"}[5m])))",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -3602,7 +3602,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(oplog_svc_call_total[5m])) by (api)",
+          "expr": "sum(rate(golem_oplog_svc_call_total[5m])) by (api)",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -3694,7 +3694,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(redis_serialized_size_bytes_bucket{svc=\"oplog\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"oplog\"}[5m])) by (le, entity))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -3702,7 +3702,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(redis_serialized_size_bytes_bucket{svc=\"oplog\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"oplog\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p99",
@@ -3711,7 +3711,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(redis_serialized_size_bytes_bucket{svc=\"oplog\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"oplog\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -3720,7 +3720,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum(rate(redis_serialized_size_bytes_bucket{svc=\"oplog\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.5, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"oplog\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p50",
@@ -3813,7 +3813,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(redis_success_seconds_bucket{svc=\"oplog\"}[5m])) by (le, cmd))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_redis_success_seconds_bucket{svc=\"oplog\"}[5m])) by (le, cmd))",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -3905,7 +3905,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(redis_failure_total{svc=\"oplog\"}[5m])) by (api, cmd)",
+          "expr": "sum(rate(golem_redis_failure_total{svc=\"oplog\"}[5m])) by (api, cmd)",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -4014,7 +4014,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(promises_scheduled_complete_total[5m])) by (pod)",
+          "expr": "sum(rate(golem_promise_scheduled_completion_total[5m])) by (pod)",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -4105,7 +4105,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(redis_serialized_size_bytes_bucket{svc=\"promise\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"promise\"}[5m])) by (le, entity))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -4113,7 +4113,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(redis_serialized_size_bytes_bucket{svc=\"promise\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"promise\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p99",
@@ -4122,7 +4122,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(redis_serialized_size_bytes_bucket{svc=\"promise\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"promise\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -4131,7 +4131,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum(rate(redis_serialized_size_bytes_bucket{svc=\"promise\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.5, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"promise\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p50",
@@ -4224,7 +4224,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(redis_success_seconds_bucket{svc=\"promise\"}[5m])) by (le, cmd))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_redis_success_seconds_bucket{svc=\"promise\"}[5m])) by (le, cmd))",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -4316,7 +4316,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(redis_failure_total{svc=\"promise\"}[5m])) by (api, cmd)",
+          "expr": "sum(rate(golem_redis_failure_total{svc=\"promise\"}[5m])) by (api, cmd)",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -4421,7 +4421,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(promises_scheduled_complete_total[5m])) by (pod)",
+          "expr": "sum(rate(golem_promise_scheduled_completion_total[5m])) by (pod)",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -4512,7 +4512,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(redis_serialized_size_bytes_bucket{svc=\"scheduler\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"scheduler\"}[5m])) by (le, entity))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -4520,7 +4520,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(redis_serialized_size_bytes_bucket{svc=\"scheduler\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.99, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"scheduler\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p99",
@@ -4529,7 +4529,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.75, sum(rate(redis_serialized_size_bytes_bucket{svc=\"scheduler\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.75, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"scheduler\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p75",
@@ -4538,7 +4538,7 @@
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, sum(rate(redis_serialized_size_bytes_bucket{svc=\"scheduler\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.5, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"scheduler\"}[5m])) by (le, entity))",
           "hide": false,
           "instant": false,
           "legendFormat": "p50",
@@ -4631,7 +4631,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(redis_success_seconds_bucket{svc=\"scheduler\"}[5m])) by (le, cmd))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_redis_success_seconds_bucket{svc=\"scheduler\"}[5m])) by (le, cmd))",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -4723,7 +4723,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(redis_failure_total{svc=\"scheduler\"}[5m])) by (api, cmd)",
+          "expr": "sum(rate(golem_redis_failure_total{svc=\"scheduler\"}[5m])) by (api, cmd)",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -4832,7 +4832,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(worker_executor_call_total[5m])) by (api)",
+          "expr": "sum(rate(golem_worker_executor_call_total[5m])) by (api)",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -4928,7 +4928,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(redis_serialized_size_bytes_bucket{svc=\"worker\"}[5m])) by (le, entity))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_redis_serialized_size_bytes_bucket{svc=\"worker\"}[5m])) by (le, entity))",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -5024,7 +5024,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(redis_success_seconds_bucket{svc=\"worker\"}[5m])) by (le, cmd))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_redis_success_seconds_bucket{svc=\"worker\"}[5m])) by (le, cmd))",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -5120,7 +5120,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(redis_failure_total{svc=\"worker\"}[5m])) by (api, cmd)",
+          "expr": "sum(rate(golem_redis_failure_total{svc=\"worker\"}[5m])) by (api, cmd)",
           "instant": false,
           "legendFormat": "{{cmd}}",
           "range": true,
@@ -5231,7 +5231,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "cache_size{cache=\"active_agents\"}",
+          "expr": "golem_cache_size{cache=\"active_agents\"}",
           "hide": false,
           "instant": false,
           "legendFormat": "{{pod}}",
@@ -5329,7 +5329,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(cache_hit_total{cache=\"active_agents\"}[5m]))/(sum(rate(cache_hit_total{cache=\"active_agents\"}[5m]))+sum(rate(cache_miss_total{cache=\"active_agents\"}[5m])))",
+          "expr": "sum(rate(golem_cache_hit_total{cache=\"active_agents\"}[5m]))/(sum(rate(golem_cache_hit_total{cache=\"active_agents\"}[5m]))+sum(rate(golem_cache_miss_total{cache=\"active_agents\"}[5m])))",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -5419,7 +5419,7 @@
         {
           "editorMode": "code",
           "exemplar": false,
-          "expr": "max(executor_version_info) by (pod, version, wasmtime)",
+          "expr": "max(golem_executor_build_info) by (pod, version, wasmtime)",
           "format": "table",
           "instant": false,
           "legendFormat": "{{pod}}",
@@ -5512,7 +5512,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(worker_admission_wait_seconds_bucket[5m])) by (le, executor_id, phase))",
+          "expr": "histogram_quantile(0.95, sum(rate(golem_worker_admission_wait_seconds_bucket[5m])) by (le, executor_id, phase))",
           "instant": false,
           "legendFormat": "{{executor_id}} {{phase}}",
           "range": true,

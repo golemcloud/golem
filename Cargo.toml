@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "golem-a2a",
     "golem-ai-contract",
     "golem-api-grpc",
     "golem-async-trait",
@@ -48,6 +49,7 @@ print_stderr = "deny"
 license-file = "LICENSE"
 
 [workspace.dependencies]
+golem-a2a = { version = "=0.0.0", path = "golem-a2a" }
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-async-trait = { version = "=0.0.0", path = "golem-async-trait" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
@@ -66,6 +68,7 @@ golem-schema = { version = "=0.0.0", path = "golem-schema", default-features = f
 golem-schema-derive = { version = "=0.0.0", path = "golem-schema-derive" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
+golem-size-analysis = { version = "=0.0.0", path = "golem-size-analysis", default-features = false }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
 golem-tool-metadata = { version = "=0.0.0", path = "golem-tool-metadata", default-features = false }
@@ -75,6 +78,8 @@ golem-worker-service = { path = "golem-worker-service" }
 golem-xfs-quotad = { version = "=0.0.0", path = "golem-xfs-quotad" }
 
 
+a2a = { package = "a2a-lf", version = "=0.4.3" }
+a2a-pb = "=0.4.0"
 anyhow = "1.0.97"
 applying = "1.0.1"
 arc-swap = "1.9.1"
@@ -226,7 +231,6 @@ openapiv3 = "=2.0.0"
 openidconnect = "4.0.1"
 opentelemetry = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
-opentelemetry-prometheus-text-exporter = "=0.3.0"
 opentelemetry_sdk = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "internal-logs"] }
 phf = { version = "0.12.1", features = ["macros"] }
 pin-project = "1.1.10"

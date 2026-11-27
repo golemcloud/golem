@@ -18,6 +18,7 @@ use super::{
     ShardLeaseRevision, UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, golem,
     retired_by_assignment, shard_epochs_from_proto,
 };
+use golem_common::model::protobuf::executor_count_from_proto;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -34,7 +35,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("RevokeShardsRequest.{error}"))
             })?;
 
-        match self.shard_service().revoke_shards(&shard_ids, revision)? {
+        let executor_count =
+            executor_count_from_proto(request.executor_count, "RevokeShardsRequest.executor_count")
+                .map_err(WorkerExecutorError::invalid_request)?;
+        match self
+            .shard_service()
+            .revoke_shards(&shard_ids, revision, executor_count)?
+        {
             ShardDeliveryOutcome::Applied { .. } => {}
             ShardDeliveryOutcome::Stale { delivered, applied } => {
                 // A newer delivery has already been applied and its set is the
@@ -93,10 +100,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!("AssignShardsRequest.{error}"))
             })?;
-        match self
-            .shard_service()
-            .assign_shards(number_of_shards, &shard_epochs, revision)?
-        {
+        match self.shard_service().assign_shards(
+            number_of_shards,
+            &shard_epochs,
+            revision,
+            executor_count_from_proto(request.executor_count, "AssignShardsRequest.executor_count")
+                .map_err(WorkerExecutorError::invalid_request)?,
+        )? {
             ShardDeliveryOutcome::Applied { .. } => {}
             ShardDeliveryOutcome::Stale { delivered, applied } => {
                 // Crossed on the network with a newer delivery, which has already
@@ -147,7 +157,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     /// no longer owns. The recovery runs only under a live lease: a fenced
     /// executor starts nothing, so a push that lands after the local lease
     /// lapsed - the first one after a manager outage does - reports the
-    /// recovery deferred, and the grant that revives the lease runs it.
+    /// recovery deferred. A later accepted grant runs it; a stale grant can
+    /// revive the lease without running the owed recovery.
     ///
     /// The owed-recovery ticket is taken here, before anything runs, and handed
     /// back only after a recovery ran, so the startup registration and the push

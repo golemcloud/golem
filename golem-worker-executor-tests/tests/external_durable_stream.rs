@@ -744,6 +744,8 @@ async fn authentication_stays_on_wire_and_completed_replay_skips_secret_fetch(
     let secrets = Arc::new(TestEnvironmentStateService::default());
     secrets.set_agent_secret(AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["bearer".into()]),
         revision: AgentSecretRevision::INITIAL,

@@ -127,7 +127,6 @@ impl CompileWorker {
                                 permit.send(CompiledComponent {
                                     component_and_revision: request.component,
                                     component,
-                                    environment_id: request.environment_id,
                                     wasm_hash: request.wasm_hash,
                                     upload_finished,
                                 });

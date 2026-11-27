@@ -19,7 +19,6 @@ impl MultiLayerOplog {
     pub async fn new(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
-        account_id: AccountId,
         primary: Arc<dyn Oplog>,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
@@ -46,11 +45,7 @@ impl MultiLayerOplog {
                 }
             };
             if i != (multi_layer_oplog_service.lower.len().get() - 1) {
-                let instrumented = Arc::new(InstrumentedOplogArchive::new(
-                    raw,
-                    account_id,
-                    owned_agent_id.environment_id(),
-                ));
+                let instrumented = Arc::new(InstrumentedOplogArchive::new(raw));
                 lower.push(Arc::new(
                     WrappedOplogArchive::new(
                         i,
@@ -63,11 +58,7 @@ impl MultiLayerOplog {
                     .await,
                 ));
             } else {
-                lower.push(Arc::new(InstrumentedOplogArchive::new(
-                    raw,
-                    account_id,
-                    owned_agent_id.environment_id(),
-                )));
+                lower.push(Arc::new(InstrumentedOplogArchive::new(raw)));
             }
         }
         let lower = NEVec::try_from_vec(lower).expect("At least one lower layer is required");

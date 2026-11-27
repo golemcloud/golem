@@ -112,7 +112,7 @@ async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
             .await
             .unwrap();
         if metrics.lines().any(|line| {
-            line.strip_prefix("tokio_workers_count ")
+            line.strip_prefix("golem_tokio_workers_count ")
                 .and_then(|value| value.parse::<f64>().ok())
                 .is_some_and(|value| value > 0.0)
         }) {
@@ -120,7 +120,7 @@ async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "local server metrics did not contain tokio_workers_count"
+            "local server metrics did not contain golem_tokio_workers_count"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

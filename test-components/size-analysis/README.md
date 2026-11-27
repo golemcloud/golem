@@ -3,6 +3,56 @@
 The `golem-size-analysis` crate (repository root) measures component size. This directory holds
 its inputs: the retention fixtures, the retention experiment and the allocator smoke benchmark.
 
+## Six-SDK fixtures
+
+`sdk-fixtures/` supplies data-only checked call lists and representative source overlays for
+TypeScript, Effect, Scala, Rust, MoonBit and Go. The fixture registry and descriptor contract live
+in `golem-size-analysis/src/fixtures.rs`. Each SDK has a generated starter, an existing streaming
+tool provider and a representative agent. The CLI integration suite assembles these applications
+from the current templates and provider sources; the overlays are not independent applications.
+
+Prepare the SDKs through the existing CLI test prerequisites: build the TS/Effect bundles and
+guests, publish Scala with `golemPublishLocal`, and install the Rust, MoonBit and patched Go
+toolchains. Then build the native CLI test binaries and run a selected SDK, for example:
+
+```sh
+cargo test -p golem-cli --test integration -- app::size_fixtures::rust_starter --report-time
+```
+
+The six SDK tests each loop over the three fixture kinds and their two presets. TS, Effect and
+Scala use `quick`/`optimized`; Rust, MoonBit and Go use `debug`/`release`. SDK overrides always
+select this checkout, even when the general CLI suite uses published SDK packages. For debugging
+one SDK, set `GOLEM_CLI_TEST_DIR` to an empty persistent directory before the run. Size evidence is
+written beneath each generated application's `golem-temp/size-evidence/` directory.
+Go measurements append `-trimpath` to `GOFLAGS` so absolute source paths do not change uploaded
+bytes between directories. Keep that flag and all other build inputs fixed when comparing runs.
+
+Every descriptor binds `${run}` once in its constructor string arguments and HTTP paths. Calls
+through one alias share state; a fresh binding addresses a different keyed agent. Invoke arguments
+are ordered CLI JSON values. HTTP expectations include status and JSON body. Tool arguments carry
+argv and stdin bytes; tool expectations include the typed result and stdout/stderr bytes. A
+successful unit result is explicit JSON `null`, not a missing invocation result. Stream support
+comes from the discovered command schema, including empty streams and explicit stdin EOF.
+
+The representative adds 7 then 11, reads 18 through HTTP, reads nondefault runtime configuration,
+updates and independently reads a separate same-app agent, invokes a typed provider client and
+checks two asymmetric slices of a literal payload. Its dependency also consumes a runtime-selected
+slice. `payload.txt` contains 100,000 ASCII hex bytes: concatenate the SHA-256 hex digests of UTF-8
+`golem-size-fixture:0` through `golem-size-fixture:1562`, then take the first 100,000 bytes. Its
+SHA-256 is `e7694100ad6d20e0586fe5af2e3322f8561886cfa5c13fc8ec10c49665bf57d9`.
+
+Measure only the selected preset's resolved `componentWasm`. The harness compares the deployed
+revision's downloaded bytes with that file, then passes the same bytes to the existing collector.
+TS/Effect retain `main.modules.json` from the final Rollup output, with app-relative paths
+including virtual CommonJS modules. The map is a build target and is regenerated when missing.
+Scala retains one linked-bundle bucket. Compiled SDKs use named/debug companion artifacts where needed. Proportional JS ownership
+and scaled compiled attribution are estimates, not exact ownership of anonymous data segments.
+
+The first call and an equivalent call on a fresh agent must have equal checked results and complete
+oplogs without outbound network operations. Rust, MoonBit and Go starters also rebuild with an
+unused feature import and require byte-identical selected upload artifacts. A compiler that changes
+those bytes fails this check; the harness does not strip differences or skip the assertion.
+
 ## The local report
 
 This is an explicitly invoked local report, not a byte-budget gate. Run the representative
@@ -37,7 +87,7 @@ cargo run -p golem-size-analysis -- collect --sdk rust --wasm component.wasm \
 cargo run -p golem-size-analysis -- collect --sdk ts --wasm app.preinitialized.wasm \
   --guest agent_guest.wasm --module main.js --module-map modules.json
 cargo run -p golem-size-analysis -- collect --sdk go --wasm release.wasm \
-  --named-wasm debug.wasm --user example.com/app
+  --named-wasm debug.wasm --user example.com/app --go-packages go-packages.json
 ```
 
 The buckets add up to the uploaded file:
@@ -57,7 +107,14 @@ The buckets add up to the uploaded file:
 - Go and MoonBit: twiggy over the `name` section of a debug build, scaled to the release file and
   marked approximate.
 
-Go symbols belong to their package path. The standard library of the pinned Go toolchain, its
+Go requires the resolved package list from `go list -deps -json .`, saved as `go-packages.json`
+using the build's toolchain and flags. These fixtures use `GOOS=wasip1`, `GOARCH=wasm`,
+`-buildmode=c-shared` and `-tags=componentizego_async`. Module ownership and the `Standard` flag
+select the buckets; only full package paths match symbol boundaries.
+Go symbols are matched against those paths using the pinned linker's Wasm name encoding
+(characters other than ASCII letters, digits, `_` and `.` become `_`). This encoding is lossy;
+the fixture evidence retains raw matching symbols instead of claiming to recover package paths.
+The standard library of the pinned Go toolchain, its
 vendored packages and linker-generated `type:` and `go:` symbols are the runtime; any other
 package, including a local module with a dotless path, is a dependency. MoonBit symbols are
 mangled by `moonc` (`_M0FP28username5hello12use__generic`); the collector decodes their package
@@ -71,9 +128,9 @@ nothing.
 ## Reflection retention contracts
 
 The `fixtures` workspace provides named, unstripped empty, non-reflective tool/client, and
-explicit reflection components. `./build-components.sh rust` builds `retention-empty`,
-`retention-non-reflective` and `retention-reflection` into `test-components/`, and the
-`golem-size-analysis` `retention` test checks them:
+explicit reflection components. `./build-components.sh rust` builds `retention-canonical-floor`,
+`retention-empty`, `retention-non-reflective` and `retention-reflection` into `test-components/`,
+and the `golem-size-analysis` `retention` test checks them:
 
 ```sh
 cargo test -p golem-size-analysis --test retention
@@ -81,8 +138,15 @@ cargo test -p golem-size-analysis --test retention
 
 The test rejects reflection host imports and model/reflection helper retention in both negative
 fixtures, and requires `get-agent-type` plus the positive fixture's named reflection method. The
-report runs the same check on its own builds, and also checks that the empty fixture keeps the
-canonical floor's five-interface export contract and imports nothing new.
+test also checks that the empty fixture keeps the canonical floor's five-interface export contract
+and imports nothing new. The report runs the same checks on its own builds.
+
+The canonical floor depends only on the pinned WIT bindings, not the SDK. Its absent snapshot
+loader uses the generated ABI to drop nested constructor allocations and owned resources before
+returning the same error as an empty SDK component. Its import envelope therefore includes the
+binding runtime needed by that path; it is not a theoretical minimum across handwritten ABIs.
+`empty_preserves_canonical_floor_contract` compares the prebuilt floor and empty component with
+the same strict export/import checker used by the report.
 
 ## Read the right numbers
 

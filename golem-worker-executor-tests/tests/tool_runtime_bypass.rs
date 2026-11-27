@@ -177,6 +177,8 @@ async fn fixture(
     ] {
         environment.set_agent_secret(AgentSecret {
             id: AgentSecretId::new(),
+            owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+            destinations: vec![],
             environment_id,
             path: CanonicalAgentSecretPath(vec!["contextSecret".to_string()]),
             revision: AgentSecretRevision::INITIAL,

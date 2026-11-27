@@ -75,6 +75,7 @@ mod guest_invocation_handles;
 mod held_response_restart;
 mod hint_before_rpc_start;
 mod input_gc;
+mod interrupted_open_input_session;
 mod kept_handle_deleting_child;
 mod replay_barrier_probe;
 mod websocket_crash_probe;

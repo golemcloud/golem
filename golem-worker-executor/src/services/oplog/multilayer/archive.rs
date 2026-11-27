@@ -15,16 +15,8 @@
 use super::*;
 
 impl InstrumentedOplogArchive {
-    pub fn new(
-        inner: Arc<dyn OplogArchive + Send + Sync>,
-        account_id: AccountId,
-        environment_id: EnvironmentId,
-    ) -> Self {
-        Self {
-            inner,
-            account_id,
-            environment_id,
-        }
+    pub fn new(inner: Arc<dyn OplogArchive + Send + Sync>) -> Self {
+        Self { inner }
     }
 }
 
@@ -44,23 +36,11 @@ impl OplogArchive for InstrumentedOplogArchive {
             return Ok(0);
         }
         let entry_count = chunk.len() as u64;
-        let account_id = self.account_id.to_string();
-        let environment_id = self.environment_id.to_string();
 
         let bytes = self.inner.append(chunk).await?;
 
-        record_storage_bytes_written(
-            STORAGE_TYPE_OPLOG_ARCHIVE,
-            &account_id,
-            &environment_id,
-            bytes,
-        );
-        record_storage_objects_written(
-            STORAGE_TYPE_OPLOG_ARCHIVE,
-            &account_id,
-            &environment_id,
-            entry_count,
-        );
+        record_storage_bytes_written(STORAGE_TYPE_OPLOG_ARCHIVE, bytes);
+        record_storage_objects_written(STORAGE_TYPE_OPLOG_ARCHIVE, entry_count);
 
         Ok(bytes)
     }
@@ -79,14 +59,7 @@ impl OplogArchive for InstrumentedOplogArchive {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
         let dropped = self.inner.drop_prefix(last_dropped_id).await?;
         if dropped > 0 {
-            let account_id = self.account_id.to_string();
-            let environment_id = self.environment_id.to_string();
-            record_storage_objects_deleted(
-                STORAGE_TYPE_OPLOG_ARCHIVE,
-                &account_id,
-                &environment_id,
-                dropped,
-            );
+            record_storage_objects_deleted(STORAGE_TYPE_OPLOG_ARCHIVE, dropped);
         }
         Ok(dropped)
     }

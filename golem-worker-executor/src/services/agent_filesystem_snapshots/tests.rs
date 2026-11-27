@@ -1409,7 +1409,7 @@ fn the_labels_and_the_messages_of_the_service_name_what_they_count_and_report() 
     ];
     let messages = [
         SnapshotSkip::UploadInFlight.to_string(),
-        SnapshotSkip::VolumeUnderPressure.to_string(),
+        SnapshotSkip::DiskUnderPressure.to_string(),
         SnapshotSkip::DeletingAllSnapshots.to_string(),
         SnapshotsDisabled.to_string(),
     ];
@@ -1422,7 +1422,7 @@ fn the_labels_and_the_messages_of_the_service_name_what_they_count_and_report() 
         messages,
         [
             "an upload of a filesystem snapshot of the agent runs now",
-            "the volume of the agent filesystems is under pressure",
+            "the disk of the agent filesystems is under pressure",
             "the filesystem snapshots of the agent are being deleted",
             "the record names a filesystem snapshot, and filesystem snapshots are disabled on \
              this executor",
@@ -3478,7 +3478,7 @@ mod native_pressure {
 
         let admitted = snapshots.admit_periodic(&agent_snapshots(name)).await;
 
-        assert_eq!(admitted.err(), Some(SnapshotSkip::VolumeUnderPressure));
+        assert_eq!(admitted.err(), Some(SnapshotSkip::DiskUnderPressure));
     }
 }
 

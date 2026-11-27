@@ -58,7 +58,7 @@ pub mod build_tool {
 // downloaded archive against these hashes before it unpacks it.
 pub mod go_toolchain {
     pub const REPO: &str = "golemcloud/go";
-    pub const TAG: &str = "go1.27.1-golem.5";
+    pub const TAG: &str = "go1.27.1-golem.6";
 
     /// The bootstrap archive the release publishes for each platform, as Go's
     /// os and arch, with its sha256 (the release's `.sha256` assets).
@@ -66,27 +66,27 @@ pub mod go_toolchain {
         (
             "linux",
             "amd64",
-            "ef6e1bad389bb4b357bc4a35d8951a221d63bf979cca47373f65607d6474e4f1",
+            "c179447b00aa0a444ac811e710d734de3b09f7302aac6ebffe8c15a0a1d5c338",
         ),
         (
             "linux",
             "arm64",
-            "9bba6130fdbf91deb1c334d476648ea29f1f177b881526ded37b95b3ce6f91c5",
+            "e9f2cfeab35c7388863dbf94e66f387e9f2953702ef987c4ff650d6baeeb748b",
         ),
         (
             "darwin",
             "amd64",
-            "6f7d2b2bce658a404cb30dbfdeaebadf81b0dc7fc77ddc38d5a481906848c56a",
+            "21de094ce4d0bf3f5f0cd50ef1d6c12cd0c8243596da046ea83c416b8eb69fae",
         ),
         (
             "darwin",
             "arm64",
-            "99a92a074a835bc55a0e39c6eaf1d1d4d4a2b36aff4d8b54c3b6e4a55092c400",
+            "2fcd5d593968a4d91ac7a6ba571559cb30183d2b8297982014f92468cae16d53",
         ),
         (
             "windows",
             "amd64",
-            "be55a9ec8c0c7d0f16a5f20b0f4833b1f74516aae6c876788b933f65aef013d4",
+            "9b494024acc44f171281124a2a35aa9fadc4e3be0aac6c09f4a842542a1d614c",
         ),
     ];
 }

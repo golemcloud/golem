@@ -23,7 +23,6 @@ use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::wasmtime_config::wasmtime_artifact_fingerprint;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -48,7 +47,6 @@ pub trait CompiledComponentService: Send + Sync {
     /// `wasm_hash` must be the verified hash of the Wasm bytes used to compile `component`.
     async fn put(
         &self,
-        environment_id: EnvironmentId,
         wasm_hash: Hash,
         component_id: ComponentId,
         component_revision: ComponentRevision,
@@ -195,7 +193,6 @@ impl CompiledComponentService for DefaultCompiledComponentService {
 
     async fn put(
         &self,
-        environment_id: EnvironmentId,
         wasm_hash: Hash,
         component_id: ComponentId,
         component_revision: ComponentRevision,
@@ -223,9 +220,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 )
             });
         if result.is_ok() {
-            let env_str = environment_id.to_string();
-            record_compilation_cache_bytes_written(&env_str, byte_count);
-            record_compilation_cache_objects_written(&env_str, 1);
+            record_compilation_cache_bytes_written(byte_count);
+            record_compilation_cache_objects_written(1);
         }
         result
     }
@@ -263,7 +259,6 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
 
     async fn put(
         &self,
-        _environment_id: EnvironmentId,
         _wasm_hash: Hash,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
@@ -296,20 +291,13 @@ mod tests {
         let changed = b"(component (core module (memory 1)))";
         let original_hash = Hash::new(blake3::hash(original));
         let changed_hash = Hash::new(blake3::hash(changed));
-        let first = EnvironmentId::new();
         let first_component = ComponentId::new();
         let second_component = ComponentId::new();
         let initial = ComponentRevision::INITIAL;
         let updated = ComponentRevision::new(1).unwrap();
         let original_artifact = Component::new(&engine, original)?;
         service
-            .put(
-                first,
-                original_hash,
-                first_component,
-                initial,
-                &original_artifact,
-            )
+            .put(original_hash, first_component, initial, &original_artifact)
             .await?;
         assert!(
             service
@@ -325,13 +313,7 @@ mod tests {
         );
         let changed_artifact = Component::new(&engine, changed)?;
         service
-            .put(
-                first,
-                changed_hash,
-                first_component,
-                updated,
-                &changed_artifact,
-            )
+            .put(changed_hash, first_component, updated, &changed_artifact)
             .await?;
         assert!(
             service
@@ -365,7 +347,6 @@ mod tests {
         let service = DefaultCompiledComponentService::new(blob_storage);
         let unoptimized_engine = engine(OptLevel::None)?;
         let optimized_engine = engine(OptLevel::Speed)?;
-        let environment_id = EnvironmentId::new();
         let component_id = ComponentId::new();
         let component_revision = ComponentRevision::INITIAL;
         let wasm_hash = Hash::new(blake3::hash(b"(component)"));
@@ -378,7 +359,6 @@ mod tests {
         let unoptimized_component = Component::new(&unoptimized_engine, b"(component)")?;
         service
             .put(
-                environment_id,
                 wasm_hash,
                 component_id,
                 component_revision,
@@ -401,7 +381,6 @@ mod tests {
         let optimized_component = Component::new(&optimized_engine, b"(component)")?;
         service
             .put(
-                environment_id,
                 wasm_hash,
                 component_id,
                 component_revision,

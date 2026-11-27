@@ -35,7 +35,7 @@ Production requires Linux 5.8 or later and a dedicated XFS filesystem for each e
 
 - At startup, check the executor's `Using configuration:` log. Under `filesystem snapshots:`, check that it reports `enabled:`. The key is masked as `****`. Under `filesystem storage:`, check the selected mode and root.
 - Make an agent that writes a file take a snapshot. An agent with only untouched read-only initial files does not upload a filesystem snapshot.
-- Check that `filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` increases.
+- Check that `golem_filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` increases.
 - Run `golem agent oplog <agent_id>`. Look for a `SNAPSHOT` entry with a `filesystem:` name and a `SNAPSHOT CONFIRMED` entry with the same name.
 
 See [Monitoring and troubleshooting](/next/operate/filesystem_snapshots/monitoring) if captures are skipped, uploads fail, or starts use older snapshots.

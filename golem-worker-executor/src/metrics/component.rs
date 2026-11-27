@@ -14,18 +14,13 @@
 
 use std::time::Duration;
 
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 
-use golem_common::metrics::DEFAULT_TIME_BUCKETS;
-
 lazy_static! {
-    pub static ref COMPILATION_TIME_SECONDS: Histogram = register_histogram!(
-        "compilation_time_seconds",
-        "Time to compile a WASM component to native code",
-        DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
+    pub static ref COMPILATION_TIME_SECONDS: Histogram =
+        catalog::COMPILATION_TIME_SECONDS.register();
 }
 
 pub fn record_compilation_time(duration: Duration) {

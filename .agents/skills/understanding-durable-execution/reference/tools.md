@@ -411,6 +411,13 @@ typed results retain durable stream mappings while the producer and durable sess
 until materialization settles (`tool/streams.rs`). The typed outcome is exposed only through the
 entity completion; there is no separate early-result observation call. Scheduling still uses each
 layer's own filesystem capability.
+The durable session of a typed tool invocation is internal: the owner holds it locally and no
+transport prepares or attaches it, so it has no `Prepared` or `Attached` records. A body that drops
+an unread typed input, as a cancelled body does, journals its consumer cancellation in the
+session's own runtime epoch (`StreamSession::cancellation_epoch`); sessions with a transport
+attachment cancel in the epoch of that attachment. The cancelled invocation then finishes the
+session with a failure. Test:
+`tool_streaming::cancelled_typed_tool_with_an_input_stream_fails_its_session_live_and_after_restart`.
 Underlying stdout uses the ordinary writer path. Forwarded typed stdin preserves item failures;
 Store or executor loss stops resident drains without recording EOF. Reconstruction recreates
 producers and consumers from durable registrations and offsets. Normal operation settlement

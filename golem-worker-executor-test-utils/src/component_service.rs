@@ -141,7 +141,6 @@ impl ComponentServiceLocalFileSystem {
         metadata: &LocalFileSystemComponentMetadata,
     ) -> Result<wasmtime::component::Component, WorkerExecutorError> {
         let LocalFileSystemComponentMetadata {
-            environment_id,
             component_id,
             revision: component_revision,
             wasm_hash,
@@ -202,13 +201,7 @@ impl ComponentServiceLocalFileSystem {
                             );
 
                             let result = compiled_component_service
-                                .put(
-                                    environment_id,
-                                    wasm_hash,
-                                    component_id,
-                                    component_revision,
-                                    &component,
-                                )
+                                .put(wasm_hash, component_id, component_revision, &component)
                                 .await;
 
                             match result {

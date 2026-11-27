@@ -1,5 +1,5 @@
 use anyhow::{Context, bail, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -225,6 +225,22 @@ pub struct SymbolClassifier {
     pub runtime: Vec<String>,
 }
 
+/// Package ownership from `go list -deps -json`, using the build's target and toolchain.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct GoPackage {
+    pub import_path: String,
+    #[serde(default)]
+    pub standard: bool,
+    pub module: Option<GoModule>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct GoModule {
+    pub path: String,
+}
+
 impl SymbolClassifier {
     /// Rust: crate names. `user_crate` is the component crate's name with `-` replaced by `_`.
     pub fn rust(user_crate: &str) -> Self {
@@ -253,18 +269,31 @@ impl SymbolClassifier {
         }
     }
 
-    /// Go: package paths. `user_module` is the application's module path.
-    pub fn go(user_module: &str) -> Self {
-        Self {
+    /// Go: full resolved package paths. Module ownership is checked before the linker's lossy
+    /// name encoding; an encoded module prefix cannot distinguish subpackages from siblings.
+    pub fn go(user_module: &str, packages: &[GoPackage]) -> Self {
+        let mut classifier = Self {
             naming: SymbolNaming::Go,
-            user_code: vec![
-                user_module.to_string(),
-                format!("{user_module}/"),
-                "main".to_string(),
-            ],
-            sdk: vec!["github.com/golemcloud/golem/sdks/go/".to_string()],
+            user_code: vec!["main".to_string()],
+            sdk: Vec::new(),
             runtime: Vec::new(),
+        };
+        for package in packages {
+            let module = package.module.as_ref().map(|module| module.path.as_str());
+            let owners = if package.standard {
+                &mut classifier.runtime
+            } else if module == Some(user_module) {
+                &mut classifier.user_code
+            } else if module
+                .is_some_and(|path| path.starts_with("github.com/golemcloud/golem/sdks/go/"))
+            {
+                &mut classifier.sdk
+            } else {
+                continue;
+            };
+            owners.push(package.import_path.clone());
         }
+        classifier
     }
 
     /// MoonBit: package paths. `user_module` is the application's module name.
@@ -290,7 +319,9 @@ impl SymbolClassifier {
         let owner = owner.as_ref();
         let matches = |owners: &[String]| {
             owners.iter().any(|o| {
-                if o.ends_with('/') {
+                if self.naming == SymbolNaming::Go && go_symbol_matches(name, o) {
+                    true
+                } else if o.ends_with('/') {
                     owner.starts_with(o.as_str())
                 } else {
                     owner == o
@@ -302,13 +333,35 @@ impl SymbolClassifier {
         } else if matches(&self.sdk) {
             Bucket::Sdk
         } else if matches(&self.runtime)
-            || (self.naming == SymbolNaming::Go && is_go_runtime(owner))
+            || (self.naming == SymbolNaming::Go
+                && (owner.starts_with("type:")
+                    || owner.starts_with("go:")
+                    || name.starts_with("type_.")
+                    || name.starts_with("go_itab.")))
         {
             Bucket::Runtime
         } else {
             Bucket::Dependencies
         }
     }
+}
+
+/// Matches Go's Wasm function names, whose linker replaces every character except ASCII
+/// letters, digits, `_` and `.` with `_`. Only a complete package path matches. The encoding
+/// is lossy, so it establishes approximate ownership, not a reversible package path.
+pub fn go_symbol_matches(name: &str, package: &str) -> bool {
+    let prefix: String = package
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    name.strip_prefix(&prefix)
+        .is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 /// The owner of a twiggy item: the crate of a Rust symbol, or the package path of a Go or
@@ -471,75 +524,6 @@ fn moonbit_segments(mut rest: &str, count: usize) -> Option<Vec<String>> {
         .then_some(segments)
 }
 
-/// The top-level directories of `src/` in the Go toolchain the CLI pins (`go1.27.1-golem.5`, the
-/// same set as upstream `go1.27.1`). Every standard-library package path starts with one of them.
-/// A local module with a dotless path, such as `module shared`, is not in this list.
-const GO_STANDARD_LIBRARY: &[&str] = &[
-    "archive",
-    "arena",
-    "bufio",
-    "builtin",
-    "bytes",
-    "cmd",
-    "cmp",
-    "compress",
-    "container",
-    "context",
-    "crypto",
-    "database",
-    "debug",
-    "embed",
-    "encoding",
-    "errors",
-    "expvar",
-    "flag",
-    "fmt",
-    "go",
-    "hash",
-    "html",
-    "image",
-    "index",
-    "internal",
-    "io",
-    "iter",
-    "log",
-    "maps",
-    "math",
-    "mime",
-    "net",
-    "os",
-    "path",
-    "plugin",
-    "reflect",
-    "regexp",
-    "runtime",
-    "simd",
-    "slices",
-    "sort",
-    "strconv",
-    "strings",
-    "structs",
-    "sync",
-    "syscall",
-    "testing",
-    "text",
-    "time",
-    "unicode",
-    "unique",
-    "unsafe",
-    "uuid",
-    "weak",
-];
-
-/// Go packages compiled from the toolchain: the standard library, its vendored packages, and
-/// linker-generated `type:` and `go:` symbols.
-fn is_go_runtime(package: &str) -> bool {
-    package.starts_with("vendor/")
-        || package.starts_with("type:")
-        || package.starts_with("go:")
-        || GO_STANDARD_LIBRARY.contains(&package.split('/').next().unwrap_or(package))
-}
-
 /// Buckets of the named symbols of every core module of `file`. Bytes outside the core
 /// modules (the component wrapper) are [`Bucket::Other`], so the buckets add up to the file.
 pub fn symbol_buckets(
@@ -606,6 +590,48 @@ mod tests {
     use crate::sections::COMPONENT_CORE_MODULE_SECTION;
     use crate::sections::tests::{component, section};
     use test_r::test;
+
+    fn go_classifier() -> SymbolClassifier {
+        let mut packages = Vec::new();
+        for (module, paths) in [
+            (
+                "example.com/app",
+                &["example.com/app", "example.com/app/internal/store"][..],
+            ),
+            (
+                "github.com/golemcloud/golem/sdks/go/golem",
+                &["github.com/golemcloud/golem/sdks/go/golem"][..],
+            ),
+            ("log-shipper", &["log-shipper"][..]),
+            ("net_utils", &["net_utils"][..]),
+            ("example.com/app-extra", &["example.com/app-extra"][..]),
+        ] {
+            packages.extend(paths.iter().map(|path| GoPackage {
+                import_path: (*path).into(),
+                standard: false,
+                module: Some(GoModule {
+                    path: module.into(),
+                }),
+            }));
+        }
+        packages.extend(
+            [
+                "runtime",
+                "log",
+                "encoding/json/v2",
+                "unique",
+                "compress/flate",
+                "vendor/golang.org/x/net/http2/hpack",
+                "mime/multipart",
+            ]
+            .map(|path| GoPackage {
+                import_path: path.into(),
+                standard: true,
+                module: None,
+            }),
+        );
+        SymbolClassifier::go("example.com/app", &packages)
+    }
 
     fn wrap(cores: &[Vec<u8>]) -> Vec<u8> {
         component(
@@ -706,6 +732,62 @@ mod tests {
         assert_eq!(
             scala_breakdown(&component).unwrap().bucket(Bucket::Bundle),
             bundle
+        );
+    }
+
+    #[test]
+    fn js_injection_encoding_savings_belong_to_the_runtime() {
+        use wasm_encoder::{CodeSection, Function, Instruction, Module, RawSection};
+
+        let core = js_core(1000, "runtime");
+        let mut padded = Module::new();
+        let mut canonical = Module::new();
+        for payload in wasmparser::Parser::new(0).parse_all(&core) {
+            let payload = payload.unwrap();
+            if let Some((id, range)) = payload.as_section() {
+                if id == 10 {
+                    let mut function = Function::new([]);
+                    let mut unpadded = Function::new([]);
+                    for _ in 0..400 {
+                        // i32.const 1 with a padded signed LEB, followed by drop.
+                        function.raw([0x41, 0x81, 0x80, 0x80, 0x80, 0x00, 0x1a]);
+                        unpadded.instruction(&Instruction::I32Const(1));
+                        unpadded.instruction(&Instruction::Drop);
+                    }
+                    function.raw([0x41, 0x01, 0x0b]);
+                    unpadded.instruction(&Instruction::I32Const(1));
+                    unpadded.instruction(&Instruction::End);
+                    padded.section(CodeSection::new().function(&function));
+                    canonical.section(CodeSection::new().function(&unpadded));
+                } else {
+                    let section = RawSection {
+                        id,
+                        data: &core[range],
+                    };
+                    padded.section(&section);
+                    canonical.section(&section);
+                }
+            }
+        }
+        let guest = wrap(&[padded.finish()]);
+        let canonical = wrap(&[canonical.finish()]);
+        let mut dynamic = canonical.clone();
+        // Custom sections and encoding savings both belong to the runtime, not the bundle.
+        dynamic.extend(crate::sections::tests::section(0, &[0, 1, 2, 3, 4]));
+        assert!(dynamic.len() < guest.len());
+        let component = JsComponent {
+            guest: &guest,
+            dynamic: &dynamic,
+            uploaded: &dynamic,
+        };
+        let map = BTreeMap::from([("src/main.ts".into(), 1)]);
+        let breakdown = js_breakdown(&component, &map).unwrap();
+        assert_eq!(breakdown.bucket(Bucket::UserCode), 0);
+        assert_eq!(breakdown.bucket(Bucket::Runtime), dynamic.len() as u64);
+        assert_eq!(breakdown.bucket(Bucket::Snapshot), 0);
+        assert_eq!(
+            scala_breakdown(&component).unwrap().bucket(Bucket::Bundle),
+            0
         );
     }
 
@@ -838,11 +920,24 @@ mod tests {
 
     #[test]
     fn go_and_moonbit_symbols_are_bucketed_by_package_path() {
-        let go = SymbolClassifier::go("example.com/app");
+        let go = go_classifier();
         for (name, bucket) in [
             ("example.com/app.Counter.Inc", Bucket::UserCode),
             ("example.com/app/internal/store.Get", Bucket::UserCode),
             ("main.main", Bucket::UserCode),
+            ("example.com_app_internal_store.Get", Bucket::UserCode),
+            (
+                "github.com_golemcloud_golem_sdks_go_golem.Invoke",
+                Bucket::Sdk,
+            ),
+            ("github.com_dustin_go_humanize.Bytes", Bucket::Dependencies),
+            ("encoding_json_v2.Marshal", Bucket::Runtime),
+            ("type_.eq.example_com.Record", Bucket::Runtime),
+            ("main_not_the_application.Run", Bucket::Dependencies),
+            ("log_shipper.Send", Bucket::Dependencies),
+            ("net_utils.Dial", Bucket::Dependencies),
+            ("example.com_app_extra.Helper", Bucket::Dependencies),
+            ("log.Printf", Bucket::Runtime),
             (
                 "github.com/golemcloud/golem/sdks/go/golem.Invoke",
                 Bucket::Sdk,
@@ -901,7 +996,7 @@ mod tests {
         ]
         .concat();
         assert_eq!(release.len(), 777);
-        let classifier = SymbolClassifier::go("example.com/app");
+        let classifier = go_classifier();
         let (unscaled, _) = symbol_buckets(&debug, &classifier).unwrap();
         assert!(unscaled[&Bucket::Sdk] > 0 && unscaled[&Bucket::Runtime] > 0);
         assert!(unscaled[&Bucket::UserCode] > 0 && unscaled[&Bucket::Dependencies] > 0);
@@ -941,7 +1036,7 @@ mod tests {
         };
         let producers = custom("producers", &[7u8; 50]);
         let release = wrap(&[core(std::slice::from_ref(&producers))]);
-        let classifier = SymbolClassifier::go("example.com/app");
+        let classifier = go_classifier();
         let scaled = |extra: &[Vec<u8>]| {
             let named = wrap(&[core(extra)]);
             scaled_breakdown(&named, &release, &classifier).unwrap().0

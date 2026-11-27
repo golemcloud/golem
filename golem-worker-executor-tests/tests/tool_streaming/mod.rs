@@ -48,7 +48,7 @@ use golem_common::model::caller::Caller;
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentProvisionConfig;
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+use golem_common::model::durable_stream::{StreamError, StreamSessionRecord, StreamTerminal};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::json::NormalizedJsonValue;
@@ -2149,15 +2149,17 @@ impl EnvironmentStateService for ReorderedToolActivationService {
     async fn get_agent_secret_revision(
         &self,
         environment_id: golem_common::model::environment::EnvironmentId,
+        owner: golem_common::model::agent_secret::AgentSecretOwner,
         agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
         path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
-        revision: golem_common::model::agent_secret::AgentSecretRevision,
+        selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+        mode: golem_common::model::agent_secret::AgentSecretReadMode,
     ) -> Result<
         Option<golem_service_base::model::agent_secret::AgentSecret>,
         golem_service_base::error::worker_executor::WorkerExecutorError,
     > {
         self.inner
-            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .get_agent_secret_revision(environment_id, owner, agent_secret_id, path, selector, mode)
             .await
     }
 
@@ -6501,6 +6503,157 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
         panic!("unexpected provider checkpoint after reconstruction: {unexpected:?}");
     }
     assert!(caller_checkpoints.try_recv().is_err());
+    provider_server.abort();
+    caller_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn cancelled_typed_tool_with_an_input_stream_fails_its_session_live_and_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (provider_port, provider_server, mut provider_checkpoints) =
+        start_promise_checkpoint_server().await;
+    let (caller_port, caller_server, mut caller_checkpoints) =
+        start_promise_checkpoint_server().await;
+    let agent = agent_key!("ToolStreamingCaller", "session-failure-cancellation");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    provider_port.to_string(),
+                ),
+                (
+                    "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    caller_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "cancel_typed_input",
+        data_value!(),
+    );
+    let cancel = async {
+        let caller =
+            next_promise_checkpoint(&mut caller_checkpoints, "typed-input-before-cancel").await?;
+        let provider = next_promise_checkpoint(
+            &mut provider_checkpoints,
+            "typed-input-provider-consumed-first",
+        )
+        .await?;
+        wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &provider).await?;
+        executor
+            .complete_promise(
+                &context.default_environment_id,
+                &executor.promise_id(&worker, caller.oplog_idx).await?,
+                Vec::new(),
+            )
+            .await?;
+        Ok::<(), anyhow::Error>(())
+    };
+    let (result, ()) = tokio::try_join!(async { invocation.await?.into_typed::<bool>() }, cancel)?;
+    assert!(
+        result,
+        "the tool did not return its typed cancellation result"
+    );
+    let finished_sessions = |oplog: &[PublicOplogEntryWithIndex]| {
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StreamSession(session) => {
+                    match StreamSessionRecord::from_value(session.record.value()).unwrap() {
+                        StreamSessionRecord::Finished(record) => Some(record.result),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let live = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        finished_sessions(&live),
+        vec![Err(b"tool invocation was cancelled".to_vec())]
+    );
+    assert!(live.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(cancel)
+        if live.iter().any(|entry| entry.oplog_index == cancel.start_index
+            && matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke")))));
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let probe: String = executor
+        .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(probe, "replayed");
+    let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        replayed[..live.len()]
+            .iter()
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>(),
+        live.iter()
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>(),
+        "recovery changed the recorded history of the cancelled invocation"
+    );
+    assert_eq!(
+        finished_sessions(&replayed),
+        finished_sessions(&live),
+        "replay finished the tool session again"
+    );
+    assert!(
+        caller_checkpoints.try_recv().is_err() && provider_checkpoints.try_recv().is_err(),
+        "completed replay repeated a checkpoint request"
+    );
     provider_server.abort();
     caller_server.abort();
     Ok(())
@@ -22476,6 +22629,8 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
     )?;
     harness.environment_state.set_agent_secret(AgentSecret {
         id: secret_id,
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: harness.context.default_environment_id,
         path: CanonicalAgentSecretPath(secret_path.clone()),
         revision: AgentSecretRevision::INITIAL,
@@ -25668,6 +25823,8 @@ async fn native_tool_secret_permissions_and_completed_replay(
         let secret_id = AgentSecretId::new();
         let path = vec!["nativeSecret".to_string()];
         environment_state.set_agent_secret(AgentSecret {
+            owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+            destinations: vec![],
             id: secret_id,
             environment_id: context.default_environment_id,
             path: CanonicalAgentSecretPath(path.clone()),

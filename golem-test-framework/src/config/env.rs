@@ -234,7 +234,7 @@ impl EnvBasedTestDependenciesConfig {
         self.golem_repo_root.join("test-components")
     }
 
-    fn service_binaries_dir(&self) -> PathBuf {
+    pub fn service_binaries_dir(&self) -> PathBuf {
         resolve_cargo_target_dir(&self.golem_repo_root).join(&self.bin_profile)
     }
 }
@@ -665,12 +665,14 @@ enum RdbDescriptor {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct ShardManagerDescriptor {
     host: String,
+    http_port: u16,
     grpc_port: u16,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct ComponentCompilationServiceDescriptor {
     host: String,
+    http_port: u16,
     grpc_port: u16,
 }
 
@@ -687,6 +689,7 @@ struct WorkerServiceDescriptor {
 struct WorkerExecutorDescriptor {
     host: String,
     grpc_port: u16,
+    http_port: Option<u16>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -749,6 +752,7 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
             .map(|exec| WorkerExecutorDescriptor {
                 host: exec.grpc_host(),
                 grpc_port: exec.grpc_port(),
+                http_port: exec.http_port(),
             })
             .collect();
 
@@ -762,10 +766,12 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
             rdb,
             shard_manager: ShardManagerDescriptor {
                 host: self.shard_manager.grpc_host(),
+                http_port: self.shard_manager.http_port(),
                 grpc_port: self.shard_manager.grpc_port(),
             },
             component_compilation_service: ComponentCompilationServiceDescriptor {
                 host: self.component_compilation_service.grpc_host(),
+                http_port: self.component_compilation_service.http_port(),
                 grpc_port: self.component_compilation_service.grpc_port(),
             },
             worker_service: WorkerServiceDescriptor {
@@ -844,17 +850,14 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
 
         let shard_manager: Arc<dyn ShardManager> = Arc::new(ProvidedShardManager::new(
             descriptor.shard_manager.host,
-            // ShardManager's http port is opaque to its trait; the
-            // Provided constructor accepts it for logging only, so we
-            // ship a placeholder zero (the parent doesn't reach this
-            // value through the trait either).
-            0,
+            descriptor.shard_manager.http_port,
             descriptor.shard_manager.grpc_port,
         ));
 
         let component_compilation_service: Arc<dyn ComponentCompilationService> =
             Arc::new(ProvidedComponentCompilationService::new(
                 descriptor.component_compilation_service.host,
+                descriptor.component_compilation_service.http_port,
                 descriptor.component_compilation_service.grpc_port,
             ));
 
@@ -874,7 +877,7 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
                 descriptor
                     .worker_executor_cluster
                     .into_iter()
-                    .map(|w| (w.host, w.grpc_port))
+                    .map(|w| (w.host, w.grpc_port, w.http_port))
                     .collect(),
             ));
 
@@ -1472,10 +1475,12 @@ mod tests {
             rdb,
             shard_manager: ShardManagerDescriptor {
                 host: "sm".to_string(),
+                http_port: 8011,
                 grpc_port: 8001,
             },
             component_compilation_service: ComponentCompilationServiceDescriptor {
                 host: "cc".to_string(),
+                http_port: 8012,
                 grpc_port: 8002,
             },
             worker_service: WorkerServiceDescriptor {
@@ -1489,10 +1494,12 @@ mod tests {
                 WorkerExecutorDescriptor {
                     host: "we1".to_string(),
                     grpc_port: 9091,
+                    http_port: Some(9191),
                 },
                 WorkerExecutorDescriptor {
                     host: "we2".to_string(),
                     grpc_port: 9092,
+                    http_port: None,
                 },
             ],
             registry_service: RegistryServiceDescriptor {
@@ -1540,6 +1547,7 @@ mod tests {
         {
             assert_eq!(got.host, want.host);
             assert_eq!(got.grpc_port, want.grpc_port);
+            assert_eq!(got.http_port, want.http_port);
         }
         assert_eq!(
             parsed.registry_service.admin_account_token,

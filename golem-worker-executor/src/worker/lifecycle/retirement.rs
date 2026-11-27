@@ -34,7 +34,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     None => false,
                 });
         self.owner_retirement_requested.cancel();
-        self.durable_stream_producer.fence();
+        // A requested retirement keeps the producer until its stop has let an interrupted
+        // invocation record its streaming-session terminal (`quiesce_for_owner_retirement`).
+        if self.retired_for_lost_shard() {
+            self.durable_stream_producer.fence();
+        }
         if newly_lost {
             // Debug rather than warn: the oplog that latched a fence has already warned with
             // both epochs, and a revoke or reassignment is logged by the sweep.
@@ -205,7 +209,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         interrupt: Option<InterruptKind>,
         forwarding: Option<&ForwardingOplog>,
     ) -> Result<(), WorkerExecutorError> {
-        let retirement = self.retire_durable_stream_producer();
         if let Some(interrupt) = interrupt {
             self.set_interrupting(interrupt).await?;
         }
@@ -220,6 +223,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             PendingLiveInvocationDisposition::Fail,
         )
         .await;
+        // Retired after the stop: the interrupted invocation writes the terminal of its
+        // streaming session through this producer while the stop unwinds it.
+        let retirement = self.retire_durable_stream_producer();
         if let WorkerInstance::CleanupFailed(error) = self.instance.lock().await.state() {
             return Err(error.clone());
         }

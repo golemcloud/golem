@@ -1,0 +1,28 @@
+[package]
+name = "golem-a2a"
+version = "0.0.0"
+edition = "2024"
+license-file = "../LICENSE"
+description = "Shared A2A v1.0.1 wire codecs for Golem"
+
+[lib]
+harness = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+a2a = { workspace = true }
+a2a-pb = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+poem = { workspace = true, features = ["sse"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sse-stream = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
+tokio = { workspace = true }

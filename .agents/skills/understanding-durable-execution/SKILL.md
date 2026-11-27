@@ -1344,8 +1344,13 @@ resolves an observation-only owner from storage. Archive failure or cancellation
 it never grants access to the old poisoned producer or restarts the ephemeral invocation.
 
 Normal archival and explicit interruption share `Worker::quiesce_for_owner_retirement` under
-the owner-cleanup lock: stop execution, drain stream retirement and lifecycle/forwarding work,
-commit, then stop status writers. Only explicit interruption records a pending terminal interrupt.
+the owner-cleanup lock: stop execution, then retire the stream producer and drain that retirement
+and lifecycle/forwarding work, commit, then stop status writers. The producer is retired after the
+stop, so an interrupted streaming invocation records its session `Finished` while the stop unwinds
+it; only a lost shard fences the producer when the retirement is recorded, and writes no terminal.
+An interrupt queued while the Store is suspended reaches no guest; the invocation publishes it when
+it sets the Store running (`publish_interrupt_queued_before_running`), so a guest that blocks on a
+stream read still observes it. Only explicit interruption records a pending terminal interrupt.
 Archival moves the oplog before removing the cached worker. The open oplog generation and its
 forwarding wrapper may be reused by the next worker, so ordinary retirement does not close their
 task admission or forwarding. Deletion claims ownership under the same owner-cleanup lock, then
@@ -1675,6 +1680,8 @@ does not use this marker and retains its normal `Idle`/automatic-recovery semant
 agents retain their clean fail-stop lifecycle and never append it.
 
 ### Resharding, revocation and the oplog epoch fence
+
+Registration, lease renewal, assignment pushes and revokes carry the number of executors with a stored lease, including executors with no shards. `ShardService::executor_count` reads the last accepted count without copying the assignment, for cluster-wide resource budgets. The count and shard set share the revision and manager-incarnation check. An accepted revoke updates the count and revision without changing lease expiry. An older renewal can extend the lease but cannot replace the count. Wire receipts reject a zero count before changing the assignment. The `golem_executor_count` metric reports the accepted count. The single-shard adapter reports one. The single-binary `golem` uses an embedded shard manager and receives its count. Registration does not remove elapsed leases first, so the count can stay high until housekeeping removes them and a newer snapshot reaches the executor. That reduces a divided budget; it does not grant ownership or change the epoch fence.
 
 Two triggers retire an agent for its lost shard rather than reconstructing it here, and both go
 through `Worker::interrupt_and_retire(InterruptKind::ShardLost)`, the one stop-and-drop path an
@@ -3644,8 +3651,8 @@ run at the same time: a save call starts a run only while it holds the save mark
 save call whose periodic job an admission replaced while the call only waited for its late writes
 runs on as a tail that starts no run and no write, and the next save of the agent runs beside
 it. The metrics are
-`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds`,
-`filesystem_snapshot_delete_seconds` and `filesystem_snapshot_prune_seconds`. `upload_now` answers `Stopped` after a lost
+`golem_filesystem_snapshot_cleanups_pending`, `golem_filesystem_snapshot_copy_seconds`,
+`golem_filesystem_snapshot_delete_seconds` and `golem_filesystem_snapshot_prune_seconds`. `upload_now` answers `Stopped` after a lost
 shard, a shutdown or `delete_all_snapshots`, unless the save had already finished; ephemeral
 agents make no store call.
 
@@ -4185,6 +4192,8 @@ cancellable completion-delivery boundary; dropping a resource only deletes its t
 Completed replay performs no HTTP or secret fetch. Golem forks retain external URLs and producer
 identities; they do not issue DS-level forks. See `reference/streams.md` for protocol, auth and
 memory boundaries.
+
+Secret handles pin an environment-owned secret revision. A new reveal reads that fixed revision in `Live` mode, so a handle held across secret or environment deletion returns `VersionNotFound` on its next reveal. The durable reveal records the error without plaintext. Replay returns a recorded error without a registry read; a recorded success re-materializes its fixed revision in `Historical` mode and traps if that revision is gone. Rotation does not change a held handle's revision. External durable-stream authentication also uses `Historical` reads. Owners, revision selectors and read modes pass explicitly through `EnvironmentStateService` to the registry; the environment catalog contains only environment-owned secrets. The held-handle deletion/reconstruction regression runs in `integration-tests/tests/agent_config/shared_agent_config_live_mutation.rs` for both SDKs and databases.
 
 The custom Durable Streams HTTP surface maps an opaque public session ID to a concrete invocation
 key through `DurableStreamPublicBinding::{Live, Retired}` in the independently persisted session

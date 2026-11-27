@@ -75,7 +75,7 @@ Plan storage for long-lived, high-volume streams and their forks. Each fork reta
 
 ## Diagnose stream failures
 
-Use the [durable stream metrics](/next/operate/metrics#durable-stream-sessions), [gateway metrics](/next/operate/metrics#worker-service), and [OTLP summaries](/next/operate/metrics#otlp-plugin) to distinguish recovery, slow consumers, and admission failures.
+Use the [durable stream metrics](/next/operate/metrics#durable-stream-sessions), [gateway metrics](/next/operate/metrics#http-and-grpc-apis), and [OTLP summaries](/next/operate/metrics#otlp-plugin) to distinguish recovery, slow consumers, and admission failures.
 
 The `durable_stream.attachment.*` and `durable_stream.resume_attempt` OTLP spans carry attachment, stream, attempt, and epoch identifiers, but no stream values or credentials. See [Logs](/next/operate/logs) for service tracing configuration and [Observability](/next/develop/observability) for OTLP export.
 
