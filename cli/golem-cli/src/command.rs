@@ -1943,9 +1943,9 @@ pub mod worker {
             #[arg(long, conflicts_with = "cursor")]
             from: Option<u64>,
             /// Index of the last oplog entry to get. If missing, or after the end of the oplog,
-            /// the read goes to the end of the oplog. An export with --output goes to the end of
-            /// the oplog when the export starts. With --query, the read returns only the matching
-            /// entries up to this index.
+            /// the read goes to the end of the oplog. With --output, the export uses the end
+            /// reported by the first page, capped by --to. With --query, the read returns only
+            /// the matching entries up to this index.
             #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
             to: Option<u64>,
             #[arg(
@@ -1983,18 +1983,17 @@ pub mod worker {
             output: Option<std::path::PathBuf>,
             /// Read one page of at most the HTTP batch size (50) entries and print it as one
             /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
-            /// entries after the page within its range. A search page ends early when the server's
-            /// scan budget ends the search, so a page with a cursor can have fewer entries, or
-            /// none. A search with --from first reads the entries before --from within the same
-            /// budget, so its first pages can be empty.
+            /// entries after the page within its range. A search or a read with --to can end early
+            /// at the scan budget. The budget includes the scan before --from for the component
+            /// revision. A page can be empty and still have a cursor.
             #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
             page: bool,
             /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,
             /// with the same `--query` and `--to`. The cursor is opaque; use `--from` to start at
-            /// an oplog index. The server refuses a cursor of another query, or one past the end of
-            /// the oplog, as stale (`STALE_CURSOR`). It refuses a cursor after `--to` as an invalid
-            /// request. A read without --query refuses the cursor of a search that scans before
-            /// --from as an invalid request (`VALIDATION_ERROR`).
+            /// an oplog index. The executor checks the query before the cursor range. A cursor
+            /// from a different or missing query is stale (`STALE_CURSOR`). With the same query,
+            /// the executor refuses a cursor outside the requested range as an invalid request.
+            /// A cursor within that range but past the end of the oplog is stale.
             #[arg(long, requires = "page")]
             cursor: Option<OplogCursor>,
             #[command(flatten)]
@@ -3627,29 +3626,8 @@ mod test {
         }
     }
 
-    #[test]
-    fn oplog_query_combines_with_a_range_and_the_file_export_excludes_the_other_outputs() {
-        assert!(parse_oplog(&["--query", "error", "--from", "3", "--to", "9"]).is_ok());
-        assert!(parse_oplog(&["--to", "9", "--format", "jsonl", "--output", "f.jsonl"]).is_ok());
-        [
-            vec!["--output", "f.jsonl", "--page"],
-            vec!["--output", "f.jsonl", "--html", "f.html"],
-            vec!["--output", "f.jsonl", "--serve"],
-            vec!["--output", "f.jsonl", "--obfuscate"],
-            vec!["--output", "f.jsonl", "--omit-payloads"],
-            vec!["--to", "9", "--obfuscate"],
-            vec!["--to", "9", "--html", "f.html"],
-            vec!["--to", "9", "--serve"],
-        ]
-        .into_iter()
-        .for_each(|conflicting| {
-            assert_eq!(
-                parse_oplog(&conflicting).unwrap_err().kind(),
-                clap::error::ErrorKind::ArgumentConflict,
-                "{conflicting:?}"
-            )
-        });
-    }
+    #[path = "oplog/tests.rs"]
+    mod oplog;
 
     #[test]
     fn oplog_keep_flags_and_max_entry_bytes_require_obfuscate() {

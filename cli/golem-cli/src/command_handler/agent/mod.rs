@@ -1170,10 +1170,9 @@ impl AgentCommandHandler {
     /// Exports the oplog entries of `range` that match `query` to `path` as JSON Lines. The export
     /// follows the cursor of each page to the end of the range. It ends at the end of the oplog at
     /// its first page, also when the agent adds entries during the export. It writes each page
-    /// before it reads the next, so its memory does not grow with the oplog. A search page that the
-    /// scan budget of the server ends early still has a cursor, so the budget does not end the
-    /// export. A page read without a query passes no scan allowance, so the server sets no scan
-    /// limit on it. The export reads in full each entry that a page omits for its size, and a
+    /// before it reads the next, so its memory does not grow with the oplog. A page that the scan
+    /// budget of the server ends early still has a cursor. The export has no total scan budget.
+    /// The export reads in full each entry that a page omits for its size, and a
     /// failed read fails the export. The export reads the fingerprint of the agent before the first
     /// page. Each read names that fingerprint, and the worker service compares it with the agent
     /// before the read. After the last page, the export reads the fingerprint again. It fails when
@@ -4294,10 +4293,10 @@ fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<
 mod tests {
     use super::{
         AgentListCursor, AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter,
-        check_oplog_output_format, is_selected_update_attempt, parse_agent_id_address,
-        parse_agent_key, parse_method_argument_schema_value,
-        parse_method_parameters_with_error_table, pending_update_progress, read_page,
-        redeploy_parameters, render_revert_command, split_agent_id, validate_ordinary_agent_type,
+        is_selected_update_attempt, parse_agent_id_address, parse_agent_key,
+        parse_method_argument_schema_value, parse_method_parameters_with_error_table,
+        pending_update_progress, read_page, redeploy_parameters, render_revert_command,
+        split_agent_id, validate_ordinary_agent_type,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -5047,35 +5046,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_oplog_file_export_needs_the_jsonl_format() {
-        use crate::model::format::Format;
-        use strum::IntoEnumIterator;
-        let rows = [
-            (Format::Json, false),
-            (Format::Jsonl, true),
-            (Format::PrettyJson, false),
-            (Format::Yaml, false),
-            (Format::PrettyYaml, false),
-            (Format::Toon, false),
-            (Format::Text, false),
-        ];
-        assert_eq!(
-            rows.iter().map(|(format, _)| *format).collect::<Vec<_>>(),
-            Format::iter().collect::<Vec<_>>(),
-            "the table has one row for each format"
-        );
-        let output = std::path::Path::new("oplog.jsonl");
-        rows.into_iter().for_each(|(format, accepted)| {
-            assert_eq!(
-                check_oplog_output_format(Some(output), format).is_ok(),
-                accepted,
-                "--output with {format}"
-            );
-            assert!(
-                check_oplog_output_format(None, format).is_ok(),
-                "no --output with {format}"
-            );
-        });
-    }
+    #[path = "export/tests.rs"]
+    mod export;
 }

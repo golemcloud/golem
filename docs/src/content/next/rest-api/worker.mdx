@@ -291,14 +291,15 @@ at the first entry; without `to`, it goes to the end of the oplog. A `to` after 
 the oplog ends the read at the end of the oplog. The endpoint refuses a `to` before
 `from`. With `query`, the page holds only the entries in the range that match the query.
 Without `query`, a read with `to` is a range read: the response accounts its scan.
-`scanEntries` and `scanMillis` limit the scan of a range read. Without them, the scan has no
-limit, and `count` still limits each page. Without `query`, `lastIndex` is the last index of
-the oplog. With `query`, it is the last index of the range in the oplog.
+A range read uses the configured scan budget. `scanEntries` and `scanMillis` can lower it
+for a reader that shares one allowance across pages. Without `query`, `lastIndex` is the
+last index of the oplog. With `query`, it is the last index of the range in the oplog.
 
-A search with `from` first reads the entries before `from`, for the component revision at
-`from`. The scan budget of the server covers this read. When the budget ends the read
-before `from`, the page is empty, and its cursor has `scanTo`. Pass the cursor back
-unchanged, with or without `from`.
+A search or a range read with `from` first scans the entries before `from` for the
+component revision. This scan counts against the budget. With the default budget, when the
+scan stops before `from`, the page is empty and its cursor has `scanTo`. Pass the cursor
+back unchanged, with or without `from`. A cursor whose query does not match is stale,
+even when it is also outside the requested range.
 
 **Query Parameters**
 

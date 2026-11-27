@@ -401,9 +401,9 @@ pub struct OplogCursor {
     /// The hash of the search query of the pages that gave the cursor, or empty for the pages of
     /// an oplog read without a query. A read refuses a cursor of another query.
     pub query_hash: String,
-    /// The start of the range of a search that did not find the component revision at that start
-    /// yet. The search scans on for the component revision from the next index of the cursor, and
-    /// then searches from this index. A page read refuses a cursor with this field.
+    /// The start of the range when a search or a range read has not yet found the component
+    /// revision there. The next page resumes that scan at the cursor's next index before it
+    /// returns entries from the range.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
     pub scan_to: Option<u64>,
@@ -471,8 +471,7 @@ impl OplogScanAllowance {
 #[serde(rename_all = "camelCase")]
 pub struct OplogScan {
     // The allowance that the read applied: the requested allowance, clamped to the configured
-    // allowance of the server. Without a requested allowance, the read has no scan limit, and
-    // the limit is `u64::MAX` entries and milliseconds.
+    // allowance of the server. Without a requested allowance, the read uses the server limit.
     pub limit: OplogScanAllowance,
     /// The oplog entries that the read charged: the entries that it read to find the component
     /// revision at the start of the range, and the entries that it read for the page, also those

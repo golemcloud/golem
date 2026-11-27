@@ -1296,35 +1296,40 @@ async fn read_full_oplog(
     query: Option<&str>,
     include: Option<&OplogInclude>,
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    enum Page {
+        First,
+        Next(golem_client::model::OplogCursor),
+        Done,
+    }
     let (from, to) = range.to_indices();
-    let pages = futures::stream::try_unfold(
-        Some(None::<golem_client::model::OplogCursor>),
-        |cursor| async move {
-            let Some(cursor) = cursor else {
-                return Ok(None);
-            };
-            let response = client
-                .get_oplog(
-                    &agent_id.environment_id.0,
-                    &agent_id.agent_id.0,
-                    from,
-                    100,
-                    cursor.as_ref(),
-                    query,
-                    include,
-                    None,
-                    to,
-                    None,
-                    None,
-                )
-                .await
-                .map_err(|e| {
-                    anyhow!("get_oplog failed for agent {agent_id}, query={query:?}: {e}")
-                })?;
-            let entries = full_oplog_entries(client, agent_id, response.entries, include).await?;
-            anyhow::Ok(Some((entries, response.next.map(Some))))
-        },
-    );
+    let pages = futures::stream::try_unfold(Page::First, |page| async move {
+        let cursor = match page {
+            Page::First => None,
+            Page::Next(cursor) => Some(cursor),
+            Page::Done => return Ok(None),
+        };
+        let response = client
+            .get_oplog(
+                &agent_id.environment_id.0,
+                &agent_id.agent_id.0,
+                from,
+                100,
+                cursor.as_ref(),
+                query,
+                include,
+                None,
+                to,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}, query={query:?}: {e}"))?;
+        let entries = full_oplog_entries(client, agent_id, response.entries, include).await?;
+        anyhow::Ok(Some((
+            entries,
+            response.next.map_or(Page::Done, Page::Next),
+        )))
+    });
     futures::TryStreamExt::try_concat(futures::StreamExt::boxed(pages)).await
 }
 

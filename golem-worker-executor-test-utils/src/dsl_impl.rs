@@ -1876,9 +1876,16 @@ impl TestWorkerExecutor {
         query: Option<&str>,
         claims: ClaimVisibility,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let pages = futures::stream::try_unfold(Some(None), |cursor| async move {
-            let Some(cursor) = cursor else {
-                return Ok(None);
+        enum Page {
+            First,
+            Next(golem_api_grpc::proto::golem::worker::OplogCursor),
+            Done,
+        }
+        let pages = futures::stream::try_unfold(Page::First, |page| async move {
+            let cursor = match page {
+                Page::First => None,
+                Page::Next(cursor) => Some(cursor),
+                Page::Done => return Ok(None),
             };
             let Some((entries, next)) = self
                 .read_oplog_page(agent_id, range, cursor, query, claims)
@@ -1889,7 +1896,7 @@ impl TestWorkerExecutor {
             let entries = self
                 .full_oplog_entries(&agent_id.agent_id, agent_id.environment_id, entries, claims)
                 .await?;
-            anyhow::Ok(Some((entries, next.map(Some))))
+            anyhow::Ok(Some((entries, next.map_or(Page::Done, Page::Next))))
         });
         futures::TryStreamExt::try_concat(futures::StreamExt::boxed(pages)).await
     }

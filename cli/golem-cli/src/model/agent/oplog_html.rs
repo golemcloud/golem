@@ -168,22 +168,7 @@ pub(crate) fn export_temporary_file(path: &Path) -> anyhow::Result<tempfile::Nam
 
 impl OplogExportHtmlWriter {
     pub fn create(path: &Path, title: &str) -> anyhow::Result<Self> {
-        let parent = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create {}", parent.display()))?;
-                parent.to_path_buf()
-            }
-            _ => PathBuf::from("."),
-        };
-        // The file gets the mode that a plain `--html` write gives it: an existing target keeps
-        // its mode, and a new file gets 0666 under the umask instead of the 0600 of a temporary
-        // file.
-        let file = platform::temporary(&parent);
-        let mut file = file.with_context(|| {
-            format!("failed to create a temporary file in {}", parent.display())
-        })?;
-        platform::preserve_mode(file.as_file(), path)?;
+        let mut file = export_temporary_file(path)?;
         let (prefix, suffix) = template_parts(title)?;
         file.write_all(prefix.as_bytes())?;
         Ok(Self {
@@ -541,27 +526,8 @@ mod tests {
             assert_eq!(mode(&existing), 0o640);
         }
 
-        #[test]
-        fn an_export_file_gets_the_mode_of_a_plain_write() {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-            let dir = tempfile::tempdir().unwrap();
-            let plain = dir.path().join("plain.jsonl");
-            std::fs::write(&plain, "x").unwrap();
-
-            let new = dir.path().join("nested/new.jsonl");
-            export_temporary_file(&new).unwrap().persist(&new).unwrap();
-            assert_eq!(mode(&new), mode(&plain));
-
-            let existing = dir.path().join("existing.jsonl");
-            std::fs::write(&existing, "old").unwrap();
-            std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o644)).unwrap();
-            export_temporary_file(&existing)
-                .unwrap()
-                .persist(&existing)
-                .unwrap();
-            assert_eq!(mode(&existing), 0o644);
-        }
+        #[path = "export/tests.rs"]
+        mod export;
     }
 
     #[test]

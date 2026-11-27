@@ -11,6 +11,7 @@ export const enum Release {
   R_1_3_0,
   R_1_4_0,
   R_1_5_0,
+  R_2_0_0,
 }
 
 type ReleaseMeta = {
@@ -92,6 +93,9 @@ const Releases: { [key in Release]: ReleaseMeta } = {
         <div>restructured {code("httpApi")} to deployment-only model</div>
       </>
     ),
+  },
+  [Release.R_2_0_0]: {
+    json: "2.0.0",
   },
 }
 
@@ -327,6 +331,7 @@ export const Fields: FC<FieldsProps> = ({ children }) => {
     [Release.R_1_3_0]: {},
     [Release.R_1_4_0]: {},
     [Release.R_1_5_0]: {},
+    [Release.R_2_0_0]: {},
   })
 
   const addField = (relase: Release, path: string, id: string) => {

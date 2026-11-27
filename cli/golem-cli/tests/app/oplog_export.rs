@@ -1519,8 +1519,45 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         std::fs::remove_file(&plain_file).unwrap();
     }
 
-    // The scan budget of the server (4 entries) is far below the entries before `--from`. The
-    // export still reads its range, because a range read of the export has no scan budget.
+    // One page cannot reach `--from` within a four-entry budget. Its cursor continues the
+    // revision scan, and the complete export follows cursors through that scan and the range.
+    let first = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            LONG_PROBE,
+            "--from",
+            "10",
+            "--to",
+            "20",
+            "--page",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(first.success_or_dump());
+    let first = first.stdout_json::<Value>();
+    assert_eq!(first[0]["entries"], serde_json::json!([]));
+    let cursor = first[0]["cursor"].as_str().unwrap();
+    let second = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            LONG_PROBE,
+            "--to",
+            "20",
+            "--page",
+            "--cursor",
+            cursor,
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(second.success_or_dump());
+    let second = second.stdout_json::<Value>();
+    assert_eq!(second[0]["entries"], serde_json::json!([]));
+    assert_ne!(second[0]["cursor"].as_str().unwrap(), cursor);
+
     let late_path = ctx.cwd_path_join("export/late.jsonl");
     let outputs = ctx
         .cli([

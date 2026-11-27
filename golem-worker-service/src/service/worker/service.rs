@@ -1420,7 +1420,7 @@ impl WorkerService {
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let start = cursor
             .as_ref()
-            .map(|cursor| cursor.next_oplog_index)
+            .map(|cursor| cursor.scan_to.unwrap_or(cursor.next_oplog_index))
             .unwrap_or_else(|| from_oplog_index.into());
         let end = start
             .checked_add(count.saturating_sub(1))
@@ -7411,41 +7411,8 @@ mod tests {
         );
     }
 
-    #[test]
-    async fn an_oplog_page_with_an_end_needs_permission_only_up_to_its_end() {
-        let harness = RestHarness::new(AgentMode::Durable);
-        harness
-            .worker_client
-            .set_metadata_component_revision(harness.component_revision);
-        let agent_id = harness.keyed_agent_id();
-        let owned = harness.owned(&agent_id);
-        let auth_ctx = auth_ctx_with_permissions(vec![oplog_target(
-            &agent_id,
-            OplogResourcePattern::range(Some(5), Some(7)),
-        )]);
-        let get_oplog = |to: Option<u64>| {
-            harness.worker_service.get_oplog(
-                &owned,
-                OplogIndex::from_u64(5),
-                None,
-                50,
-                None,
-                to.map(|to| super::OplogRangeRead {
-                    to: OplogIndex::from_u64(to),
-                    allowance: None,
-                }),
-                ClaimVisibility::Hidden,
-                auth_ctx.clone(),
-            )
-        };
-
-        get_oplog(Some(7)).await.unwrap();
-        assert!(
-            get_oplog(None).await.is_err(),
-            "a page of 50 entries from index 5 reads past the permitted index 7"
-        );
-        assert!(get_oplog(Some(8)).await.is_err());
-    }
+    #[path = "oplog/tests.rs"]
+    mod oplog;
 
     #[test]
     async fn plugin_lifecycle_resolves_and_authorizes_the_concrete_plugin_name() {

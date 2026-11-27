@@ -19,7 +19,7 @@ use super::{
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, check_oplog_cursor_query,
     extract_owned_agent_id, get_public_oplog_entry, get_public_oplog_page,
     get_public_oplog_range_page, golem, min, oplog_page_cursor, oplog_page_start,
-    oplog_range_allowance, search_public_oplog_remote,
+    search_public_oplog_remote,
 };
 use golem_common::base_model::caller::ClaimVisibility;
 use golem_common::model::oplog::OplogRange;
@@ -80,11 +80,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let limits = self.oplog_query_limits(request.count)?;
         let claims = ClaimVisibility::from_protobuf(request.claims)
             .map_err(WorkerExecutorError::invalid_request)?;
-        if let Some(to) = request.to_oplog_index {
-            let allowance = oplog_range_allowance(
-                request.scan_allowance.map(Into::into),
-                self.services.config().limits.scan_budget,
-            );
+        if request.to_oplog_index.is_some() {
             let page = get_public_oplog_range_page(
                 component_service,
                 self.oplog_service(),
@@ -94,10 +90,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 identity.create_parameters().owner_kind,
                 agent_type_name.as_ref(),
                 cursor,
-                range.first_index_in(OplogIndex::INITIAL),
-                OplogIndex::from_u64(to),
+                range,
                 limits,
-                allowance,
+                request.scan_allowance.map(Into::into),
+                self.services.config().limits.scan_budget,
                 claims,
             )
             .await?;
@@ -115,7 +111,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ),
             });
         }
-        let (range, start_component_revision) = oplog_page_start(
+        let (start, start_component_revision) = oplog_page_start(
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
@@ -132,7 +128,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),
             start_component_revision,
-            range,
+            start,
             limits,
             claims,
         )

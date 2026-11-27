@@ -477,9 +477,8 @@ pub struct OplogRange {
     pub to: u64,
 }
 
-/// The scan allowance of the first read of a bounded report. The server clamps it to its
-/// configured allowance. A range read without an allowance has no scan limit, so the report asks
-/// for one.
+/// The scan allowance of the first read of a bounded report. The server clamps this explicit
+/// allowance to its configured allowance. The report carries the remaining allowance forward.
 const ANY_ALLOWANCE: OplogScanAllowance = OplogScanAllowance {
     entries: u64::MAX,
     millis: u64::MAX,

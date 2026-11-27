@@ -319,14 +319,15 @@ impl WorkerApi {
     /// the oplog ends the read at the end of the oplog. The endpoint refuses a `to` before
     /// `from`. With `query`, the page holds only the entries in the range that match the query.
     /// Without `query`, a read with `to` is a range read: the response accounts its scan.
-    /// `scanEntries` and `scanMillis` limit the scan of a range read. Without them, the scan has no
-    /// limit, and `count` still limits each page. Without `query`, `lastIndex` is the last index of
-    /// the oplog. With `query`, it is the last index of the range in the oplog.
+    /// A range read uses the configured scan budget. `scanEntries` and `scanMillis` can lower it
+    /// for a reader that shares one allowance across pages. Without `query`, `lastIndex` is the
+    /// last index of the oplog. With `query`, it is the last index of the range in the oplog.
     ///
-    /// A search with `from` first reads the entries before `from`, for the component revision at
-    /// `from`. The scan budget of the server covers this read. When the budget ends the read
-    /// before `from`, the page is empty, and its cursor has `scanTo`. Pass the cursor back
-    /// unchanged, with or without `from`.
+    /// A search or a range read with `from` first scans the entries before `from` for the
+    /// component revision. This scan counts against the budget. With the default budget, when the
+    /// scan stops before `from`, the page is empty and its cursor has `scanTo`. Pass the cursor
+    /// back unchanged, with or without `from`. A cursor whose query does not match is stale,
+    /// even when it is also outside the requested range.
     #[oai(
         path = "/:environment_id/agents/:agent_id/oplog",
         method = "get",
@@ -416,10 +417,21 @@ impl WorkerApi {
                     .await?
             }
             None => {
+                // Preserve an omitted start so a revision-scan cursor can supply it.
+                let oplog_start = if to.is_some()
+                    && cursor
+                        .as_ref()
+                        .is_some_and(|cursor| cursor.scan_to.is_some())
+                    && from.is_none()
+                {
+                    OplogIndex::NONE
+                } else {
+                    range.first_index_in(OplogIndex::INITIAL)
+                };
                 self.worker_service
                     .get_oplog(
                         &agent_id,
-                        range.first_index_in(OplogIndex::INITIAL),
+                        oplog_start,
                         cursor,
                         count,
                         expected_fingerprint,
@@ -846,118 +858,4 @@ fn oplog_scan_allowance(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{WorkerApi, oplog_scan_allowance};
-    use crate::api::common::ApiEndpointError;
-    use crate::mcp::OplogRead;
-    use golem_common::model::OwnedAgentId;
-    use golem_common::model::agent::{AgentKey, AgentMode};
-    use golem_common::model::oplog::{OplogIndex, OplogRange, OplogScanAllowance};
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
-    use golem_service_base::model::auth::AuthCtx;
-    use test_r::test;
-
-    #[test]
-    fn a_scan_allowance_needs_both_parameters_and_a_range_read() {
-        let allowance = OplogScanAllowance {
-            entries: 7,
-            millis: 9,
-        };
-        let needs_to = "The 'scanEntries' and 'scanMillis' parameters need the 'to' parameter";
-        let no_query = "Cannot specify both the 'scanEntries' and 'scanMillis' parameters and the 'query' parameter";
-        let together = "The 'scanEntries' and 'scanMillis' parameters go together";
-        [
-            ((None, None, None, None), Ok(None)),
-            ((None, Some(9), None, None), Ok(None)),
-            ((Some("error"), Some(9), None, None), Ok(None)),
-            ((None, Some(9), Some(7), Some(9)), Ok(Some(allowance))),
-            ((None, None, Some(7), Some(9)), Err(needs_to)),
-            ((Some("error"), None, Some(7), Some(9)), Err(no_query)),
-            ((Some("error"), Some(9), Some(7), Some(9)), Err(no_query)),
-            ((None, Some(9), Some(7), None), Err(together)),
-            ((None, Some(9), None, Some(9)), Err(together)),
-        ]
-        .into_iter()
-        .for_each(|((query, to, entries, millis), expected)| {
-            assert_eq!(
-                oplog_scan_allowance(query, to, entries, millis).map_err(|error| match error {
-                    ApiEndpointError::BadRequest(body) => body.0.errors.join(" "),
-                    _ => "not a bad request".to_string(),
-                }),
-                expected.map_err(str::to_string),
-                "query {query:?}, to {to:?}, scanEntries {entries:?}, scanMillis {millis:?}"
-            )
-        });
-    }
-
-    #[test]
-    async fn an_oplog_query_reads_its_range_and_a_read_without_a_query_reads_its_range() {
-        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
-        let (worker_service, auth_service) = harness.rest_api_services();
-        let api = WorkerApi::new(worker_service, auth_service, Default::default());
-        let key = AgentKey::new(
-            harness.agent_type.type_name.clone(),
-            TypedSchemaValue::new(
-                SchemaGraph::anonymous(SchemaType::record(vec![])),
-                SchemaValue::Record { fields: vec![] },
-            ),
-        )
-        .unwrap();
-        let agent_id = OwnedAgentId::new(harness.environment_id, &harness.add_keyed_agent(&key));
-        let index = OplogIndex::from_u64;
-        let allowance = OplogScanAllowance {
-            entries: 7,
-            millis: 9,
-        };
-        let read = |from, to, query: Option<&str>, allowance| {
-            api.get_oplog_internal(
-                agent_id.clone(),
-                from,
-                to,
-                50,
-                None,
-                query.map(str::to_string),
-                None,
-                allowance,
-                Default::default(),
-                AuthCtx::system(),
-            )
-        };
-
-        read(Some(3), Some(9), Some("error"), None).await.unwrap();
-        read(Some(4), None, None, None).await.unwrap();
-        // A read without `from` starts at index 1. The scan allowance of a range read goes to the
-        // executor.
-        read(None, Some(9), None, Some(allowance)).await.unwrap();
-        // A range that ends before its start is a bad request, with and without a query.
-        assert!(matches!(
-            read(Some(5), Some(4), Some("error"), None).await,
-            Err(ApiEndpointError::BadRequest(_))
-        ));
-        assert!(matches!(
-            read(Some(5), Some(4), None, None).await,
-            Err(ApiEndpointError::BadRequest(_))
-        ));
-
-        assert_eq!(
-            *harness.oplog_reads.lock().unwrap(),
-            vec![
-                OplogRead {
-                    range: OplogRange::new(Some(index(3)), Some(index(9))).unwrap(),
-                    query: Some("error".into()),
-                    allowance: None,
-                },
-                OplogRead {
-                    range: OplogRange::new(Some(index(4)), None).unwrap(),
-                    query: None,
-                    allowance: None,
-                },
-                OplogRead {
-                    range: OplogRange::new(Some(index(1)), Some(index(9))).unwrap(),
-                    query: None,
-                    allowance: Some(allowance),
-                },
-            ]
-        );
-    }
-}
+mod tests;
