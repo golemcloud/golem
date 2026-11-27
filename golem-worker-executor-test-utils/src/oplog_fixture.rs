@@ -72,7 +72,27 @@ impl Debug for OplogFixtureService {
 #[async_trait]
 impl OplogService for OplogFixtureService {
     async fn lock_lifecycle(&self, id: &AgentId) -> OplogLifecycleGuard {
+        let gate = {
+            let mut gates = self.deps.oplog_lifecycle_after_open_gates.lock().unwrap();
+            if gates.get(id).is_some_and(|(armed, _)| *armed) {
+                gates.remove(id).map(|(_, gate)| gate)
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
         self.inner.lock_lifecycle(id).await
+    }
+
+    fn set_seal_service(&self, service: Arc<golem_worker_executor::services::oplog::SealService>) {
+        self.inner.set_seal_service(service);
+    }
+
+    fn seal_service(&self) -> Option<Arc<golem_worker_executor::services::oplog::SealService>> {
+        self.inner.seal_service()
     }
 
     fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
@@ -83,17 +103,27 @@ impl OplogService for OplogFixtureService {
         self.inner.stream_session_index()
     }
 
+    fn stage_cleanup_tracker(
+        &self,
+    ) -> Option<Arc<golem_worker_executor::services::oplog::StageCleanupTracker>> {
+        self.inner.stage_cleanup_tracker()
+    }
+
     async fn create_staged(
         &self,
         id: &OwnedAgentId,
         mode: AgentMode,
         stage: uuid::Uuid,
         metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, String> {
-        Ok(self.handle(
-            id,
-            self.inner.create_staged(id, mode, stage, metadata).await?,
-        ))
+    ) -> Result<
+        (
+            Arc<dyn Oplog>,
+            golem_worker_executor::services::oplog::StageCleanupGuard,
+        ),
+        golem_worker_executor::services::oplog::CreateStagedError,
+    > {
+        let (writer, cleanup) = self.inner.create_staged(id, mode, stage, metadata).await?;
+        Ok((self.handle(id, writer), cleanup))
     }
 
     async fn staged_exists(
@@ -120,8 +150,11 @@ impl OplogService for OplogFixtureService {
         id: &OwnedAgentId,
         mode: AgentMode,
         stage: uuid::Uuid,
+        stage_token: Option<i64>,
     ) -> Result<(), String> {
-        self.inner.discard_staged(id, mode, stage).await
+        self.inner
+            .discard_staged(id, mode, stage, stage_token)
+            .await
     }
 
     async fn create(
@@ -179,14 +212,22 @@ impl OplogService for OplogFixtureService {
         execution: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         epoch: Option<ShardEpoch>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
-        Ok(self.handle(
-            id,
-            self.inner
-                .open(
-                    lifecycle, id, mode, last, metadata, status, execution, epoch,
-                )
-                .await?,
-        ))
+        let oplog = self
+            .inner
+            .open(
+                lifecycle, id, mode, last, metadata, status, execution, epoch,
+            )
+            .await?;
+        if let Some((armed, _)) = self
+            .deps
+            .oplog_lifecycle_after_open_gates
+            .lock()
+            .unwrap()
+            .get_mut(&id.agent_id)
+        {
+            *armed = true;
+        }
+        Ok(self.handle(id, oplog))
     }
 
     async fn get_last_index(
@@ -210,6 +251,7 @@ impl OplogService for OplogFixtureService {
         lifecycle: &mut OplogLifecycleGuard,
         id: &OwnedAgentId,
         mode: AgentMode,
+        fingerprint: golem_common::model::AgentFingerprint,
         epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
         let gate = self
@@ -222,7 +264,9 @@ impl OplogService for OplogFixtureService {
             let _ = gate.entered_tx.send(());
             let _ = gate.release_rx.await;
         }
-        self.inner.delete(lifecycle, id, mode, epoch).await
+        self.inner
+            .delete(lifecycle, id, mode, fingerprint, epoch)
+            .await
     }
 
     async fn assert_owning_epoch(

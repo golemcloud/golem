@@ -37,13 +37,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         data: &ResolvedWorkerData<Ctx>,
     ) -> Result<bool, WorkerExecutorError> {
+        // Frozen history can be projected, but attachment reconciliation can append transitions.
+        if crate::services::oplog::downcast_oplog::<
+            crate::services::oplog::sealed_reader::SealedOplog,
+        >(&data.oplog)
+        .is_some()
+        {
+            return Ok(false);
+        }
         if !data.durable_stream_producer.has_history()
             && !data.last_known_status.load().has_durable_stream_history
         {
             return Ok(false);
         }
-        let probe =
-            DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
+        let probe = DbDirectStreamAttachmentConsumerProbe::new(
+            data.deps.worker_service(),
+            self.oplog_service(),
+        );
         let config = &self.deps.config().durable_stream;
         let producer = self.durable_stream_producer_for(data).await?;
         if !producer.has_reconcilable_attachments().await {
@@ -639,6 +649,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(events)
     }
     pub(crate) fn start_durable_stream_attachment_reconciler(this: &Arc<Self>) {
+        if crate::services::oplog::downcast_oplog::<
+            crate::services::oplog::sealed_reader::SealedOplog,
+        >(&this.oplog)
+        .is_some()
+        {
+            return;
+        }
         let worker = Arc::downgrade(this);
         let slot = this.durable_stream_producer.clone();
         let shutdown = this.durable_stream_attachment_reconciler.shutdown.clone();

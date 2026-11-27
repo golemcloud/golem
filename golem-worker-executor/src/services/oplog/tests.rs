@@ -27,8 +27,8 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace,
+    AgentIndexedState, IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, UnsealAgentResult,
 };
 use assert2::check;
 use bytes::Bytes;
@@ -68,6 +68,8 @@ use test_r::test;
 use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, info};
 use uuid::Uuid;
+
+mod sealed_scan;
 
 macro_rules! create_oplog_entry {
     ($agent_id:expr, $agent_mode:expr, $component_revision:expr, $env:expr,
@@ -176,10 +178,11 @@ impl OplogArchiveService for RecordingArchiveService {
         id: &OwnedAgentId,
         mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         self.calls.open.fetch_add(1, Ordering::Relaxed);
         Ok(Arc::new(RecordingArchive {
-            inner: self.inner.open(id, mode, shard_epoch).await?,
+            inner: self.inner.open(id, mode, shard_epoch, fingerprint).await?,
             calls: self.calls.clone(),
         }))
     }
@@ -188,15 +191,34 @@ impl OplogArchiveService for RecordingArchiveService {
         id: &OwnedAgentId,
         mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         self.calls.open_fresh.fetch_add(1, Ordering::Relaxed);
         Ok(Arc::new(RecordingArchive {
-            inner: self.inner.open_fresh(id, mode, shard_epoch).await?,
+            inner: self
+                .inner
+                .open_fresh(id, mode, shard_epoch, fingerprint)
+                .await?,
             calls: self.calls.clone(),
         }))
     }
-    async fn delete(&self, id: &OwnedAgentId, mode: AgentMode) -> OplogArchiveResult<()> {
-        self.inner.delete(id, mode).await
+    async fn assert_owning_epoch(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(id, mode, expected_epoch)
+            .await
+    }
+    async fn delete(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.inner.delete(id, mode, expected_epoch).await
     }
     async fn read_source(
         &self,
@@ -374,11 +396,12 @@ impl OplogArchiveService for BlockingArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(BlockingArchive {
             inner: self
                 .inner
-                .open(owned_agent_id, agent_mode, shard_epoch)
+                .open(owned_agent_id, agent_mode, shard_epoch, fingerprint)
                 .await?,
             pause_at: self.pause_at,
             paused: self.paused.clone(),
@@ -392,11 +415,12 @@ impl OplogArchiveService for BlockingArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(BlockingArchive {
             inner: self
                 .inner
-                .open_fresh(owned_agent_id, agent_mode, shard_epoch)
+                .open_fresh(owned_agent_id, agent_mode, shard_epoch, fingerprint)
                 .await?,
             pause_at: self.pause_at,
             paused: self.paused.clone(),
@@ -405,12 +429,26 @@ impl OplogArchiveService for BlockingArchiveService {
         }))
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+            .await
+    }
+
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()> {
-        self.inner.delete(owned_agent_id, agent_mode).await
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .delete(owned_agent_id, agent_mode, expected_epoch)
+            .await
     }
 
     async fn read_source(
@@ -677,6 +715,7 @@ struct HeldAppend {
     id: u64,
     value: Vec<u8>,
     shard_epoch: Option<ShardEpoch>,
+    stage_token: Option<i64>,
 }
 
 impl InjectedAppendFailure {
@@ -722,6 +761,14 @@ impl InjectedAppendFailure {
     }
 }
 
+#[derive(Debug)]
+struct PausedIndexedRead {
+    namespace: IndexedStorageNamespace,
+    after: bool,
+    started: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+
 /// `IndexedStorage` decorator counting read-type operations, used to prove at
 /// the storage level that fresh oplog construction performs no reads before
 /// its first append.
@@ -729,6 +776,7 @@ impl InjectedAppendFailure {
 pub(crate) struct ReadCountingIndexedStorage {
     inner: InMemoryIndexedStorage,
     reads: AtomicUsize,
+    paused_read: StdMutex<Option<PausedIndexedRead>>,
     discard_compressed_appends: bool,
     read_error: Option<IndexedStorageError>,
     read_failures: StdMutex<VecDeque<IndexedStorageError>>,
@@ -756,6 +804,42 @@ pub(crate) struct ReadCountingIndexedStorage {
 impl ReadCountingIndexedStorage {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn pause_next_read(
+        &self,
+        namespace: IndexedStorageNamespace,
+        after: bool,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (started, waiting) = oneshot::channel();
+        let (release, resume) = oneshot::channel();
+        let mut slot = self.paused_read.lock().unwrap();
+        assert!(slot.is_none());
+        *slot = Some(PausedIndexedRead {
+            namespace,
+            after,
+            started,
+            release: resume,
+        });
+        (waiting, release)
+    }
+
+    async fn wait_for_read(&self, namespace: &IndexedStorageNamespace, after: bool) {
+        let pause = {
+            let mut slot = self.paused_read.lock().unwrap();
+            if slot
+                .as_ref()
+                .is_some_and(|pause| pause.namespace == *namespace && pause.after == after)
+            {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some(pause) = pause {
+            let _ = pause.started.send(());
+            let _ = pause.release.await;
+        }
     }
 
     fn discarding_compressed_appends() -> Self {
@@ -822,6 +906,7 @@ impl ReadCountingIndexedStorage {
                     append.id,
                     append.value,
                     append.shard_epoch,
+                    append.stage_token,
                 )
                 .await?;
         }
@@ -866,6 +951,127 @@ impl ReadCountingIndexedStorage {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl IndexedStorage for ReadCountingIndexedStorage {
+    fn supports_release(&self) -> bool {
+        self.inner.supports_release()
+    }
+
+    async fn reserve_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        token: i64,
+    ) -> Result<Option<i64>, IndexedStorageError> {
+        self.inner
+            .reserve_stage(svc_name, api_name, owned_agent_id, token)
+            .await
+    }
+
+    async fn remove_stage_reservation(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .remove_stage_reservation(svc_name, api_name, owned_agent_id, token)
+            .await
+    }
+
+    async fn discard_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        stage_token: Option<i64>,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .discard_stage(svc_name, api_name, namespace, key, stage_token)
+            .await
+    }
+
+    async fn observe_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<crate::storage::indexed::AgentDataObservation, IndexedStorageError> {
+        self.inner
+            .observe_agent(svc_name, api_name, owned_agent_id)
+            .await
+    }
+
+    async fn mark_sealed(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+        fingerprint: AgentFingerprint,
+        superseded_marker: Option<crate::storage::indexed::SealMarker>,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .mark_sealed(
+                svc_name,
+                api_name,
+                state,
+                epoch,
+                fingerprint,
+                superseded_marker,
+            )
+            .await
+    }
+
+    async fn release_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError> {
+        self.inner
+            .release_agent(svc_name, api_name, state, epoch)
+            .await
+    }
+
+    async fn unseal_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+        record_epoch: ShardEpoch,
+        valid_until: std::time::SystemTime,
+        fingerprint: AgentFingerprint,
+    ) -> Result<UnsealAgentResult, IndexedStorageError> {
+        self.inner
+            .unseal_agent(
+                svc_name,
+                api_name,
+                state,
+                epoch,
+                record_epoch,
+                valid_until,
+                fingerprint,
+            )
+            .await
+    }
+
+    async fn remove_key_epoch_if_empty(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .remove_key_epoch_if_empty(svc_name, api_name, namespace, key, epoch)
+            .await
+    }
+
     async fn set_key_epoch(
         &self,
         svc_name: &'static str,
@@ -873,7 +1079,9 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         shard_epoch: ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
+        presence_namespaces: &[IndexedStorageNamespace],
+        remove_if_absent: bool,
+    ) -> Result<crate::storage::indexed::KeyEpochClaim, IndexedStorageError> {
         if let (
             Some(error),
             IndexedStorageNamespace::CompressedOpLog { .. }
@@ -883,7 +1091,15 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             return Err(error.clone());
         }
         self.inner
-            .set_key_epoch(svc_name, api_name, namespace, key, shard_epoch)
+            .set_key_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                shard_epoch,
+                presence_namespaces,
+                remove_if_absent,
+            )
             .await
     }
 
@@ -894,6 +1110,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
         // A whole-key delete, as `delete` is: an archive level deletes its key with its record.
         if self.fail_delete_once.swap(false, Ordering::Relaxed) {
@@ -902,7 +1119,14 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             ));
         }
         self.inner
-            .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
+            .delete_with_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                expected_epoch,
+                retain_epoch,
+            )
             .await
     }
 
@@ -934,12 +1158,18 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
         self.count_read();
+        self.wait_for_read(&namespace, false).await;
         if self.fail_exists_once.swap(false, Ordering::Relaxed) {
             return Err(IndexedStorageError::Other(
                 "injected indexed exists failure".to_string(),
             ));
         }
-        self.inner.exists(svc_name, api_name, namespace, key).await
+        let result = self
+            .inner
+            .exists(svc_name, api_name, namespace.clone(), key)
+            .await;
+        self.wait_for_read(&namespace, true).await;
+        result
     }
 
     async fn scan_stable(
@@ -968,6 +1198,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         id: u64,
         mut value: Vec<u8>,
         shard_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.append_attempts.fetch_add(1, Ordering::Relaxed);
         if self.discard_compressed_appends
@@ -997,6 +1228,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                         id,
                         value.clone(),
                         shard_epoch,
+                        stage_token,
                     )
                     .await?;
                 self.inner
@@ -1006,6 +1238,8 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                         namespace.clone(),
                         key,
                         ShardEpoch(epoch.0 + 1),
+                        &[],
+                        false,
                     )
                     .await?;
                 return self
@@ -1019,6 +1253,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                         id,
                         value,
                         shard_epoch,
+                        stage_token,
                     )
                     .await;
             }
@@ -1029,6 +1264,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                     id,
                     value,
                     shard_epoch,
+                    stage_token,
                 });
                 return Err(IndexedStorageError::Indeterminate(
                     "injected connection loss".to_string(),
@@ -1052,6 +1288,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                 id,
                 value,
                 shard_epoch,
+                stage_token,
             )
             .await?;
         failure.after_write_result()
@@ -1066,6 +1303,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
         shard_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.append_many_attempts.fetch_add(1, Ordering::Relaxed);
         if self.discard_compressed_appends
@@ -1119,9 +1357,35 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                 key,
                 pairs,
                 shard_epoch,
+                stage_token,
             )
             .await?;
         failure.after_write_result()
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+        stage_token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .move_if_absent(
+                svc_name,
+                api_name,
+                source_namespace,
+                source_key,
+                target_namespace,
+                target_key,
+                expected_last_id,
+                stage_token,
+            )
+            .await
     }
 
     async fn length(
@@ -1171,6 +1435,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         end_id: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         self.count_read();
+        self.wait_for_read(&namespace, false).await;
         if let Some(error) = &self.read_error {
             return Err(error.clone());
         }
@@ -1184,17 +1449,20 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         {
             return Ok(Vec::new());
         }
-        self.inner
+        let result = self
+            .inner
             .read(
                 svc_name,
                 api_name,
                 entity_name,
-                namespace,
+                namespace.clone(),
                 key,
                 start_id,
                 end_id,
             )
-            .await
+            .await;
+        self.wait_for_read(&namespace, true).await;
+        result
     }
 
     async fn first(
@@ -1234,14 +1502,18 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
         self.count_read();
+        self.wait_for_read(&namespace, false).await;
         if let (Some(error), IndexedStorageNamespace::CompressedOpLog { .. }) =
             (&self.archive_last_id_error, &namespace)
         {
             return Err(error.clone());
         }
-        self.inner
-            .last_id(svc_name, api_name, entity_name, namespace, key)
-            .await
+        let result = self
+            .inner
+            .last_id(svc_name, api_name, entity_name, namespace.clone(), key)
+            .await;
+        self.wait_for_read(&namespace, true).await;
+        result
     }
 
     async fn closest(
@@ -1254,6 +1526,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         id: u64,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.count_read();
+        self.wait_for_read(&namespace, false).await;
         if let Some(error) = &self.read_error {
             return Err(error.clone());
         }
@@ -1263,9 +1536,12 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         if self.miss_closest_once.swap(false, Ordering::Relaxed) {
             return Ok(None);
         }
-        self.inner
-            .closest(svc_name, api_name, entity_name, namespace, key, id)
-            .await
+        let result = self
+            .inner
+            .closest(svc_name, api_name, entity_name, namespace.clone(), key, id)
+            .await;
+        self.wait_for_read(&namespace, true).await;
+        result
     }
 
     async fn drop_prefix(
@@ -1308,11 +1584,22 @@ impl IndexedStorage for ReadCountingIndexedStorage {
     }
 }
 
+type PausedBlobOperation<T> = StdMutex<
+    Option<(
+        T,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
+>;
+
 /// `BlobStorage` decorator counting read-type operations and optionally failing a raw write.
 #[derive(Debug)]
 pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
     inner: B,
     reads: AtomicUsize,
+    seal_lists: StdMutex<Vec<(AgentMode, &'static str, &'static str)>>,
+    fail_read_once: AtomicBool,
+    fail_seal_list_once: AtomicBool,
     puts: AtomicUsize,
     fail_put: Option<usize>,
     fail_delete_after: AtomicUsize,
@@ -1324,12 +1611,8 @@ pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
             tokio::sync::oneshot::Receiver<()>,
         )>,
     >,
-    pause_read: std::sync::Mutex<
-        Option<(
-            tokio::sync::oneshot::Sender<()>,
-            tokio::sync::oneshot::Receiver<()>,
-        )>,
-    >,
+    pause_seal_list: PausedBlobOperation<usize>,
+    pause_read: PausedBlobOperation<Option<BlobStorageNamespace>>,
 }
 
 impl ReadCountingBlobStorage {
@@ -1351,12 +1634,16 @@ impl<B> ReadCountingBlobStorage<B> {
         Self {
             inner,
             reads: AtomicUsize::new(0),
+            seal_lists: StdMutex::new(Vec::new()),
+            fail_read_once: AtomicBool::new(false),
+            fail_seal_list_once: AtomicBool::new(false),
             puts: AtomicUsize::new(0),
             fail_put: None,
             fail_delete_after: AtomicUsize::new(0),
             fail_delete_after_commit: AtomicUsize::new(0),
             fail_delete_dir_once: AtomicBool::new(false),
             pause_put: std::sync::Mutex::new(None),
+            pause_seal_list: std::sync::Mutex::new(None),
             pause_read: std::sync::Mutex::new(None),
         }
     }
@@ -1373,16 +1660,26 @@ impl<B> ReadCountingBlobStorage<B> {
         (started_rx, release_tx)
     }
 
-    fn fail_next_delete(&self) {
+    pub(crate) fn pause_seal_list_after(
+        &self,
+        preceding_lists: usize,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        *self.pause_seal_list.lock().unwrap() = Some((preceding_lists, started_tx, release_rx));
+        (started_rx, release_tx)
+    }
+
+    pub(crate) fn fail_next_delete(&self) {
         self.fail_delete_after.store(1, Ordering::Relaxed);
     }
 
-    fn fail_delete_after_commit(&self, successful_deletes: usize) {
+    pub(crate) fn fail_delete_after_commit(&self, successful_deletes: usize) {
         self.fail_delete_after_commit
             .store(successful_deletes + 1, Ordering::Relaxed);
     }
 
-    fn fail_next_delete_dir(&self) {
+    pub(crate) fn fail_next_delete_dir(&self) {
         self.fail_delete_dir_once.store(true, Ordering::Relaxed);
     }
 
@@ -1394,16 +1691,38 @@ impl<B> ReadCountingBlobStorage<B> {
     ) {
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        *self.pause_read.lock().unwrap() = Some((started_tx, release_rx));
+        *self.pause_read.lock().unwrap() = Some((None, started_tx, release_rx));
         (started_rx, release_tx)
+    }
+
+    pub(crate) fn pause_next_read_in(
+        &self,
+        namespace: BlobStorageNamespace,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (waiting, resume) = self.pause_next_read();
+        self.pause_read.lock().unwrap().as_mut().unwrap().0 = Some(namespace);
+        (waiting, resume)
+    }
+
+    pub(crate) fn fail_next_read(&self) {
+        self.fail_read_once.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fail_next_seal_list(&self) {
+        self.fail_seal_list_once.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn reads(&self) -> usize {
         self.reads.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn seal_lists(&self) -> Vec<(AgentMode, &'static str, &'static str)> {
+        self.seal_lists.lock().unwrap().clone()
+    }
+
     pub(crate) fn reset(&self) {
-        self.reads.store(0, Ordering::Relaxed)
+        self.reads.store(0, Ordering::Relaxed);
+        self.seal_lists.lock().unwrap().clear();
     }
 
     fn count_read(&self) {
@@ -1414,6 +1733,70 @@ impl<B> ReadCountingBlobStorage<B> {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
+    async fn list_page_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
+        self.count_read();
+        if let BlobStorageNamespace::SealRecords { agent_mode, .. } = &namespace {
+            self.seal_lists
+                .lock()
+                .unwrap()
+                .push((*agent_mode, target_label, op_label));
+        }
+        let pause = if matches!(&namespace, BlobStorageNamespace::SealRecords { .. }) {
+            let mut pause = self.pause_seal_list.lock().unwrap();
+            match pause.as_mut() {
+                Some((0, _, _)) => pause.take(),
+                Some((remaining, _, _)) => {
+                    *remaining -= 1;
+                    None
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        if let Some((_, started, resume)) = pause {
+            let _ = started.send(());
+            let _ = resume.await;
+        }
+        if matches!(&namespace, BlobStorageNamespace::SealRecords { .. })
+            && self.fail_seal_list_once.swap(false, Ordering::Relaxed)
+        {
+            anyhow::bail!("injected seal LIST failure");
+        }
+        self.inner
+            .list_page_at(
+                target_label,
+                op_label,
+                namespace,
+                prefix,
+                start_after,
+                max_keys,
+            )
+            .await
+    }
+
+    async fn put_raw_if_absent_once_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<PutIfAbsent> {
+        self.inner
+            .put_raw_if_absent_once_at(target_label, op_label, namespace, path, data, timeout)
+            .await
+    }
+
     async fn copy_between_at(
         &self,
         target_label: &'static str,
@@ -1443,10 +1826,22 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, anyhow::Error> {
         self.count_read();
-        let pause = self.pause_read.lock().unwrap().take();
-        if let Some((started, release)) = pause {
+        let pause = {
+            let mut slot = self.pause_read.lock().unwrap();
+            if slot.as_ref().is_some_and(|(filter, _, _)| {
+                filter.as_ref().is_none_or(|filter| *filter == namespace)
+            }) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some((_, started, release)) = pause {
             let _ = started.send(());
             let _ = release.await;
+        }
+        if self.fail_read_once.swap(false, Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("injected blob read failure"));
         }
         self.inner
             .get_raw_at(target_label, op_label, namespace, path)
@@ -2033,13 +2428,13 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .publish_staged(
                 &owned,
                 AgentMode::Ephemeral,
-                StagePublication::for_tests(stage_id),
+                StagePublication::for_tests(stage_id, None),
                 OplogIndex::INITIAL
             )
             .await
             .is_err()
     );
-    let stage = service
+    let (stage, mut stage_cleanup) = service
         .create_staged(&owned, AgentMode::Durable, stage_id, metadata.clone())
         .await
         .unwrap();
@@ -2049,20 +2444,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .await
             .unwrap()
     );
-    // A crashed attempt leaves its committed stage behind. A fresh attempt must neither
-    // enumerate it as an agent nor reuse its contents when publishing the same target.
     let orphan_id = Uuid::new_v4();
-    let orphan = service
-        .create_staged(&owned, AgentMode::Durable, orphan_id, metadata.clone())
-        .await
-        .unwrap();
-    orphan.add(create.clone()).await.unwrap();
-    orphan
-        .add(OplogEntry::recovery_succeeded().rounded())
-        .await
-        .unwrap();
-    orphan.commit(CommitLevel::Always).await.unwrap();
-    drop(orphan);
     let entries = [
         create.clone(),
         OplogEntry::suspend().rounded(),
@@ -2100,6 +2482,13 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
                 .is_empty()
         );
     }
+    // Real staged entries, unlike the reservation token, exclude another admission.
+    assert!(matches!(
+        service
+            .create_staged(&owned, AgentMode::Durable, orphan_id, metadata.clone())
+            .await,
+        Err(CreateStagedError::TargetPresent)
+    ));
     assert_eq!(
         stage
             .read_exact(OplogIndex::INITIAL, 3)
@@ -2117,18 +2506,20 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     else {
         panic!("expected external payload")
     };
+    let stage_token = stage.stage_token();
     drop(stage);
     assert!(
         service
             .publish_staged(
                 &owned,
                 AgentMode::Durable,
-                StagePublication::for_tests(stage_id),
+                StagePublication::for_tests(stage_id, stage_token),
                 OplogIndex::from_u64(3)
             )
             .await
             .unwrap()
     );
+    stage_cleanup.disarm();
     assert!(
         !service
             .staged_exists(&owned, AgentMode::Durable, stage_id)
@@ -2145,7 +2536,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         entries
     );
     service
-        .discard_staged(&owned, AgentMode::Durable, orphan_id)
+        .discard_staged(&owned, AgentMode::Durable, orphan_id, None)
         .await
         .unwrap();
     let reopened = service
@@ -2174,24 +2565,22 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     );
 
     let losing_id = Uuid::new_v4();
-    let losing = service
-        .create_staged(&owned, AgentMode::Durable, losing_id, metadata)
-        .await
-        .unwrap();
-    losing.add(create).await.unwrap();
-    losing.commit(CommitLevel::Always).await.unwrap();
-    assert_eq!(losing.current_oplog_index().await, OplogIndex::INITIAL);
+    assert!(matches!(
+        service
+            .create_staged(&owned, AgentMode::Durable, losing_id, metadata)
+            .await,
+        Err(CreateStagedError::TargetPresent)
+    ));
     assert_eq!(
         reopened.current_oplog_index().await,
         OplogIndex::from_u64(3)
     );
-    drop(losing);
     assert!(
         !service
             .publish_staged(
                 &owned,
                 AgentMode::Durable,
-                StagePublication::for_tests(losing_id),
+                StagePublication::for_tests(losing_id, None),
                 OplogIndex::INITIAL
             )
             .await
@@ -2212,14 +2601,14 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .publish_staged(
                 &owned,
                 AgentMode::Durable,
-                StagePublication::for_tests(losing_id),
+                StagePublication::for_tests(losing_id, None),
                 OplogIndex::INITIAL
             )
             .await
             .unwrap()
     );
     service
-        .discard_staged(&owned, AgentMode::Durable, losing_id)
+        .discard_staged(&owned, AgentMode::Durable, losing_id, None)
         .await
         .unwrap();
     assert_eq!(
@@ -2325,7 +2714,12 @@ async fn a_layered_oplog_length_counts_every_layer(_tracing: &Tracing) {
             .unwrap();
     }
     let archived = lower
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -2453,6 +2847,7 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
 
     let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
     metadata.agent_mode = AgentMode::Ephemeral;
+    let fingerprint = metadata.fingerprint;
     indexed_storage.reset();
     blob_storage.reset();
     let oplog = service
@@ -2483,6 +2878,24 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
         .unwrap();
     assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
     assert!(blob_storage.reads() > 0);
+
+    let chunks = blob_storage
+        .list_blobs_below(
+            "test",
+            "test",
+            BlobStorageNamespace::CompressedOplog {
+                environment_id,
+                type_tag: agent_id.type_tag(),
+                agent_mode: AgentMode::Ephemeral,
+                level: 1,
+            },
+            &Path::new("chunks")
+                .join(agent_path_segment(&agent_id))
+                .join(fingerprint.to_string()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(chunks.len(), 1);
 
     drop(oplog);
 }
@@ -2592,6 +3005,7 @@ async fn lifecycle_reader_blocks_delete_and_late_drop_cannot_remove_replacement(
     let delete = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
+        let fingerprint = metadata.fingerprint;
         async move {
             let lock = service.lock_lifecycle(&id.agent_id);
             tokio::pin!(lock);
@@ -2600,7 +3014,7 @@ async fn lifecycle_reader_blocks_delete_and_late_drop_cannot_remove_replacement(
             let mut guard = lock.await;
             old.stop_and_wait().await.unwrap();
             service
-                .delete(&mut guard, &id, AgentMode::Durable, None)
+                .delete(&mut guard, &id, AgentMode::Durable, fingerprint, None)
                 .await
                 .unwrap();
             let next_lifecycle = service.lock_lifecycle(&id.agent_id);
@@ -3488,13 +3902,14 @@ async fn a_delete_that_outlived_the_shard_leaves_the_oplog_to_its_new_owner(_tra
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId::from_parts(7, 16);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let metadata = make_agent_metadata(agent_id, account_id, environment_id);
     let oplog = service
         .create(
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             OplogEntry::recovery_succeeded(),
-            make_agent_metadata(agent_id, account_id, environment_id),
+            metadata.clone(),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             Some(ShardEpoch(5)),
@@ -3520,6 +3935,8 @@ async fn a_delete_that_outlived_the_shard_leaves_the_oplog_to_its_new_owner(_tra
             },
             &owned_agent_id.storage_key(),
             ShardEpoch(6),
+            &[],
+            false,
         )
         .await
         .unwrap();
@@ -3529,6 +3946,7 @@ async fn a_delete_that_outlived_the_shard_leaves_the_oplog_to_its_new_owner(_tra
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
+            metadata.fingerprint,
             Some(ShardEpoch(5)),
         )
         .await;
@@ -5114,13 +5532,23 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let secondary_length = secondary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
         .await;
     let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -5861,8 +6289,14 @@ async fn late_archive_publication_survives_cold_reopen_and_retry(_tracing: &Trac
     let blobs: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
     let archive_service = blob_archive(indexed.clone(), blobs.clone(), 1);
     let (_, owned, metadata) = archive_open_agent("cold-late-publication");
+    let fingerprint = metadata.fingerprint;
     let archive = archive_service
-        .open_fresh(&owned, AgentMode::Durable, Some(ShardEpoch(5)))
+        .open_fresh(
+            &owned,
+            AgentMode::Durable,
+            Some(ShardEpoch(5)),
+            metadata.fingerprint,
+        )
         .await
         .unwrap();
     let expected = transfer_test_entries();
@@ -5897,7 +6331,7 @@ async fn late_archive_publication_survives_cold_reopen_and_retry(_tracing: &Trac
     );
 
     let retry = cold_archive_service
-        .open(&owned, AgentMode::Durable, Some(ShardEpoch(6)))
+        .open(&owned, AgentMode::Durable, Some(ShardEpoch(6)), fingerprint)
         .await
         .unwrap();
     retry.append(&entries).await.unwrap();
@@ -5924,7 +6358,12 @@ async fn late_archive_publication_after_cold_takeover_is_fenced(_tracing: &Traci
     let blobs: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
     let (_, owned, metadata) = archive_open_agent("cold-late-publication-after-takeover");
     let old = blob_archive(indexed.clone(), blobs.clone(), 1)
-        .open_fresh(&owned, AgentMode::Durable, Some(ShardEpoch(5)))
+        .open_fresh(
+            &owned,
+            AgentMode::Durable,
+            Some(ShardEpoch(5)),
+            metadata.fingerprint,
+        )
         .await
         .unwrap();
     let expected = transfer_test_entries();
@@ -5936,7 +6375,12 @@ async fn late_archive_publication_after_cold_takeover_is_fenced(_tracing: &Traci
     // This independent owner records its epoch before the old manifest request arrives.
     let cold_archive_service = Arc::new(blob_archive(indexed.clone(), blobs.clone(), 1));
     let new_owner = cold_archive_service
-        .open(&owned, AgentMode::Durable, Some(ShardEpoch(6)))
+        .open(
+            &owned,
+            AgentMode::Durable,
+            Some(ShardEpoch(6)),
+            metadata.fingerprint,
+        )
         .await
         .unwrap();
     let landed = indexed.land_held_appends().await;
@@ -6674,7 +7118,12 @@ async fn multilayer_transfers_entries_after_limit_reached(
             .unwrap();
 
         let secondary_length = secondary_layer
-            .open(&owned_agent_id, AgentMode::Durable, None)
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint(),
+            )
             .await
             .unwrap()
             .length()
@@ -6711,13 +7160,23 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .await
         .unwrap();
     let secondary_length = secondary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
         .await;
     let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -6870,13 +7329,23 @@ async fn read_from_archive_impl(use_blob: bool) {
         .await
         .unwrap();
     let secondary_length = secondary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
         .await;
     let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -7433,7 +7902,12 @@ async fn transient_compressed_archive_failure_retries_without_losing_source(_tra
     );
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 43));
     let target = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -7471,7 +7945,12 @@ async fn indeterminate_compressed_archive_write_reconciles_before_dropping_sourc
     let service = CompressedOplogArchiveService::new(storage, 1, immediate_archive_retry_config(1));
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 44));
     let target = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -7515,7 +7994,12 @@ async fn partial_compressed_archive_write_can_be_retried_without_data_loss(_trac
     let service = CompressedOplogArchiveService::new(storage, 1, immediate_archive_retry_config(1));
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 45));
     let target = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     let layers = nev![
@@ -7563,6 +8047,7 @@ async fn permanent_archive_failure_isolated_from_other_agents(_tracing: &Tracing
             &OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 1)),
             AgentMode::Durable,
             None,
+            archive_fingerprint(),
         )
         .await
         .unwrap();
@@ -7590,6 +8075,7 @@ async fn permanent_archive_failure_isolated_from_other_agents(_tracing: &Tracing
             &OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 2)),
             AgentMode::Durable,
             None,
+            archive_fingerprint(),
         )
         .await
         .unwrap();
@@ -7820,6 +8306,10 @@ fn blob_archive(
     )
 }
 
+fn archive_fingerprint() -> AgentFingerprint {
+    AgentFingerprint(Uuid::from_u128(1))
+}
+
 #[test]
 async fn blob_archive_write_failure_preserves_transfer_source(_tracing: &Tracing) {
     let expected = transfer_test_entries();
@@ -7838,6 +8328,7 @@ async fn blob_archive_write_failure_preserves_transfer_source(_tracing: &Tracing
             &OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 48)),
             AgentMode::Durable,
             None,
+            archive_fingerprint(),
         )
         .await
         .unwrap();
@@ -7871,6 +8362,7 @@ async fn blob_archive_failed_prefix_drop_remains_retryable(_tracing: &Tracing) {
             &OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 49)),
             AgentMode::Durable,
             None,
+            archive_fingerprint(),
         )
         .await
         .unwrap();
@@ -7897,7 +8389,12 @@ async fn blob_archive_object_delete_failure_does_not_fail_the_drop(_tracing: &Tr
     let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 50));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     archive
@@ -7912,7 +8409,12 @@ async fn blob_archive_object_delete_failure_does_not_fail_the_drop(_tracing: &Tr
         "the manifest no longer lists the chunk, so its object is only garbage"
     );
     let reopened = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     assert_eq!(reopened.length().await.unwrap(), 0);
@@ -7934,7 +8436,12 @@ async fn a_listed_blob_chunk_that_does_not_decode_is_corruption(_tracing: &Traci
     let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 51));
     service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .append(&transfer_test_entries().into_iter().collect::<Vec<_>>())
@@ -7952,7 +8459,9 @@ async fn a_listed_blob_chunk_that_does_not_decode_is_corruption(_tracing: &Traci
             "blob_oplog",
             "test",
             namespace.clone(),
-            Path::new(&agent_path_segment(&owned_agent_id.agent_id)),
+            &Path::new("chunks")
+                .join(agent_path_segment(&owned_agent_id.agent_id))
+                .join(archive_fingerprint().to_string()),
         )
         .await
         .unwrap();
@@ -7975,7 +8484,12 @@ async fn a_listed_blob_chunk_that_does_not_decode_is_corruption(_tracing: &Traci
             .unwrap();
 
         let error = service
-            .open(&owned_agent_id, AgentMode::Durable, None)
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint(),
+            )
             .await
             .unwrap()
             .read_source(OplogIndex::INITIAL, 2)
@@ -7997,7 +8511,12 @@ async fn missing_listed_blob_chunk_is_reported_as_corruption(_tracing: &Tracing)
     let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 52));
     service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .append(&transfer_test_entries().into_iter().collect::<Vec<_>>())
@@ -8015,7 +8534,9 @@ async fn missing_listed_blob_chunk_is_reported_as_corruption(_tracing: &Tracing)
             "blob_oplog",
             "test",
             namespace.clone(),
-            Path::new(&agent_path_segment(&owned_agent_id.agent_id)),
+            &Path::new("chunks")
+                .join(agent_path_segment(&owned_agent_id.agent_id))
+                .join(archive_fingerprint().to_string()),
         )
         .await
         .unwrap();
@@ -8027,7 +8548,12 @@ async fn missing_listed_blob_chunk_is_reported_as_corruption(_tracing: &Tracing)
 
     assert!(
         service
-            .open(&owned_agent_id, AgentMode::Durable, None)
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint()
+            )
             .await
             .unwrap()
             .read_source(OplogIndex::INITIAL, 2)
@@ -8061,14 +8587,24 @@ async fn blob_archive_retry_after_a_failed_source_trim_reuses_the_listed_chunk(_
     let target_service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 2);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 53));
     let source = source_service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     let entries = expected.clone().into_iter().collect::<Vec<_>>();
     source.append(&entries[..2]).await.unwrap();
     source.append(&entries[2..]).await.unwrap();
     let target = target_service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     source_manifests.fail_next_drop_prefix();
@@ -8084,11 +8620,21 @@ async fn blob_archive_retry_after_a_failed_source_trim_reuses_the_listed_chunk(_
     // final, so the retry discards its copy. It succeeds because the listed chunk holds the same
     // entries.
     let reopened_source = source_service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     let reopened_target = target_service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     transfer_between_lower_layers(
@@ -8133,7 +8679,12 @@ async fn blob_archive_append_reconciles_with_a_chunk_already_listed(_tracing: &T
     let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 54));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     archive.append(&entries).await.unwrap();
@@ -8152,7 +8703,12 @@ async fn blob_archive_append_reconciles_with_a_chunk_already_listed(_tracing: &T
     assert_eq!(blob_objects(&storage, &owned_agent_id, 1).await, 1);
     assert_eq!(
         service
-            .open(&owned_agent_id, AgentMode::Durable, None)
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint()
+            )
             .await
             .unwrap()
             .read_source(OplogIndex::INITIAL, 4)
@@ -8171,7 +8727,12 @@ async fn blob_archive_keeps_the_object_of_a_listing_that_lands_late(_tracing: &T
     let service = blob_archive(manifests.clone(), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 55));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -8187,7 +8748,12 @@ async fn blob_archive_keeps_the_object_of_a_listing_that_lands_late(_tracing: &T
     );
     assert_eq!(
         service
-            .open(&owned_agent_id, AgentMode::Durable, None)
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint()
+            )
             .await
             .unwrap()
             .read_source(OplogIndex::INITIAL, 2)
@@ -8212,7 +8778,12 @@ async fn blob_archive_retries_past_a_listing_that_never_landed(_tracing: &Tracin
     let service = blob_archive(manifests.clone(), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 56));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -8227,7 +8798,12 @@ async fn blob_archive_retries_past_a_listing_that_never_landed(_tracing: &Tracin
     assert_eq!(blob_objects(&storage, &owned_agent_id, 1).await, 2);
     assert_eq!(
         service
-            .open(&owned_agent_id, AgentMode::Durable, None)
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint()
+            )
             .await
             .unwrap()
             .read_source(OplogIndex::INITIAL, 2)
@@ -8246,7 +8822,12 @@ async fn blob_archive_keeps_the_object_of_a_listing_refused_when_repeated(_traci
     let service = blob_archive(manifests.clone(), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 57));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(ShardEpoch(5)),
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -8265,7 +8846,12 @@ async fn blob_archive_keeps_the_object_of_a_listing_refused_when_repeated(_traci
     );
     assert_eq!(
         service
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(6)),
+                archive_fingerprint()
+            )
             .await
             .unwrap()
             .read_source(OplogIndex::INITIAL, 2)
@@ -8284,7 +8870,12 @@ async fn blob_archive_keeps_the_object_of_a_refused_listing_it_cannot_look_up(_t
     let service = blob_archive(manifests.clone(), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 58));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(ShardEpoch(5)),
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -8318,7 +8909,12 @@ async fn blob_archive_keeps_its_object_when_another_is_listed_for_the_chunk(_tra
     let service = blob_archive(manifests.clone(), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 59));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(ShardEpoch(5)),
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     archive.append(&entries).await.unwrap();
@@ -8343,7 +8939,12 @@ async fn blob_archive_keeps_its_object_when_another_is_listed_for_the_chunk(_tra
     manifests.land_held_appends().await.unwrap();
     assert_eq!(
         service
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(5)),
+                archive_fingerprint()
+            )
             .await
             .unwrap()
             .read_source(OplogIndex::INITIAL, 2)
@@ -8369,7 +8970,12 @@ async fn blob_archive_keeps_its_object_when_a_repeated_listing_meets_a_held_inde
     );
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 60));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     archive.append(&entries).await.unwrap();
@@ -8396,11 +9002,21 @@ async fn blob_archive_indeterminate_object_delete_does_not_fail_the_transfer(_tr
     let target_service = blob_archive(manifests, storage.clone(), 2);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 61));
     let source = source_service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     let target = target_service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     source
@@ -8430,7 +9046,12 @@ async fn blob_archive_read_racing_a_drop_sees_the_layer_boundary(_tracing: &Trac
     let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 62));
     service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .append(&[(
@@ -8440,7 +9061,12 @@ async fn blob_archive_read_racing_a_drop_sees_the_layer_boundary(_tracing: &Trac
         .await
         .unwrap();
     let archive = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     assert_eq!(archive.length().await.unwrap(), 1);
@@ -8467,7 +9093,7 @@ async fn blob_prefix_drop_does_not_delete_the_whole_directory(_tracing: &Tracing
         let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
         let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 63));
         let target = service
-            .open_fresh(&owned_agent_id, agent_mode, None)
+            .open_fresh(&owned_agent_id, agent_mode, None, archive_fingerprint())
             .await
             .unwrap();
         target
@@ -8481,7 +9107,10 @@ async fn blob_prefix_drop_does_not_delete_the_whole_directory(_tracing: &Tracing
             1
         );
         assert!(
-            service.delete(&owned_agent_id, agent_mode).await.is_err(),
+            service
+                .delete(&owned_agent_id, agent_mode, None)
+                .await
+                .is_err(),
             "the injected recursive delete failure must remain unused by prefix cleanup"
         );
     }
@@ -8495,7 +9124,12 @@ async fn compressed_archive_cleanup_failure_does_not_fail_completed_drop(_tracin
         CompressedOplogArchiveService::new(storage.clone(), 1, immediate_archive_retry_config(1));
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 64));
     let target = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     target
@@ -8509,7 +9143,12 @@ async fn compressed_archive_cleanup_failure_does_not_fail_completed_drop(_tracin
         1
     );
     let reopened = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     assert!(
@@ -8530,7 +9169,12 @@ async fn ephemeral_compressed_prefix_drop_does_not_delete_the_whole_key(_tracing
         CompressedOplogArchiveService::new(storage.clone(), 1, immediate_archive_retry_config(1));
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 65));
     let target = service
-        .open_fresh(&owned_agent_id, AgentMode::Ephemeral, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     target
@@ -8542,7 +9186,7 @@ async fn ephemeral_compressed_prefix_drop_does_not_delete_the_whole_key(_tracing
     target.drop_prefix(OplogIndex::from_u64(2)).await.unwrap();
     assert!(
         service
-            .delete(&owned_agent_id, AgentMode::Ephemeral)
+            .delete(&owned_agent_id, AgentMode::Ephemeral, None)
             .await
             .is_err(),
         "the injected whole-key delete failure must remain unused by prefix cleanup"
@@ -8556,7 +9200,12 @@ async fn emptied_compressed_archive_accepts_the_same_chunk_id_on_retry(_tracing:
     let service = CompressedOplogArchiveService::new(storage, 1, immediate_archive_retry_config(1));
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 66));
     let target = service
-        .open_fresh(&owned_agent_id, AgentMode::Ephemeral, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -8588,14 +9237,14 @@ async fn archive_service_delete_failures_are_returned_for_retry(_tracing: &Traci
     indexed_storage.fail_next_delete();
     assert!(
         compressed
-            .delete(&owned_agent_id, AgentMode::Durable)
+            .delete(&owned_agent_id, AgentMode::Durable, None)
             .await
             .unwrap_err()
             .to_string()
             .contains("injected indexed delete failure")
     );
     compressed
-        .delete(&owned_agent_id, AgentMode::Durable)
+        .delete(&owned_agent_id, AgentMode::Durable, None)
         .await
         .unwrap();
 
@@ -8607,13 +9256,13 @@ async fn archive_service_delete_failures_are_returned_for_retry(_tracing: &Traci
     );
     blob_storage.fail_next_delete_dir();
     assert!(
-        blob.delete(&owned_agent_id, AgentMode::Durable)
+        blob.delete(&owned_agent_id, AgentMode::Durable, None)
             .await
             .unwrap_err()
             .to_string()
             .contains("injected blob directory delete failure")
     );
-    blob.delete(&owned_agent_id, AgentMode::Durable)
+    blob.delete(&owned_agent_id, AgentMode::Durable, None)
         .await
         .unwrap();
 }
@@ -8641,7 +9290,12 @@ async fn multilayer_partial_delete_stays_retryable(_tracing: &Tracing) {
     let service = MultiLayerOplogService::new(primary, nev![archive.clone()], 100, 100);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 68));
     archive
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .append(&transfer_test_entries().into_iter().collect::<Vec<_>>())
@@ -8652,7 +9306,13 @@ async fn multilayer_partial_delete_stays_retryable(_tracing: &Tracing) {
     let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
     assert!(
         service
-            .delete(&mut lifecycle, &owned_agent_id, AgentMode::Durable, None)
+            .delete(
+                &mut lifecycle,
+                &owned_agent_id,
+                AgentMode::Durable,
+                archive_fingerprint(),
+                None
+            )
             .await
             .unwrap_err()
             .to_string()
@@ -8667,7 +9327,13 @@ async fn multilayer_partial_delete_stays_retryable(_tracing: &Tracing) {
     );
 
     service
-        .delete(&mut lifecycle, &owned_agent_id, AgentMode::Durable, None)
+        .delete(
+            &mut lifecycle,
+            &owned_agent_id,
+            AgentMode::Durable,
+            archive_fingerprint(),
+            None,
+        )
         .await
         .unwrap();
     assert!(
@@ -8694,7 +9360,10 @@ async fn check_that_an_unlisted_blob_object_is_never_read<B: BlobStorageBackend 
         agent_mode: AgentMode::Durable,
         level: 1,
     };
-    let path = PathBuf::from(agent_path_segment(&agent_id)).join("2");
+    let path = Path::new("chunks")
+        .join(agent_path_segment(&agent_id))
+        .join(archive_fingerprint().to_string())
+        .join("2-unlisted");
     storage
         .put_raw(
             "blob_oplog",
@@ -8714,7 +9383,12 @@ async fn check_that_an_unlisted_blob_object_is_never_read<B: BlobStorageBackend 
             .unwrap()
     );
     let archive = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     assert_eq!(archive.length().await.unwrap(), 0);
@@ -8734,7 +9408,12 @@ async fn check_that_an_unlisted_blob_object_is_never_read<B: BlobStorageBackend 
         .unwrap();
     assert_eq!(
         service
-            .open(&owned_agent_id, AgentMode::Durable, None)
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint()
+            )
             .await
             .unwrap()
             .read_source(OplogIndex::INITIAL, 2)
@@ -8786,7 +9465,12 @@ async fn failed_compressed_append_does_not_publish_unpersisted_cache_entries(_tr
     let service = CompressedOplogArchiveService::new(storage, 1, immediate_archive_retry_config(1));
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 70));
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
     let entries = transfer_test_entries().into_iter().collect::<Vec<_>>();
@@ -8809,7 +9493,12 @@ async fn required_archive_read_reports_storage_failure(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 71));
     let entries = transfer_test_entries().into_iter().collect::<Vec<_>>();
     service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .append(&entries)
@@ -8824,7 +9513,12 @@ async fn required_archive_read_reports_storage_failure(_tracing: &Tracing) {
         ));
 
     let archive = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -8865,6 +9559,7 @@ async fn store_truncated_compressed_chunk(
         &owned_agent_id.storage_key(),
         last_idx.into(),
         &chunk,
+        None,
         None,
     )
     .await
@@ -8983,6 +9678,7 @@ async fn invalid_archive_serialization_versions_are_corruption(_tracing: &Tracin
                     2,
                     raw,
                     None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -9024,12 +9720,17 @@ async fn invalid_blob_manifest_versions_are_corruption(_tracing: &Tracing) {
         let key = owned_agent_id.storage_key();
         storage
             .with_entity("test", "append", "manifest_entry")
-            .append_raw(namespace.clone(), &key, 2, bytes.clone(), None)
+            .append_raw(namespace.clone(), &key, 2, bytes.clone(), None, None)
             .await
             .unwrap();
         let service = blob_archive(storage.clone(), Arc::new(InMemoryBlobStorage::new()), 1);
         let archive = service
-            .open(&owned_agent_id, AgentMode::Durable, None)
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint(),
+            )
             .await
             .unwrap();
         let error = archive
@@ -9749,7 +10450,12 @@ async fn compressed_transfer_verification_bypasses_append_cache(_tracing: &Traci
         CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default());
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 78));
     let target = service
-        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -9795,7 +10501,12 @@ async fn blob_transfer_verifies_the_persisted_entry_representation(_tracing: &Tr
     );
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 79));
     let target = target_service
-        .open_fresh(&owned_agent_id, AgentMode::Ephemeral, None)
+        .open_fresh(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap();
 
@@ -9857,13 +10568,14 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId::from_parts(7, 80);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let metadata = make_agent_metadata(agent_id, account_id, environment_id);
     let oplog = service
         .create(
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             OplogEntry::recovery_succeeded(),
-            make_agent_metadata(agent_id, account_id, environment_id),
+            metadata.clone(),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             None,
@@ -9881,6 +10593,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
+            metadata.fingerprint,
             None,
         )
         .await
@@ -10048,16 +10761,17 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId::from_parts(7, 81);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let metadata = AgentMetadata {
+        agent_mode,
+        ..make_agent_metadata(agent_id, account_id, environment_id)
+    };
     let oplog = service
         .open(
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             agent_mode,
             None,
-            AgentMetadata {
-                agent_mode,
-                ..make_agent_metadata(agent_id, account_id, environment_id)
-            },
+            metadata.clone(),
             default_last_known_status(),
             default_execution_status(agent_mode),
             None,
@@ -10082,6 +10796,7 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             agent_mode,
+            metadata.fingerprint,
             None,
         )
         .await
@@ -10338,13 +11053,23 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .await
         .unwrap();
     let secondary_length = secondary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
         .await;
     let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -10452,13 +11177,23 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .await
         .unwrap();
     let secondary_length = secondary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
         .await;
     let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -10782,13 +11517,23 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         .await
         .unwrap();
     let secondary_length = secondary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
         .await;
     let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -10940,13 +11685,23 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .await
         .unwrap();
     let secondary_length = secondary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
         .await;
     let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -11008,13 +11763,23 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .await
         .unwrap();
     let secondary_length = secondary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
         .await;
     let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -11284,7 +12049,7 @@ async fn multilayer_scan_propagates_lower_layer_exists_failure(_tracing: &Tracin
 #[test]
 async fn multilayer_scan_for_type_ephemeral(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
-    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let blob_storage = Arc::new(ReadCountingBlobStorage::new());
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(
             indexed_storage.clone(),
@@ -11316,6 +12081,11 @@ async fn multilayer_scan_for_type_ephemeral(_tracing: &Tracing) {
         1000,
         10,
     ));
+    let _scheduler = sealed_scan::attach(
+        oplog_service.as_ref(),
+        indexed_storage,
+        blob_storage.clone(),
+    );
 
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
@@ -11356,11 +12126,23 @@ async fn multilayer_scan_for_type_ephemeral(_tracing: &Tracing) {
     for i in 0..20 {
         ephemeral.push(create_worker(AgentMode::Ephemeral, format!("eph-{i}")).await);
     }
+    for (mode, ids) in [
+        (AgentMode::Durable, &mut durable),
+        (AgentMode::Ephemeral, &mut ephemeral),
+    ] {
+        let id = OwnedAgentId::new(
+            environment_id,
+            &crate::test_agent_id(&format!("sealed-{mode:?}")),
+        );
+        sealed_scan::seed(blob_storage.as_ref(), &id, mode).await;
+        ids.push(id);
+    }
 
     // Give any background processes a chance to settle.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let drain = async |modes: Option<AgentMode>| {
+        blob_storage.reset();
         let mut cursor = ScanCursor::default();
         let mut acc: Vec<OwnedAgentId> = Vec::new();
         // Use a small page size so pagination crosses layers and mode boundaries.
@@ -11380,6 +12162,7 @@ async fn multilayer_scan_for_type_ephemeral(_tracing: &Tracing) {
             }
             cursor = next_cursor;
         }
+        sealed_scan::assert_listing_only(&blob_storage, modes);
         acc.sort_by_key(|a| a.agent_id);
         acc
     };
@@ -11872,6 +12655,10 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
             &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
+            match &durable_create {
+                OplogEntry::Create { parameters, .. } => AgentFingerprint(parameters.instance_id),
+                _ => unreachable!(),
+            },
             None,
         )
         .await
@@ -11936,10 +12723,10 @@ async fn make_workers(
 #[test]
 async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
-    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let blob_storage = Arc::new(ReadCountingBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(
-        indexed_storage,
-        blob_storage,
+        indexed_storage.clone(),
+        blob_storage.clone(),
         1,
         1,
         100,
@@ -11951,7 +12738,7 @@ async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Trac
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
 
-    let durable = make_workers(
+    let mut durable = make_workers(
         &oplog_service,
         environment_id,
         account_id,
@@ -11960,7 +12747,7 @@ async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Trac
         "dur",
     )
     .await;
-    let ephemeral = make_workers(
+    let mut ephemeral = make_workers(
         &oplog_service,
         environment_id,
         account_id,
@@ -11970,7 +12757,28 @@ async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Trac
     )
     .await;
 
+    let lower: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+        blob_storage.clone(),
+        indexed_storage.clone(),
+        0,
+        RetryConfig::default(),
+    ));
+    let oplog_service = MultiLayerOplogService::new(Arc::new(oplog_service), nev![lower], 1000, 10);
+    let _scheduler = sealed_scan::attach(&oplog_service, indexed_storage, blob_storage.clone());
+    for (mode, ids) in [
+        (AgentMode::Durable, &mut durable),
+        (AgentMode::Ephemeral, &mut ephemeral),
+    ] {
+        let id = OwnedAgentId::new(
+            environment_id,
+            &crate::test_agent_id(&format!("sealed-{mode:?}")),
+        );
+        sealed_scan::seed(blob_storage.as_ref(), &id, mode).await;
+        ids.push(id);
+    }
+
     let drain = async |modes: Option<AgentMode>| {
+        blob_storage.reset();
         let mut cursor = ScanCursor::default();
         let mut acc: Vec<OwnedAgentId> = Vec::new();
         loop {
@@ -11988,6 +12796,7 @@ async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Trac
             }
             cursor = next_cursor;
         }
+        sealed_scan::assert_listing_only(&blob_storage, modes);
         acc.sort_by_key(|a| a.agent_id);
         acc
     };
@@ -13253,6 +14062,7 @@ async fn deleting_an_oplog_fences_a_writer_that_still_holds_it(_tracing: &Tracin
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId::from_parts(7, 99);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let metadata = make_agent_metadata(agent_id, account_id, environment_id);
 
     let oplog = service
         .open(
@@ -13260,7 +14070,7 @@ async fn deleting_an_oplog_fences_a_writer_that_still_holds_it(_tracing: &Tracin
             &owned_agent_id,
             AgentMode::Durable,
             None,
-            make_agent_metadata(agent_id, account_id, environment_id),
+            metadata.clone(),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             Some(golem_common::model::ShardEpoch(7)),
@@ -13275,6 +14085,7 @@ async fn deleting_an_oplog_fences_a_writer_that_still_holds_it(_tracing: &Tracin
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
+            metadata.fingerprint,
             None,
         )
         .await
@@ -13592,11 +14403,10 @@ async fn wait_for_replicas_does_not_report_a_fenced_flush_as_durable(_tracing: &
     );
 }
 
-// A fork stage is hidden and has one writer, so it asserts no epoch and its commit can never be
-// refused - even while the target agent's oplog is held at a newer epoch by another executor. The
-// fork's stream-store load commits through the stage and expects that commit to succeed.
+// A fork stage asserts its reservation rather than a shard epoch. A newer bare epoch claim
+// does not invalidate it; a competing INITIAL insertion does.
 #[test]
-async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing: &Tracing) {
+async fn a_staged_oplog_asserts_its_reservation_not_the_shard_epoch(_tracing: &Tracing) {
     let tempdir = tempfile::TempDir::new().unwrap();
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
@@ -13605,6 +14415,15 @@ async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing
     let forking_executor = fencing_oplog_service(&tempdir, "staged-fence").await;
     let owning_executor = fencing_oplog_service(&tempdir, "staged-fence").await;
 
+    let (stage, _stage_cleanup) = forking_executor
+        .create_staged(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Uuid::new_v4(),
+            make_agent_metadata(agent_id, account_id, environment_id),
+        )
+        .await
+        .unwrap();
     let owner = owning_executor
         .open(
             &mut owning_executor
@@ -13620,18 +14439,6 @@ async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing
         )
         .await
         .unwrap();
-    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
-    owner.commit(CommitLevel::Always).await.unwrap();
-
-    let stage = forking_executor
-        .create_staged(
-            &owned_agent_id,
-            AgentMode::Durable,
-            Uuid::new_v4(),
-            make_agent_metadata(agent_id, account_id, environment_id),
-        )
-        .await
-        .unwrap();
     assert_eq!(stage.shard_epoch(), None, "a stage must assert no epoch");
     stage.add(OplogEntry::suspend().rounded()).await.unwrap();
     stage
@@ -13639,6 +14446,7 @@ async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing
         .await
         .expect("a stage's commit must never be fenced");
     assert!(stage.fence().is_none(), "a stage must never latch a fence");
+    drop(owner);
 }
 
 #[test]
@@ -14312,6 +15120,7 @@ impl ArchivingExecutor {
     ) -> Arc<dyn Oplog> {
         let metadata = AgentMetadata {
             agent_mode,
+            fingerprint: archive_fingerprint(),
             ..make_agent_metadata(
                 owned_agent_id.agent_id(),
                 AccountId::new(),
@@ -14351,7 +15160,12 @@ async fn archive_level_length(
     level: usize,
 ) -> u64 {
     CompressedOplogArchiveService::new(storage.clone(), level, RetryConfig::default())
-        .open(owned_agent_id, AgentMode::Durable, None)
+        .open(
+            owned_agent_id,
+            AgentMode::Durable,
+            None,
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .length()
@@ -14384,7 +15198,7 @@ async fn blob_objects(
     level: usize,
 ) -> usize {
     blob_storage
-        .list_dir(
+        .list_blobs_below(
             "test",
             "blob_objects",
             BlobStorageNamespace::CompressedOplog {
@@ -14393,7 +15207,7 @@ async fn blob_objects(
                 agent_mode: AgentMode::Durable,
                 level,
             },
-            Path::new(&agent_path_segment(&owned_agent_id.agent_id)),
+            &Path::new("chunks").join(agent_path_segment(&owned_agent_id.agent_id)),
         )
         .await
         .unwrap()
@@ -14410,7 +15224,12 @@ async fn level_refuses(
     epoch: u64,
 ) -> bool {
     CompressedOplogArchiveService::new(storage.clone(), level, RetryConfig::default())
-        .open(owned_agent_id, agent_mode, Some(ShardEpoch(epoch)))
+        .open(
+            owned_agent_id,
+            agent_mode,
+            Some(ShardEpoch(epoch)),
+            archive_fingerprint(),
+        )
         .await
         .unwrap()
         .fence()
@@ -14447,11 +15266,14 @@ async fn create_archiving_agent(
                 account_id,
                 instance_id,
             ),
-            make_agent_metadata(
-                owned_agent_id.agent_id(),
-                account_id,
-                owned_agent_id.environment_id(),
-            ),
+            AgentMetadata {
+                fingerprint: AgentFingerprint(instance_id),
+                ..make_agent_metadata(
+                    owned_agent_id.agent_id(),
+                    account_id,
+                    owned_agent_id.environment_id(),
+                )
+            },
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             Some(ShardEpoch(epoch)),
@@ -14511,6 +15333,354 @@ fn assert_fenced_by(backend: &str, fence: Option<OplogFence>, expected: u64, act
             assert_eq!(fence.actual_epoch, actual.map(ShardEpoch), "{backend}");
         }
         None => panic!("{backend}: expected the superseded owner's oplog to be fenced"),
+    }
+}
+
+async fn archive_ownership_service(
+    storage: &Arc<dyn IndexedStorage + Send + Sync>,
+    blob_first: bool,
+) -> MultiLayerOplogService {
+    let blob = blob_store();
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            storage.clone(),
+            blob.clone(),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        storage.clone(),
+        if blob_first { 2 } else { 1 },
+        RetryConfig::default(),
+    ));
+    let blob: Arc<dyn OplogArchiveService> =
+        Arc::new(blob_level(storage, &blob, if blob_first { 1 } else { 2 }));
+    let lower = if blob_first {
+        nev![blob, compressed]
+    } else {
+        nev![compressed, blob]
+    };
+    MultiLayerOplogService::new(primary, lower, 100, 1)
+}
+
+#[test]
+async fn ephemeral_archive_ownership_needs_no_primary_epoch_or_seal_service(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        for blob_first in [false, true] {
+            let service = archive_ownership_service(&storage, blob_first).await;
+            let id = archiving_agent("ephemeral-lower-ownership");
+            let mode = AgentMode::Ephemeral;
+            assert!(service.seal_service().is_none());
+            for layer in &service.lower {
+                layer
+                    .open(&id, mode, Some(ShardEpoch(5)), archive_fingerprint())
+                    .await
+                    .unwrap()
+                    .append(&[(OplogIndex::INITIAL, OplogEntry::suspend().rounded())])
+                    .await
+                    .unwrap();
+            }
+            service
+                .assert_owning_epoch(&id, mode, ShardEpoch(5))
+                .await
+                .unwrap();
+
+            // Neither opening the lower layers nor asserting ownership may claim the primary.
+            let mut lifecycle = service.lock_lifecycle(&id.agent_id).await;
+            match storage
+                .append(
+                    "test",
+                    "primary_epoch_absent",
+                    "oplog",
+                    IndexedStorageNamespace::OpLog {
+                        owned_agent_id: id.clone(),
+                        agent_mode: mode,
+                    },
+                    &id.storage_key(),
+                    1,
+                    vec![1],
+                    Some(ShardEpoch(5)),
+                    None,
+                )
+                .await
+            {
+                Err(IndexedStorageError::Fenced {
+                    expected: ShardEpoch(5),
+                    actual: None,
+                    ..
+                }) => {}
+                other => panic!("{backend}: expected no primary epoch, got {other:?}"),
+            }
+            service
+                .delete(
+                    &mut lifecycle,
+                    &id,
+                    mode,
+                    archive_fingerprint(),
+                    Some(ShardEpoch(5)),
+                )
+                .await
+                .unwrap();
+            for layer in &service.lower {
+                assert!(!layer.exists(&id, mode).await.unwrap(), "{backend}");
+            }
+            // Deleting a completely absent key remains idempotent.
+            service
+                .delete(
+                    &mut lifecycle,
+                    &id,
+                    mode,
+                    archive_fingerprint(),
+                    Some(ShardEpoch(5)),
+                )
+                .await
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+async fn ephemeral_delete_rechecks_the_first_lower_epoch_before_any_cleanup(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        for blob_first in [false, true] {
+            let service = archive_ownership_service(&storage, blob_first).await;
+            let id = archiving_agent("ephemeral-lower-superseded");
+            let mode = AgentMode::Ephemeral;
+            let entries = vec![(OplogIndex::INITIAL, OplogEntry::suspend().rounded())];
+            for layer in &service.lower {
+                layer
+                    .open(&id, mode, Some(ShardEpoch(5)), archive_fingerprint())
+                    .await
+                    .unwrap()
+                    .append(&entries)
+                    .await
+                    .unwrap();
+            }
+            service
+                .assert_owning_epoch(&id, mode, ShardEpoch(5))
+                .await
+                .unwrap();
+            // Only the actual owning layer moves on after the deletion's initial check.
+            service
+                .lower
+                .first()
+                .assert_owning_epoch(&id, mode, ShardEpoch(6))
+                .await
+                .unwrap();
+            match service.assert_owning_epoch(&id, mode, ShardEpoch(5)).await {
+                Err(OplogError::Fenced(fence)) => {
+                    assert_fenced_by(backend, Some(fence), 5, Some(6))
+                }
+                other => panic!("{backend}: expected a lower-layer fence, got {other:?}"),
+            }
+            match service
+                .delete(
+                    &mut service.lock_lifecycle(&id.agent_id).await,
+                    &id,
+                    mode,
+                    archive_fingerprint(),
+                    Some(ShardEpoch(5)),
+                )
+                .await
+            {
+                Err(OplogError::Fenced(fence)) => {
+                    assert_fenced_by(backend, Some(fence), 5, Some(6))
+                }
+                other => panic!("{backend}: expected an atomic deletion fence, got {other:?}"),
+            }
+            for layer in &service.lower {
+                // Read through a fresh handle: a surviving manifest must still have its objects.
+                assert_eq!(
+                    layer
+                        .read_source(&id, mode, OplogIndex::INITIAL, 1)
+                        .await
+                        .unwrap(),
+                    entries.clone().into_iter().collect(),
+                    "{backend}: a fenced delete changed archive data (blob_first={blob_first})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+async fn ephemeral_delete_without_a_handle_claims_the_current_lower_epoch(_tracing: &Tracing) {
+    use crate::services::golem_config::OplogConfig;
+    use crate::services::scheduler::SchedulerService;
+    use crate::services::shard::{ShardService, ShardServiceDefault};
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use golem_common::model::{ScheduleId, ScheduledAction, ShardId};
+    use std::collections::HashMap;
+
+    struct Scheduler;
+    #[async_trait]
+    impl SchedulerService for Scheduler {
+        fn is_durable(&self) -> bool {
+            true
+        }
+
+        async fn schedule(&self, _time: jiff::Timestamp, _action: ScheduledAction) -> ScheduleId {
+            ScheduleId::fresh()
+        }
+
+        async fn schedule_with_id(
+            &self,
+            id: ScheduleId,
+            _time: jiff::Timestamp,
+            _action: ScheduledAction,
+        ) -> ScheduleId {
+            id
+        }
+
+        async fn cancel(&self, _id: ScheduleId) {}
+    }
+
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        for blob_first in [false, true] {
+            for recorded_epoch in [None, Some(4), Some(5), Some(6)] {
+                let blobs = blob_store();
+                let primary = Arc::new(
+                    PrimaryOplogService::new(
+                        storage.clone(),
+                        blobs.clone(),
+                        1,
+                        1,
+                        100,
+                        32,
+                        RetryConfig::default(),
+                    )
+                    .await,
+                );
+                let mut lower: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
+                if !blob_first {
+                    lower.push(Arc::new(CompressedOplogArchiveService::new(
+                        storage.clone(),
+                        1,
+                        RetryConfig::default(),
+                    )));
+                }
+                lower.push(Arc::new(blob_level(&storage, &blobs, 0)));
+                let service = MultiLayerOplogService::new(
+                    primary,
+                    nonempty_collections::NEVec::try_from_vec(lower).unwrap(),
+                    100,
+                    1,
+                );
+                let id = archiving_agent(&format!(
+                    "ephemeral-lower-claim-{blob_first}-{recorded_epoch:?}"
+                ));
+                let shard = Arc::new(ShardServiceDefault::new());
+                shard.install_unexpiring(1, &HashMap::from([(ShardId::new(0), ShardEpoch(5))]));
+                let scheduler: Arc<dyn SchedulerService> = Arc::new(Scheduler);
+                service.set_seal_service(Arc::new(super::seal::SealService::new(
+                    storage.clone(),
+                    blobs,
+                    Arc::new(InMemoryKeyValueStorage::new()),
+                    shard,
+                    Arc::downgrade(&scheduler),
+                    OplogConfig {
+                        indexed_storage_layers: if blob_first { 1 } else { 2 },
+                        blob_storage_layers: 1,
+                        ..Default::default()
+                    },
+                    RetryConfig::default(),
+                )));
+                let mode = AgentMode::Ephemeral;
+                let entries = vec![(OplogIndex::INITIAL, OplogEntry::suspend().rounded())];
+                for layer in &service.lower {
+                    layer
+                        .open(
+                            &id,
+                            mode,
+                            recorded_epoch.map(ShardEpoch),
+                            archive_fingerprint(),
+                        )
+                        .await
+                        .unwrap()
+                        .append(&entries)
+                        .await
+                        .unwrap();
+                }
+                let mut lifecycle = service.lock_lifecycle(&id.agent_id).await;
+                let result = service
+                    .delete(&mut lifecycle, &id, mode, archive_fingerprint(), None)
+                    .await;
+                if recorded_epoch == Some(6) {
+                    match result {
+                        Err(OplogError::Fenced(fence)) => {
+                            assert_fenced_by(backend, Some(fence), 5, Some(6))
+                        }
+                        other => panic!("{backend}: expected a higher-epoch fence, got {other:?}"),
+                    }
+                    for layer in &service.lower {
+                        assert_eq!(
+                            layer
+                                .read_source(&id, mode, OplogIndex::INITIAL, 1)
+                                .await
+                                .unwrap(),
+                            entries.clone().into_iter().collect(),
+                            "{backend}: a refused delete removed archive data"
+                        );
+                    }
+                } else {
+                    result.unwrap();
+                    for layer in &service.lower {
+                        assert!(!layer.exists(&id, mode).await.unwrap(), "{backend}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+async fn durable_archive_ownership_stays_with_primary_when_a_lower_epoch_is_higher(
+    _tracing: &Tracing,
+) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    for (backend, storage) in archive_storages(&tempdir).await {
+        let service = archive_ownership_service(&storage, false).await;
+        let id = archiving_agent("durable-primary-ownership");
+        let mode = AgentMode::Durable;
+        for layer in &service.lower {
+            layer
+                .open(&id, mode, Some(ShardEpoch(6)), archive_fingerprint())
+                .await
+                .unwrap()
+                .append(&[(OplogIndex::INITIAL, OplogEntry::suspend().rounded())])
+                .await
+                .unwrap();
+        }
+        service
+            .primary
+            .assert_owning_epoch(&id, mode, ShardEpoch(5))
+            .await
+            .unwrap();
+        service
+            .assert_owning_epoch(&id, mode, ShardEpoch(5))
+            .await
+            .unwrap();
+        service
+            .delete(
+                &mut service.lock_lifecycle(&id.agent_id).await,
+                &id,
+                mode,
+                archive_fingerprint(),
+                Some(ShardEpoch(5)),
+            )
+            .await
+            .unwrap();
+        for layer in &service.lower {
+            assert!(!layer.exists(&id, mode).await.unwrap(), "{backend}");
+        }
     }
 }
 
@@ -14624,6 +15794,7 @@ async fn an_agent_deleted_by_its_new_owner_gets_no_archive_chunks_back(_tracing:
                     .await,
                 &owned_agent_id,
                 AgentMode::Durable,
+                archive_fingerprint(),
                 Some(ShardEpoch(6)),
             )
             .await
@@ -14724,11 +15895,16 @@ async fn a_superseded_owners_transfer_cannot_list_a_chunk_in_the_blob_layer(_tra
         assert_fenced_by(backend, loser.fence(), 5, Some(6));
         let blob = blob_level(&storage, &blob_storage, 2);
         assert_eq!(
-            blob.open(&owned_agent_id, AgentMode::Durable, None)
-                .await
-                .unwrap()
-                .length()
-                .await,
+            blob.open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                archive_fingerprint()
+            )
+            .await
+            .unwrap()
+            .length()
+            .await,
             Ok(0),
             "{backend}: the superseded owner listed a chunk in the new owner's blob layer"
         );
@@ -14772,6 +15948,7 @@ async fn an_agent_deleted_by_its_new_owner_gets_no_blob_chunks_back(_tracing: &T
                     .await,
                 &owned_agent_id,
                 AgentMode::Durable,
+                archive_fingerprint(),
                 Some(ShardEpoch(6)),
             )
             .await
@@ -14831,8 +16008,8 @@ async fn an_agent_created_again_reads_nothing_of_the_one_deleted_under_a_late_bl
 
         // The old owner creates the agent and archives it to level 1. Its transfer on to the blob
         // layer has read level 1 and is in flight when the shard moves.
-        let loser =
-            create_archiving_agent(&losing_executor, &owned_agent_id, Uuid::new_v4(), 5).await;
+        let instance_id = Uuid::new_v4();
+        let loser = create_archiving_agent(&losing_executor, &owned_agent_id, instance_id, 5).await;
         loser.add(OplogEntry::suspend().rounded()).await.unwrap();
         loser.commit(CommitLevel::Always).await.unwrap();
         MultiLayerOplog::try_archive_blocking(&loser).await.unwrap();
@@ -14850,6 +16027,7 @@ async fn an_agent_created_again_reads_nothing_of_the_one_deleted_under_a_late_bl
                     .await,
                 &owned_agent_id,
                 AgentMode::Durable,
+                AgentFingerprint(instance_id),
                 Some(ShardEpoch(6)),
             )
             .await
@@ -14935,16 +16113,31 @@ async fn a_stale_blob_level_handle_can_neither_list_nor_drop_chunks(_tracing: &T
         };
 
         let stale = level
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(5)),
+                archive_fingerprint(),
+            )
             .await
             .unwrap();
         stale.append(&entries(1..=3)).await.unwrap();
         let stale_writer = level
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(5)),
+                archive_fingerprint(),
+            )
             .await
             .unwrap();
         let owner = level
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(6)),
+                archive_fingerprint(),
+            )
             .await
             .unwrap();
 
@@ -15019,11 +16212,21 @@ async fn blob_level_handles_see_each_others_chunks(_tracing: &Tracing) {
         };
 
         let first = level
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(5)),
+                archive_fingerprint(),
+            )
             .await
             .unwrap();
         let second = level
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(5)),
+                archive_fingerprint(),
+            )
             .await
             .unwrap();
         first.append(&entries(1..=3)).await.unwrap();
@@ -15197,12 +16400,22 @@ async fn a_stale_archive_level_handle_cannot_trim_the_owners_level(_tracing: &Tr
         };
 
         let stale = level
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(5)),
+                archive_fingerprint(),
+            )
             .await
             .unwrap();
         stale.append(&entries(1..=3)).await.unwrap();
         let owner = level
-            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(ShardEpoch(6)),
+                archive_fingerprint(),
+            )
             .await
             .unwrap();
 
@@ -15316,6 +16529,7 @@ fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
                     idx,
                     value,
                     None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -15367,4 +16581,96 @@ fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
 
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn indeterminate_stage_commit_preserves_reservation_refusals() {
+    {
+        let indexed = Arc::new(ReadCountingIndexedStorage::new());
+        let service = append_reconciliation_service(indexed.clone()).await;
+        let metadata = make_agent_metadata(
+            AgentId::from_parts(7, 2255),
+            AccountId::new(),
+            EnvironmentId::new(),
+        );
+        let id = metadata.owned_agent_id();
+        let stage_id = Uuid::new_v4();
+        let (old, _old_cleanup) = service
+            .create_staged(&id, AgentMode::Durable, stage_id, metadata.clone())
+            .await
+            .unwrap();
+        // Empty commits still validate ownership, and a lost reply to that check is retryable.
+        indexed.inject_append_many_failure(InjectedAppendFailure::IndeterminateBeforeWrite);
+        old.commit(CommitLevel::Always).await.unwrap();
+        let namespace = IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: id.clone(),
+            agent_mode: AgentMode::Durable,
+        };
+        let (waiting, resume) = indexed.pause_next_read(namespace, false);
+        indexed.inject_append_many_failure(InjectedAppendFailure::IndeterminateBeforeWrite);
+        old.add(OplogEntry::suspend()).await.unwrap();
+        let committing = tokio::spawn(async move { old.commit(CommitLevel::Always).await });
+        waiting.await.unwrap();
+        let (replacement, _replacement_cleanup) = service
+            .create_staged(&id, AgentMode::Durable, Uuid::new_v4(), metadata)
+            .await
+            .unwrap();
+        replacement.add(OplogEntry::exited()).await.unwrap();
+        replacement.commit(CommitLevel::Always).await.unwrap();
+        resume.send(()).unwrap();
+        let actual = committing.await.unwrap();
+        assert!(
+            matches!(actual, Err(OplogError::StageInvalidated { .. })),
+            "a superseded stage must return its typed refusal: {actual:?}"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn discarded_stage_report_returns_invalidation_instead_of_a_gap_panic() {
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let service = PrimaryOplogService::new(
+        indexed.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        0,
+        append_reconciliation_retry_config(),
+    )
+    .await;
+    let metadata = make_agent_metadata(
+        AgentId::from_parts(7, 2256),
+        AccountId::new(),
+        EnvironmentId::new(),
+    );
+    let id = metadata.owned_agent_id();
+    let stage_id = Uuid::new_v4();
+    let (stage, _stage_cleanup) = service
+        .create_staged(&id, AgentMode::Durable, stage_id, metadata)
+        .await
+        .unwrap();
+    let token = stage.stage_token();
+    stage.add(OplogEntry::suspend()).await.unwrap();
+    stage.add(OplogEntry::exited()).await.unwrap();
+    let (reading, resume) = indexed.pause_next_read(
+        IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: id.clone(),
+            agent_mode: AgentMode::Durable,
+        },
+        false,
+    );
+    let reporting = tokio::spawn(async move { stage.commit(CommitLevel::ReportOnly).await });
+    reading.await.unwrap();
+    service
+        .discard_staged(&id, AgentMode::Durable, stage_id, token)
+        .await
+        .unwrap();
+    resume.send(()).unwrap();
+    assert!(matches!(
+        reporting.await.unwrap(),
+        Err(OplogError::StageInvalidated { .. })
+    ));
 }

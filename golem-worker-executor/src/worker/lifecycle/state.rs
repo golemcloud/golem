@@ -412,6 +412,15 @@ impl WorkerLifecycle {
 /// Reads and replaces the runtime that a phase holds. A deletion retains the runtime of the
 /// worker it claimed, so each method looks through `Deleting` to that runtime.
 impl WorkerInstance {
+    pub(in crate::worker) fn is_absent_for_seal(&self, mode: AgentMode) -> bool {
+        matches!(
+            self,
+            Self::Unloaded {
+                startup_failure: None
+            }
+        ) || (mode == AgentMode::Ephemeral && matches!(self, Self::Inactive(_)))
+    }
+
     /// Installs `next` in place of the runtime and returns the previous runtime. A phase without
     /// a runtime stays unchanged.
     fn replace_runtime(&mut self, next: WorkerRuntime) -> Option<WorkerRuntime> {

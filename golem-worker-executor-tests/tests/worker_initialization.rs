@@ -1922,7 +1922,8 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] component: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    let (executor, seed, _, gate) =
+        setup_with_metadata_gate(last_unique_id, deps, component).await?;
     for (scenario, first_exclusive, second_exclusive, keyed, identical) in [
         ("exclusive-exclusive", true, true, false, false),
         ("keyed-retry", true, true, true, true),
@@ -1974,7 +1975,7 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
                     .await
                 }
             };
-            let gate = faults.pause_next("read_cached_agent_mode");
+            gate.arm_metadata();
             let mut first = Box::pin(create(first_value, first_exclusive, first_caller.clone()));
             assert!(poll!(&mut first).is_pending());
             gate.entered().await;
@@ -2330,6 +2331,38 @@ async fn setup_with_retry_interval(
     Ok((executor, seed, faults))
 }
 
+async fn setup_with_metadata_gate(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    component: &PrecompiledComponent,
+) -> anyhow::Result<(
+    TestWorkerExecutor,
+    Arc<Worker<TestWorkerCtx>>,
+    KeyValueStorageFaults,
+    Arc<crate::active_agents::ComponentLoadGate>,
+)> {
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let gate = Arc::new(crate::active_agents::ComponentLoadGate::new());
+    let mut config = overrides(&faults, Duration::from_millis(50));
+    config.wrap_component_service = Some(Arc::new({
+        let gate = gate.clone();
+        move |inner| {
+            Arc::new(crate::active_agents::GatedComponentService {
+                inner,
+                gate: gate.clone(),
+            })
+        }
+    }));
+    let executor = start_with_overrides(deps, &context, config).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let seed = seed_worker(&executor, &component).await?;
+    Ok((executor, seed, faults, gate))
+}
+
 fn overrides(faults: &KeyValueStorageFaults, retry_interval: Duration) -> TestExecutorOverrides {
     TestExecutorOverrides {
         configure: Some(Arc::new(move |config| {
@@ -2475,7 +2508,8 @@ async fn rejected_fresh_initializer_does_not_reject_its_valid_follower(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] component: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    let (executor, seed, _, gate) =
+        setup_with_metadata_gate(last_unique_id, deps, component).await?;
     for (invalid_first, cancel_first) in [(true, false), (false, false), (true, true)] {
         let id = target(
             &seed,
@@ -2508,7 +2542,7 @@ async fn rejected_fresh_initializer_does_not_reject_its_valid_follower(
                 .await
             }
         };
-        let gate = faults.pause_next("read_cached_agent_mode");
+        gate.arm_metadata();
         let mut first = Box::pin(acquire(invalid_first));
         assert!(poll!(&mut first).is_pending());
         gate.entered().await;
@@ -2789,7 +2823,8 @@ async fn partial_creation_reloads_identity_and_original_initialization(
     #[tagged_as("agent_counters")] component: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    let (executor, seed, faults, gate) =
+        setup_with_metadata_gate(last_unique_id, deps, component).await?;
     let all = seed.all().clone();
     for agent_type in ["Counter", "EphemeralCounter"] {
         let id = if agent_type == "Counter" {
@@ -2797,11 +2832,8 @@ async fn partial_creation_reloads_identity_and_original_initialization(
         } else {
             unkeyed_target(&seed, agent_type, "partial-creation")
         };
-        faults.fail(
-            "read_cached_agent_mode",
-            1,
-            KeyValueStorageError::Other("before creation outage".into()),
-        );
+        gate.fail_next_metadata(WorkerExecutorError::runtime("before creation outage"));
+        gate.release();
         assert!(
             acquire(&seed, &id)
                 .await

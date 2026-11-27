@@ -86,6 +86,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        _fingerprint: golem_common::model::AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(
             CompressedOplogArchive::opened(
@@ -105,16 +106,32 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
-        self.open(owned_agent_id, agent_mode, shard_epoch).await
+        self.open(owned_agent_id, agent_mode, shard_epoch, fingerprint)
+            .await
+    }
+
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.stream(owned_agent_id, agent_mode)
+            .assert_owning_epoch(expected_epoch)
+            .await
     }
 
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()> {
-        self.stream(owned_agent_id, agent_mode).delete().await
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.stream(owned_agent_id, agent_mode)
+            .delete(expected_epoch)
+            .await
     }
 
     async fn read_source(
@@ -124,12 +141,16 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
-        let archive = self
-            .open(owned_agent_id, agent_mode, None)
-            .await
-            .map_err(|error| {
-                OplogReadError::of_archive(OplogReadSource::Archive(self.level), error)
-            })?;
+        let archive = CompressedOplogArchive::opened(
+            owned_agent_id.clone(),
+            agent_mode,
+            self.indexed_storage.clone(),
+            self.level,
+            self.retry_config.clone(),
+            None,
+        )
+        .await
+        .map_err(|error| OplogReadError::of_archive(OplogReadSource::Archive(self.level), error))?;
         archive.read_source(idx, n).await
     }
 

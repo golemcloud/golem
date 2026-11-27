@@ -57,6 +57,7 @@ pub(crate) use fields::{InvocationRequests, fold_invocation_result_entries};
 pub use reconstruction::calculate_last_known_status;
 pub use reconstruction::calculate_last_known_status_for_existing_worker;
 pub use reconstruction::calculate_last_known_status_with_checkpoint;
+pub use reconstruction::calculate_last_known_status_with_checkpoint_attempt;
 pub use reconstruction::calculate_last_known_status_with_checkpoint_reader;
 pub(super) use reconstruction::calculate_status_with_reader;
 pub(super) use reconstruction::fold_committed_status;
@@ -129,6 +130,7 @@ pub(super) struct StatusOplogReader<'a> {
     owned_agent_id: &'a OwnedAgentId,
     agent_mode: AgentMode,
     horizon: OplogIndex,
+    attempt: Option<&'a crate::services::oplog::OplogReadAttempt>,
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.

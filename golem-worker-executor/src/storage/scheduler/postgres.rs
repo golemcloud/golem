@@ -70,6 +70,10 @@ impl PostgresSchedulerStorage {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerStorage for PostgresSchedulerStorage {
+    fn is_durable(&self) -> bool {
+        true
+    }
+
     async fn insert(
         &self,
         schedule_id: ScheduleId,

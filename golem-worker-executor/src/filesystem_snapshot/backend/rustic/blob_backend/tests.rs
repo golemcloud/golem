@@ -1312,6 +1312,30 @@ mod value_rules {
     #[async_trait]
     #[golem_async_trait::region_simple]
     impl BlobStorageBackend for FailingBlobStorage {
+        async fn list_page_at(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _prefix: &NormalizedBlobPath<'_>,
+            _start_after: Option<&NormalizedBlobPath<'_>>,
+            _max_keys: u32,
+        ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
+            Err(broken())
+        }
+
+        async fn put_raw_if_absent_once_at(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &NormalizedBlobPath<'_>,
+            _data: &[u8],
+            _timeout: std::time::Duration,
+        ) -> anyhow::Result<PutIfAbsent> {
+            Err(broken())
+        }
+
         async fn copy_between_at(
             &self,
             _target_label: &'static str,

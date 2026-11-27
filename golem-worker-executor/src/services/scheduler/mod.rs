@@ -41,6 +41,11 @@ use tracing::{Instrument, debug, debug_span, error, info, info_span, warn};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
+    /// Whether scheduled actions survive an executor restart.
+    fn is_durable(&self) -> bool {
+        false
+    }
+
     async fn schedule(&self, time: jiff::Timestamp, action: ScheduledAction) -> ScheduleId;
 
     async fn schedule_with_id(
@@ -538,6 +543,26 @@ impl SchedulerServiceDefault {
                 );
                 false
             }
+            ScheduledAction::CollectTombstone {
+                owned_agent_id,
+                agent_mode,
+            } => {
+                match self
+                    .oplog_service
+                    .collect_tombstone(&owned_agent_id, agent_mode)
+                    .await
+                {
+                    Ok(()) => true,
+                    Err(error) => {
+                        error!(
+                            agent_id = %owned_agent_id,
+                            error = %error,
+                            "Failed to collect oplog tombstone"
+                        );
+                        false
+                    }
+                }
+            }
             ScheduledAction::CompletePromise {
                 account_id: _,
                 promise_id,
@@ -735,6 +760,10 @@ impl Drop for SchedulerServiceDefault {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerService for SchedulerServiceDefault {
+    fn is_durable(&self) -> bool {
+        self.scheduler_storage.is_durable()
+    }
+
     async fn schedule(&self, time: jiff::Timestamp, action: ScheduledAction) -> ScheduleId {
         self.schedule_with_id(ScheduleId::fresh(), time, action)
             .await

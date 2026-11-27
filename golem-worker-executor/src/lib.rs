@@ -74,7 +74,9 @@ use self::services::direct_invocation_auth::{
     DefaultDirectInvocationAuthService, DirectInvocationAuthService,
 };
 use self::services::environment_state::EnvironmentStateService;
-use self::services::golem_config::{EnvironmentStateServiceConfig, QuotaServiceConfig};
+use self::services::golem_config::{
+    EnvironmentStateServiceConfig, OplogConfig, QuotaServiceConfig,
+};
 use self::services::promise::LazyPromiseService;
 use self::services::quota::LazyQuotaService;
 use self::services::rdbms::RdbmsService;
@@ -313,8 +315,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Overridable so a test can watch or fake shard ownership. Everything that
     /// gates on ownership goes through this one service, including the periodic
     /// re-check a caller parked in `Worker::wait_for_invocation_result` runs.
-    fn create_shard_service(&self) -> Arc<dyn ShardService> {
-        Arc::new(ShardServiceDefault::new())
+    fn create_shard_service(&self, config: &OplogConfig) -> Arc<dyn ShardService> {
+        Arc::new(ShardServiceDefault::with_max_lease_ttl(
+            config.shard_lease_max_ttl,
+        ))
     }
 
     fn create_quota_service(
@@ -972,7 +976,7 @@ async fn create_worker_executor_impl<
     )?);
     let golem_config = Arc::new(golem_config);
 
-    let shard_service = bootstrap.create_shard_service();
+    let shard_service = bootstrap.create_shard_service(&golem_config.oplog);
 
     let mut oplog_archives: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
     for idx in 1..golem_config.oplog.indexed_storage_layers {
@@ -1135,6 +1139,10 @@ async fn create_worker_executor_impl<
 
     let promise_service = Arc::new(LazyPromiseService::new());
 
+    if let Some(tracker) = oplog_service.stage_cleanup_tracker() {
+        tracker.track_shutdown(&shutdown);
+    }
+
     let scheduler_service = SchedulerServiceDefault::new(
         scheduler_storage,
         shard_service.clone(),
@@ -1148,6 +1156,17 @@ async fn create_worker_executor_impl<
         golem_config.scheduler.max_concurrent_action_processing,
         shutdown_token.clone(),
     );
+
+    let seal_scheduler: Arc<dyn services::scheduler::SchedulerService> = scheduler_service.clone();
+    oplog_service.set_seal_service(Arc::new(services::oplog::SealService::new(
+        indexed_storage.clone(),
+        blob_storage.clone(),
+        key_value_storage.clone(),
+        shard_service.clone(),
+        Arc::downgrade(&seal_scheduler),
+        golem_config.oplog.clone(),
+        golem_config.indexed_storage_retry.clone(),
+    )));
 
     // Tracked by `shutdown` rather than the join set, so on termination the sweeper gets
     // `SHUTDOWN_GRACE` to finish the archive step it is in before the join set is aborted.

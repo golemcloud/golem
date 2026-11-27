@@ -60,6 +60,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             },
         };
         if result == Some(false) {
+            if self.oplog.fence().is_none()
+                && let Some(seal) = self
+                    .oplog_service()
+                    .seal_service()
+                    .filter(|seal| seal.can_seal_mode(self.agent_mode()))
+                && let Some(epoch) = self.oplog.shard_epoch()
+                && self.shard_service().current_assignment()?.lease.is_some()
+            {
+                let worker = self.clone();
+                // Retirement and release must finish even when the scheduler loses its delivery
+                // lease and cancels its waiter. The task retains both lifecycle boundaries.
+                return tokio::spawn(async move {
+                    let _lifecycle = _lifecycle;
+                    let metadata = worker.try_get_latest_worker_metadata().await?;
+                    if !crate::services::worker::seal_status_is_eligible(
+                        &metadata.last_known_status,
+                    ) {
+                        return Ok(Some(false));
+                    }
+                    if seal.deadline(&worker.owned_agent_id, epoch).is_none() {
+                        return Ok(Some(true));
+                    }
+                    let sealed = worker
+                        .worker_service()
+                        .seal_generation(metadata, epoch, worker.retire_for_seal().boxed())
+                        .await?;
+                    Ok(Some(sealed == Some(false)))
+                })
+                .await
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!("Worker seal task failed: {error}"))
+                })?;
+            }
             self.worker_service()
                 .remove_cached_status(
                     &self.owned_agent_id,
@@ -89,6 +122,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn try_get_last_known_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        if self.retired_for_seal() {
+            return Err(self.retirement_error());
+        }
         match self.state_actor.try_status().await {
             Err(_) if self.retired_for_lost_shard() => Err(self.retirement_error()),
             Err(_) if self.deletion_owns_retirement().await => Err(
@@ -114,10 +150,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn get_repaired_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
-        self.state_actor
+        if self.retired_for_seal() {
+            return Err(self.retirement_error());
+        }
+        let status = self
+            .state_actor
             .repaired_status()
             .await
-            .map_err(|refusal| self.refused_by(refusal).into())
+            .map_err(|refusal| WorkerExecutorError::from(self.refused_by(refusal)))?;
+        if self.retired_for_seal() {
+            return Err(self.retirement_error());
+        }
+        Ok(status)
     }
     /// Whether the published status is detached from the oplog: a rebuild runs, or one failed.
     pub(crate) fn last_known_status_detached(&self) -> bool {

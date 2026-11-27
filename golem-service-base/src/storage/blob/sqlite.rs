@@ -170,6 +170,14 @@ impl SqliteBlobStorage {
             BlobStorageNamespace::CustomStorage { environment_id } => {
                 format!("custom_data-{environment_id}")
             }
+            BlobStorageNamespace::SealRecords {
+                environment_id,
+                type_tag,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("seal_records-{mode}-{environment_id}-{type_tag:08x}")
+            }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
                 agent_id,
@@ -288,6 +296,45 @@ impl BlobStorageBackend for SqliteBlobStorage {
             .get_range_stream_at(target_label, op_label, namespace, path, 0, metadata.size)
             .await?
             .map(|result| result.stream))
+    }
+
+    async fn list_page_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> Result<Vec<super::BlobPageEntry>, Error> {
+        let prefix = prefix.text()?;
+        let prefix = if prefix.is_empty() {
+            prefix
+        } else {
+            format!("{prefix}/")
+        };
+        let after = start_after
+            .map(|p| p.text())
+            .transpose()?
+            .unwrap_or_default();
+        let rows = self.pool.with_ro(target_label, op_label)
+            .fetch_all_as::<(String, SqlDateTime), _>(sqlx::query_as(
+                "SELECT CASE WHEN parent = '' THEN name ELSE parent || '/' || name END AS key, last_modified_at FROM blob_storage WHERE namespace = ? AND is_directory = FALSE AND substr(CASE WHEN parent = '' THEN name ELSE parent || '/' || name END, 1, length(?)) = ? AND (CASE WHEN parent = '' THEN name ELSE parent || '/' || name END) > ? ORDER BY key COLLATE BINARY LIMIT ?"
+            ).bind(Self::namespace(namespace)).bind(&prefix).bind(&prefix).bind(after).bind(i64::from(max_keys)))
+            .await?;
+        rows.into_iter()
+            .map(|(path, modified)| {
+                Ok(super::BlobPageEntry {
+                    path: PathBuf::from(path).into_boxed_path(),
+                    last_modified_at: modified
+                        .into_utc()
+                        .to_string()
+                        .parse()
+                        .map_err(|e: String| anyhow!(e))?,
+                    timestamp_resolution: std::time::Duration::from_secs(1),
+                })
+            })
+            .collect()
     }
 
     async fn get_raw_at(

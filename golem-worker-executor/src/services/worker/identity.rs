@@ -15,11 +15,194 @@
 use super::*;
 
 impl DefaultWorkerService {
+    pub(super) async fn resolve_attempt_agent_identity(
+        &self,
+        id: &OwnedAgentId,
+        attempt: &crate::services::oplog::OplogReadAttempt,
+    ) -> Result<Option<ResolvedAgentIdentity>, WorkerExecutorError> {
+        attempt.assert_id(id);
+        let first = match attempt.mode() {
+            Some(mode) => mode,
+            None => self
+                .read_cached_agent_mode(id)
+                .await?
+                .map_or(AgentMode::Durable, |hint| hint.agent_mode),
+        };
+        for mode in [
+            first,
+            match first {
+                AgentMode::Durable => AgentMode::Ephemeral,
+                AgentMode::Ephemeral => AgentMode::Durable,
+            },
+        ]
+        .into_iter()
+        .filter(|mode| attempt.mode().is_none_or(|known| known == *mode))
+        {
+            let entry = attempt
+                .read_source(
+                    self.oplog_service.as_ref(),
+                    id,
+                    mode,
+                    OplogIndex::INITIAL,
+                    1,
+                )
+                .await?
+                .remove(&OplogIndex::INITIAL);
+            match entry {
+                None => {}
+                Some(ref entry @ OplogEntry::Create { ref parameters, .. })
+                    if parameters.agent_mode == mode =>
+                {
+                    return Ok(Some(ResolvedAgentIdentity {
+                        agent_mode: mode,
+                        fingerprint: AgentFingerprint(parameters.instance_id),
+                        create_entry: entry.clone(),
+                    }));
+                }
+                Some(_) => {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "agent {id} has an invalid initial Create entry"
+                    )));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub(super) fn seal_read_error(
+        owned_agent_id: &OwnedAgentId,
+        error: crate::services::oplog::OplogArchiveError,
+    ) -> WorkerExecutorError {
+        crate::services::oplog::UnreadableOplog::new(
+            &owned_agent_id.agent_id,
+            crate::services::oplog::OplogReadError::of_archive(
+                crate::services::oplog::OplogReadSource::Other("seal record"),
+                error,
+            ),
+        )
+        .into()
+    }
+
+    pub(super) async fn resolve_agent_identity_with_authority(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<ResolvedAgentIdentity>, WorkerExecutorError> {
+        if let Some(seal) = self
+            .oplog_service
+            .seal_service()
+            .filter(|seal| seal.enabled())
+        {
+            return seal
+                .read_with_authority(
+                    owned_agent_id,
+                    None,
+                    || self.resolve_present_agent_identity(owned_agent_id),
+                    |record| {
+                        let seal = seal.clone();
+                        async move {
+                            self.read_sealed_agent_identity(owned_agent_id, &seal, &record)
+                                .await
+                        }
+                    },
+                    || Ok(None),
+                    |error| Self::seal_read_error(owned_agent_id, error),
+                )
+                .await;
+        }
+        self.resolve_present_agent_identity(owned_agent_id).await
+    }
+
+    pub(super) async fn resolve_present_agent_identity(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<ResolvedAgentIdentity>, WorkerExecutorError> {
+        let hint = self.read_cached_agent_mode(owned_agent_id).await?;
+        record_agent_identity_resolution(if hint.is_some() { "hint" } else { "no_hint" });
+        let first_mode = hint
+            .as_ref()
+            .map_or(AgentMode::Durable, |hint| hint.agent_mode);
+        let second_mode = match first_mode {
+            AgentMode::Durable => AgentMode::Ephemeral,
+            AgentMode::Ephemeral => AgentMode::Durable,
+        };
+        let resolved = match self
+            .read_agent_identity_in_mode(owned_agent_id, first_mode)
+            .await?
+        {
+            Some(identity) => Some(identity),
+            None => {
+                record_agent_identity_resolution("alternate_mode_fallback");
+                self.read_agent_identity_in_mode(owned_agent_id, second_mode)
+                    .await?
+            }
+        };
+        // Cold readers must not race seal cleanup with a cache write that can outlive the request.
+        if self
+            .oplog_service
+            .seal_service()
+            .is_some_and(|seal| seal.enabled())
+        {
+            return Ok(resolved);
+        }
+        match &resolved {
+            Some(identity) if identity.agent_mode == AgentMode::Durable => {
+                let actual = CachedAgentMode {
+                    agent_mode: identity.agent_mode,
+                    fingerprint: identity.fingerprint,
+                };
+                if hint.as_ref() != Some(&actual) {
+                    match self.write_cached_agent_mode(owned_agent_id, &actual).await {
+                        Ok(()) if hint.is_some() => {
+                            record_agent_identity_resolution("stale_hint_replacement");
+                        }
+                        Ok(()) => {}
+                        Err(err) => {
+                            error!("Failed to cache the agent mode for {owned_agent_id}: {err}");
+                        }
+                    }
+                }
+            }
+            Some(_) if hint.is_some() => {
+                match self.remove_cached_agent_mode(owned_agent_id).await {
+                    Ok(()) => record_agent_identity_resolution("stale_hint_replacement"),
+                    Err(err) => {
+                        error!("Failed to remove stale agent mode for {owned_agent_id}: {err}");
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(resolved)
+    }
+
+    pub(super) async fn read_sealed_agent_identity(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        seal: &crate::services::oplog::SealService,
+        record: &crate::services::oplog::seal::SealRecord,
+    ) -> Result<Option<ResolvedAgentIdentity>, WorkerExecutorError> {
+        let create_entry = seal.read_initial(owned_agent_id, record).await?;
+        if !matches!(&create_entry, OplogEntry::Create { parameters, .. }
+            if parameters.agent_id == owned_agent_id.agent_id
+                && parameters.environment_id == owned_agent_id.environment_id
+                && parameters.agent_mode == record.agent_mode
+                && AgentFingerprint(parameters.instance_id) == record.fingerprint)
+        {
+            return Err(WorkerExecutorError::runtime(format!(
+                "agent {owned_agent_id} has a seal without a matching initial Create entry"
+            )));
+        }
+        Ok(Some(ResolvedAgentIdentity {
+            agent_mode: record.agent_mode,
+            fingerprint: record.fingerprint,
+            create_entry,
+        }))
+    }
+
     /// Key holding the worker's immutable mode and fingerprint as a hint for identity resolution,
-    /// stored separately from `AgentStatusRecord`. Populated lazily for durable workers and never
-    /// written on the per-commit hot path. The `Create` entry remains authoritative, so stale hints
-    /// are replaced or removed. This lives in the `Worker` namespace because it has an independent
-    /// lifecycle from the status fields.
+    /// stored separately from `AgentStatusRecord`. Cold resolution populates and repairs durable
+    /// hints only when sealing is disabled. The `Create` entry remains authoritative. This lives
+    /// in the `Worker` namespace because it has an independent lifecycle from the status fields.
     pub(super) fn agent_mode_key(owned_agent_id: &OwnedAgentId) -> String {
         format!("worker:agent_mode:{}", owned_agent_id.storage_key())
     }

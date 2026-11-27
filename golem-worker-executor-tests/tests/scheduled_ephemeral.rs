@@ -104,6 +104,10 @@ impl SchedulerStorage for DuplicateWakes {
         self.inner.reschedule(id, owner, due, now).await
     }
 
+    fn is_durable(&self) -> bool {
+        self.inner.is_durable()
+    }
+
     async fn insert(
         &self,
         id: ScheduleId,
@@ -204,6 +208,10 @@ impl SchedulerStorage for PausedScheduler {
         now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.reschedule(id, owner, due, now).await
+    }
+
+    fn is_durable(&self) -> bool {
+        self.inner.is_durable()
     }
 
     async fn insert(

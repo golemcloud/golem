@@ -77,5 +77,6 @@ pub fn action_kind_label(action: &golem_common::model::ScheduledAction) -> &'sta
         ScheduledAction::WakeInvocation { .. } => "wake_invocation",
         ScheduledAction::ExpireDurableStreamSession { .. } => "expire_stream_session",
         ScheduledAction::Resume { .. } => "resume",
+        ScheduledAction::CollectTombstone { .. } => "collect_tombstone",
     }
 }

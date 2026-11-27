@@ -51,6 +51,7 @@ const TEST_TTL: Duration = Duration::from_millis(50);
 
 pub(crate) struct ComponentLoadGate {
     armed: AtomicBool,
+    metadata_armed: AtomicBool,
     error:
         std::sync::Mutex<Option<golem_service_base::error::worker_executor::WorkerExecutorError>>,
     entered: tokio::sync::Semaphore,
@@ -61,6 +62,7 @@ impl ComponentLoadGate {
     pub(crate) fn new() -> Self {
         Self {
             armed: AtomicBool::new(false),
+            metadata_armed: AtomicBool::new(false),
             error: std::sync::Mutex::new(None),
             entered: tokio::sync::Semaphore::new(0),
             release: tokio::sync::Semaphore::new(0),
@@ -69,6 +71,18 @@ impl ComponentLoadGate {
 
     pub(crate) fn arm(&self) {
         self.armed.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn arm_metadata(&self) {
+        self.metadata_armed.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn fail_next_metadata(
+        &self,
+        error: golem_service_base::error::worker_executor::WorkerExecutorError,
+    ) {
+        *self.error.lock().unwrap() = Some(error);
+        self.arm_metadata();
     }
 
     pub(crate) fn fail_next(
@@ -85,6 +99,17 @@ impl ComponentLoadGate {
 
     pub(crate) fn release(&self) {
         self.release.add_permits(1);
+    }
+
+    async fn wait(
+        &self,
+    ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
+        self.entered.add_permits(1);
+        self.release.acquire().await.unwrap().forget();
+        if let Some(error) = self.error.lock().unwrap().take() {
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
@@ -108,11 +133,7 @@ impl ComponentService for GatedComponentService {
         golem_service_base::error::worker_executor::WorkerExecutorError,
     > {
         if self.gate.armed.swap(false, Ordering::AcqRel) {
-            self.gate.entered.add_permits(1);
-            self.gate.release.acquire().await.unwrap().forget();
-            if let Some(error) = self.gate.error.lock().unwrap().take() {
-                return Err(error);
-            }
+            self.gate.wait().await?;
         }
         self.inner
             .get(engine, component_id, component_revision)
@@ -127,6 +148,9 @@ impl ComponentService for GatedComponentService {
         golem_service_base::model::component::Component,
         golem_service_base::error::worker_executor::WorkerExecutorError,
     > {
+        if self.gate.metadata_armed.swap(false, Ordering::AcqRel) {
+            self.gate.wait().await?;
+        }
         self.inner.get_metadata(component_id, forced_revision).await
     }
 

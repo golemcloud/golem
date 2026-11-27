@@ -194,8 +194,20 @@ impl Debug for ForwardingOplogService {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl OplogService for ForwardingOplogService {
+    fn stage_cleanup_tracker(&self) -> Option<Arc<crate::services::oplog::StageCleanupTracker>> {
+        self.inner.stage_cleanup_tracker()
+    }
+
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.inner.lock_lifecycle(agent_id).await
+    }
+
+    fn set_seal_service(&self, service: Arc<super::super::SealService>) {
+        self.inner.set_seal_service(service);
+    }
+
+    fn seal_service(&self) -> Option<Arc<super::super::SealService>> {
+        self.inner.seal_service()
     }
 
     fn set_stream_session_index(&self, index: Arc<super::super::StreamSessionIndexService>) {
@@ -212,7 +224,10 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
         initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, String> {
+    ) -> Result<
+        (Arc<dyn Oplog>, crate::services::oplog::StageCleanupGuard),
+        crate::services::oplog::CreateStagedError,
+    > {
         self.inner
             .create_staged(
                 owned_agent_id,
@@ -251,9 +266,10 @@ impl OplogService for ForwardingOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
+        stage_token: Option<i64>,
     ) -> Result<(), String> {
         self.inner
-            .discard_staged(owned_agent_id, agent_mode, stage_id)
+            .discard_staged(owned_agent_id, agent_mode, stage_id, stage_token)
             .await
     }
 
@@ -370,6 +386,34 @@ impl OplogService for ForwardingOplogService {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
+    async fn get_last_index_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.inner.get_last_index_present(id, mode).await
+    }
+
+    async fn read_source_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        self.inner.read_source_present(id, mode, idx, n).await
+    }
+
+    async fn read_exact_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        self.inner.read_exact_present(id, mode, idx, n).await
+    }
+
     async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -396,10 +440,17 @@ impl OplogService for ForwardingOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        fingerprint: golem_common::model::AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
         self.inner
-            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+            .delete(
+                lifecycle,
+                owned_agent_id,
+                agent_mode,
+                fingerprint,
+                expected_epoch,
+            )
             .await
     }
 

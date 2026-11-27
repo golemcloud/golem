@@ -10022,6 +10022,10 @@ async fn owner_load_restores_lost_invocation_wake(
             self.inner.reschedule(id, owner, due, now).await
         }
 
+        fn is_durable(&self) -> bool {
+            self.inner.is_durable()
+        }
+
         async fn insert(
             &self,
             id: ScheduleId,
@@ -13217,6 +13221,10 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             self.inner.reschedule(id, owner, due, now).await
+        }
+
+        fn is_durable(&self) -> bool {
+            self.inner.is_durable()
         }
 
         async fn insert(

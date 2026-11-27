@@ -334,9 +334,10 @@ Rules that follow from it:
   tokens.
 - **Derived caches are disposable.** The cached status, its checkpoint and the invocation-result
   index are scoped by fingerprint; the agent-mode hint has one key per agent and carries the
-  fingerprint in its value. Archiving removes all four once the whole oplog is in the last layer
-  (`worker/persistence.rs` → `WorkerService::remove_cached_status`). The next load folds the status
-  caches from the oplog, and the next resolution writes the hint again. Test:
+  fingerprint in its value. Full archival removes all four (`worker/persistence.rs` →
+  `WorkerService::remove_cached_status`). Seal also removes the derived stream-session index.
+  A sealed metadata or history read uses the seal record without restoring caches or indexed rows.
+  A durable activation unseals and can rebuild caches from history. Test:
   `oplog_unreadable.rs::archived_keyed_agents_resolve_by_key_and_by_id_from_their_oplog`.
 
 ## Component map
@@ -1721,15 +1722,15 @@ owner leaves by:
   primary oplog, or at an ephemeral oplog's first level, records nothing on the remaining levels:
   the handle is finished and never writes them. An emptied level is
   removed with `delete_empty_with_epoch`, which keeps its epoch record: the owner keeps writing
-  the level, and an older owner is still refused. A fully archived ephemeral oplog's emptied
-  levels keep their records too: removing one would leave nothing that remembers the newest
-  owner, and any older handle could claim the level again. Deleting the agent removes the
-  records with it, so a transfer still in flight on an older owner cannot write the deleted
-  agent's archive back. An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
+  the level, and an older owner is still refused. Emptied levels retain their epoch records
+  while indexed presence exists. Only the atomic seal release removes them together after a
+  deadline-admissible record is durable. Tombstone-writing deletion retains its fence until GC;
+  ordinary deleted levels have no epoch record, so an old transfer's fenced append is refused.
+  An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
   it; the open-oplog cache replaces an ephemeral handle for an opener at a newer epoch, as it
   replaces a primary one.
-- **Blob archive layer.** Blob storage has no conditional write, so a blob level's chunks exist
-  only as far as its manifest lists them: a per-agent key in indexed storage
+- **Blob archive layer.** While indexed data is present, a blob level's chunks exist only as far
+  as its manifest lists them: a per-agent key in indexed storage
   (`IndexedStorageNamespace::BlobOplogManifest`) holding, per chunk, the object name and entry
   count, fenced like a compressed level (`services/oplog/blob.rs`). An append stores the chunk
   under an object name no other write uses, then appends its manifest entry. The rule for the
@@ -1755,6 +1756,20 @@ owner leaves by:
   crash after its upload, by a crash after its trim, and by a manifest append that failed
   without an answer and whose entry never landed; nothing reads it, and deleting the agent
   removes it.
+
+### Sealed archive authority
+
+`services/oplog/seal/` holds seal selection, frozen reads, release and tombstone GC. Any indexed data row (including staged rows or `SealedPresent`) means indexed storage is authoritative. Bare epoch rows and stage reservations are fences, not presence. Without data, the newest admissible record decides existence. `SealRecords` is scoped by environment, exact type tag and mode; known-mode reads list one namespace. Keys carry epoch, sequence, fingerprint and, for a seal, its validity deadline. Use `list_page` timestamps, never HEAD: a seal is admissible only when `last_modified + resolution ≤ valid_until`. At equal epoch and sequence, deletion wins. Malformed keys are ignored and never collected.
+
+Seal requires full archival (`Ok(Some(false))` with no fence) and resident-idle admission under the instance guard. It excludes permit waits, initialization, replay, stopping and cleanup failure; terminal Inactive is allowed only for ephemeral retirement. It evicts the Worker under the lifecycle guard and gate write lock. It writes one single-attempt conditional record, verifies admissibility, marks indexed presence, removes derivable KV and moved promise copies, then atomically releases every indexed data and epoch row. A refusal leaves indexed authority intact. Fully archived ineligible agents are not polled: eligibility transitions retrigger archival, including Suspended and completion of a start that leaves the folded status unchanged.
+
+Moved data remains in records across unseal. Promise readers use KV first; rejected-snapshot readers union KV and the pinned record. Indexed-present reads pin the readable Create fingerprint, otherwise the marker fingerprint, and select the newest admissible seal for that fingerprint even if a tombstone sorts above it. Indexed-absent reads use the head, so a deletion head means absent. Read generations in the markers guard release/unseal ABA: revalidate the whole authority attempt and retry on change. Cold acquisition shares its one mode-scoped selection across read-only checks. An indexed-present open can continue its revalidated attempt after claiming; it restores no record. Never restore a pre-claim seal selection: unsealing durable activation and durable creation take fresh post-claim listings. Fresh startup has no moved-data LIST without a pinned identity.
+
+Durable activation schedules ArchiveOplog before atomic unseal; metadata, history, search and listing do not unseal. Ephemeral retained responses remain frozen, including in-memory stream-session folds. Only deletion with stream history unseals either mode without starting the guest: under lifecycle and write guards, check the stale epoch, evict a frozen generation, schedule archival, unseal and install Deleting before releasing the guards. No-history deletion stays frozen and uses a fence plus tombstone.
+
+Pending durable promises and timers stay as obligations. Completed promises and exact rejected-snapshot sets move into the record; pending ephemeral promises move too. External completion of a recorded ephemeral pending promise writes one KV completion row, does not activate the agent, and remains until deletion. Scans use indexed stages excluding markers followed by LIST-only seal stages, with no per-candidate GET or scheduler write. Only a crash after record creation and before marking can duplicate an agent across stages.
+
+Every tombstone-writing attempt schedules durable CollectTombstone before the fence and PUT. GC holds the lifecycle guard, checks indexed identity then a fresh listing, and removes only an expired tombstone's region and fingerprint-scoped chunks. A lost deletion removes only its tombstone. The fence is removed before the tombstone, which is the last mutation. The bound is listed tombstone time + shard_lease_max_ttl + seal_put_timeout + server_commit_bound + 2 × skew_margin. The server commit bound is an operational assumption, not a client-timeout guarantee. Redis, multi-SQLite and memory scheduler deployments skip seal. See `reference/crash-matrix.md` for recovery windows and `tests/oplog_sealed_postgres.rs` for lifecycle/population evidence.
 
 Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
 refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and

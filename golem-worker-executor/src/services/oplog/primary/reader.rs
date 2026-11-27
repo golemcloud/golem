@@ -14,7 +14,7 @@
 
 use super::*;
 
-pub(super) async fn read_persisted_oplog_entries(
+pub(crate) async fn read_persisted_oplog_entries(
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     namespace: IndexedStorageNamespace,
     key: String,

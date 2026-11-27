@@ -23,6 +23,7 @@ impl MultiLayerOplog {
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> Result<Arc<dyn Oplog>, UnreadableOplog> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -37,7 +38,10 @@ impl MultiLayerOplog {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in multi_layer_oplog_service.lower.iter().enumerate() {
             // A layer that does not open fails the open of the oplog, and nothing is cached.
-            let raw = match layer.open(&owned_agent_id, agent_mode, shard_epoch).await {
+            let raw = match layer
+                .open(&owned_agent_id, agent_mode, shard_epoch, fingerprint)
+                .await
+            {
                 Ok(raw) => raw,
                 Err(error) => {
                     close();
@@ -451,6 +455,7 @@ impl Oplog for MultiLayerOplog {
 
     fn retire(&self) {
         self.retired.store(true, Ordering::Release);
+        self.primary.retire();
         self.multi_layer_oplog_service
             .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
         self.multi_layer_oplog_service

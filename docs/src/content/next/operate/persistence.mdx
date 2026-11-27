@@ -32,7 +32,7 @@ With S3, the blob storage keeps each kind of blob in the bucket that one setting
 | --- | --- |
 | `compilation_cache_bucket` | The compiled components of the compilation cache |
 | `custom_data_bucket` | The blobs that agents write through the WASI Blob Store API |
-| `oplog_payload_bucket` | The large payloads of oplog entries |
+| `oplog_payload_bucket` | The large payloads of oplog entries, seal records and deletion records |
 | `compressed_oplog_buckets` | The compressed oplog of the archive layers in the blob storage, one bucket for each layer |
 | `initial_agent_files_bucket` | The initial files of agents |
 | `components_bucket` | The original component Wasm files of the registry service |
@@ -70,12 +70,15 @@ With `namespace_prefixes = true`, the keys have these prefixes:
 | Compilation cache | `<object_prefix>/compilation_cache/<Wasm hash>/` |
 | WASI Blob Store data | `<object_prefix>/custom_data/<environment id>/` |
 | Oplog payloads | `<object_prefix>/oplog_payload/<agent mode>/<environment id>/<agent>/` |
-| Compressed oplog | `<object_prefix>/compressed_oplog/<agent mode>/<environment id>/<component id>/<layer>/` |
+| Compressed oplog | `<object_prefix>/compressed_oplog/<agent mode>/<environment id>/<type tag>/<layer>/` |
+| Seal and deletion records | `<object_prefix>/seal_records/<agent mode>/<environment id>/<type tag>/seals/<agent id>/` |
 | Initial agent files | `<object_prefix>/initial_agent_files/<environment id>/` |
 | Component uploads | `<object_prefix>/component_uploads/<account id>/` |
 | Filesystem snapshots | `<object_prefix>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/` |
 
 Without `object_prefix`, each prefix starts at the segment of its kind. `<agent mode>` is `durable` or `ephemeral`, and `<layer>` is the index of the archive layer in the blob storage, from 0. `<agent>` is the agent part of the location of [filesystem snapshots](/next/operate/filesystem_snapshots/recovery#where-the-snapshots-are). The same segments make the directories of the file system blob storage below its `root`.
+
+`<type tag>` is the environment-local type ID, written as eight lowercase hexadecimal digits. Seal and deletion records use the same `seal_records/` prefix even with `namespace_prefixes = false`, in `oplog_payload_bucket`.
 
 Component upload keys end in `<sha256>-<uuid>`. With `namespace_prefixes = false`, the key is `<object_prefix>/component_uploads/<account id>/<sha256>-<uuid>` in `components_bucket`, with `<object_prefix>/` omitted when it is not configured.
 
@@ -104,7 +107,7 @@ The oplog is stored in multiple configurable layers. The default configuration i
 - There is a **secondary layer** that is also persisted to the **indexed storage**, but on this level each entry holds a compressed set of oplog entries.
 - A **tertiary layer** holds even larger chunks of compressed oplog entries and stores them in the **blob storage**.
 
-Oplogs are moved toward lower layers to prevent the primary indexed storage from filling up. With the default layers, inactive agents' oplog entries eventually reach blob storage. A small creation-fence key remains in primary storage.
+Oplogs are moved toward lower layers to prevent the primary indexed storage from filling up. With the default layers, idle agents' oplog entries eventually reach blob storage. On supported storage, Golem then seals the agent and removes its indexed rows, including its creation marker and epoch fences.
 
 In addition to the above, there are oplog entries holding user-defined data (such as invocation parameters). As these user-defined payloads can have an arbitrary size, the worker executor has to protect its storage layer against putting too large entries into the primary oplog. For this reason large payloads are written to the **blob storage** and the corresponding oplog entry only stores a reference to them. Payloads below a configurable limit are stored inline in the oplog entry.
 
@@ -122,6 +125,10 @@ entry_count_limit = 1024
 indexed_storage_layers = 2
 max_operations_before_commit = 128
 max_payload_size = 65536
+skew_margin = "30s"
+seal_put_timeout = "10s"
+server_commit_bound = "5m"
+shard_lease_max_ttl = "60s"
 ```
 
 These options have the following meaning:
@@ -134,10 +141,40 @@ These options have the following meaning:
 | `entry_count_limit`            | The number of oplog entries triggering the archivation of a chunk to the lower oplog layer              |
 | `max_operations_before_commit` | The number of non-critical oplog entries that can be buffered before committed to the oplog             |
 | `max_payload_size`             | The maximum size of user-defined payloads that can be stored inline in an oplog entry                   |
+| `skew_margin` | The clock-skew allowance subtracted from the shard lease deadline |
+| `seal_put_timeout` | The client timeout for a single conditional seal-record PUT; it does not bound server commit time |
+| `server_commit_bound` | The assumed maximum time for the blob server to commit a received request, or never commit it |
+| `shard_lease_max_ttl` | The ceiling applied to received shard lease TTLs; configure it at least as large as the shard manager's `shard_lease_duration` |
+
+### Sealed agents and PostgreSQL footprint
+
+While any indexed data row of an agent exists, indexed storage remains its authority. Blob chunks have an indexed manifest, and writes retain their shard epoch fence. An epoch row alone is a fence, not data presence.
+
+Seal runs only after full archival, with no latched fence, when the resident generation is idle and can be evicted. Suspended agents can seal without being resumed. A start waiting for a permit or replaying cannot seal. The owner writes a conditional seal record containing the manifests, metadata, status, completed promises and rejected periodic snapshot indexes. It removes derived KV caches and the moved promise copies, then atomically releases every indexed data and epoch row of the agent.
+
+A sealed agent is read from its record and chunks. Metadata, listing, oplog inspection and search do not restore rows or refresh KV caches. Activating a durable agent schedules archival and restores its manifests, marker and fences in one transaction before opening it. The first invocation-result lookup can rebuild its index from the archive. An ephemeral agent is not activated again: response and duplicate reads stay frozen and write nothing. Deletion that must record a stream cascade is the sole exception; it unseals either mode without starting the guest, and claims deletion before releasing the lifecycle guards. Deletion without stream history stays on the frozen fast path.
+
+With PostgreSQL for indexed, KV and scheduler storage, sealed agents with no pending obligations add no rows to `index_storage`, `indexed_key_epoch`, `kv_storage`, `set_storage`, `sorted_set_storage` or `scheduled_actions`. Pending promises and timers of durable agents remain until resolved. They are bounded by outstanding waits, not archived history. Pending promises of retired ephemeral agents move into the record; an external completion creates one KV completion row that remains until deletion.
+
+Seal requires an atomic whole-agent release (PostgreSQL, SQLite or in-memory indexed storage), a durable scheduler (PostgreSQL or SQLite), a final blob archive layer and an expiring shard lease. Redis and multi-SQLite skip seal and keep their indexed footprint. Configurations without a blob archive layer also keep it.
+
+### Blob-store requirements and deletion GC
+
+Seal records require ordered paged listings with modification timestamps and conditional create (`If-None-Match: *`). S3 general-purpose buckets, and compatible stores that implement both operations correctly, can be used. S3 directory buckets are unsupported because their listings are unordered. GCS through its S3 interface and Garage are unsupported because they do not provide the required conditional writes. Golem does not detect these stores for you.
+
+The deployment must bound clock skew by `skew_margin` and ensure that a request received by the blob server commits within `server_commit_bound`, or never commits. The client timeout alone does not establish this bound. A seal record carries a fixed lease-derived deadline in its key. Readers admit it only when its listed modification time plus the timestamp resolution is at most that deadline. Unseal checks its deadline against the database clock.
+
+Deletion writes a tombstone before removing indexed state and retains an epoch fence against old owners. A durable `CollectTombstone` action collects the tombstone, its old seal records, incarnation-scoped chunks and fence after:
+
+`T_gc = tombstone.last_modified + shard_lease_max_ttl + seal_put_timeout + server_commit_bound + 2 × skew_margin`
+
+The defaults give about seven minutes. GC checks PostgreSQL identity and a fresh listing before removing anything: a failed deletion that left the same incarnation alive loses only its tombstone. GC leaves a recreated incarnation intact. After successful GC, the deleted agent has no seal keys, indexed rows or GC schedule row. Scan paths never schedule GC.
+
+A process crash after the tombstone write but before indexed deletion does not retry the delete automatically. The user must delete again. Until deletion finishes or GC discards the tombstone of that failed deletion, a marked agent can be absent from both listing stages.
 
 ## Agent metadata
 
-The **oplog** is the primary source of truth for agent state, but the **key-value store** also caches aggregated agent metadata for performance. This metadata records the oplog index from which it was calculated, and Golem can refresh it by processing newer entries. Once archival is complete, Golem clears the cached status and its checkpoint. If the agent is recovered later, Golem reconstructs the metadata from the archived oplog.
+The **oplog** is the primary source of truth for agent state, but the **key-value store** also caches aggregated agent metadata for performance. This metadata records the oplog index from which it was calculated, and Golem can refresh it by processing newer entries. Full archival clears the cached status, checkpoint, invocation-result index and mode hint. Seal also removes the derived stream-session index. Sealed metadata reads use the record's snapshot without writing these caches; activation can rebuild them from the history.
 
 ## Filesystem snapshots
 
@@ -145,7 +182,7 @@ When [filesystem snapshots](/next/operate/filesystem_snapshots) are enabled, the
 
 ## Promises and schedules
 
-The worker executor stores **promise information** in its **key-value storage**, with one entry for each promise's completion state. Scheduled actions, including promise completion used to wake agents after long sleeps, use the separate **scheduler storage**.
+The worker executor stores **promise information** in its **key-value storage** until seal moves completed promises into the seal record. Readers use KV first, then the record of the same incarnation, including for duplicate completion and cross-agent polls. Pending durable promises remain in KV; pending ephemeral promises move too. Scheduled actions, including promise completion used to wake agents after long sleeps, use the separate **scheduler storage**. A sealed agent has no `ArchiveOplog` row.
 
 ## WASI Blob store and Key Value store
 

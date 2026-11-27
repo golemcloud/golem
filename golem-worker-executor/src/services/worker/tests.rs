@@ -57,9 +57,13 @@ use uuid::Uuid;
 struct IndexTestOplogService {
     entries: BTreeMap<OplogIndex, OplogEntry>,
     stream_index: std::sync::OnceLock<Arc<StreamSessionIndexService>>,
+    seal: std::sync::OnceLock<Arc<crate::services::oplog::SealService>>,
+    churn_authority:
+        std::sync::OnceLock<Arc<crate::storage::indexed::memory::InMemoryIndexedStorage>>,
     reads: StdMutex<Vec<(OplogIndex, u64)>>,
     delete_attempts: AtomicUsize,
     pause_next_read: AtomicBool,
+    released_read_behavior: AtomicUsize,
     read_started: Notify,
     resume_read: Notify,
 }
@@ -69,9 +73,12 @@ impl IndexTestOplogService {
         Self {
             entries,
             stream_index: std::sync::OnceLock::new(),
+            seal: std::sync::OnceLock::new(),
+            churn_authority: std::sync::OnceLock::new(),
             reads: StdMutex::new(Vec::new()),
             delete_attempts: AtomicUsize::new(0),
             pause_next_read: AtomicBool::new(false),
+            released_read_behavior: AtomicUsize::new(0),
             read_started: Notify::new(),
             resume_read: Notify::new(),
         }
@@ -97,6 +104,10 @@ impl IndexTestOplogService {
 
 #[async_trait]
 impl OplogService for IndexTestOplogService {
+    fn seal_service(&self) -> Option<Arc<crate::services::oplog::SealService>> {
+        self.seal.get().cloned()
+    }
+
     async fn staged_exists(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -187,6 +198,7 @@ impl OplogService for IndexTestOplogService {
         _lifecycle: &mut OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
         _expected_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.delete_attempts.fetch_add(1, Ordering::Relaxed);
@@ -210,6 +222,52 @@ impl OplogService for IndexTestOplogService {
         if self.pause_next_read.swap(false, Ordering::AcqRel) {
             self.read_started.notify_one();
             self.resume_read.notified().await;
+        }
+        match self.released_read_behavior.swap(0, Ordering::AcqRel) {
+            1 => return Ok(BTreeMap::new()),
+            2 => {
+                return Err(UnreadableOplog::new(
+                    &_owned_agent_id.agent_id,
+                    crate::services::oplog::OplogReadError::source_unavailable(
+                        crate::services::oplog::OplogReadSource::Primary,
+                        "released during read",
+                    ),
+                ));
+            }
+            _ => {}
+        }
+        if let Some(indexed) = self.churn_authority.get() {
+            use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
+            let OplogEntry::Create { parameters, .. } = &self.entries[&OplogIndex::INITIAL] else {
+                unreachable!()
+            };
+            let marker = IndexedStorageNamespace::SealedPresent {
+                owned_agent_id: _owned_agent_id.clone(),
+                agent_mode,
+            };
+            let key = _owned_agent_id.storage_key();
+            indexed
+                .delete("test", "churn_remove", marker.clone(), &key)
+                .await
+                .unwrap();
+            indexed
+                .append(
+                    "test",
+                    "churn_restore",
+                    "agent",
+                    marker,
+                    &key,
+                    0,
+                    serialize(&crate::storage::indexed::SealMarker {
+                        generation: Uuid::new_v4(),
+                        fingerprint: AgentFingerprint(parameters.instance_id),
+                    })
+                    .unwrap(),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
         }
         let end = idx.as_u64().saturating_add(n.saturating_sub(1));
         Ok(self
@@ -446,6 +504,663 @@ fn index_test_service_with(
         Arc::new(IndexTestComponentService),
         Arc::new(config),
     ))
+}
+
+struct UnusedSealScheduler;
+
+#[async_trait]
+impl crate::services::scheduler::SchedulerService for UnusedSealScheduler {
+    fn is_durable(&self) -> bool {
+        true
+    }
+
+    async fn schedule(
+        &self,
+        _: jiff::Timestamp,
+        _: golem_common::model::ScheduledAction,
+    ) -> golem_common::model::ScheduleId {
+        unreachable!()
+    }
+
+    async fn schedule_with_id(
+        &self,
+        _: golem_common::model::ScheduleId,
+        _: jiff::Timestamp,
+        _: golem_common::model::ScheduledAction,
+    ) -> golem_common::model::ScheduleId {
+        unreachable!()
+    }
+
+    async fn cancel(&self, _: golem_common::model::ScheduleId) {
+        unreachable!()
+    }
+}
+
+struct ColdSealFixture {
+    service: Arc<DefaultWorkerService>,
+    oplog: Arc<IndexTestOplogService>,
+    faults: KeyValueStorageFaults,
+    indexed: Arc<crate::storage::indexed::memory::InMemoryIndexedStorage>,
+    blobs: Arc<golem_service_base::storage::blob::memory::InMemoryBlobStorage>,
+    record: crate::services::oplog::seal::SealRecord,
+    _scheduler: Arc<UnusedSealScheduler>,
+}
+
+impl ColdSealFixture {
+    async fn new() -> Self {
+        Self::with_seal_storage(1, None, None).await
+    }
+
+    async fn with_seal_storage(
+        blob_layers: usize,
+        seal_indexed: Option<Arc<dyn crate::storage::indexed::IndexedStorage + Send + Sync>>,
+        seal_blobs: Option<Arc<dyn golem_service_base::storage::blob::BlobStorage>>,
+    ) -> Self {
+        use crate::services::oplog::{BlobOplogArchiveService, OplogArchiveService, SealService};
+        let id = test_owned_agent_id("cold-seal-reader");
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::INITIAL,
+                test_create_entry(&id, AgentMode::Durable, AgentFingerprint::new()),
+            ),
+            (OplogIndex::from_u64(2), OplogEntry::suspend()),
+        ]);
+        let oplog = Arc::new(IndexTestOplogService::new(entries.clone()));
+        let faults = KeyValueStorageFaults::default();
+        let storage = Arc::new(FaultInjectingKeyValueStorage::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            faults.clone(),
+        ));
+        let service = index_test_service_with(storage, oplog.clone());
+        let result = service.get(&id).await.unwrap().unwrap();
+        let mut metadata = result.initial_worker_metadata;
+        metadata.last_known_status = result.last_known_status.unwrap();
+        // The frozen value must be distinguishable from a resident fold of the same Create.
+        metadata.last_known_status.total_linear_memory_size = 9876;
+        let indexed = Arc::new(crate::storage::indexed::memory::InMemoryIndexedStorage::new());
+        let blobs = Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new());
+        let archive =
+            BlobOplogArchiveService::new(blobs.clone(), indexed.clone(), 0, Default::default());
+        archive
+            .open(&id, AgentMode::Durable, None, metadata.fingerprint)
+            .await
+            .unwrap()
+            .append(&entries.into_iter().collect::<Vec<_>>())
+            .await
+            .unwrap();
+        let record = crate::services::oplog::seal::SealRecord {
+            writer_nonce: Uuid::new_v4(),
+            writer_epoch: ShardEpoch(1),
+            fingerprint: metadata.fingerprint,
+            agent_mode: AgentMode::Durable,
+            manifest: BTreeMap::from([(
+                0,
+                archive
+                    .manifest_snapshot(&id, AgentMode::Durable)
+                    .await
+                    .unwrap(),
+            )]),
+            last_index: metadata.last_known_status.oplog_idx,
+            metadata,
+            completed_promises: Default::default(),
+            pending_promises: Default::default(),
+            rejected_periodic_snapshots: Default::default(),
+        };
+        let config = crate::services::golem_config::OplogConfig {
+            blob_storage_layers: blob_layers,
+            ..Default::default()
+        };
+        let scheduler = Arc::new(UnusedSealScheduler);
+        let scheduler_ref: Arc<dyn crate::services::scheduler::SchedulerService> =
+            scheduler.clone();
+        oplog
+            .seal
+            .set(Arc::new(SealService::new(
+                seal_indexed.unwrap_or_else(|| indexed.clone()),
+                seal_blobs.unwrap_or_else(|| blobs.clone()),
+                service.key_value_storage.clone(),
+                Arc::new(ShardServiceDefault::new()),
+                Arc::downgrade(&scheduler_ref),
+                config,
+                Default::default(),
+            )))
+            .unwrap();
+        service
+            .remove_cached_status(&id, record.fingerprint)
+            .await
+            .unwrap();
+        Self {
+            service,
+            oplog,
+            faults,
+            indexed,
+            blobs,
+            record,
+            _scheduler: scheduler,
+        }
+    }
+
+    fn id(&self) -> OwnedAgentId {
+        self.record.metadata.owned_agent_id()
+    }
+
+    fn cold_cache_mutations(&self) -> [usize; 4] {
+        [
+            "write_cached_agent_mode",
+            "remove_cached_agent_mode",
+            "update_status",
+            "remove",
+        ]
+        .map(|label| self.faults.calls(label))
+    }
+
+    async fn publish_record(&self) {
+        use crate::services::oplog::seal::{SealRecordKey, SealRecordKind, seal_namespace};
+        use golem_service_base::storage::blob::BlobStorageLabelledApi;
+        let key = SealRecordKey {
+            agent_id: self.id().agent_id,
+            epoch: self.record.writer_epoch,
+            seq: 0,
+            kind: SealRecordKind::Sealed {
+                valid_until_ms: u64::MAX,
+            },
+            fingerprint: self.record.fingerprint,
+        };
+        self.blobs
+            .with("test", "publish_seal")
+            .put_raw(
+                seal_namespace(&self.id(), self.record.agent_mode),
+                &key.path(),
+                &serialize(&self.record).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            self.oplog
+                .seal
+                .get()
+                .unwrap()
+                .record(&self.id())
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    async fn release(&self) {
+        use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
+        self.indexed
+            .delete(
+                "test",
+                "release_marker",
+                IndexedStorageNamespace::SealedPresent {
+                    owned_agent_id: self.id(),
+                    agent_mode: AgentMode::Durable,
+                },
+                &self.id().storage_key(),
+            )
+            .await
+            .unwrap();
+        self.indexed
+            .delete(
+                "test",
+                "release",
+                IndexedStorageNamespace::BlobOplogManifest {
+                    owned_agent_id: self.id(),
+                    agent_mode: AgentMode::Durable,
+                    level: 0,
+                },
+                &self.id().storage_key(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            self.oplog
+                .seal
+                .get()
+                .unwrap()
+                .state(&self.id())
+                .await
+                .unwrap(),
+            crate::services::oplog::seal::AgentSealState::Sealed(_)
+        ));
+    }
+
+    async fn install_generation(&self) {
+        use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
+        self.indexed
+            .append(
+                "test",
+                "generation",
+                "agent",
+                IndexedStorageNamespace::SealedPresent {
+                    owned_agent_id: self.id(),
+                    agent_mode: AgentMode::Durable,
+                },
+                &self.id().storage_key(),
+                0,
+                serialize(&crate::storage::indexed::SealMarker {
+                    generation: Uuid::new_v4(),
+                    fingerprint: self.record.fingerprint,
+                })
+                .unwrap(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn restore_presence(&self) {
+        use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
+        for (index, chunk) in &self.record.manifest[&0] {
+            self.indexed
+                .append(
+                    "test",
+                    "restore",
+                    "agent",
+                    IndexedStorageNamespace::BlobOplogManifest {
+                        owned_agent_id: self.id(),
+                        agent_mode: AgentMode::Durable,
+                        level: 0,
+                    },
+                    &self.id().storage_key(),
+                    index.as_u64(),
+                    serialize(chunk).unwrap(),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        self.install_generation().await;
+    }
+
+    async fn assert_no_cold_caches(&self) {
+        let id = self.id();
+        assert!(
+            self.service
+                .read_cached_agent_mode(&id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            self.service
+                .read_cached_status(&id, self.record.fingerprint)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            self.service
+                .key_value_storage
+                .with("test", "index_keys")
+                .keys(DefaultWorkerService::invocation_result_index_namespace(
+                    &id,
+                    self.record.fingerprint
+                ),)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cold_reads_keep_presence_authoritative_without_publishing_caches() {
+    for has_record in [false, true] {
+        let fixture = ColdSealFixture::new().await;
+        if has_record {
+            fixture.publish_record().await;
+        }
+        let mutations = fixture.cold_cache_mutations();
+        let identity = fixture
+            .service
+            .resolve_agent_identity(&fixture.id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(identity.fingerprint, fixture.record.fingerprint);
+        let result = fixture.service.get(&fixture.id()).await.unwrap().unwrap();
+        assert_ne!(
+            result
+                .last_known_status
+                .as_ref()
+                .unwrap()
+                .total_linear_memory_size,
+            9876
+        );
+        assert_eq!(fixture.cold_cache_mutations(), mutations);
+        fixture.assert_no_cold_caches().await;
+        // The shared status writer remains available to the live actor, even with a seal record.
+        fixture
+            .service
+            .write_cached_status(
+                &fixture.id(),
+                fixture.record.fingerprint,
+                None,
+                result.last_known_status.unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(fixture.faults.calls("update_status") > mutations[2]);
+        assert!(
+            fixture
+                .service
+                .read_cached_status(&fixture.id(), fixture.record.fingerprint)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cold_reads_do_not_list_seal_records_for_stable_presence_or_disabled_sealing() {
+    use crate::storage::indexed::IndexedStorage;
+    use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
+    use crate::storage::indexed::redis::RedisIndexedStorage;
+    use golem_service_base::db::sqlite::SqlitePool;
+    use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let blobs = Arc::new(
+        SqliteBlobStorage::new(SqlitePool::new(pool.clone(), pool.clone()))
+            .await
+            .unwrap(),
+    );
+    pool.close().await;
+    // RedisPool::configured constructs a lazy pool; disabled reads must not connect to Redis.
+    let redis: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(RedisIndexedStorage::new(
+        golem_common::redis::RedisPool::configured(&Default::default())
+            .await
+            .unwrap(),
+    ));
+    let directory = tempfile::tempdir().unwrap();
+    let multi_sqlite = Arc::new(MultiSqliteIndexedStorage::new(directory.path(), 1, false));
+    let cases = [
+        (0, None, false),
+        (1, Some(redis), false),
+        (1, Some(multi_sqlite), false),
+        (1, None, true),
+    ];
+    for (blob_layers, indexed, enabled) in cases {
+        let fixture =
+            ColdSealFixture::with_seal_storage(blob_layers, indexed, Some(blobs.clone())).await;
+        assert_eq!(fixture.oplog.seal.get().unwrap().enabled(), enabled);
+        assert!(
+            crate::services::oplog::seal::list_records(
+                blobs.as_ref(),
+                &fixture.id(),
+                AgentMode::Durable,
+                "test"
+            )
+            .await
+            .is_err(),
+            "the closed blob backend must refuse seal LIST"
+        );
+        let mutations = fixture.cold_cache_mutations();
+        assert_eq!(
+            fixture
+                .service
+                .resolve_agent_identity(&fixture.id())
+                .await
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            fixture.record.fingerprint
+        );
+        let result = fixture.service.get(&fixture.id()).await.unwrap().unwrap();
+        assert_eq!(
+            result.initial_worker_metadata.fingerprint,
+            fixture.record.fingerprint
+        );
+        if !enabled {
+            assert!(fixture.faults.calls("write_cached_agent_mode") > mutations[0]);
+            assert!(fixture.faults.calls("update_status") > mutations[2]);
+            assert!(
+                fixture
+                    .service
+                    .read_cached_agent_mode(&fixture.id())
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                fixture
+                    .service
+                    .read_cached_status(&fixture.id(), fixture.record.fingerprint)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        } else {
+            assert_eq!(fixture.cold_cache_mutations(), mutations);
+            fixture.assert_no_cold_caches().await;
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cold_reads_retry_frozen_authority_after_release_during_identity_read() {
+    for metadata_read in [false, true] {
+        for behavior in [1, 2] {
+            let fixture = ColdSealFixture::new().await;
+            fixture.oplog.pause_next_read();
+            let service = fixture.service.clone();
+            let id = fixture.id();
+            let reader = tokio::spawn(async move {
+                if metadata_read {
+                    let result = service.get(&id).await?.unwrap();
+                    assert_eq!(
+                        result.last_known_status.unwrap().total_linear_memory_size,
+                        9876
+                    );
+                    Ok(result.initial_worker_metadata.fingerprint)
+                } else {
+                    service
+                        .resolve_agent_identity(&id)
+                        .await
+                        .map(|identity| identity.unwrap().fingerprint)
+                }
+            });
+            fixture.oplog.read_started.notified().await;
+            fixture.publish_record().await;
+            fixture.release().await;
+            fixture
+                .oplog
+                .released_read_behavior
+                .store(behavior, Ordering::Release);
+            fixture.oplog.resume_read.notify_one();
+            assert_eq!(reader.await.unwrap().unwrap(), fixture.record.fingerprint);
+            fixture.assert_no_cold_caches().await;
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cold_get_uses_frozen_metadata_after_release_during_status_read() {
+    for fail_read in [false, true] {
+        let fixture = ColdSealFixture::new().await;
+        let gate = if fail_read {
+            fixture.faults.gate_next(
+                "read_cached_status",
+                KeyValueStorageError::Other("released".into()),
+            )
+        } else {
+            fixture.faults.gate_next_pass("read_cached_status")
+        };
+        let service = fixture.service.clone();
+        let id = fixture.id();
+        let reader = tokio::spawn(async move { service.get(&id).await });
+        gate.entered().await;
+        fixture.publish_record().await;
+        fixture
+            .service
+            .remove_cached_status(&fixture.id(), fixture.record.fingerprint)
+            .await
+            .unwrap();
+        fixture.release().await;
+        gate.release();
+        let result = reader.await.unwrap().unwrap().unwrap();
+        assert_eq!(
+            result.last_known_status,
+            Some(fixture.record.metadata.last_known_status.clone())
+        );
+        fixture.assert_no_cold_caches().await;
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cold_reads_retry_the_whole_read_after_release_and_same_epoch_restoration() {
+    use crate::storage::indexed::IndexedStorage;
+    for metadata_read in [false, true] {
+        for behavior in [1, 2] {
+            let fixture = ColdSealFixture::new().await;
+            fixture.install_generation().await;
+            let before = fixture
+                .indexed
+                .observe_agent("test", "before", &fixture.id())
+                .await
+                .unwrap();
+            fixture.oplog.pause_next_read();
+            let service = fixture.service.clone();
+            let id = fixture.id();
+            let reader = tokio::spawn(async move {
+                if metadata_read {
+                    let result = service.get(&id).await?.unwrap();
+                    assert_ne!(
+                        result.last_known_status.unwrap().total_linear_memory_size,
+                        9876
+                    );
+                    Ok(result.initial_worker_metadata.fingerprint)
+                } else {
+                    service
+                        .resolve_agent_identity(&id)
+                        .await
+                        .map(|identity| identity.unwrap().fingerprint)
+                }
+            });
+            fixture.oplog.read_started.notified().await;
+            fixture.publish_record().await;
+            fixture.release().await;
+            fixture.restore_presence().await;
+            let after = fixture
+                .indexed
+                .observe_agent("test", "after", &fixture.id())
+                .await
+                .unwrap();
+            assert!(before.has_data && after.has_data);
+            assert!(before.durable_marker.is_some() && after.durable_marker.is_some());
+            assert_ne!(before.durable_marker, after.durable_marker);
+            fixture
+                .oplog
+                .released_read_behavior
+                .store(behavior, Ordering::Release);
+            fixture.oplog.resume_read.notify_one();
+            assert_eq!(reader.await.unwrap().unwrap(), fixture.record.fingerprint);
+            fixture.assert_no_cold_caches().await;
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cold_reads_keep_resident_fingerprint_without_publishing_caches() {
+    let mut fixture = ColdSealFixture::new().await;
+    let actual = fixture.record.fingerprint;
+    fixture.record.fingerprint = AgentFingerprint::new();
+    fixture.record.metadata.fingerprint = fixture.record.fingerprint;
+    fixture.publish_record().await;
+    let mutations = fixture.cold_cache_mutations();
+    assert_eq!(
+        fixture
+            .service
+            .resolve_agent_identity(&fixture.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .fingerprint,
+        actual
+    );
+    let result = fixture.service.get(&fixture.id()).await.unwrap().unwrap();
+    assert_eq!(result.initial_worker_metadata.fingerprint, actual);
+    assert_eq!(fixture.cold_cache_mutations(), mutations);
+    assert!(
+        fixture
+            .service
+            .read_cached_status(&fixture.id(), actual)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        fixture
+            .service
+            .read_cached_agent_mode(&fixture.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cold_metadata_and_identity_authority_churn_remains_retryable() {
+    for metadata_read in [false, true] {
+        let fixture = ColdSealFixture::new().await;
+        fixture.install_generation().await;
+        fixture
+            .oplog
+            .churn_authority
+            .set(fixture.indexed.clone())
+            .unwrap();
+        let error = if metadata_read {
+            fixture
+                .service
+                .get(&fixture.id())
+                .await
+                .expect_err("authority churn must refuse metadata")
+        } else {
+            fixture
+                .service
+                .resolve_agent_identity(&fixture.id())
+                .await
+                .expect_err("authority churn must refuse identity")
+        };
+        assert!(matches!(
+            error,
+            WorkerExecutorError::RecoveryRequired { .. }
+        ));
+    }
+}
+
+#[test]
+fn cold_seal_read_errors_preserve_the_archive_failure_class() {
+    use crate::services::oplog::OplogArchiveError;
+    let id = test_owned_agent_id("seal-read-errors");
+    for (error, retryable) in [
+        (OplogArchiveError::Unavailable("not answered".into()), true),
+        (
+            OplogArchiveError::Corruption("invalid record".into()),
+            false,
+        ),
+        (OplogArchiveError::Failed("read failed".into()), false),
+    ] {
+        assert_eq!(
+            matches!(
+                DefaultWorkerService::seal_read_error(&id, error),
+                WorkerExecutorError::RecoveryRequired { .. }
+            ),
+            retryable
+        );
+    }
 }
 
 #[test]
@@ -2230,6 +2945,51 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
 }
 
 #[test]
+fn seal_eligibility_excludes_active_work_but_keeps_future_invocations() {
+    let mut status = AgentStatusRecord::default();
+    for value in [
+        AgentStatus::Idle,
+        AgentStatus::Suspended,
+        AgentStatus::Failed,
+        AgentStatus::Exited,
+    ] {
+        status.status = value;
+        assert!(seal_status_is_eligible(&status));
+    }
+    for value in [
+        AgentStatus::Running,
+        AgentStatus::Retrying,
+        AgentStatus::Interrupted,
+    ] {
+        status.status = value;
+        assert!(!seal_status_is_eligible(&status));
+    }
+    status.status = AgentStatus::Suspended;
+    status.pending_invocations.push(PendingInvocationRef {
+        timestamp: Timestamp::now_utc(),
+        not_before: Some(Timestamp::from(
+            Timestamp::now_utc().to_millis() + 3_600_000,
+        )),
+        oplog_index: OplogIndex::INITIAL,
+        idempotency_key: Some(InvocationId(Uuid::new_v4())),
+        manual_update_target_revision: None,
+        operation: None,
+    });
+    assert!(seal_status_is_eligible(&status));
+    status.pending_invocations[0].not_before = Some(Timestamp::from(0));
+    assert!(!seal_status_is_eligible(&status));
+    status.pending_invocations.clear();
+    status.pending_updates.push_back(PendingUpdateRef {
+        timestamp: Timestamp::now_utc(),
+        oplog_index: OplogIndex::INITIAL,
+        admission_index: OplogIndex::INITIAL,
+        target_revision: ComponentRevision::INITIAL,
+        kind: PendingUpdateKind::Automatic,
+    });
+    assert!(!seal_status_is_eligible(&status));
+}
+
+#[test]
 fn tracks_workers_with_pending_updates_for_assignment_recovery() {
     let status = AgentStatusRecord {
         status: AgentStatus::Idle,
@@ -2410,6 +3170,7 @@ impl OplogService for FakeOplogService {
         _lifecycle: &mut OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
         _expected_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.delete_attempts.fetch_add(1, Ordering::Relaxed);

@@ -44,9 +44,9 @@ use golem_common::model::oplog::{
     UpdateDescription,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
-    AgentStatusRecord, DurableStreamSessionStatus, InvocationRequestOperation, OwnedAgentId,
-    ScanCursor, ShardEpoch, StoredAgentInvocationPayload, Timestamp,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult,
+    AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus, InvocationRequestOperation,
+    OwnedAgentId, ScanCursor, ShardEpoch, StoredAgentInvocationPayload, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
@@ -86,6 +86,46 @@ mod open;
 mod owned_starts;
 mod payload;
 mod scan;
+pub(crate) mod seal;
+pub(crate) mod sealed_reader;
+mod stage;
+
+pub use seal::{OplogReadAttempt, SealService};
+pub use stage::{StageCleanupGuard, StageCleanupTracker};
+
+#[derive(Clone, Copy)]
+pub enum OplogReadContext<'a> {
+    Attempt(&'a OplogReadAttempt),
+    Opened(&'a dyn Oplog),
+}
+
+impl OplogReadContext<'_> {
+    pub async fn get_last_index(
+        self,
+        service: &dyn OplogService,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        match self {
+            Self::Attempt(attempt) => attempt.get_last_index(service, id, mode).await,
+            Self::Opened(oplog) => Ok(oplog.current_oplog_index().await),
+        }
+    }
+
+    pub async fn read_exact(
+        self,
+        service: &dyn OplogService,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        match self {
+            Self::Attempt(attempt) => attempt.read_exact(service, id, mode, idx, n).await,
+            Self::Opened(oplog) => oplog.read_exact(idx, n).await,
+        }
+    }
+}
 
 pub(crate) use epoch::{
     epoch_record_service, epoch_record_verdict, record_epoch_verdict, record_owning_epoch,
@@ -94,6 +134,7 @@ pub(crate) use epoch::{
 pub use extensions::{
     OplogOps, OplogPayloadDownloadError, OplogServiceOps, RawOplogPayloadDownloadError,
 };
+pub(crate) use open::OplogOpenPurpose;
 pub use open::{
     OpenOplogs, OplogCloseCompletion, OplogConstructor, OplogLifecycleGuard, OplogShutdownHandle,
 };
@@ -139,6 +180,7 @@ pub struct ScanPage {
 
 pub struct StagePublication {
     stage_id: uuid::Uuid,
+    stage_token: Option<i64>,
 }
 
 impl StagePublication {
@@ -147,7 +189,19 @@ impl StagePublication {
         stage_id: uuid::Uuid,
         _key: crate::services::agent_filesystem_snapshots::PublicationKey,
     ) -> Self {
-        Self { stage_id }
+        Self {
+            stage_id,
+            stage_token: None,
+        }
+    }
+
+    pub(crate) fn with_stage_token(mut self, stage_token: Option<i64>) -> Self {
+        self.stage_token = stage_token;
+        self
+    }
+
+    pub(crate) fn stage_token(&self) -> Option<i64> {
+        self.stage_token
     }
 
     /// The stage that the permission publishes.
@@ -157,8 +211,11 @@ impl StagePublication {
 
     /// The permission to publish the stage `stage_id`, for the tests of the oplog.
     #[cfg(test)]
-    pub(crate) fn for_tests(stage_id: uuid::Uuid) -> Self {
-        Self { stage_id }
+    pub(crate) fn for_tests(stage_id: uuid::Uuid, stage_token: Option<i64>) -> Self {
+        Self {
+            stage_id,
+            stage_token,
+        }
     }
 }
 
@@ -168,6 +225,32 @@ pub enum ArchiveWait {
     Queued,
     /// Holds the agent's oplog lifecycle lock until the transfer finishes.
     Finished,
+}
+
+#[derive(Debug)]
+pub enum CreateStagedError {
+    TargetPresent,
+    TargetSealed,
+    Retryable(String),
+    Storage(String),
+}
+
+impl Display for CreateStagedError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TargetPresent => f.write_str("the target has indexed presence"),
+            Self::TargetSealed => f.write_str("the target has an admissible seal record"),
+            Self::Retryable(error) | Self::Storage(error) => f.write_str(error),
+        }
+    }
+}
+
+impl std::error::Error for CreateStagedError {}
+
+impl From<WorkerExecutorError> for CreateStagedError {
+    fn from(error: WorkerExecutorError) -> Self {
+        Self::Storage(error.to_string())
+    }
 }
 
 /// A top-level service for managing worker oplogs
@@ -186,6 +269,10 @@ pub enum ArchiveWait {
 ///
 #[async_trait]
 pub trait OplogService: Debug + Send + Sync {
+    fn stage_cleanup_tracker(&self) -> Option<Arc<StageCleanupTracker>> {
+        None
+    }
+
     /// Locks cold lifecycle operations for the entire logical oplog stack.
     /// Wrappers delegate to their inner service; normal oplog operations do not take this lock.
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard;
@@ -200,17 +287,43 @@ pub trait OplogService: Debug + Send + Sync {
 
     fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>>;
 
+    /// Installs the shared seal storage after the scheduler and oplog stack exist.
+    fn set_seal_service(&self, _service: Arc<SealService>) {}
+
+    fn seal_service(&self) -> Option<Arc<SealService>> {
+        None
+    }
+
+    async fn collect_tombstone(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<(), OplogError> {
+        let mut lifecycle = self.lock_lifecycle(&owned_agent_id.agent_id).await;
+        if let Some(service) = self.seal_service() {
+            service
+                .collect_tombstone(&mut lifecycle, owned_agent_id, agent_mode)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Creates an empty, hidden oplog with one writer and a fresh per-attempt stage id.
     /// It bypasses visible oplog caches, archives and derived session indexes. Payloads use
     /// the final agent's blob namespace so publication needs no payload rewrite.
+    /// Admission takes no lifecycle guard or shard-epoch claim.
+    /// The separate guard owns the entire stage lifetime and must survive dropping the writer
+    /// before publication. A new attempt must use a new stage id.
     async fn create_staged(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
         _stage_id: uuid::Uuid,
         _initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, String> {
-        Err("staged oplogs are unsupported by this oplog service".to_string())
+    ) -> Result<(Arc<dyn Oplog>, StageCleanupGuard), CreateStagedError> {
+        Err(CreateStagedError::Storage(
+            "staged oplogs are unsupported by this oplog service".to_string(),
+        ))
     }
 
     /// Checks whether one particular hidden stage still awaits publication.
@@ -222,9 +335,10 @@ pub trait OplogService: Debug + Send + Sync {
     ) -> Result<bool, String>;
 
     /// Publishes a fully committed stage, the stage of `publication`, if no primary oplog exists.
-    /// The caller must stop and drop its staged writer first. `false` means a competing target
-    /// exists; errors may have indeterminate outcomes and must be reconciled using the target's
-    /// fork provenance.
+    /// The caller must stop and drop its staged writer first, then hold the target lifecycle
+    /// guard through publication and claim cleanup. `false` means publication was refused by
+    /// a competing or sealed target, or an invalidated stage. Errors may have indeterminate
+    /// outcomes and must be reconciled using the target's fork provenance.
     async fn publish_staged(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -241,6 +355,7 @@ pub trait OplogService: Debug + Send + Sync {
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
         _stage_id: uuid::Uuid,
+        _stage_token: Option<i64>,
     ) -> Result<(), String> {
         Err("staged oplogs are unsupported by this oplog service".to_string())
     }
@@ -317,13 +432,17 @@ pub trait OplogService: Debug + Send + Sync {
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
     /// executor recorded it: otherwise nothing is deleted and the delete is refused with
-    /// [`OplogError::Fenced`], as a write at that epoch would be. `None` is an ephemeral oplog,
-    /// deleted unconditionally: nothing fences it or the archive layers behind it.
+    /// [`OplogError::Fenced`], as a write at that epoch would be. The owning layer is the primary
+    /// for a durable oplog and the first lower layer for a multilayer ephemeral oplog. With
+    /// sealing enabled, `None` first claims this executor's current shard epoch on the owning
+    /// layer: an absent or lower epoch succeeds, and a higher epoch is refused. The deletion
+    /// then uses that epoch and the tombstone protocol. Without sealing, `None` is unconditional.
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        fingerprint: AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError>;
 
@@ -337,6 +456,37 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         expected_epoch: ShardEpoch,
     ) -> Result<(), OplogError>;
+
+    /// Reads indexed/archive data under an authority selected by the caller, without selection.
+    async fn get_last_index_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.get_last_index(id, mode).await
+    }
+
+    async fn read_source_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        self.read_source(id, mode, idx, n).await
+    }
+
+    async fn read_exact_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let entries = self.read_source_present(id, mode, idx, n).await?;
+        reader::exact_from_source(OplogReadSource::Other("selected present"), idx, n, entries)
+            .map_err(|error| UnreadableOplog::new(&id.agent_id, error))
+    }
 
     /// Reads exactly `n` contiguous entries starting at `idx`.
     async fn read_exact(
@@ -513,6 +663,7 @@ impl OplogFence {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
+    StageInvalidated { key: String },
     Payload(String),
     Maintenance(String),
     ArchiveWrite(ArchiveWriteFailure),
@@ -559,7 +710,10 @@ impl OplogError {
         match self {
             Self::ArchiveWrite(failure) => Some(failure.clone().into()),
             Self::Unreadable(unreadable) => Some(unreadable.clone().into()),
-            Self::Fenced(_) | Self::Payload(_) | Self::Maintenance(_) => None,
+            Self::Fenced(_)
+            | Self::StageInvalidated { .. }
+            | Self::Payload(_)
+            | Self::Maintenance(_) => None,
         }
     }
 }
@@ -578,6 +732,9 @@ impl From<OplogError> for WorkerExecutorError {
                 fence.expected_epoch.0,
                 fence.actual_epoch.map(|epoch| epoch.0),
             ),
+            OplogError::StageInvalidated { key } => {
+                WorkerExecutorError::recovery_required(format!("Oplog stage {key} was invalidated"))
+            }
             OplogError::Payload(details) => WorkerExecutorError::runtime(details),
             OplogError::Maintenance(details) => WorkerExecutorError::runtime(details),
             OplogError::ArchiveWrite(failure) => WorkerExecutorError::from(failure),
@@ -599,6 +756,7 @@ impl Display for OplogError {
                     .map(|epoch| epoch.to_string())
                     .unwrap_or_else(|| "none".to_string())
             ),
+            OplogError::StageInvalidated { key } => write!(f, "oplog stage {key} was invalidated"),
             OplogError::Payload(details) => write!(f, "oplog payload error: {details}"),
             OplogError::Maintenance(details) => write!(f, "oplog maintenance error: {details}"),
             OplogError::ArchiveWrite(failure) => write!(f, "{failure}"),
@@ -622,6 +780,7 @@ impl std::error::Error for OplogError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogRefusal {
     Fenced(OplogFence),
+    StageInvalidated { key: String },
     ArchiveWrite(ArchiveWriteFailure),
     Unreadable(UnreadableOplog),
 }
@@ -631,7 +790,7 @@ impl OplogRefusal {
     pub fn fence(&self) -> Option<&OplogFence> {
         match self {
             Self::Fenced(fence) => Some(fence),
-            Self::ArchiveWrite(_) | Self::Unreadable(_) => None,
+            Self::StageInvalidated { .. } | Self::ArchiveWrite(_) | Self::Unreadable(_) => None,
         }
     }
 }
@@ -641,6 +800,7 @@ impl OplogError {
     pub fn into_refusal(self) -> Result<OplogRefusal, OplogError> {
         match self {
             Self::Fenced(fence) => Ok(OplogRefusal::Fenced(fence)),
+            Self::StageInvalidated { key } => Ok(OplogRefusal::StageInvalidated { key }),
             Self::ArchiveWrite(failure) => Ok(OplogRefusal::ArchiveWrite(failure)),
             Self::Unreadable(unreadable) => Ok(OplogRefusal::Unreadable(unreadable)),
             error @ (Self::Payload(_) | Self::Maintenance(_)) => Err(error),
@@ -652,6 +812,7 @@ impl From<OplogRefusal> for OplogError {
     fn from(refusal: OplogRefusal) -> Self {
         match refusal {
             OplogRefusal::Fenced(fence) => Self::Fenced(fence),
+            OplogRefusal::StageInvalidated { key } => Self::StageInvalidated { key },
             OplogRefusal::ArchiveWrite(failure) => Self::ArchiveWrite(failure),
             OplogRefusal::Unreadable(unreadable) => Self::Unreadable(unreadable),
         }
@@ -990,13 +1151,15 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.enqueue_add_pair(start, make_second).await
     }
 
-    /// The shard epoch this oplog's primary writes assert, or `None` without a primary oplog. An
-    /// ephemeral oplog has none: its archive layers assert the epoch it was opened with, and a
-    /// refusal there is reported by [`Self::fence`].
-    ///
-    /// Only the primary oplog knows it, so a wrapper answers from the oplog it wraps.
+    /// The opening shard epoch asserted by the primary (durable) or first archive (ephemeral).
+    /// Read-only sealed handles have no writing epoch. Wrappers delegate to their inner oplog.
     fn shard_epoch(&self) -> Option<ShardEpoch> {
         self.inner().and_then(|inner| inner.shard_epoch())
+    }
+
+    /// The reservation that admits this hidden stage's writes and publication.
+    fn stage_token(&self) -> Option<i64> {
+        self.inner().and_then(|inner| inner.stage_token())
     }
 
     /// The refusal this oplog has latched, if the storage has turned one of its writes away:

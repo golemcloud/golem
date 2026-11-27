@@ -213,3 +213,24 @@ async fn replacement_keeps_the_preceding_establishment_owned() {
     last.establishment.complete();
     last.establishment.wait().await;
 }
+
+#[test]
+fn seal_resident_absence_rejects_durable_inactive_and_unclean_unloads() {
+    let inactive = WorkerInstance::Inactive(inactive_ephemeral_agent_error());
+    assert!(!inactive.is_absent_for_seal(AgentMode::Durable));
+    assert!(inactive.is_absent_for_seal(AgentMode::Ephemeral));
+    let failed = WorkerInstance::Unloaded {
+        startup_failure: Some(WorkerExecutorError::runtime("failed start")),
+    };
+    let clean = WorkerInstance::Unloaded {
+        startup_failure: None,
+    };
+    let cleanup_failed =
+        WorkerInstance::CleanupFailed(WorkerExecutorError::runtime("cleanup failed"));
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        assert!(clean.is_absent_for_seal(mode));
+        assert!(!failed.is_absent_for_seal(mode));
+        assert!(!cleanup_failed.is_absent_for_seal(mode));
+        assert!(!WorkerInstance::Unresolved.is_absent_for_seal(mode));
+    }
+}

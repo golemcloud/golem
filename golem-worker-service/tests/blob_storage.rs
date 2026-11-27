@@ -3088,6 +3088,15 @@ fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamesp
             agent_mode,
             level,
         },
+        BlobStorageNamespace::SealRecords {
+            type_tag,
+            agent_mode,
+            ..
+        } => BlobStorageNamespace::SealRecords {
+            environment_id,
+            type_tag,
+            agent_mode,
+        },
         BlobStorageNamespace::ComponentUploads { .. } => BlobStorageNamespace::ComponentUploads {
             account_id: AccountId::new(),
         },
@@ -3155,6 +3164,11 @@ fn namespaces_of_one_environment() -> Vec<BlobStorageNamespace> {
         namespaces.push(BlobStorageNamespace::OplogPayload {
             environment_id,
             agent_id,
+            agent_mode,
+        });
+        namespaces.push(BlobStorageNamespace::SealRecords {
+            environment_id,
+            type_tag,
             agent_mode,
         });
         for level in [0, 1] {

@@ -63,6 +63,7 @@ use crate::services::card_interest::{
 use crate::services::golem_config::{
     ActiveAgentsConfig, AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
+use crate::services::oplog::OplogOpenPurpose;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::entity_invocation::{
     EntityBodyOutcome, EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
@@ -76,12 +77,18 @@ use crate::worker::instance::{
 };
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerInvocationTicket};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
-use crate::worker::{CreateIntent, NewOwner, RetirementReason, Worker, WorkerCreationMode};
+use crate::worker::{
+    CreateIntent, ExistingWorkerAcquisitionError, NewOwner, RetirementReason, Worker,
+    WorkerCreationMode,
+};
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
 use crate::workerctx::WorkerCtx;
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use futures::FutureExt;
+use golem_common::cache::{
+    BackgroundEvictionMode, Cache, FullCacheEvictionMode, PendingOrFinal, SimpleCache,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
@@ -343,29 +350,31 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             deps,
             owned_agent_id,
             worker_env,
-            worker_agent_config,
+            Ok(worker_agent_config),
             component_revision,
             parent,
             invocation_context_stack,
-            caller,
+            Ok(caller),
             InvocationFreshnessDisposition::MayExist,
             CreateIntent::Existing,
+            None,
         )
         .await
     }
 
-    pub async fn get_or_add_with_freshness<T>(
+    pub(crate) async fn get_or_add_with_freshness<T>(
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
+        worker_agent_config: Result<Vec<AgentConfigEntryDto>, WorkerExecutorError>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        caller: Caller,
+        caller: Result<Caller, WorkerExecutorError>,
         freshness_disposition: InvocationFreshnessDisposition,
         create_intent: CreateIntent,
+        admission: Option<crate::worker::AcquisitionAdmission>,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -383,6 +392,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 freshness_disposition,
                 WorkerCreationMode::ComponentAgent,
                 create_intent,
+                admission,
             )
             .in_current_span()
             .await?;
@@ -405,11 +415,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .primary
             .ensure_created(
                 None,
-                Vec::new(),
+                Ok(Vec::new()),
                 Some(component_revision),
                 None,
                 InvocationContextStack::fresh(),
-                caller,
+                Ok(caller),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::OplogProcessor,
                 CreateIntent::Create {
@@ -417,6 +427,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     exclusive: false,
                     idempotency_key: None,
                 },
+                None,
             )
             .in_current_span()
             .await?;
@@ -482,11 +493,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         worker
             .ensure_created(
                 None,
-                Vec::new(),
+                Ok(Vec::new()),
                 Some(component_revision),
                 None,
                 invocation_context_stack.clone(),
-                caller,
+                Ok(caller),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::EphemeralExternalTool,
                 CreateIntent::Create {
@@ -494,6 +505,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     exclusive: false,
                     idempotency_key: Some(idempotency_key.clone()),
                 },
+                None,
             )
             .in_current_span()
             .await?;
@@ -523,11 +535,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .primary
             .ensure_created(
                 None,
-                Vec::new(),
+                Ok(Vec::new()),
                 Some(component_revision),
                 None,
                 invocation_context.clone(),
-                caller,
+                Ok(caller),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::StandaloneTool,
                 CreateIntent::Create {
@@ -535,6 +547,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     exclusive: false,
                     idempotency_key: Some(key),
                 },
+                None,
             )
             .await?;
         Ok(active_agent.primary())
@@ -555,6 +568,125 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .await
     }
 
+    pub(crate) async fn prepare_sealed_deletion<T>(
+        &self,
+        deps: &T,
+        id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<crate::worker::DeleteOutcome>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let Some(seal) = deps.oplog_service().seal_service() else {
+            return Ok(None);
+        };
+        let mut lifecycle = deps.oplog_service().lock_lifecycle(&id.agent_id).await;
+        lifecycle.set_open_purpose(OplogOpenPurpose::Delete);
+        let gate = deps
+            .worker_service()
+            .lock_deletion_preparation(&id.agent_id)
+            .await?;
+        let record = match seal
+            .state(id)
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        {
+            crate::services::oplog::seal::AgentSealState::Present => return Ok(None),
+            crate::services::oplog::seal::AgentSealState::Absent => {
+                return Err(WorkerExecutorError::worker_not_found(id.agent_id));
+            }
+            crate::services::oplog::seal::AgentSealState::Sealed(record) => record,
+        };
+        if record.fingerprint != fingerprint {
+            return Err(WorkerExecutorError::worker_not_found(id.agent_id));
+        }
+        let epoch = crate::worker::owned_shard_epoch(deps, &id.agent_id)?
+            .ok_or(WorkerExecutorError::ShardingNotReady)?;
+        // This check precedes eviction, scheduling and every epoch claim.
+        seal.check_deletion_epoch(id, record.agent_mode, epoch)
+            .await?;
+        if let Some(agent) = self.agents.try_get(id).await
+            && !agent.primary.is_resolved()
+        {
+            // An earlier initializer can need both guards. Join it without either, then
+            // restart from authority selection; no sealed preparation has mutated storage.
+            drop(gate);
+            drop(lifecycle);
+            match agent
+                .primary
+                .ensure_existing_with_purpose(Some(fingerprint), OplogOpenPurpose::Delete)
+                .await
+            {
+                Ok(()) | Err(ExistingWorkerAcquisitionError::RetiredForSeal) => return Ok(None),
+                Err(ExistingWorkerAcquisitionError::Executor(error)) => return Err(error),
+            }
+        }
+        if let Some(cached) = self.try_get_cached(id).await {
+            if cached.deletion_owns_retirement().await {
+                drop(gate);
+                drop(lifecycle);
+                return cached.start_deletion(fingerprint).await;
+            }
+            cached.retire_frozen_for_deletion().await?;
+        }
+        let deps = deps.clone();
+        let id = id.clone();
+        let key = id.clone();
+        let worker = Worker::unresolved(&deps, self.card_interest_index.clone(), id.clone());
+        let loops = self.invocation_loops.clone();
+        let (prepared, outcome) = tokio::sync::oneshot::channel();
+        // The cache owns construction even if its initiating RPC is cancelled. An unused
+        // factory drops both guards before a follower waits on an existing pending entry.
+        let result = self
+            .agents
+            .get_or_insert_pending(
+                &key,
+                || (),
+                move |_| {
+                    async move {
+                        if record.metadata.last_known_status.has_durable_stream_history {
+                            seal.unseal_record(&id, epoch, &record, OplogOpenPurpose::Delete)
+                                .await?;
+                        }
+                        let outcome = worker
+                            .initialize_for_deletion(&mut lifecycle, &record, epoch)
+                            .await?;
+                        drop(gate);
+                        drop(lifecycle);
+                        let _ = prepared.send(outcome);
+                        Ok(Arc::new(ActiveAgent::new_unresolved(id, worker, loops)))
+                    }
+                    .boxed()
+                },
+            )
+            .await?;
+        let agent = match result {
+            PendingOrFinal::Final(agent) => agent,
+            PendingOrFinal::Pending(mut pending) => pending
+                .completion
+                .wait_for(|result| result.is_some())
+                .await
+                .map_err(|_| {
+                    WorkerExecutorError::runtime("Deletion construction ended without a result")
+                })?
+                .clone()
+                .expect("completed cache construction")?,
+        };
+        match outcome.await {
+            Ok((outcome, sender)) => Ok(Some(
+                agent
+                    .primary()
+                    .spawn_deletion_attempt(outcome, sender, false),
+            )),
+            // An existing cache owner drops the unused factory and its guards. Use that
+            // generation's normal join/retry contract; never reread our own claimed handle.
+            Err(_) => match agent.resolved_primary() {
+                Some(worker) => worker.start_deletion(fingerprint).await,
+                None => Ok(None),
+            },
+        }
+    }
+
     pub(crate) async fn get_existing_with_fingerprint<T>(
         &self,
         deps: &T,
@@ -564,12 +696,62 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
-        let worker = active_agent.primary.clone();
-        let result = worker
-            .ensure_existing_with_fingerprint(expected_fingerprint)
-            .in_current_span()
+        self.get_existing_for_purpose(
+            deps,
+            owned_agent_id,
+            expected_fingerprint,
+            OplogOpenPurpose::Activation,
+        )
+        .await
+    }
+
+    pub(crate) async fn get_existing_for_archive<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        self.get_existing_for_purpose(deps, owned_agent_id, None, OplogOpenPurpose::Archive)
             .await
+    }
+
+    pub(crate) async fn get_existing_for_purpose<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: Option<AgentFingerprint>,
+        purpose: OplogOpenPurpose,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        for _ in 0..3 {
+            let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
+            let worker = active_agent.primary.clone();
+            if matches!(purpose, OplogOpenPurpose::Activation)
+                && let Some(hook) = Ctx::existing_worker_acquisition_hook(&deps.extra_deps())
+            {
+                hook(owned_agent_id.clone()).await;
+            }
+            let result = match worker
+                .ensure_existing_with_purpose(expected_fingerprint, purpose)
+                .in_current_span()
+                .await
+            {
+                Ok(()) => Ok(()),
+                Err(ExistingWorkerAcquisitionError::Executor(error)) => Err(error),
+                Err(ExistingWorkerAcquisitionError::RetiredForSeal) => {
+                    // Retirement marks the old generation before eviction. Wait for its seal
+                    // to finish, rather than selecting that same cached generation again.
+                    let _lifecycle = deps
+                        .oplog_service()
+                        .lock_lifecycle(&owned_agent_id.agent_id)
+                        .await;
+                    continue;
+                }
+            }
             .and_then(|()| {
                 // A worker that was already resolved, or that another caller loaded, has not
                 // been compared with this caller's expected incarnation.
@@ -584,20 +766,22 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     _ => Ok(()),
                 }
             });
-        if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
-            && Arc::strong_count(&active_agent) == 2
-            && Arc::strong_count(&worker) == 2
-        {
-            let expected = active_agent.clone();
-            self.agents
-                .remove_if_cached(owned_agent_id, move |current| {
-                    Arc::ptr_eq(current, &expected)
-                        && Arc::strong_count(current) == 3
-                        && current.primary.can_discard_unresolved()
-                })
-                .await;
+            if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
+                && Arc::strong_count(&active_agent) == 2
+                && Arc::strong_count(&worker) == 2
+            {
+                let expected = active_agent.clone();
+                self.agents
+                    .remove_if_cached(owned_agent_id, move |current| {
+                        Arc::ptr_eq(current, &expected)
+                            && Arc::strong_count(current) == 3
+                            && current.primary.can_discard_unresolved()
+                    })
+                    .await;
+            }
+            return result.map(|()| active_agent.primary());
         }
-        result.map(|()| active_agent.primary())
+        Err(WorkerExecutorError::ShardingNotReady)
     }
 
     async fn get_or_add_unresolved<T>(
@@ -608,6 +792,15 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx>,
     {
+        if let Some(agent) = self.agents.try_get(owned_agent_id).await {
+            return Ok(agent);
+        }
+        // Cold insertion shares deletion's reservation boundary. Once deletion evicts a
+        // frozen observation, no ordinary placeholder may displace its private constructor.
+        let _lifecycle = deps
+            .oplog_service()
+            .lock_lifecycle(&owned_agent_id.agent_id)
+            .await;
         let owned_agent_id = owned_agent_id.clone();
         let worker = Worker::unresolved(
             deps,

@@ -72,7 +72,7 @@ mod service;
 mod state;
 mod storage;
 
-use reader::read_persisted_oplog_entries;
+pub(crate) use reader::read_persisted_oplog_entries;
 use storage::{
     retry_maintenance_storage_op, retry_oplog_append, retry_storage_op, retry_storage_op_result,
 };
@@ -107,11 +107,14 @@ pub struct PrimaryOplogService {
     retry_config: RetryConfig,
     oplogs: OpenOplogs,
     stream_session_index: Arc<std::sync::OnceLock<Arc<super::StreamSessionIndexService>>>,
+    seal_service: Arc<std::sync::OnceLock<Arc<super::SealService>>>,
+    stage_cleanup: Arc<super::StageCleanupTracker>,
 }
 
 #[derive(Clone)]
 struct CreateOplogConstructor {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+    seal_service: Option<Arc<super::SealService>>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     replicas: u8,
     max_operations_before_commit: u64,
@@ -174,6 +177,7 @@ struct PrimaryOplog {
     /// The epoch the actor's state asserts on every append, copied here so that reading it does
     /// not have to go through the actor. Fixed for the oplog's lifetime.
     shard_epoch: Option<ShardEpoch>,
+    stage_token: Option<i64>,
     /// The inline payload threshold of the actor's state, copied here so that an inline upload
     /// does not wait behind the actor's queued commits. Fixed for the oplog's lifetime.
     max_payload_size: usize,
@@ -218,7 +222,7 @@ enum OplogJob {
         done: tokio::sync::oneshot::Sender<Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>>,
     },
     Flush {
-        done: tokio::sync::oneshot::Sender<()>,
+        done: tokio::sync::oneshot::Sender<Result<(), OplogError>>,
     },
     DropPrefix {
         last_dropped_id: OplogIndex,
@@ -317,6 +321,7 @@ struct PrimaryOplogState {
     /// this is the value its metadata row was written with. A renewal never changes it - an epoch
     /// only moves when the shard changes owner, and then this oplog is the losing side.
     shard_epoch: Option<ShardEpoch>,
+    stage_token: Option<i64>,
     /// Set once a write has been refused, or at open when the epoch record already belonged to a
     /// newer owner. Every later write fails on it immediately: the oplog is another executor's
     /// now, so there is nothing to be gained by asking the storage again. Shared with the handle,

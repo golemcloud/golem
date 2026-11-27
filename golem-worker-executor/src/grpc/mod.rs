@@ -208,7 +208,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Some(revision) => worker_executor.shard_service().register(
                 shard_assignment.number_of_shards,
                 &shard_assignment.shard_epochs,
-                shard_assignment.expires_at,
+                shard_assignment.lease,
                 revision,
                 shard_assignment.executor_count,
             ),

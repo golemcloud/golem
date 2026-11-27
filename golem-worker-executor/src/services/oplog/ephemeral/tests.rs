@@ -173,6 +173,7 @@ impl OplogArchiveService for SingletonArchiveService {
         _: &OwnedAgentId,
         _: AgentMode,
         _: Option<ShardEpoch>,
+        _: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(self.0.clone())
     }
@@ -181,10 +182,24 @@ impl OplogArchiveService for SingletonArchiveService {
         _: &OwnedAgentId,
         _: AgentMode,
         _: Option<ShardEpoch>,
+        _: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(self.0.clone())
     }
-    async fn delete(&self, _: &OwnedAgentId, _: AgentMode) -> OplogArchiveResult<()> {
+    async fn assert_owning_epoch(
+        &self,
+        _: &OwnedAgentId,
+        _: AgentMode,
+        _: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        Ok(())
+    }
+    async fn delete(
+        &self,
+        _: &OwnedAgentId,
+        _: AgentMode,
+        _: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
         Ok(())
     }
     async fn read_source(
@@ -268,6 +283,7 @@ pub async fn fixture(threshold: u64) -> Fixture {
             transfer_fiber,
             service,
             Box::new(|| {}),
+            None,
         )
         .await,
     );
@@ -328,6 +344,7 @@ async fn two_layer_oplog(
             transfer_fiber,
             service,
             Box::new(|| {}),
+            None,
         )
         .await,
     )

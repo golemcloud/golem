@@ -17,8 +17,9 @@ use super::{
     InvocationFreshnessDisposition, OwnedAgentId, ParsedAgentKey, UsesAllDeps, Worker, WorkerCtx,
     WorkerExecutorImpl, info_span,
 };
-use crate::worker::CreateIntent;
+use crate::services::HasOplog;
 use crate::worker::target::ResolvedTarget;
+use crate::worker::{AcquisitionAdmission, CreateIntent};
 use golem_common::base_model::{AgentId, IdempotencyKey, RESERVED_TYPE_TAG};
 use golem_common::model::AgentFingerprint;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentTarget};
@@ -528,17 +529,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             request.env(),
-            request.config()?,
+            Ok(request.config()?),
             None,
             request.parent(),
             &invocation_context,
-            request.caller()?,
+            Ok(request.caller()?),
             InvocationFreshnessDisposition::MayExist,
             if creates {
                 resolved.invocation_intent(None, request.invocation())
             } else {
                 CreateIntent::Existing
             },
+            None,
         )
         .await
         .map(Some)
@@ -559,10 +561,42 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         ),
         WorkerExecutorError,
     > {
+        self.get_or_create_pending_with_admission(
+            request,
+            resolved,
+            freshness_disposition,
+            expected_fingerprint,
+            AcquisitionAdmission {
+                mode: resolved.agent_mode,
+                freshness_key: None,
+                after_freshness: Ok(()),
+                check_health: freshness_disposition != InvocationFreshnessDisposition::KnownFresh,
+                observe_failed: false,
+            },
+        )
+        .await
+        .map(|(worker, lease, _)| (worker, lease))
+    }
+
+    pub(super) async fn get_or_create_pending_with_admission<Req: CanStartWorker>(
+        &self,
+        request: &Req,
+        resolved: &ResolvedTarget,
+        freshness_disposition: InvocationFreshnessDisposition,
+        expected_fingerprint: Option<AgentFingerprint>,
+        admission: AcquisitionAdmission,
+    ) -> Result<
+        (
+            Arc<Worker<Ctx>>,
+            Option<Arc<crate::worker::EphemeralResponseLease>>,
+            Option<WorkerExecutorError>,
+        ),
+        WorkerExecutorError,
+    > {
         let owned_agent_id = resolved.owned_agent_id.clone();
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
-        if let Some(expected) = expected_fingerprint {
+        let (worker, response_lease) = if let Some(expected) = expected_fingerprint {
             // The incarnation is pinned before its status is read, so the failure of a re-created
             // agent never answers a caller that named the deleted incarnation.
             let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
@@ -571,78 +605,74 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Some(expected),
             )
             .await?;
-            worker.ensure_owns_key(resolved.new_owner.as_ref())?;
-            if worker.agent_mode() != AgentMode::Ephemeral
-                && worker.pending_startup_attempt().is_none()
-            {
-                let status = worker
-                    .deleted_incarnation_as_not_found(
-                        Some(expected),
-                        worker.try_get_last_known_status().await,
-                    )
-                    .await?;
-                self.ensure_not_failed(&owned_agent_id, worker.agent_mode(), &status)
-                    .await?;
-            }
-            return Ok((worker, response_lease));
-        }
-
-        // This runs on every invocation. For a resident agent, read the status the worker already
-        // publishes; only an agent that is not resident has its record materialised (from the
-        // cache and the oplog), which is the same cold path as before.
-        let failure_check = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-            None
-        } else if let Some(worker) = self.active_agents().try_get(&owned_agent_id).await {
-            worker.ensure_owns_key(resolved.new_owner.as_ref())?;
-            if worker.pending_startup_attempt().is_some() {
-                None
-            } else {
-                Some((
-                    worker.agent_mode(),
-                    worker.try_get_last_known_status().await?,
-                ))
-            }
-        } else {
-            Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-                .await?
-                .map(|metadata| -> Result<_, WorkerExecutorError> {
-                    if let Some(owner) = &resolved.new_owner {
-                        owner.ensure_owns_key(
-                            owned_agent_id.agent_id,
-                            metadata.agent_mode,
-                            metadata.canonical_key.as_deref(),
-                        )?;
-                    }
-                    Ok((metadata.agent_mode, Arc::new(metadata.last_known_status)))
-                })
-                .transpose()?
-        };
-
-        if let Some((agent_mode, status)) = &failure_check
-            && *agent_mode != AgentMode::Ephemeral
-        {
-            self.ensure_not_failed(&owned_agent_id, *agent_mode, status)
+            if let Some(key) = &admission.freshness_key {
+                Worker::<Ctx>::validate_freshness_from_metadata(
+                    self,
+                    &owned_agent_id,
+                    key,
+                    freshness_disposition,
+                    resolved.new_owner.as_ref(),
+                    Some(&worker.get_initial_worker_metadata()),
+                )
                 .await?;
-        }
-
-        let invocation_context = request
-            .maybe_invocation_context()
-            .unwrap_or_else(InvocationContextStack::fresh);
-        let invocation_context = self.limit_invocation_context_stack_depth(invocation_context);
-
-        Worker::get_or_create_suspended_for_response(
-            self,
-            &owned_agent_id,
-            request.env(),
-            request.config()?,
-            None,
-            request.parent(),
-            &invocation_context,
-            request.caller()?,
-            freshness_disposition,
-            resolved.invocation_intent(request.idempotency_key()?, request.invocation()),
-        )
-        .await
+            }
+            admission.after_freshness.clone()?;
+            worker.ensure_owns_key(resolved.new_owner.as_ref())?;
+            (worker, response_lease)
+        } else {
+            let invocation_context = request
+                .maybe_invocation_context()
+                .unwrap_or_else(InvocationContextStack::fresh);
+            let invocation_context = self.limit_invocation_context_stack_depth(invocation_context);
+            Worker::get_or_create_suspended_for_response(
+                self,
+                &owned_agent_id,
+                request.env(),
+                request.config(),
+                None,
+                request.parent(),
+                &invocation_context,
+                request.caller(),
+                freshness_disposition,
+                resolved.invocation_intent(request.idempotency_key()?, request.invocation()),
+                Some(admission.clone()),
+            )
+            .await?
+        };
+        let health = if admission.check_health
+            && worker.agent_mode() != AgentMode::Ephemeral
+            && worker.pending_startup_attempt().is_none()
+        {
+            let status = worker
+                .deleted_incarnation_as_not_found(
+                    expected_fingerprint,
+                    worker.try_get_last_known_status().await,
+                )
+                .await?;
+            Worker::<Ctx>::ensure_not_failed_with_reader(
+                self,
+                &owned_agent_id,
+                worker.agent_mode(),
+                &status,
+                Some(crate::services::oplog::OplogReadContext::Opened(
+                    worker.oplog().as_ref(),
+                )),
+            )
+            .await
+        } else {
+            Ok(())
+        };
+        let refusal = match health {
+            Err(
+                error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+                | WorkerExecutorError::PreviousInvocationExited),
+            ) if admission.observe_failed => Some(error),
+            health => {
+                health?;
+                None
+            }
+        };
+        Ok((worker, response_lease, refusal))
     }
 }
 

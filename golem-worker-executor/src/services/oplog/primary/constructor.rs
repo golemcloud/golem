@@ -20,6 +20,7 @@ impl CreateOplogConstructor {
         shard_epoch: Option<ShardEpoch>,
         epoch_record: EpochRecord,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+        seal_service: Option<Arc<super::super::SealService>>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
         max_operations_before_commit: u64,
@@ -38,6 +39,7 @@ impl CreateOplogConstructor {
             shard_epoch,
             epoch_record,
             indexed_storage,
+            seal_service,
             blob_storage,
             replicas,
             max_operations_before_commit,
@@ -64,25 +66,121 @@ impl OplogConstructor for CreateOplogConstructor {
 
     async fn create_oplog(
         self,
-        _lifecycle: &mut OplogLifecycleGuard,
+        lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         // Recorded before the oplog is usable, so an executor whose shard has moved is refused
         // at its very first write rather than after replaying the new owner's entries.
         let fence = match (self.epoch_record, self.shard_epoch) {
             (EpochRecord::Recorded(fence), _) => fence,
-            (EpochRecord::Pending, Some(shard_epoch)) => {
-                record_owning_epoch(
-                    &*self.indexed_storage,
-                    &self.retry_config,
-                    PrimaryOplogService::namespace(&self.owned_agent_id, self.agent_mode),
-                    &self.owned_agent_id.agent_id,
-                    &self.key,
-                    shard_epoch,
-                )
-                .await
+            (EpochRecord::Pending, Some(shard_epoch))
+                if self.agent_mode == AgentMode::Durable
+                    && self
+                        .seal_service
+                        .as_ref()
+                        .is_some_and(|service| service.enabled()) =>
+            {
+                let service = self.seal_service.as_ref().unwrap();
+                let result = async {
+                    let claim = service.claim(&self.owned_agent_id, shard_epoch).await?;
+                    let present = claim.has_data;
+                    if let Some(attempt) = lifecycle.read_attempt() {
+                        attempt.assert_id(&self.owned_agent_id);
+                        if present != attempt.is_present()
+                            || attempt.is_absent()
+                            || !service
+                                .validate_read_attempt(&self.owned_agent_id, attempt)
+                                .await
+                                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                        {
+                            return Err(super::super::OplogReadAttempt::invalidated());
+                        }
+                    }
+                    if !present {
+                        if lifecycle.open_purpose() == super::super::OplogOpenPurpose::Archive {
+                            if claim.change == crate::storage::indexed::KeyEpochChange::Inserted {
+                                service
+                                    .remove_claim(&self.owned_agent_id, shard_epoch)
+                                    .await?;
+                            }
+                            return Err(WorkerExecutorError::worker_not_found(
+                                self.owned_agent_id.agent_id,
+                            ));
+                        }
+                        let record = service
+                            .record_in_mode(&self.owned_agent_id, self.agent_mode)
+                            .await
+                            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                            .ok_or_else(|| {
+                                if lifecycle.read_attempt().is_some() {
+                                    super::super::OplogReadAttempt::invalidated()
+                                } else {
+                                    WorkerExecutorError::worker_not_found(
+                                        self.owned_agent_id.agent_id,
+                                    )
+                                }
+                            })?;
+                        if let Some(attempt) = lifecycle.read_attempt()
+                            && attempt
+                                .record()
+                                .is_none_or(|selected| selected.writer_nonce != record.writer_nonce)
+                        {
+                            return Err(super::super::OplogReadAttempt::invalidated());
+                        }
+                        service
+                            .unseal_record(
+                                &self.owned_agent_id,
+                                shard_epoch,
+                                &record,
+                                lifecycle.open_purpose(),
+                            )
+                            .await?;
+                    }
+                    Ok::<_, WorkerExecutorError>(())
+                }
+                .await;
+                if let Err(error) = result {
+                    close();
+                    return Err(error);
+                }
+                None
             }
-            (EpochRecord::Pending, None) => None,
+            (EpochRecord::Pending, Some(shard_epoch)) => record_owning_epoch(
+                &*self.indexed_storage,
+                &self.retry_config,
+                PrimaryOplogService::namespace(&self.owned_agent_id, self.agent_mode),
+                &self.owned_agent_id.agent_id,
+                &self.key,
+                shard_epoch,
+            )
+            .await
+            .err(),
+            (EpochRecord::Pending, None) => {
+                if self.agent_mode == AgentMode::Durable
+                    && let Some(service) = &self.seal_service
+                {
+                    if let Some(attempt) = lifecycle.read_attempt() {
+                        attempt.assert_id(&self.owned_agent_id);
+                        if !attempt.is_present() {
+                            close();
+                            return Err(WorkerExecutorError::ShardingNotReady);
+                        }
+                    } else {
+                        match service.state(&self.owned_agent_id).await {
+                            Ok(super::super::seal::AgentSealState::Sealed(_)) => {
+                                close();
+                                return Err(WorkerExecutorError::ShardingNotReady);
+                            }
+                            Err(error) => {
+                                close();
+                                return Err(WorkerExecutorError::runtime(error.to_string()));
+                            }
+                            Ok(_) => {}
+                        }
+                    }
+                }
+                None
+            }
         };
 
         // Read after the claim: once it returns, every writer at an older epoch is refused, so the
@@ -112,6 +210,7 @@ impl OplogConstructor for CreateOplogConstructor {
         Ok(Arc::new(PrimaryOplog::new(
             self.shard_epoch,
             fence,
+            None,
             self.indexed_storage,
             self.blob_storage,
             self.replicas,

@@ -1048,6 +1048,262 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[timeout("120s")]
+async fn cancelling_fork_during_source_copy_cleans_stage_and_preserves_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentStatus;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
+    use golem_worker_executor::derive_disjoint_sqlite_config;
+    use golem_worker_executor::services::{HasOplogService, HasWorkerForkService};
+    use golem_worker_executor::storage::indexed::IndexedStorage;
+    use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
+    use golem_worker_executor_test_utils::sqlite_storage_config;
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_local_resume(deps, &context, false).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let source_name = agent_key!("Counter", "cancel-fork-source-copy");
+    let source = executor
+        .start_agent(&component.id, source_name.clone())
+        .await?;
+    for expected in [1, 2] {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &source_name, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            expected
+        );
+    }
+    executor
+        .wait_for_status(&source, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    executor.commit_oplog(&source.agent_id).await?;
+    let before = executor.stored_oplog(&source.agent_id).await;
+    let cut = OplogIndex::from_u64(before.len() as u64);
+    let target = fresh_fork_target(&source);
+    let worker = executor.active_agent(&source).await.unwrap().primary();
+    let oplog_service = worker.oplog_service();
+    // Read the same database as start_with_local_resume, without going through oplog caches.
+    let indexed = SqliteIndexedStorage::configured(&derive_disjoint_sqlite_config(
+        &sqlite_storage_config(deps, &context),
+        "indexed",
+    ))
+    .await?;
+    let (copy_entered, release_copy) =
+        executor.gate_next_oplog_read(&source.agent_id, OplogIndex::INITIAL);
+    let fork = tokio::spawn({
+        let service = worker.worker_fork_service();
+        let source = source.clone();
+        let target = target.clone();
+        let auth_ctx = executor.auth_ctx();
+        let account_id = context.account_id;
+        async move {
+            service
+                .fork(
+                    account_id,
+                    &source,
+                    &target.agent_id,
+                    cut,
+                    &auth_ctx,
+                    CreateRequest::new(
+                        CreateRequestKind::Fork,
+                        None,
+                        callers::anonymous(),
+                        &InvocationContextStack::fresh(),
+                    ),
+                    None,
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), copy_entered).await??;
+    // Abort the service future itself, not a client request whose server task could continue.
+    fork.abort();
+    assert!(matches!(fork.await, Err(error) if error.is_cancelled()));
+    assert!(
+        release_copy.is_closed(),
+        "the cancelled copy must drop its read gate"
+    );
+    drop(release_copy);
+    assert!(
+        oplog_service
+            .stage_cleanup_tracker()
+            .unwrap()
+            .drain(Duration::from_secs(5))
+            .await
+    );
+    assert!(!oplog_service.exists(&target, AgentMode::Durable).await?);
+    assert!(
+        !indexed
+            .observe_agent("test", "cancelled_fork_target", &target)
+            .await?
+            .has_data,
+        "cancellation must leave neither target presence nor hidden staged rows"
+    );
+    assert!(
+        !indexed
+            .remove_stage_reservation("test", "cancelled_fork_reservation", &target, None)
+            .await?,
+        "the production cleanup drain must remove the stage reservation"
+    );
+    assert_eq!(executor.stored_oplog(&source.agent_id).await, before);
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &source_name, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3,
+        "cancelling the copy must release the source lifecycle guard"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn cancelling_fork_waiting_for_target_guard_cleans_committed_stage(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentStatus;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
+    use golem_service_base::db::PoolApi;
+    use golem_service_base::db::sqlite::SqlitePool;
+    use golem_worker_executor::derive_disjoint_sqlite_config;
+    use golem_worker_executor::services::{HasOplogService, HasWorkerForkService};
+    use golem_worker_executor::storage::indexed::IndexedStorage;
+    use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
+    use golem_worker_executor_test_utils::sqlite_storage_config;
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_local_resume(deps, &context, false).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let source_name = agent_key!("Counter", "cancel-fork-target-guard");
+    let source = executor
+        .start_agent(&component.id, source_name.clone())
+        .await?;
+    for expected in [1, 2] {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &source_name, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            expected
+        );
+    }
+    executor
+        .wait_for_status(&source, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    executor.commit_oplog(&source.agent_id).await?;
+    let before = executor.stored_oplog(&source.agent_id).await;
+    let cut = OplogIndex::from_u64(before.len() as u64);
+    let target = fresh_fork_target(&source);
+    let worker = executor.active_agent(&source).await.unwrap().primary();
+    let oplog_service = worker.oplog_service();
+    let sqlite_config =
+        derive_disjoint_sqlite_config(&sqlite_storage_config(deps, &context), "indexed");
+    let indexed = SqliteIndexedStorage::configured(&sqlite_config).await?;
+    let pool = SqlitePool::configured(&sqlite_config).await?;
+    let target_key = target.storage_key();
+    let stage_rows = || async {
+        pool.with_ro("test", "fork_stage_rows")
+            .fetch_one_as(sqlx::query_as::<_, (i64, i64)>(
+                "SELECT (SELECT COUNT(*) FROM index_storage WHERE namespace = 'durable-worker-staged-oplog' AND key >= ?1 || '#' AND key < ?1 || '$'), (SELECT COUNT(*) FROM indexed_key_epoch WHERE namespace = 'stage-reservation' AND key = ?1)",
+            ).bind(&target_key))
+            .await
+    };
+
+    // Acquire the real guard before arming the wrapper, so only the fork can enter the gate.
+    let target_guard = oplog_service.lock_lifecycle(&target.agent_id).await;
+    let (publication_entered, release_publication) =
+        executor.gate_next_oplog_lifecycle(&target.agent_id);
+    let fork_service = worker.worker_fork_service();
+    let auth_ctx = executor.auth_ctx();
+    let mut fork = Box::pin(fork_service.fork(
+        context.account_id,
+        &source,
+        &target.agent_id,
+        cut,
+        &auth_ctx,
+        CreateRequest::new(
+            CreateRequestKind::Fork,
+            None,
+            callers::anonymous(),
+            &InvocationContextStack::fresh(),
+        ),
+        None,
+    ));
+    tokio::select! {
+        result = &mut fork => panic!("fork completed before target lifecycle acquisition: {result:?}"),
+        entered = tokio::time::timeout(Duration::from_secs(10), publication_entered) => entered??,
+    }
+    release_publication.send(()).unwrap();
+    assert!(
+        futures::poll!(fork.as_mut()).is_pending(),
+        "the actual fork must wait for the held target guard after the wrapper resumes"
+    );
+    let (staged_before, reservations_before) = stage_rows().await?;
+    assert!(
+        staged_before > 0,
+        "the hidden copy must already be committed"
+    );
+    assert_eq!(
+        reservations_before, 1,
+        "the stage must still own its reservation"
+    );
+    assert!(!oplog_service.exists(&target, AgentMode::Durable).await?);
+
+    // Drop the actual service future while it awaits publication's target guard.
+    drop(fork);
+    assert!(
+        oplog_service
+            .stage_cleanup_tracker()
+            .unwrap()
+            .drain(Duration::from_secs(5))
+            .await
+    );
+    assert_eq!(stage_rows().await?, (0, 0));
+    assert!(
+        !indexed
+            .observe_agent("test", "cancelled_target_guard", &target)
+            .await?
+            .has_data
+    );
+    assert!(
+        !indexed
+            .remove_stage_reservation("test", "cancelled_target_guard_reservation", &target, None)
+            .await?
+    );
+    assert!(!oplog_service.exists(&target, AgentMode::Durable).await?);
+    assert_eq!(executor.stored_oplog(&source.agent_id).await, before);
+    drop(target_guard);
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &source_name, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

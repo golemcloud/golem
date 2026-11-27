@@ -164,17 +164,25 @@ impl SerializedOplogAppend {
         api_name: &'static str,
         key: &str,
         shard_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         let storage = indexed_storage.with_entity("oplog", api_name, "entry");
         match self {
             Self::Entry((id, value)) => {
                 storage
-                    .append_raw(namespace.clone(), key, *id, value.to_vec(), shard_epoch)
+                    .append_raw(
+                        namespace.clone(),
+                        key,
+                        *id,
+                        value.to_vec(),
+                        shard_epoch,
+                        stage_token,
+                    )
                     .await
             }
             Self::Batch(entries) => {
                 storage
-                    .append_many_raw(namespace, key, entries.clone(), shard_epoch)
+                    .append_many_raw(namespace, key, entries.clone(), shard_epoch, stage_token)
                     .await
             }
         }
@@ -190,23 +198,33 @@ pub(super) async fn retry_oplog_append(
     key: &str,
     append: SerializedOplogAppend,
     shard_epoch: Option<ShardEpoch>,
+    stage_token: Option<i64>,
 ) -> Result<(), IndexedStorageError> {
     let mut attempts = 0u32;
     let mut write_may_have_committed = false;
     loop {
         attempts += 1;
         let error = match append
-            .write(indexed_storage, namespace, api_name, key, shard_epoch)
+            .write(
+                indexed_storage,
+                namespace,
+                api_name,
+                key,
+                shard_epoch,
+                stage_token,
+            )
             .await
         {
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
 
-        // The storage refused the write because the shard has a new owner. Not a transient
-        // failure to retry and not an indeterminate one to reconcile: it is a deliberate refusal,
-        // so hand it back and let the caller give up this one agent instead of aborting.
-        if matches!(error, IndexedStorageError::Fenced { .. }) {
+        // A lost shard or stage reservation is a deliberate refusal, not a storage failure.
+        // Return it for ownership recovery or fork reconciliation rather than aborting.
+        if matches!(
+            error,
+            IndexedStorageError::Fenced { .. } | IndexedStorageError::StageInvalidated { .. }
+        ) {
             return Err(error);
         }
 
@@ -231,10 +249,12 @@ pub(super) async fn retry_oplog_append(
                 false
             }
             // Returned above; named here only because the guard does not make this exhaustive.
-            IndexedStorageError::Fenced { .. } => unreachable!("a fence returns before this match"),
+            IndexedStorageError::Fenced { .. } | IndexedStorageError::StageInvalidated { .. } => {
+                unreachable!("a refusal returns before this match")
+            }
         };
 
-        if write_may_have_committed {
+        if write_may_have_committed && !append.entries().is_empty() {
             match stored_oplog_batch_matches(
                 retry_config,
                 indexed_storage,
@@ -249,16 +269,25 @@ pub(super) async fn retry_oplog_append(
                     // The stored content differs from what this attempt sent - the only
                     // legitimate way that happens is a new owner having already written those
                     // same indices. Repeat the write once as a probe: the backends check the
-                    // epoch inside the same transaction as the insert, so a shard that has
-                    // moved on is fenced before the insert is even attempted. A same-epoch
-                    // conflict instead fails the probe's insert (still fatal, below) - the
-                    // mismatch is unexplained and not safe to paper over.
-                    if let Some(epoch) = shard_epoch
-                        && let Err(fenced @ IndexedStorageError::Fenced { .. }) = append
-                            .write(indexed_storage, namespace, api_name, key, Some(epoch))
+                    // epoch or stage token inside the same transaction as the insert, so a
+                    // superseded writer is refused before the insert is attempted. A conflict
+                    // with unchanged ownership is still fatal: the mismatch is unexplained.
+                    if (shard_epoch.is_some() || stage_token.is_some())
+                        && let Err(
+                            refused @ (IndexedStorageError::Fenced { .. }
+                            | IndexedStorageError::StageInvalidated { .. }),
+                        ) = append
+                            .write(
+                                indexed_storage,
+                                namespace,
+                                api_name,
+                                key,
+                                shard_epoch,
+                                stage_token,
+                            )
                             .await
                     {
-                        return Err(fenced);
+                        return Err(refused);
                     }
                     panic!(
                         "Indexed storage operation '{op_name}' failed for key '{key}' and the indeterminate write did not match storage: {error}"

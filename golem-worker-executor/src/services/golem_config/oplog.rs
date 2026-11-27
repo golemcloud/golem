@@ -32,6 +32,22 @@ pub struct OplogConfig {
     pub entry_count_limit: u64,
     #[serde(with = "humantime_serde")]
     pub archive_interval: Duration,
+    /// Clock-skew allowance between the executor and blob storage when deriving a seal's
+    /// validity deadline from a shard lease and deciding when tombstones are safe to collect.
+    #[serde(with = "humantime_serde")]
+    pub skew_margin: Duration,
+    /// Client-side timeout for a single-attempt seal PUT. A timeout does not cancel a server
+    /// commit; `server_commit_bound` bounds that separate risk.
+    #[serde(with = "humantime_serde")]
+    pub seal_put_timeout: Duration,
+    /// Assumed upper bound on how long blob storage can take to commit an issued PUT, even
+    /// after the client times out. Tombstone collection must wait out such late commits.
+    #[serde(with = "humantime_serde")]
+    pub server_commit_bound: Duration,
+    /// Clamps received shard lease TTLs. Tombstone collection uses this bound to outwait writers
+    /// that held the shard before deletion. Must be at least the shard manager's lease duration.
+    #[serde(with = "humantime_serde")]
+    pub shard_lease_max_ttl: Duration,
     pub default_snapshotting: SnapshotPolicy,
     pub oplog_processor_snapshotting: SnapshotPolicy,
     /// Maximum number of oplog commits before the ForwardingOplog flushes
@@ -81,6 +97,18 @@ impl SafeDisplay for OplogConfig {
         );
         let _ = writeln!(&mut result, "entry count limit: {}", self.entry_count_limit);
         let _ = writeln!(&mut result, "archive interval: {:?}", self.archive_interval);
+        let _ = writeln!(&mut result, "skew margin: {:?}", self.skew_margin);
+        let _ = writeln!(&mut result, "seal put timeout: {:?}", self.seal_put_timeout);
+        let _ = writeln!(
+            &mut result,
+            "server commit bound: {:?}",
+            self.server_commit_bound
+        );
+        let _ = writeln!(
+            &mut result,
+            "shard lease max ttl: {:?}",
+            self.shard_lease_max_ttl
+        );
         let _ = writeln!(&mut result, "default snapshotting:");
         let _ = writeln!(
             &mut result,
@@ -213,6 +241,10 @@ impl Default for OplogConfig {
             blob_storage_layers: 1,
             entry_count_limit: 1024,
             archive_interval: Duration::from_secs(60 * 60 * 24), // 24 hours
+            skew_margin: Duration::from_secs(30),
+            seal_put_timeout: Duration::from_secs(10),
+            server_commit_bound: Duration::from_secs(5 * 60),
+            shard_lease_max_ttl: Duration::from_secs(60),
             default_snapshotting: SnapshotPolicy::default(),
             oplog_processor_snapshotting: SnapshotPolicy::EveryNInvocation { count: 10 },
             plugin_max_commit_count: 3,

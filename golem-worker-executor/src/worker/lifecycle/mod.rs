@@ -174,20 +174,58 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let mut worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
-        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-        loop {
+        let mut reacquiring = false;
+        for _ in 0..3 {
+            let worker = deps
+                .active_agents()
+                .get_existing_for_purpose(
+                    deps,
+                    owned_agent_id,
+                    Some(expected_fingerprint),
+                    crate::services::oplog::OplogOpenPurpose::Delete,
+                )
+                .await;
+            let worker = match worker {
+                Err(WorkerExecutorError::AgentNotFound { .. }) if reacquiring => return Ok(()),
+                result => result?,
+            };
+            // An ordinary initializer or a seal may have won the cache race. A frozen answer
+            // goes back through preparation unless deletion already owns its cleanup stages.
+            if downcast_oplog::<crate::services::oplog::sealed_reader::SealedOplog>(&worker.oplog)
+                .is_some()
+                && !worker.deletion_owns_retirement().await
+            {
+                drop(worker);
+                // Preparation evicts the frozen generation and reserves its replacement.
+                // Own that interval independently of the initiating RPC's cancellation.
+                let preparation = tokio::spawn({
+                    let deps = deps.clone();
+                    let id = owned_agent_id.clone();
+                    async move {
+                        deps.active_agents()
+                            .prepare_sealed_deletion(&deps, &id, expected_fingerprint)
+                            .await
+                    }
+                });
+                match preparation.await.map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "Deletion preparation task failed: {error}"
+                    ))
+                })? {
+                    Ok(Some(outcome)) => return outcome.handle().wait().await,
+                    Ok(None) => {}
+                    Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
+                    Err(error) => return Err(error),
+                }
+                reacquiring = true;
+                continue;
+            }
             if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
                 return outcome.handle().wait().await;
             }
-            worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
-                Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
-                    worker
-                }
-                Ok(_) | Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
-                Err(error) => return Err(error),
-            };
+            reacquiring = true;
         }
+        Err(WorkerExecutorError::ShardingNotReady)
     }
 
     pub async fn interrupt<T>(
@@ -292,6 +330,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     owned_agent_id,
                     metadata.agent_mode,
                     &metadata.last_known_status,
+                    None,
                 )
                 .await;
                 if let Some(last_error) = error_and_retry_count {

@@ -68,6 +68,17 @@ pub(crate) const DERIVED_CACHE_EXPIRY: std::time::Duration =
 const INVOCATION_RESULT_INDEX_METADATA_FIELD: &str = "metadata";
 const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
 
+pub(crate) fn seal_status_is_eligible(status: &AgentStatusRecord) -> bool {
+    !matches!(
+        status.status,
+        AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Interrupted
+    ) && status.pending_updates.is_empty()
+        && !status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.is_due(golem_common::model::Timestamp::now_utc()))
+}
+
 /// The rejected automatic snapshot entries to store: `current` and `new` together, as
 /// [`kept_rejections`] keeps them for `status`, in index order. `None` when they equal `current`,
 /// so nothing needs a write.
@@ -192,6 +203,17 @@ pub type OnStale<'a> = &'a (dyn Fn(&OwnedAgentId, AgentFingerprint) + Send + Syn
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
 pub trait WorkerService: Send + Sync {
+    /// Clones this service with an acquisition-local stream index for frozen history.
+    /// The replacement must not be installed in the shared oplog service.
+    fn with_stream_session_index(
+        &self,
+        _index: Arc<StreamSessionIndexService>,
+    ) -> Result<Arc<dyn WorkerService>, WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "acquisition-local stream metadata is unavailable",
+        ))
+    }
+
     /// Loads the worker's initial metadata and last known cached status.
     ///
     /// `Ok(None)` means the worker has no oplog (it does not exist). Oplog storage failures follow
@@ -200,6 +222,26 @@ pub trait WorkerService: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError>;
+
+    async fn get_for_acquisition(
+        &self,
+        id: &OwnedAgentId,
+        _attempt: &crate::services::oplog::OplogReadAttempt,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        self.get(id).await
+    }
+
+    #[doc(hidden)]
+    async fn get_with_attempt(
+        &self,
+        id: &OwnedAgentId,
+        attempt: Option<&crate::services::oplog::OplogReadAttempt>,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        match attempt {
+            Some(attempt) => self.get_for_acquisition(id, attempt).await,
+            None => self.get(id).await,
+        }
+    }
 
     /// Enumerates the workers this executor must recover, per assigned shard.
     ///
@@ -251,6 +293,29 @@ pub trait WorkerService: Send + Sync {
         operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError>;
 
+    /// Excludes metadata reads and promise writes while a sealed deletion restores and claims
+    /// its writable generation. The caller must already hold the oplog lifecycle guard.
+    async fn lock_deletion_preparation(
+        &self,
+        _agent_id: &AgentId,
+    ) -> Result<WorkerDeletionGuard, WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "Deletion preparation gate unavailable",
+        ))
+    }
+
+    /// Retires one worker generation and seals its drained state while excluding local metadata
+    /// readers and promise writers. `Some(false)` retries storage work; `None` waits for the
+    /// resident runtime's idle transition instead of registering an archive polling loop.
+    async fn seal_generation<'a>(
+        &self,
+        _metadata: AgentMetadata,
+        _epoch: ShardEpoch,
+        _retire: BoxFuture<'a, Result<Option<AgentMetadata>, WorkerExecutorError>>,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        Ok(Some(false))
+    }
+
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
     /// key and the dedicated `agent_mode` key), leaving the oplog untouched.
     async fn remove_cached_status(
@@ -267,6 +332,19 @@ pub trait WorkerService: Send + Sync {
         _fingerprint: AgentFingerprint,
     ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
         Ok(HashSet::new())
+    }
+
+    async fn get_rejected_periodic_snapshots_with_moved(
+        &self,
+        id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        moved: &std::collections::BTreeSet<OplogIndex>,
+    ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
+        let mut result = self
+            .get_rejected_periodic_snapshots(id, fingerprint)
+            .await?;
+        result.extend(moved.iter().copied());
+        Ok(result)
     }
 
     /// Adds `oplog_indexes` to the stored rejected automatic snapshot entries of the incarnation
@@ -537,6 +615,12 @@ struct AgentLifecycleGate {
     agent_id: AgentId,
     gate: Arc<RwLock<()>>,
     registry: Arc<AgentLifecycleGates>,
+}
+
+pub struct WorkerDeletionGuard {
+    // Release the owned lock before pruning its registry entry.
+    _guard: tokio::sync::OwnedRwLockWriteGuard<()>,
+    _gate: AgentLifecycleGate,
 }
 
 impl Drop for AgentLifecycleGate {

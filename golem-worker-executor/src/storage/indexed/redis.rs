@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanResume,
+    AgentDataObservation, AgentIndexedState, IndexedStorage, IndexedStorageError,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, KeyEpochChange, KeyEpochClaim,
+    ReleaseAgentResult, ScanResume, UnsealAgentResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,11 +24,11 @@ use fred::prelude::{Key, Value};
 use fred::types::config::Options;
 use fred::types::streams::XCapKind;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
-use golem_common::model::ShardEpoch;
+use golem_common::model::{OwnedAgentId, ShardEpoch};
 use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Redis checks a key's epoch in a Lua script, which it runs atomically with the `XADD`s the
 /// script guards. Two limits follow from Redis itself rather than from this code: an epoch is
@@ -80,13 +81,32 @@ end
 return redis.status_reply('OK')
 "#;
 
-    /// `ARGV`: the epoch, compared the way [`Self::FENCED_APPEND_SCRIPT`] does.
+    /// Prevalidate the fence before mutation: Lua errors do not roll back earlier writes.
+    /// `KEYS`: stream, epoch hash, seal marker. `ARGV`: exact asserted epoch.
+    const DELETE_RETAINING_EPOCH_SCRIPT: &'static str = r#"
+local stored = redis.call('HGET', KEYS[2], 'epoch')
+if stored == false then
+  if redis.call('EXISTS', KEYS[1]) == 1 then
+    return redis.error_reply('FENCED -')
+  end
+elseif stored ~= ARGV[1] then
+  return redis.error_reply('FENCED ' .. stored)
+end
+redis.call('HSET', KEYS[2], 'epoch', ARGV[1])
+redis.call('DEL', KEYS[1], KEYS[3])
+return redis.status_reply('OK')
+"#;
+
+    /// `KEYS`: the epoch hash, then the index. `ARGV`: the epoch, compared the way
+    /// [`Self::FENCED_APPEND_SCRIPT`] does. Returns namespace-local presence.
     const SET_KEY_EPOCH_SCRIPT: &'static str = r#"
 local epoch = redis.call('HGET', KEYS[1], 'epoch')
 local higher = epoch ~= false and (#ARGV[1] > #epoch or (#ARGV[1] == #epoch and ARGV[1] > epoch))
 if epoch == false or higher or epoch == ARGV[1] then
+  local change = 0
+  if epoch == false then change = 2 elseif higher then change = 4 end
   redis.call('HSET', KEYS[1], 'epoch', ARGV[1])
-  return redis.status_reply('OK')
+  return change + redis.call('EXISTS', KEYS[2])
 end
 return redis.error_reply('FENCED ' .. epoch)
 "#;
@@ -154,6 +174,10 @@ return 1
     /// an `...oplog:<key>:epoch` sibling would come back from it as a key of its own.
     fn epoch_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
+            IndexedStorageNamespace::SealedPresent { agent_mode, .. } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:sealed-present-epoch:{key}")
+            }
             IndexedStorageNamespace::OpLog {
                 owned_agent_id: _,
                 agent_mode,
@@ -261,6 +285,10 @@ return 1
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
+            IndexedStorageNamespace::SealedPresent { agent_mode, .. } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:sealed-present:{key}")
+            }
             IndexedStorageNamespace::OpLog {
                 owned_agent_id: _,
                 agent_mode,
@@ -413,7 +441,8 @@ return 1
             IndexedStorageNamespace::BlobOplogManifest { .. } => {
                 Self::classify_manifest_append_error
             }
-            IndexedStorageNamespace::CompressedOpLog { .. } => {
+            IndexedStorageNamespace::CompressedOpLog { .. }
+            | IndexedStorageNamespace::SealedPresent { .. } => {
                 |error| Self::classify_append_error(error, false)
             }
         }
@@ -457,6 +486,78 @@ return 1
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl IndexedStorage for RedisIndexedStorage {
+    fn supports_release(&self) -> bool {
+        // Complete atomic release needs SCAN/KEYS inside Lua, blocking Redis for O(database keys).
+        // Client-side or configured-level key lists are not complete atomically. A per-agent
+        // index would avoid that scan but is out of scope for this backend.
+        false
+    }
+
+    async fn observe_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<AgentDataObservation, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "Redis agent observation is unsupported".into(),
+        ))
+    }
+
+    async fn mark_sealed(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _state: &AgentIndexedState,
+        _epoch: ShardEpoch,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _superseded_marker: Option<super::SealMarker>,
+    ) -> Result<(), IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "Redis sealing is unsupported".into(),
+        ))
+    }
+
+    async fn release_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _state: &AgentIndexedState,
+        _epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "Redis agent release is unsupported".into(),
+        ))
+    }
+
+    async fn unseal_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _state: &AgentIndexedState,
+        _epoch: ShardEpoch,
+        _record_epoch: ShardEpoch,
+        _valid_until: SystemTime,
+        _fingerprint: golem_common::model::AgentFingerprint,
+    ) -> Result<UnsealAgentResult, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "Redis unsealing is unsupported".into(),
+        ))
+    }
+
+    async fn remove_key_epoch_if_empty(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _namespace: IndexedStorageNamespace,
+        _key: &str,
+        _epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "Redis cannot atomically check whole-agent absence".into(),
+        ))
+    }
+
     async fn number_of_replicas(
         &self,
         svc_name: &'static str,
@@ -542,6 +643,7 @@ impl IndexedStorage for RedisIndexedStorage {
         id: u64,
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
+        _stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
         let classify = Self::append_error_classifier(&namespace);
@@ -587,6 +689,7 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
         expected_epoch: Option<ShardEpoch>,
+        _stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
             let classify = Self::append_error_classifier(namespace);
@@ -640,18 +743,35 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         epoch: ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
+        _presence_namespaces: &[IndexedStorageNamespace],
+        _remove_if_absent: bool,
+    ) -> Result<KeyEpochClaim, IndexedStorageError> {
         self.redis
             .with(svc_name, api_name)
             .eval(
                 Self::SET_KEY_EPOCH_SCRIPT,
-                &[Self::epoch_key(namespace, key)],
+                &[
+                    Self::epoch_key(namespace.clone(), key),
+                    Self::composite_key(namespace, key),
+                ],
                 vec![Value::from(epoch.0.to_string())],
                 None,
             )
             .await
-            .map(|_| ())
             .map_err(|error| Self::classify_epoch_error(error, key, Some(epoch)))
+            .and_then(|result| match result {
+                Value::Integer(code @ 0..=5) => Ok(KeyEpochClaim {
+                    has_data: code % 2 == 1,
+                    change: match code / 2 {
+                        1 => KeyEpochChange::Inserted,
+                        2 => KeyEpochChange::Raised,
+                        _ => KeyEpochChange::Unchanged,
+                    },
+                }),
+                _ => Err(IndexedStorageError::Other(
+                    "invalid epoch claim result".into(),
+                )),
+            })
     }
 
     async fn delete_with_epoch(
@@ -661,7 +781,60 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
+        if retain_epoch {
+            let expected = expected_epoch.ok_or_else(|| {
+                IndexedStorageError::Other("retaining an epoch requires an asserted epoch".into())
+            })?;
+            let (owned_agent_id, agent_mode) = match &namespace {
+                IndexedStorageNamespace::OpLog {
+                    owned_agent_id,
+                    agent_mode,
+                }
+                | IndexedStorageNamespace::StagedOpLog {
+                    owned_agent_id,
+                    agent_mode,
+                }
+                | IndexedStorageNamespace::SealedPresent {
+                    owned_agent_id,
+                    agent_mode,
+                }
+                | IndexedStorageNamespace::CompressedOpLog {
+                    owned_agent_id,
+                    agent_mode,
+                    ..
+                }
+                | IndexedStorageNamespace::BlobOplogManifest {
+                    owned_agent_id,
+                    agent_mode,
+                    ..
+                } => (owned_agent_id.clone(), *agent_mode),
+            };
+            let marker = Self::composite_key(
+                IndexedStorageNamespace::SealedPresent {
+                    owned_agent_id,
+                    agent_mode,
+                },
+                key.split('#').next().unwrap_or(key),
+            );
+            return self
+                .redis
+                .with(svc_name, api_name)
+                .eval(
+                    Self::DELETE_RETAINING_EPOCH_SCRIPT,
+                    &[
+                        Self::composite_key(namespace.clone(), key),
+                        Self::epoch_key(namespace, key),
+                        marker,
+                    ],
+                    vec![Value::from(expected.0.to_string())],
+                    None,
+                )
+                .await
+                .map(|_| ())
+                .map_err(|error| Self::classify_epoch_error(error, key, Some(expected)));
+        }
         let args = match expected_epoch {
             Some(expected) => vec![Value::from(expected.0.to_string())],
             None => vec![],
@@ -691,6 +864,7 @@ impl IndexedStorage for RedisIndexedStorage {
         target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
+        _stage_token: Option<i64>,
     ) -> Result<bool, IndexedStorageError> {
         let source = Self::composite_key(source_namespace, source_key);
         let target = Self::composite_key(target_namespace, target_key);
@@ -1140,6 +1314,7 @@ mod tests {
                 1,
                 vec![1],
                 Some(ShardEpoch(5)),
+                None,
             ),
         )
         .await
@@ -1169,6 +1344,7 @@ mod tests {
                 "key",
                 vec![(1, Bytes::from_static(b"a")), (2, Bytes::from_static(b"b"))].into(),
                 Some(ShardEpoch(5)),
+                None,
             ),
         )
         .await

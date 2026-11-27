@@ -462,6 +462,7 @@ impl S3BlobStorage {
             BlobStorageNamespace::CompilationCache => &self.config.compilation_cache_bucket,
             BlobStorageNamespace::CustomStorage { .. } => &self.config.custom_data_bucket,
             BlobStorageNamespace::OplogPayload { .. } => &self.config.oplog_payload_bucket,
+            BlobStorageNamespace::SealRecords { .. } => &self.config.oplog_payload_bucket,
             BlobStorageNamespace::CompressedOplog { level, .. } => {
                 &self.config.compressed_oplog_buckets[*level]
             }
@@ -505,6 +506,14 @@ impl S3BlobStorage {
             BlobStorageNamespace::CustomStorage { environment_id }
             | BlobStorageNamespace::InitialAgentFiles { environment_id } => {
                 environment_id.to_string()
+            }
+            BlobStorageNamespace::SealRecords {
+                environment_id,
+                type_tag,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("seal_records/{mode}/{environment_id}/{type_tag:08x}")
             }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
@@ -1279,6 +1288,100 @@ impl BlobStorageBackend for S3BlobStorage {
             false,
         )
         .await;
+        match result {
+            Ok(_) => Ok(PutIfAbsent::Written),
+            Err(SdkError::ServiceError(error)) if Self::is_precondition_failed(error.raw()) => {
+                Ok(PutIfAbsent::AlreadyExists)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn list_page_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> Result<Vec<super::BlobPageEntry>, Error> {
+        let namespace_prefix = Self::prefix_with_slash(&self.prefix_of(&namespace));
+        let prefix = Self::prefix_with_slash(&self.key_of(&namespace, prefix)?);
+        let after = start_after
+            .map(|p| self.key_of(&namespace, p))
+            .transpose()?;
+        let mut result = Vec::new();
+        let mut continuation = None;
+        loop {
+            let response = self
+                .client
+                .list_objects_v2()
+                .bucket(self.bucket_of(&namespace))
+                .prefix(&prefix)
+                .set_start_after(after.clone())
+                .set_continuation_token(continuation)
+                .max_keys((max_keys as usize - result.len()) as i32)
+                .send()
+                .await
+                .map_err(read_error)?;
+            for object in response.contents() {
+                let key = object
+                    .key()
+                    .ok_or_else(|| anyhow!("S3 listing returned no key"))?;
+                if key.ends_with('/') || key.ends_with(&format!("/{DIR_MARKER}")) {
+                    continue;
+                }
+                let path = key
+                    .strip_prefix(&namespace_prefix)
+                    .ok_or_else(|| anyhow!("S3 listing returned a key outside its namespace"))?;
+                let modified = object
+                    .last_modified()
+                    .ok_or_else(|| anyhow!("S3 listing returned no LastModified"))?;
+                result.push(super::BlobPageEntry {
+                    path: PathBuf::from(path).into_boxed_path(),
+                    last_modified_at: Timestamp::from(modified.to_millis()? as u64),
+                    timestamp_resolution: std::time::Duration::from_secs(1),
+                });
+            }
+            if result.len() == max_keys as usize || !response.is_truncated().unwrap_or(false) {
+                return Ok(result);
+            }
+            continuation = Some(
+                response
+                    .next_continuation_token()
+                    .ok_or_else(|| anyhow!("S3 truncated listing returned no continuation token"))?
+                    .to_string(),
+            );
+        }
+    }
+
+    async fn put_raw_if_absent_once_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+        timeout: std::time::Duration,
+    ) -> Result<PutIfAbsent, Error> {
+        let key = self.key_of(&namespace, path)?;
+        let result = tokio::time::timeout(
+            timeout,
+            self.client
+                .put_object()
+                .bucket(self.bucket_of(&namespace))
+                .key(key)
+                .if_none_match("*")
+                .body(ByteStream::from(Bytes::copy_from_slice(data)))
+                .customize()
+                .config_override(
+                    aws_sdk_s3::config::Builder::new()
+                        .retry_config(aws_sdk_s3::config::retry::RetryConfig::disabled()),
+                )
+                .send(),
+        )
+        .await?;
         match result {
             Ok(_) => Ok(PutIfAbsent::Written),
             Err(SdkError::ServiceError(error)) if Self::is_precondition_failed(error.raw()) => {

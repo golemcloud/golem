@@ -24,6 +24,7 @@ mod startup;
 mod streaming;
 
 use acquisition::ConstructionError;
+pub(crate) use acquisition::ExistingWorkerAcquisitionError;
 #[cfg(test)]
 use acquisition::snapshot_policy_of_mode;
 #[cfg(test)]
@@ -631,6 +632,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 /// fields remain private and it is not a construction or lifecycle API.
 #[doc(hidden)]
 pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
+    deps: All<Ctx>,
     owner_context: ResolvedOwnerContext,
     parsed_agent_id: Option<ParsedAgentKey>,
 
@@ -688,6 +690,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Prevents weak-reference background work from starting while an unloaded
     /// worker is being conditionally removed from `ActiveAgents`.
     cache_retirement_in_progress: AtomicBool,
+    /// A declined seal waits for the resident runtime to become idle, not for another timer.
+    seal_waiting_for_idle: AtomicBool,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
@@ -711,6 +715,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     last_resume_request: Mutex<Timestamp>,
     /// The automatic snapshot entries that the starts of the agent exclude.
     snapshot_exclusions: StdMutex<SnapshotExclusions>,
+    /// Moved rejections resolved by construction, retained until its first successful prepare.
+    initial_moved_snapshot_rejections: StdMutex<Option<std::collections::BTreeSet<OplogIndex>>>,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_accounting: residency::MemoryAccounting,
@@ -834,7 +840,7 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
     type Ctx = Ctx;
 
     fn all(&self) -> &All<Self::Ctx> {
-        &self.deps
+        self.resolved.get().map_or(&self.deps, |data| &data.deps)
     }
 }
 
@@ -1457,6 +1463,7 @@ pub enum ResultOrSubscription {
 pub(crate) struct GetOrCreateWorkerResult {
     pub(crate) initial_worker_metadata: AgentMetadata,
     pub(crate) current_status: Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+    initial_moved_snapshot_rejections: Option<std::collections::BTreeSet<OplogIndex>>,
     /// The status value currently persisted in the live cache, used as the first delta baseline.
     persisted_status: Option<AgentStatusRecord>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
@@ -1499,6 +1506,7 @@ enum StopResult {
 #[cfg(test)]
 mod resource_release_tests;
 
+pub(crate) use acquisition::AcquisitionAdmission;
 pub use acquisition::merge_agent_env_with_default_env;
 pub(crate) use ingress::{
     await_scalar_invocation, require_canonical_command_path,
@@ -1506,7 +1514,7 @@ pub(crate) use ingress::{
 };
 use ingress::{inactive_ephemeral_agent_error, validate_resolved_invocation_identity};
 use interrupt::register_interrupt_request;
-use lifecycle::retirement::owned_shard_epoch;
+pub(crate) use lifecycle::retirement::owned_shard_epoch;
 pub(crate) use lifecycle::retirement::retired_by_assignment;
 use lifecycle::stop::{invocation_keys_failed_on_giving_up, invocation_keys_to_fail};
 use read_only_cache::{build_read_only_cache_entry, is_no_cache, populate_read_only_cache};

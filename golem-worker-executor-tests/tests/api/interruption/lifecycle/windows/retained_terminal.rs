@@ -15,7 +15,8 @@
 use super::*;
 use futures::FutureExt;
 use golem_common::model::{
-    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, Timestamp,
+    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseClock,
+    ShardLeaseRevision, Timestamp,
 };
 use golem_worker_executor::services::HasEvents;
 use golem_worker_executor::services::shard::ShardService;
@@ -616,6 +617,17 @@ impl ShardService for StartupAdmissionGate {
     fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
         self.inner.check_worker(agent_id)
     }
+    fn clamp_lease(&self, lease: ShardLeaseClock) -> ShardLeaseClock {
+        self.inner.clamp_lease(lease)
+    }
+    fn lease_valid_until(
+        &self,
+        agent_id: &AgentId,
+        epoch: ShardEpoch,
+        skew_margin: Duration,
+    ) -> Option<std::time::SystemTime> {
+        self.inner.lease_valid_until(agent_id, epoch, skew_margin)
+    }
     fn assign_shards(
         &self,
         number_of_shards: usize,
@@ -630,14 +642,14 @@ impl ShardService for StartupAdmissionGate {
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<Instant>,
+        lease: Option<ShardLeaseClock>,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         self.inner.register(
             number_of_shards,
             shard_epochs,
-            expires_at,
+            lease,
             revision,
             executor_count,
         )
@@ -662,12 +674,12 @@ impl ShardService for StartupAdmissionGate {
     fn update_lease(
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Instant,
+        clock: ShardLeaseClock,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
-            .update_lease(shard_epochs, expires_at, revision, executor_count)
+            .update_lease(shard_epochs, clock, revision, executor_count)
     }
     fn clear_assignment(&self) {
         self.inner.clear_assignment()

@@ -12,9 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::reader::checked_range_end;
+use super::super::seal::SealRecord;
 use super::*;
 
 impl MultiLayerOplogService {
+    async fn read_with_authority<T, E, R, RF, S, SF, A>(
+        &self,
+        id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        mut present: R,
+        sealed: S,
+        absent: A,
+        map_error: impl Fn(UnreadableOplog) -> E + Send,
+    ) -> Result<T, E>
+    where
+        T: Send,
+        E: Send,
+        R: FnMut() -> RF + Send,
+        RF: std::future::Future<Output = Result<T, E>> + Send,
+        S: FnMut(Box<SealRecord>) -> SF + Send,
+        SF: std::future::Future<Output = Result<T, E>> + Send,
+        A: FnMut() -> Result<T, E> + Send,
+    {
+        let Some(service) = self.seal_service() else {
+            return present().await;
+        };
+        service
+            .read_with_authority(
+                id,
+                Some(agent_mode),
+                present,
+                sealed,
+                absent,
+                move |error| {
+                    map_error(UnreadableOplog::new(
+                        &id.agent_id,
+                        OplogReadError::of_archive(OplogReadSource::Other("seal record"), error),
+                    ))
+                },
+            )
+            .await
+    }
+
     pub fn new(
         primary: Arc<dyn OplogService>,
         lower: NEVec<Arc<dyn OplogArchiveService>>,
@@ -121,6 +161,12 @@ impl MultiLayerOplogService {
     ) -> Result<Vec<OwnedAgentId>, WorkerExecutorError> {
         let mut ids = Vec::new();
         for id in unfiltered_ids {
+            if let Some(service) = self.seal_service()
+                && service.enabled()
+                && service.is_marked(&id, agent_mode).await?
+            {
+                continue;
+            }
             let mut exists_in_lower = false;
             for lower_layer in &self.lower.iter().as_slice()[from..] {
                 if lower_layer
@@ -271,8 +317,20 @@ impl Clone for MultiLayerOplogService {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl OplogService for MultiLayerOplogService {
+    fn stage_cleanup_tracker(&self) -> Option<Arc<crate::services::oplog::StageCleanupTracker>> {
+        self.primary.stage_cleanup_tracker()
+    }
+
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.primary.lock_lifecycle(agent_id).await
+    }
+
+    fn set_seal_service(&self, service: Arc<super::super::SealService>) {
+        self.primary.set_seal_service(service);
+    }
+
+    fn seal_service(&self) -> Option<Arc<super::super::SealService>> {
+        self.primary.seal_service()
     }
 
     fn set_stream_session_index(
@@ -294,7 +352,10 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
         initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, String> {
+    ) -> Result<
+        (Arc<dyn Oplog>, crate::services::oplog::StageCleanupGuard),
+        crate::services::oplog::CreateStagedError,
+    > {
         self.primary
             .create_staged(
                 owned_agent_id,
@@ -333,9 +394,10 @@ impl OplogService for MultiLayerOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
+        stage_token: Option<i64>,
     ) -> Result<(), String> {
         self.primary
-            .discard_staged(owned_agent_id, agent_mode, stage_id)
+            .discard_staged(owned_agent_id, agent_mode, stage_id, stage_token)
             .await
     }
 
@@ -440,16 +502,35 @@ impl OplogService for MultiLayerOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, UnreadableOplog> {
-        let mut result = self
-            .primary
-            .get_last_index(owned_agent_id, agent_mode)
-            .await?;
+        self.read_with_authority(
+            owned_agent_id,
+            agent_mode,
+            || self.get_last_index_present(owned_agent_id, agent_mode),
+            |record| async move {
+                Ok(if record.agent_mode == agent_mode {
+                    record.last_index
+                } else {
+                    OplogIndex::NONE
+                })
+            },
+            || Ok(OplogIndex::NONE),
+            std::convert::identity,
+        )
+        .await
+    }
+
+    async fn get_last_index_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        let mut result = self.primary.get_last_index_present(id, mode).await?;
         if result == OplogIndex::NONE {
             for (level, layer) in self.lower.iter().enumerate() {
                 let idx = layer
-                    .get_last_index(owned_agent_id, agent_mode)
+                    .get_last_index(id, mode)
                     .await
-                    .map_err(|error| unreadable_archive(owned_agent_id, level, error))?;
+                    .map_err(|error| unreadable_archive(id, level, error))?;
                 if idx != OplogIndex::NONE {
                     result = idx;
                     break;
@@ -464,23 +545,39 @@ impl OplogService for MultiLayerOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, String> {
-        let mut result = self
-            .primary
-            .try_get_last_index(owned_agent_id, agent_mode)
-            .await?;
-        if result == OplogIndex::NONE {
-            for layer in &self.lower {
-                let idx = layer
-                    .get_last_index(owned_agent_id, agent_mode)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                if idx != OplogIndex::NONE {
-                    result = idx;
-                    break;
+        self.read_with_authority(
+            owned_agent_id,
+            agent_mode,
+            || async {
+                let mut result = self
+                    .primary
+                    .try_get_last_index(owned_agent_id, agent_mode)
+                    .await?;
+                if result == OplogIndex::NONE {
+                    for layer in &self.lower {
+                        let idx = layer
+                            .get_last_index(owned_agent_id, agent_mode)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        if idx != OplogIndex::NONE {
+                            result = idx;
+                            break;
+                        }
+                    }
                 }
-            }
-        }
-        Ok(result)
+                Ok(result)
+            },
+            |record| async move {
+                Ok(if record.agent_mode == agent_mode {
+                    record.last_index
+                } else {
+                    OplogIndex::NONE
+                })
+            },
+            || Ok(OplogIndex::NONE),
+            |error| error.to_string(),
+        )
+        .await
     }
 
     async fn assert_owning_epoch(
@@ -489,9 +586,19 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         expected_epoch: ShardEpoch,
     ) -> Result<(), OplogError> {
-        self.primary
-            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
-            .await
+        match agent_mode {
+            AgentMode::Durable => {
+                self.primary
+                    .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+                    .await
+            }
+            AgentMode::Ephemeral => {
+                self.lower
+                    .first()
+                    .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+                    .await
+            }
+        }
     }
 
     async fn delete(
@@ -499,24 +606,76 @@ impl OplogService for MultiLayerOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        fingerprint: AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
-        if let Err(error) = self
-            .primary
-            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
-            .await
-        {
+        let (deleted, expected_epoch) = if let Some(service) = self.seal_service() {
+            service
+                .delete_with_tombstone(
+                    lifecycle,
+                    owned_agent_id,
+                    agent_mode,
+                    fingerprint,
+                    expected_epoch,
+                )
+                .await?
+        } else {
+            (false, expected_epoch)
+        };
+        if deleted {
+            self.archive_failures
+                .lock()
+                .unwrap()
+                .retain(|(id, _), _| id != owned_agent_id);
+            return Ok(());
+        }
+        let deleted = match agent_mode {
+            AgentMode::Durable => {
+                self.primary
+                    .delete(
+                        lifecycle,
+                        owned_agent_id,
+                        agent_mode,
+                        fingerprint,
+                        expected_epoch,
+                    )
+                    .await
+            }
+            AgentMode::Ephemeral => {
+                self.lower
+                    .first()
+                    .delete(owned_agent_id, agent_mode, expected_epoch)
+                    .await
+            }
+        };
+        if let Err(error) = deleted {
             crate::metrics::oplog::record_archive_maintenance_failure("delete");
-            warn!(agent_id = %owned_agent_id, error = %error, "Failed to delete primary oplog storage; deletion remains fenced for retry");
+            warn!(agent_id = %owned_agent_id, error = %error, "Failed to delete owning oplog storage; deletion remains fenced for retry");
             return Err(error);
         }
+        if agent_mode == AgentMode::Ephemeral {
+            // Ephemeral writers claim the first lower layer, not the unused primary namespace.
+            // Clean the primary only after the authoritative deletion passes its epoch check.
+            if let Err(error) = self
+                .primary
+                .delete(lifecycle, owned_agent_id, agent_mode, fingerprint, None)
+                .await
+            {
+                crate::metrics::oplog::record_archive_maintenance_failure("delete");
+                warn!(agent_id = %owned_agent_id, error = %error, "Failed to clean primary oplog storage; deletion remains fenced for retry");
+                return Err(error);
+            }
+        }
         for (level, layer) in self.lower.iter().enumerate() {
-            if let Err(error) = layer.delete(owned_agent_id, agent_mode).await {
+            if agent_mode == AgentMode::Ephemeral && level == 0 {
+                continue;
+            }
+            if let Err(error) = layer.delete(owned_agent_id, agent_mode, None).await {
                 crate::metrics::oplog::record_archive_maintenance_failure("delete");
                 warn!(agent_id = %owned_agent_id, level, error = %error, "Failed to delete archived oplog storage; deletion remains fenced for retry");
-                return Err(OplogError::Maintenance(error.to_string()));
+                return Err(error);
             }
         }
         self.archive_failures
@@ -534,21 +693,58 @@ impl OplogService for MultiLayerOplogService {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let unreadable = |error| UnreadableOplog::new(&owned_agent_id.agent_id, error);
-        let mut read = OplogRead::new(idx, n).map_err(unreadable)?;
+        self.read_with_authority(
+            owned_agent_id,
+            agent_mode,
+            || self.read_exact_present(owned_agent_id, agent_mode, idx, n),
+            |record| async move {
+                if record.agent_mode != agent_mode {
+                    return OplogRead::<OplogEntry>::new(idx, n)
+                        .and_then(OplogRead::finish)
+                        .map_err(unreadable);
+                }
+                let service = self.seal_service().expect("sealed state has a service");
+                super::super::sealed_reader::read_sealed(
+                    service.blobs.as_ref(),
+                    owned_agent_id,
+                    &record,
+                    idx,
+                    n,
+                )
+                .await
+                .map_err(unreadable)
+            },
+            || {
+                OplogRead::<OplogEntry>::new(idx, n)
+                    .and_then(OplogRead::finish)
+                    .map_err(unreadable)
+            },
+            std::convert::identity,
+        )
+        .await
+    }
 
+    async fn read_exact_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let unreadable = |error| UnreadableOplog::new(&id.agent_id, error);
+        let mut read = OplogRead::new(idx, n).map_err(unreadable)?;
         if let Some((start, count)) = read.next_range() {
             let entries = self
                 .primary
-                .read_source(owned_agent_id, agent_mode, start, count)
+                .read_source_present(id, mode, start, count)
                 .await?;
             read.add_source(OplogReadSource::Primary, entries)
                 .map_err(unreadable)?;
         }
-
         for (level, layer) in self.lower.iter().enumerate() {
             if let Some((start, count)) = read.next_range() {
                 let entries = layer
-                    .read_source(owned_agent_id, agent_mode, start, count)
+                    .read_source(id, mode, start, count)
                     .await
                     .map_err(unreadable)?;
                 read.add_source(OplogReadSource::Archive(level), entries)
@@ -557,7 +753,6 @@ impl OplogService for MultiLayerOplogService {
                 break;
             }
         }
-
         read.finish().map_err(unreadable)
     }
 
@@ -568,13 +763,45 @@ impl OplogService for MultiLayerOplogService {
         idx: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
-        let mut result = self
-            .primary
-            .read_source(owned_agent_id, agent_mode, idx, n)
-            .await?;
+        let unreadable = |error| UnreadableOplog::new(&owned_agent_id.agent_id, error);
+        checked_range_end(idx, n).map_err(unreadable)?;
+        self.read_with_authority(
+            owned_agent_id,
+            agent_mode,
+            || self.read_source_present(owned_agent_id, agent_mode, idx, n),
+            |record| async move {
+                if record.agent_mode != agent_mode {
+                    return Ok(BTreeMap::new());
+                }
+                let service = self.seal_service().expect("sealed state has a service");
+                super::super::sealed_reader::read_sealed_source(
+                    service.blobs.as_ref(),
+                    owned_agent_id,
+                    &record,
+                    idx,
+                    n,
+                )
+                .await
+                .map_err(unreadable)
+            },
+            || Ok(BTreeMap::new()),
+            std::convert::identity,
+        )
+        .await
+    }
+
+    async fn read_source_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let unreadable = |error| UnreadableOplog::new(&id.agent_id, error);
+        checked_range_end(idx, n).map_err(unreadable)?;
+        let mut result = self.primary.read_source_present(id, mode, idx, n).await?;
         for layer in &self.lower {
-            // Each layer holds an older part of the oplog than the layer above it and reads a
-            // suffix of the range it is given, so it is given the range below what is covered.
+            // Every layer stores an older suffix than the layer above it.
             let count = match result.first_key_value() {
                 Some((first, _)) => first.as_u64().saturating_sub(idx.as_u64()),
                 None => n,
@@ -583,9 +810,9 @@ impl OplogService for MultiLayerOplogService {
                 break;
             }
             let entries = layer
-                .read_source(owned_agent_id, agent_mode, idx, count)
+                .read_source(id, mode, idx, count)
                 .await
-                .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
+                .map_err(unreadable)?;
             for (index, entry) in entries {
                 result.entry(index).or_insert(entry);
             }
@@ -598,24 +825,32 @@ impl OplogService for MultiLayerOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<bool, UnreadableOplog> {
-        if self.primary.exists(owned_agent_id, agent_mode).await? {
-            return Ok(true);
-        }
-
-        for (level, layer) in self.lower.iter().enumerate() {
-            if agent_mode == AgentMode::Ephemeral {
-                crate::metrics::ephemeral::record_lower_oplog_existence_read();
-            }
-            if layer
-                .exists(owned_agent_id, agent_mode)
-                .await
-                .map_err(|error| unreadable_archive(owned_agent_id, level, error))?
-            {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
+        self.read_with_authority(
+            owned_agent_id,
+            agent_mode,
+            || async {
+                if self.primary.exists(owned_agent_id, agent_mode).await? {
+                    return Ok(true);
+                }
+                for (level, layer) in self.lower.iter().enumerate() {
+                    if agent_mode == AgentMode::Ephemeral {
+                        crate::metrics::ephemeral::record_lower_oplog_existence_read();
+                    }
+                    if layer
+                        .exists(owned_agent_id, agent_mode)
+                        .await
+                        .map_err(|error| unreadable_archive(owned_agent_id, level, error))?
+                    {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            },
+            |record| async move { Ok(record.agent_mode == agent_mode) },
+            || Ok(false),
+            std::convert::identity,
+        )
+        .await
     }
 
     async fn try_exists(
@@ -623,22 +858,32 @@ impl OplogService for MultiLayerOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<bool, String> {
-        if self.primary.try_exists(owned_agent_id, agent_mode).await? {
-            return Ok(true);
-        }
-        for layer in &self.lower {
-            if agent_mode == AgentMode::Ephemeral {
-                crate::metrics::ephemeral::record_lower_oplog_existence_read();
-            }
-            if layer
-                .exists(owned_agent_id, agent_mode)
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        self.read_with_authority(
+            owned_agent_id,
+            agent_mode,
+            || async {
+                if self.primary.try_exists(owned_agent_id, agent_mode).await? {
+                    return Ok(true);
+                }
+                for layer in &self.lower {
+                    if agent_mode == AgentMode::Ephemeral {
+                        crate::metrics::ephemeral::record_lower_oplog_existence_read();
+                    }
+                    if layer
+                        .exists(owned_agent_id, agent_mode)
+                        .await
+                        .map_err(|error| error.to_string())?
+                    {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            },
+            |record| async move { Ok(record.agent_mode == agent_mode) },
+            || Ok(false),
+            |error| error.to_string(),
+        )
+        .await
     }
 
     async fn scan_for_type(
@@ -651,7 +896,9 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<ScanPage, WorkerExecutorError> {
         let state = decode_scan_cursor(&cursor, modes)?;
         let layer = state.layer;
-        if layer > self.lower.len().get() {
+        let seal_service = self.seal_service().filter(|service| service.enabled());
+        let last_layer = self.lower.len().get() + usize::from(seal_service.is_some());
+        if layer > last_layer {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "Invalid oplog layer in scan cursor: {layer}"
             )));
@@ -689,7 +936,7 @@ impl OplogService for MultiLayerOplogService {
                 let agent_ids = self
                     .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, layer)
                     .await?;
-                let cursor = if new_cursor.is_finished() && (layer + 1) <= self.lower.len().get() {
+                let cursor = if new_cursor.is_finished() && layer < last_layer {
                     first_scan_cursor(layer + 1, modes)?
                 } else if new_cursor.is_finished() {
                     ScanCursor::default()
@@ -702,7 +949,12 @@ impl OplogService for MultiLayerOplogService {
                     examined_keys,
                 })
             }
-            _ => unreachable!(),
+            _ => {
+                seal_service
+                    .expect("validated seal scan layer")
+                    .scan_for_type(environment_id, type_id, modes, cursor, count)
+                    .await
+            }
         }
     }
 

@@ -241,6 +241,10 @@ max_retained_auto_commit_batches = 32
 oplog_rate_limit_enabled = false
 plugin_max_commit_count = 3
 plugin_max_elapsed_time = "5s"
+seal_put_timeout = "10s"
+server_commit_bound = "5m"
+shard_lease_max_ttl = "1m"
+skew_margin = "30s"
 
 [oplog.default_snapshotting]
 type = "Disabled"
@@ -707,6 +711,10 @@ without_time = false
 # oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
+# seal_put_timeout = "10s"
+# server_commit_bound = "5m"
+# shard_lease_max_ttl = "1m"
+# skew_margin = "30s"
 #
 # [oplog.default_snapshotting]
 # type = "Disabled"
@@ -1172,6 +1180,10 @@ without_time = false
 # oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
+# seal_put_timeout = "10s"
+# server_commit_bound = "5m"
+# shard_lease_max_ttl = "1m"
+# skew_margin = "30s"
 #
 # [oplog.default_snapshotting]
 # type = "Disabled"
@@ -1607,6 +1619,10 @@ without_time = false
 # oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
+# seal_put_timeout = "10s"
+# server_commit_bound = "5m"
+# shard_lease_max_ttl = "1m"
+# skew_margin = "30s"
 #
 # [oplog.default_snapshotting]
 # type = "Disabled"

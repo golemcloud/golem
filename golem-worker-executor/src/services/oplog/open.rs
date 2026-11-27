@@ -54,17 +54,42 @@ struct OpenOplogEntry {
 
 type OplogSlot = Arc<Mutex<Option<OpenOplogEntry>>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OplogOpenPurpose {
+    Activation,
+    Archive,
+    Delete,
+}
+
 /// Exclusive ownership of a logical oplog's cold lifecycle. The primary service owns the slot;
 /// wrapper construction uses the same guard, including when no primary handle exists yet.
 pub struct OplogLifecycleGuard {
     agent_id: AgentId,
     slot: Option<OwnedMutexGuard<Option<OpenOplogEntry>>>,
     owner: OpenOplogs,
+    open_purpose: OplogOpenPurpose,
+    read_attempt: Option<Arc<super::OplogReadAttempt>>,
 }
 
 impl OplogLifecycleGuard {
+    pub fn set_read_attempt(&mut self, attempt: Option<Arc<super::OplogReadAttempt>>) {
+        self.read_attempt = attempt;
+    }
+
+    pub fn read_attempt(&self) -> Option<&Arc<super::OplogReadAttempt>> {
+        self.read_attempt.as_ref()
+    }
+
     pub fn assert_agent(&self, agent_id: &AgentId) {
         assert_eq!(&self.agent_id, agent_id);
+    }
+
+    pub(crate) fn set_open_purpose(&mut self, purpose: OplogOpenPurpose) {
+        self.open_purpose = purpose;
+    }
+
+    pub(crate) fn open_purpose(&self) -> OplogOpenPurpose {
+        self.open_purpose
     }
 }
 
@@ -107,6 +132,8 @@ impl OpenOplogs {
             agent_id: *agent_id,
             slot: Some(slot),
             owner: self.clone(),
+            open_purpose: OplogOpenPurpose::Activation,
+            read_attempt: None,
         }
     }
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::worker::*;
+use golem_common::model::ScheduledAction;
 
 type MemoryAccountingCommit = Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>;
 
@@ -101,6 +102,52 @@ impl MemoryAccounting {
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(in crate::worker) async fn is_resident_idle_for_seal(
+        &self,
+        instance: &WorkerLifecycle,
+    ) -> bool {
+        if self.startup_attempt.pending().is_some() {
+            return false;
+        }
+        match instance.state() {
+            WorkerInstance::Running(running) => self.is_running_worker_idle(running).await,
+            phase => phase.is_absent_for_seal(self.agent_mode()),
+        }
+    }
+
+    pub(in crate::worker) async fn schedule_seal_after_resident_idle(&self) {
+        if !self.seal_waiting_for_idle.load(Ordering::Acquire) {
+            return;
+        }
+        // Share the retirement lock so an idle publication cannot pass a declined seal before
+        // that seal records its demand. Folded status need not change when replay finishes.
+        let instance = self.instance.lock().await;
+        if self.owner_retirement_requested.is_cancelled()
+            || !self.is_resident_idle_for_seal(&instance).await
+            || !self.seal_waiting_for_idle.swap(false, Ordering::AcqRel)
+        {
+            return;
+        }
+        let status = self.get_last_known_status().await;
+        if !crate::services::worker::seal_status_is_eligible(&status) {
+            return;
+        }
+        drop(instance);
+        let interval = self.config().oplog.archive_interval;
+        self.scheduler_service()
+            .schedule(
+                jiff::Timestamp::now() + interval,
+                ScheduledAction::ArchiveOplog {
+                    account_id: self.initial_worker_metadata.created_by,
+                    owned_agent_id: self.owned_agent_id.clone(),
+                    agent_mode: self.agent_mode(),
+                    last_oplog_index: status.oplog_idx,
+                    next_after: interval,
+                },
+            )
+            .await;
+    }
+
     /// This method is supposed to be called on a worker for what `is_currently_idle_but_running`
     /// previously returned true.
     ///

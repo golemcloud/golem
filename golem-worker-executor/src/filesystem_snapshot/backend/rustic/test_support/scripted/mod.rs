@@ -501,6 +501,111 @@ impl Debug for ScriptedBlobStorage {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl BlobStorageBackend for ScriptedBlobStorage {
+    async fn list_page_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
+        let _in_flight = self.in_flight(&namespace, op_label, prefix);
+        let script = (self.rule)(&_in_flight.namespace, op_label, prefix);
+        if script == Script::Torn {
+            self.record(op_label, prefix);
+            self.gate.cancelled().await;
+            let listed = self
+                .inner
+                .list_page_at(
+                    target_label,
+                    op_label,
+                    namespace,
+                    prefix,
+                    start_after,
+                    max_keys,
+                )
+                .await?;
+            let hidden = self
+                .hidden
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            return Ok(listed
+                .into_iter()
+                .filter(|blob| !hidden.contains(&blob.path))
+                .collect());
+        }
+        self.follow(
+            script,
+            op_label,
+            prefix,
+            self.inner.list_page_at(
+                target_label,
+                op_label,
+                namespace,
+                prefix,
+                start_after,
+                max_keys,
+            ),
+        )
+        .await
+    }
+
+    async fn put_raw_if_absent_once_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<PutIfAbsent> {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
+        let script = (self.rule)(&_in_flight.namespace, op_label, path);
+        if script.is_late() {
+            let (inner, owned_path, owned_data) =
+                (self.inner.clone(), path.to_path_buf(), data.to_vec());
+            return self
+                .late(script, &_in_flight, async move {
+                    inner
+                        .put_raw_if_absent_once(
+                            target_label,
+                            op_label,
+                            namespace,
+                            &owned_path,
+                            &owned_data,
+                            timeout,
+                        )
+                        .await
+                        .map(|_| ())
+                })
+                .await;
+        }
+        if script == Script::AnswerAlreadyExists {
+            self.record(op_label, path);
+            let _: PutIfAbsent = self
+                .inner
+                .put_raw_if_absent_once_at(target_label, op_label, namespace, path, data, timeout)
+                .await?;
+            return Ok(PutIfAbsent::AlreadyExists);
+        }
+        self.follow(
+            script,
+            op_label,
+            path,
+            self.inner.put_raw_if_absent_once_at(
+                target_label,
+                op_label,
+                namespace,
+                path,
+                data,
+                timeout,
+            ),
+        )
+        .await
+    }
+
     async fn get_raw_at(
         &self,
         target_label: &'static str,

@@ -4,7 +4,10 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
-use super::{DefaultWorkerFork, admission, admission::Admission, stream_cut};
+use super::{
+    CopiedSourceOplog, DefaultWorkerFork, StageAdmission, StageError, admission,
+    admission::Admission, stream_cut,
+};
 use crate::durable_host::durable_stream::DurableStreamStore;
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::services::HasOplog;
@@ -46,6 +49,16 @@ pub(super) use golem_common::model::durable_stream::StreamExportForkCandidate as
 enum Error {
     Rejected(ForkStreamSlotRejection),
     Worker(WorkerExecutorError),
+    StageInvalidated { key: String },
+}
+
+impl From<StageError> for Error {
+    fn from(error: StageError) -> Self {
+        match error {
+            StageError::Invalidated { key } => Self::StageInvalidated { key },
+            StageError::Worker(error) => Self::Worker(error),
+        }
+    }
 }
 
 impl From<WorkerExecutorError> for Error {
@@ -73,7 +86,7 @@ impl From<DurableStreamRemoteError<WorkerExecutorError>> for Error {
 
 impl From<crate::services::oplog::OplogError> for Error {
     fn from(error: crate::services::oplog::OplogError) -> Self {
-        Self::Worker(error.into())
+        StageError::from(error).into()
     }
 }
 
@@ -93,6 +106,10 @@ pub(super) async fn fork<Ctx: WorkerCtx>(
         Ok(success) => fork_stream_slot_response::Result::Success(success),
         Err(Error::Rejected(rejection)) => fork_stream_slot_response::Result::Rejected(rejection),
         Err(Error::Worker(error)) => fork_stream_slot_response::Result::Failure(error.into()),
+        Err(Error::StageInvalidated { key }) => fork_stream_slot_response::Result::Failure(
+            WorkerExecutorError::from(crate::services::oplog::OplogError::StageInvalidated { key })
+                .into(),
+        ),
     };
     ForkStreamSlotResponse {
         result: Some(result),
@@ -255,9 +272,10 @@ async fn execute<Ctx: WorkerCtx>(
         return Ok(success);
     }
     let mut stage_id = Uuid::new_v4();
+    let mut stage_cleanup = None;
     let result = async {
         // Stage before charging limits. A rejected byte budget never consumes admission.
-        let (mut oplog, copied_bytes, mut target_fingerprint, mut baseline) = stage(
+        let staged = stage(
             service,
             &source,
             &target_id,
@@ -267,8 +285,16 @@ async fn execute<Ctx: WorkerCtx>(
             &candidate,
             request.max_copied_bytes,
             &fork_request,
+            &mut stage_cleanup,
         )
         .await?;
+        let (mut oplog, copied_bytes, mut target_fingerprint, mut baseline) = match staged {
+            StageAdmission::Created(copied) => copied,
+            StageAdmission::Refused => {
+                return refused_stage(service.oplog_service.as_ref(), &target, request, &source_id)
+                    .await;
+            }
+        };
         // A source without the snapshot of the baseline holds no reservation.
         if let Some(refused) = source_baseline_refusal(
             service,
@@ -312,14 +338,16 @@ async fn execute<Ctx: WorkerCtx>(
         };
         if winner != candidate {
             drop(oplog);
-            service
-                .oplog_service
-                .discard_staged(&target, AgentMode::Durable, stage_id)
+            stage_cleanup
+                .as_mut()
+                .expect("stage was admitted")
+                .discard()
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
             stage_id = Uuid::new_v4();
+            stage_cleanup = None;
             candidate = winner;
-            (oplog, _, target_fingerprint, baseline) = stage(
+            let staged = stage(
                 service,
                 &source,
                 &target_id,
@@ -329,8 +357,21 @@ async fn execute<Ctx: WorkerCtx>(
                 &candidate,
                 request.max_copied_bytes,
                 &fork_request,
+                &mut stage_cleanup,
             )
             .await?;
+            (oplog, _, target_fingerprint, baseline) = match staged {
+                StageAdmission::Created(copied) => copied,
+                StageAdmission::Refused => {
+                    return refused_stage(
+                        service.oplog_service.as_ref(),
+                        &target,
+                        request,
+                        &source_id,
+                    )
+                    .await;
+                }
+            };
             if let Some(refused) = source_baseline_refusal(
                 service,
                 &source_snapshots,
@@ -393,19 +434,27 @@ async fn execute<Ctx: WorkerCtx>(
         .await?;
         oplog.commit(CommitLevel::Always).await?;
         let last = oplog.current_oplog_index().await;
+        let stage_token = oplog.stage_token();
         drop(oplog);
         let candidate = &candidate;
         let target = &target;
         let source_id = &source_id;
+        let cleanup = stage_cleanup.as_mut().expect("stage was admitted");
         let published = copied
             .publish(
                 |publication| {
                     async move {
                         let outcome = service
                             .oplog_service
-                            .publish_staged(target, AgentMode::Durable, publication, last)
+                            .publish_staged(
+                                target,
+                                AgentMode::Durable,
+                                publication.with_stage_token(stage_token),
+                                last,
+                            )
                             .await;
                         if let Ok(true) = outcome {
+                            cleanup.disarm();
                             return PublishFound::Published(Ok(response(
                                 &candidate.export,
                                 candidate.cut,
@@ -448,12 +497,21 @@ async fn execute<Ctx: WorkerCtx>(
         published
     }
     .await;
-    let cleanup = service
-        .oplog_service
-        .discard_staged(&target, AgentMode::Durable, stage_id)
-        .await;
+    let result = reconcile_invalidated_stage(
+        result,
+        service.oplog_service.as_ref(),
+        &target,
+        request,
+        &source_id,
+    )
+    .await;
+    let cleanup = match stage_cleanup.as_mut() {
+        Some(cleanup) => cleanup.discard().await,
+        None => Ok(()),
+    };
     let success = result?;
     cleanup.map_err(WorkerExecutorError::runtime)?;
+    drop(stage_cleanup);
     resume(service, &target, &auth).await?;
     Ok(success)
 }
@@ -478,6 +536,44 @@ fn receipt_answer(
         true,
         &receipt.initialized.session_key,
     ))
+}
+
+async fn reconcile_invalidated_stage(
+    result: Result<ForkStreamSlotSuccess, Error>,
+    service: &dyn OplogService,
+    target: &OwnedAgentId,
+    request: &ForkStreamSlotRequest,
+    source: &AgentId,
+) -> Result<ForkStreamSlotSuccess, Error> {
+    match result {
+        Err(Error::StageInvalidated { .. }) => {
+            refused_stage(service, target, request, source).await
+        }
+        result => result,
+    }
+}
+
+async fn refused_stage(
+    service: &dyn OplogService,
+    target: &OwnedAgentId,
+    request: &ForkStreamSlotRequest,
+    source: &AgentId,
+) -> Result<ForkStreamSlotSuccess, Error> {
+    if let Some(receipt) = creation_receipt(service, target).await? {
+        return receipt_answer(&receipt, request, source, Reason::Conflict);
+    }
+    if service.exists(target, AgentMode::Durable).await?
+        || service.exists(target, AgentMode::Ephemeral).await?
+    {
+        if let Some(receipt) = creation_receipt(service, target).await? {
+            return receipt_answer(&receipt, request, source, Reason::Conflict);
+        }
+        return Err(reject(Reason::Conflict));
+    }
+    Err(WorkerExecutorError::recovery_required(format!(
+        "Export fork stage admission for {target} was refused without a visible target"
+    ))
+    .into())
 }
 
 /// The answer of a fork whose source does not hold the snapshot `baseline` of the baseline of
@@ -594,15 +690,8 @@ async fn stage<Ctx: WorkerCtx>(
     candidate: &Candidate,
     max_bytes: u64,
     fork_request: &CreateRequest,
-) -> Result<
-    (
-        std::sync::Arc<dyn crate::services::oplog::Oplog>,
-        u64,
-        AgentFingerprint,
-        Option<FilesystemSnapshotName>,
-    ),
-    Error,
-> {
+    stage_cleanup: &mut Option<super::StageCleanupGuard>,
+) -> Result<StageAdmission<CopiedSourceOplog>, Error> {
     service
         .copy_source_oplog(
             account,
@@ -616,18 +705,18 @@ async fn stage<Ctx: WorkerCtx>(
             Some(max_bytes),
             Some(candidate),
             fork_request,
+            stage_cleanup,
         )
         .await
-        .map_err(|error| {
-            if error.to_string().contains("fork copied bytes") {
+        .map_err(|error| match error {
+            StageError::Worker(error) if error.to_string().contains("fork copied bytes") => {
                 Error::Rejected(ForkStreamSlotRejection {
                     reason: Reason::TooLarge as i32,
                     copied_bytes: max_bytes.saturating_add(1),
                     retry_after_seconds: 0,
                 })
-            } else {
-                Error::Worker(error)
             }
+            error => Error::from(error),
         })
 }
 
@@ -1116,6 +1205,210 @@ mod tests {
     use test_r::test;
     use uuid::Uuid;
 
+    #[test]
+    async fn export_stage_refusal_reconciles_publication_after_preflight() {
+        use super::super::tests::StageRace;
+        for (matching, expired) in [(true, false), (false, false), (true, true)] {
+            for write in [None, Some("receipt"), Some("commit")] {
+                let race = StageRace::new().await;
+                let source = AgentId::from_parts(7, 2);
+                let request = ForkStreamSlotRequest {
+                    environment_id: Some(race.target.environment_id.into()),
+                    session: "export-session".into(),
+                    route_scope: "export-route".into(),
+                    slot: "input".into(),
+                    expected_method: "echo".into(),
+                    ..Default::default()
+                };
+                assert!(
+                    creation_receipt(&race.service, &race.target)
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    !race
+                        .service
+                        .exists(&race.target, AgentMode::Durable)
+                        .await
+                        .unwrap()
+                );
+                let export = StreamExportFork {
+                    source,
+                    source_environment_id: race.target.environment_id,
+                    source_fingerprint: AgentFingerprint::new(),
+                    source_path: request.source_path.clone(),
+                    session: request.session.clone(),
+                    route_scope: request.route_scope.clone(),
+                    slot: if matching {
+                        request.slot.clone()
+                    } else {
+                        "other-input".into()
+                    },
+                    expected_method: request.expected_method.clone(),
+                    requested_offset: None,
+                    anchor: None,
+                    sub_offset: 0,
+                    content_type: "application/json".into(),
+                    initial_content_hash: blake3::hash(&request.initial_content)
+                        .as_bytes()
+                        .to_vec(),
+                    closed: false,
+                    target_expiry_policy: if expired {
+                        StreamSessionExpiryPolicy::Absolute {
+                            expires_at_millis: 1,
+                        }
+                    } else {
+                        StreamSessionExpiryPolicy::None
+                    },
+                };
+                let hash = [7; 32];
+                let mut initialized = receipt(true).initialized;
+                initialized.public_session_id = request.session.clone();
+                initialized.route_scope = request.route_scope.clone();
+                initialized.request_hash = hash.to_vec();
+                initialized.expiry_policy = export.target_expiry_policy;
+                initialized.expiry_deadline_millis = expired.then_some(1);
+                let invocation_key = initialized.session_key;
+                let candidate = Candidate {
+                    export: export.clone(),
+                    horizon: OplogIndex::from_u64(2),
+                    cut: OplogIndex::from_u64(2),
+                    selected: golem_common::model::durable_stream::StreamId(Uuid::new_v4()),
+                    source_invocation: initialized.source_invocation.clone(),
+                    target_session_key: invocation_key,
+                    expiry_policy: initialized.expiry_policy,
+                    expiry_deadline_millis: initialized.expiry_deadline_millis,
+                    retained_through: None,
+                    initial: None,
+                };
+                let answer = if let Some(write) = write {
+                    let (stage_id, stage, _cleanup) = race.hidden_stage().await;
+                    stage.add(OplogEntry::suspend()).await.unwrap();
+                    race.discard(stage_id, stage.stage_token()).await;
+                    race.publish(hash, Some(export), Some(initialized)).await;
+                    let result: Result<ForkStreamSlotSuccess, Error> = async {
+                        if write == "receipt" {
+                            append_target_initialization(
+                                stage.as_ref(),
+                                &candidate,
+                                hash,
+                                candidate.expiry_deadline_millis,
+                            )
+                            .await?;
+                        } else {
+                            stage.commit(CommitLevel::Always).await?;
+                        }
+                        Ok(response(
+                            &candidate.export,
+                            candidate.cut,
+                            false,
+                            &invocation_key,
+                        ))
+                    }
+                    .await;
+                    assert!(
+                        matches!(&result, Err(Error::StageInvalidated { key }) if !key.is_empty()),
+                        "{write}: {result:?}"
+                    );
+                    reconcile_invalidated_stage(
+                        result,
+                        &race.service,
+                        &race.target,
+                        &request,
+                        &source,
+                    )
+                    .await
+                } else {
+                    assert!(matches!(
+                        race.admit_after(race.publish(hash, Some(export), Some(initialized)))
+                            .await
+                            .unwrap(),
+                        StageAdmission::Refused
+                    ));
+                    refused_stage(&race.service, &race.target, &request, &source).await
+                };
+                if matching && !expired {
+                    let success = answer.unwrap();
+                    assert!(success.replayed);
+                    assert_eq!(success.invocation_key, Some(invocation_key.into()));
+                    assert_eq!(success.oplog_index, 2);
+                    for error in [
+                        Error::from(crate::services::oplog::OplogError::Maintenance(
+                            "backend failure".into(),
+                        )),
+                        Error::from(WorkerExecutorError::recovery_required("unrelated recovery")),
+                    ] {
+                        assert!(matches!(
+                            reconcile_invalidated_stage(
+                                Err(error),
+                                &race.service,
+                                &race.target,
+                                &request,
+                                &source
+                            )
+                            .await,
+                            Err(Error::Worker(_))
+                        ));
+                    }
+                } else {
+                    assert_eq!(rejected(answer), Some(Reason::Conflict as i32));
+                }
+            }
+        }
+    }
+
+    #[test]
+    async fn export_stage_admission_without_a_visible_target_remains_retryable() {
+        use super::super::tests::StageRace;
+        let race = StageRace::new().await;
+        let StageAdmission::Created((hidden, _cleanup)) = race.admit_after(async {}).await.unwrap()
+        else {
+            panic!("the first stage must be admitted");
+        };
+        hidden.add(OplogEntry::suspend()).await.unwrap();
+        hidden.commit(CommitLevel::Always).await.unwrap();
+        assert!(matches!(
+            race.admit_after(async {}).await.unwrap(),
+            StageAdmission::Refused
+        ));
+        let answer = refused_stage(
+            &race.service,
+            &race.target,
+            &ForkStreamSlotRequest::default(),
+            &AgentId::from_parts(7, 2),
+        )
+        .await;
+        assert!(matches!(
+            answer,
+            Err(Error::Worker(WorkerExecutorError::RecoveryRequired { .. }))
+        ));
+        drop(hidden);
+    }
+
+    #[test]
+    async fn export_stage_invalidation_without_a_visible_target_remains_retryable() {
+        use super::super::tests::StageRace;
+        let race = StageRace::new().await;
+        let (stage_id, stage, _cleanup) = race.hidden_stage().await;
+        stage.add(OplogEntry::suspend()).await.unwrap();
+        race.discard(stage_id, stage.stage_token()).await;
+        let error = stage.commit(CommitLevel::Always).await.unwrap_err();
+        let error = Error::from(error);
+        assert!(matches!(&error, Error::StageInvalidated { .. }));
+        assert!(matches!(
+            reconcile_invalidated_stage(
+                Err(error),
+                &race.service,
+                &race.target,
+                &ForkStreamSlotRequest::default(),
+                &AgentId::from_parts(7, 2),
+            )
+            .await,
+            Err(Error::Worker(WorkerExecutorError::RecoveryRequired { .. })),
+        ));
+    }
+
     /// A creation receipt of no export, which is `live` or not.
     fn receipt(live: bool) -> CreationReceipt {
         let agent = AgentId::from_parts(7, 1);
@@ -1209,6 +1502,7 @@ mod tests {
                 .map(|answer| match answer {
                     Err(Error::Rejected(rejection)) => format!("rejected {}", rejection.reason),
                     Err(Error::Worker(error)) => format!("{error}"),
+                    Err(Error::StageInvalidated { key }) => format!("invalidated {key}"),
                     Ok(_) => "success".to_string(),
                 })
         };
@@ -1256,6 +1550,7 @@ mod tests {
         ) {
             Err(Error::Rejected(rejection)) => format!("rejected {}", rejection.reason),
             Err(Error::Worker(error)) => format!("{error}"),
+            Err(Error::StageInvalidated { key }) => format!("invalidated {key}"),
             Ok(_) => "success".to_string(),
         };
 

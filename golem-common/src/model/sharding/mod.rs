@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroUsize;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use desert_rust::BinaryCodec;
 use http::Uri;
@@ -124,7 +124,8 @@ pub struct RoutingTableEntry {
 /// assertion racing the manager. A newtype of this crate's own: the shard
 /// manager keeps a twin in `sharding::model`, and the wire's `u64` is the only
 /// bridge between them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, BinaryCodec)]
+#[desert(transparent)]
 pub struct ShardEpoch(pub u64);
 
 impl Display for ShardEpoch {
@@ -201,6 +202,42 @@ pub enum ShardDeliveryOutcome {
     },
 }
 
+/// A lease TTL anchored immediately before the request is sent. The wall clock bounds a host
+/// suspend, during which the monotonic clock may stop advancing.
+#[derive(Clone, Copy, Debug)]
+pub struct ShardLeaseClock {
+    pub sent_at: Instant,
+    pub wall_anchor: SystemTime,
+    pub ttl: Duration,
+}
+
+impl ShardLeaseClock {
+    pub fn expires_at(&self) -> Instant {
+        self.sent_at + self.ttl
+    }
+
+    pub fn clamped(self, max_ttl: Duration) -> Self {
+        Self {
+            ttl: self.ttl.min(max_ttl),
+            ..self
+        }
+    }
+
+    pub fn valid_until(
+        &self,
+        now: Instant,
+        wall_now: SystemTime,
+        skew_margin: Duration,
+    ) -> Option<SystemTime> {
+        let remaining = self.expires_at().checked_duration_since(now)?;
+        self.wall_anchor
+            .checked_add(self.ttl)?
+            .min(wall_now.checked_add(remaining)?)
+            .checked_sub(skew_margin)
+            .filter(|deadline| *deadline > wall_now)
+    }
+}
+
 /// The shards this executor currently holds, with the epoch each was granted
 /// at, and when the lease over them lapses on this executor's own clock, if
 /// it lapses at all.
@@ -218,7 +255,7 @@ pub struct ShardAssignment {
     /// the shard manager's copy of the lease is never earlier than this one.
     /// A push carries no lease. `None` means the lease never expires
     /// (single-shard mode and the pre-registration placeholder).
-    pub expires_at: Option<Instant>,
+    pub lease: Option<ShardLeaseClock>,
     /// The revision of the delivery this set came from, and the shard manager
     /// process this executor follows. A delivery older than this, or pushed
     /// by another process, is ignored; see [`ShardLeaseRevision`]. `None`
@@ -233,7 +270,7 @@ impl Default for ShardAssignment {
             number_of_shards: 0,
             executor_count: NonZeroUsize::MIN,
             shard_epochs: HashMap::new(),
-            expires_at: None,
+            lease: None,
             revision: None,
         }
     }
@@ -254,7 +291,7 @@ impl ShardAssignment {
                 .into_iter()
                 .map(|shard_id| (shard_id, ShardEpoch::default()))
                 .collect(),
-            expires_at: None,
+            lease: None,
             revision: None,
         }
     }
@@ -331,20 +368,17 @@ impl ShardAssignment {
     /// manager is correcting a push this executor never received, and the
     /// caller sweeps and recovers agents exactly as it would for a push.
     ///
-    /// The expiry is written as is, not maxed against the current one: each
-    /// grant is the manager's current word, and the manager's own deadline for
-    /// this executor never moves earlier, so a later grant is never the shorter
-    /// one. Grants arrive in the order they were asked for (the renewal loop
-    /// awaits each one), so a later grant is always anchored later.
+    /// Each grant replaces the clock, even when its bounded TTL expires earlier than the
+    /// previous grant. Keeping the later expiry would defeat the caller's TTL ceiling.
     pub fn adopt_grant(
         &mut self,
         number_of_shards: Option<usize>,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Instant,
+        lease: ShardLeaseClock,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
-        self.expires_at = Some(expires_at);
+        self.lease = Some(lease);
         self.apply(
             number_of_shards,
             shard_epochs,
@@ -451,13 +485,21 @@ impl ShardAssignment {
     /// admission keeps refusing until a re-registration installs a fresh grant.
     pub fn clear(&mut self, now: Instant) {
         self.shard_epochs.clear();
-        self.expires_at = Some(now);
+        self.lease = Some(ShardLeaseClock {
+            sent_at: now,
+            wall_anchor: SystemTime::now(),
+            ttl: Duration::ZERO,
+        });
+    }
+
+    pub fn expires_at(&self) -> Option<Instant> {
+        self.lease.map(|lease| lease.expires_at())
     }
 
     /// The single place the never-expires rule is spelled: a `None` expiry is
     /// always live.
     pub fn lease_is_live(&self, now: Instant) -> bool {
-        match self.expires_at {
+        match self.expires_at() {
             None => true,
             Some(expires_at) => now < expires_at,
         }
@@ -478,7 +520,7 @@ impl Display for ShardAssignment {
             "{{ number_of_shards: {}, shard_epochs: {}, lease: {} }}",
             self.number_of_shards,
             shard_epochs,
-            match self.expires_at {
+            match self.expires_at() {
                 Some(expires_at) => match expires_at.checked_duration_since(Instant::now()) {
                     Some(left) if !left.is_zero() => format!("{}ms left", left.as_millis()),
                     _ => "lapsed".to_string(),

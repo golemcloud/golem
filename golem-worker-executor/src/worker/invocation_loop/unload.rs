@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::HasWorkerService;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Finalizes a taken interrupt without a resident Store, retaining the caller's retry
@@ -230,9 +231,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 worker
                     .quiesce_for_owner_retirement(None, forwarding.as_deref())
                     .await?;
+                let mut fully_archived = false;
                 loop {
                     match EphemeralOplog::try_archive_blocking(&worker.oplog).await {
                         Ok(Some(true)) => {}
+                        Ok(Some(false)) => {
+                            fully_archived = worker.oplog.fence().is_none();
+                            break;
+                        }
                         Ok(_) => break,
                         Err(error) => {
                             tracing::warn!(
@@ -242,6 +248,32 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             );
                             break;
                         }
+                    }
+                }
+                if fully_archived
+                    && let Some(seal) = worker
+                        .oplog_service()
+                        .seal_service()
+                        .filter(|seal| seal.can_seal_mode(AgentMode::Ephemeral))
+                    && let Some(epoch) = worker.oplog.shard_epoch()
+                    && seal.deadline(&worker.owned_agent_id, epoch).is_some()
+                {
+                    // Seal takes the worker-service write gate before it retires the generation.
+                    // The oplog lifecycle guard stays held across both retirement paths.
+                    drop(cleanup);
+                    let sealed = async {
+                        let metadata = worker.try_get_latest_worker_metadata().await?;
+                        if !crate::services::worker::seal_status_is_eligible(&metadata.last_known_status) {
+                            return Ok(None);
+                        }
+                        worker
+                            .worker_service()
+                            .seal_generation(metadata, epoch, worker.retire_for_seal().boxed())
+                            .await
+                    }.await;
+                    cleanup = worker.owner_cleanup.lock().await;
+                    if let Err(error) = sealed {
+                        tracing::warn!(agent_id = %worker.agent_id(), error = %error, "Failed to seal the retired ephemeral oplog; archived history remains available");
                     }
                 }
                 worker.remove_from_active_agents().await;

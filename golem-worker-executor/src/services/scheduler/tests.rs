@@ -721,6 +721,10 @@ impl SchedulerStorage for FlakyInsertSchedulerStorage {
         self.inner.reschedule(id, owner, due, now).await
     }
 
+    fn is_durable(&self) -> bool {
+        self.inner.is_durable()
+    }
+
     async fn insert(
         &self,
         schedule_id: ScheduleId,
@@ -882,6 +886,10 @@ impl SchedulerStorage for RecordingSchedulerStorage {
         now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.reschedule(id, owner, due, now).await
+    }
+
+    fn is_durable(&self) -> bool {
+        self.inner.is_durable()
     }
 
     async fn insert(
@@ -1157,8 +1165,16 @@ fn scheduled_action_variants() -> Vec<ScheduledAction> {
             target_worker_fingerprint: AgentFingerprint::new(),
         },
         ScheduledAction::DeleteFinishedInvocation {
-            owned_agent_id,
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint: AgentFingerprint::new(),
+        },
+        ScheduledAction::CollectTombstone {
+            owned_agent_id: owned_agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+        },
+        ScheduledAction::CollectTombstone {
+            owned_agent_id,
+            agent_mode: AgentMode::Ephemeral,
         },
     ]
 }
@@ -1254,7 +1270,11 @@ async fn assert_storage_roundtrips_all_action_variants(
 
 #[test]
 async fn in_memory_scheduler_storage_roundtrips_all_action_variants() {
-    assert_storage_roundtrips_all_action_variants(Arc::new(InMemorySchedulerStorage::new())).await;
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    assert!(!storage.is_durable());
+    let scheduler = create_scheduler(storage.clone(), create_promise_service_mock()).await;
+    assert!(!scheduler.is_durable());
+    assert_storage_roundtrips_all_action_variants(storage).await;
 }
 
 #[test]
@@ -1272,7 +1292,97 @@ async fn sqlite_scheduler_storage_roundtrips_all_action_variants() {
     .await
     .unwrap();
 
-    assert_storage_roundtrips_all_action_variants(Arc::new(storage)).await;
+    let storage = Arc::new(storage);
+    assert!(storage.is_durable());
+    let scheduler = create_scheduler(storage.clone(), create_promise_service_mock()).await;
+    assert!(scheduler.is_durable());
+    assert_storage_roundtrips_all_action_variants(storage).await;
+}
+
+#[test]
+async fn sqlite_tombstone_collection_survives_restart_and_shard_move() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let config = DbSqliteConfig {
+        database: tempdir
+            .path()
+            .join("scheduler.db")
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 1,
+        foreign_keys: false,
+    };
+    let now = jiff::Timestamp::from_str("2023-07-17T10:06:00Z").unwrap();
+    let action = ScheduledAction::CollectTombstone {
+        owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("collect-tombstone")),
+        agent_mode: AgentMode::Ephemeral,
+    };
+    let schedule_id = ScheduleId::fresh();
+    let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
+    let shard = ShardId::from_routing_hash(routing_hash, 2);
+    let other_shard = ShardId::new((shard.value() + 1) % 2);
+    let old_assignment = ShardAssignment::unexpiring(2, [shard]);
+    let moved_assignment = ShardAssignment::unexpiring(2, [other_shard]);
+    let mut new_assignment = ShardAssignment::unexpiring(2, [shard]);
+    new_assignment.shard_epochs.insert(shard, ShardEpoch(1));
+
+    let storage = SqliteSchedulerStorage::configured(&config).await.unwrap();
+    storage
+        .insert(schedule_id, now, shard, &serialize(&action).unwrap())
+        .await
+        .unwrap();
+    let first = storage
+        .claim_due(now, &old_assignment, 1, Duration::from_secs(30))
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(first.action, action);
+    // Drop the owner after claiming, before acknowledging completion.
+    drop(storage);
+
+    let storage = SqliteSchedulerStorage::configured(&config).await.unwrap();
+    assert_eq!(storage.count_due(now, &new_assignment).await.unwrap(), 1);
+    assert!(
+        storage
+            .claim_due(now, &new_assignment, 1, Duration::from_secs(30))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let retry_at = now + jiff::SignedDuration::from_secs(31);
+    assert!(
+        storage
+            .claim_due(retry_at, &moved_assignment, 1, Duration::from_secs(30))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let retry = storage
+        .claim_due(retry_at, &new_assignment, 1, Duration::from_secs(30))
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(retry.schedule_id, schedule_id);
+    assert_eq!(retry.action, action);
+    assert_eq!(retry.attempt_count, first.attempt_count + 1);
+    assert_ne!(retry.lease_owner, first.lease_owner);
+    assert!(
+        !storage
+            .ack(&schedule_id, first.lease_owner, retry_at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .ack(&schedule_id, retry.lease_owner, retry_at)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        storage.count_due(retry_at, &new_assignment).await.unwrap(),
+        0
+    );
 }
 
 /// The scheduler's span must cover one tick, not the whole background loop. A
@@ -1635,6 +1745,7 @@ async fn create_oplog_service_with_presence(
             &owned_agent_id.storage_key(),
             1,
             vec![],
+            None,
             None,
         )
         .await
@@ -2086,6 +2197,7 @@ async fn retention_registration_rechecks_authority_after_recreation_and_repairs_
                 1,
                 serialize(&create(a)).unwrap(),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -2139,6 +2251,7 @@ async fn retention_registration_rechecks_authority_after_recreation_and_repairs_
                 &owner.storage_key(),
                 1,
                 serialize(&create(b)).unwrap(),
+                None,
                 None,
             )
             .await
@@ -3061,6 +3174,10 @@ mod lease_renewal_isolation {
             now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             self.inner.reschedule(id, owner, due, now).await
+        }
+
+        fn is_durable(&self) -> bool {
+            self.inner.is_durable()
         }
 
         async fn insert(

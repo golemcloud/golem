@@ -25,7 +25,10 @@ use crate::services::oplog::{
 };
 use crate::services::shard::ShardServiceDefault;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
-use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
+use crate::storage::indexed::{
+    AgentIndexedState, IndexedStorageError, IndexedStorageNamespace, ReleaseAgentResult,
+    UnsealAgentResult,
+};
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::OwnerKind;
@@ -524,6 +527,127 @@ struct FixedPages {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl IndexedStorage for FixedPages {
+    fn supports_release(&self) -> bool {
+        self.inner.supports_release()
+    }
+
+    async fn reserve_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        token: i64,
+    ) -> Result<Option<i64>, IndexedStorageError> {
+        self.inner
+            .reserve_stage(svc_name, api_name, owned_agent_id, token)
+            .await
+    }
+
+    async fn remove_stage_reservation(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .remove_stage_reservation(svc_name, api_name, owned_agent_id, token)
+            .await
+    }
+
+    async fn discard_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        stage_token: Option<i64>,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .discard_stage(svc_name, api_name, namespace, key, stage_token)
+            .await
+    }
+
+    async fn observe_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<crate::storage::indexed::AgentDataObservation, IndexedStorageError> {
+        self.inner
+            .observe_agent(svc_name, api_name, owned_agent_id)
+            .await
+    }
+
+    async fn mark_sealed(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+        fingerprint: golem_common::model::AgentFingerprint,
+        superseded_marker: Option<crate::storage::indexed::SealMarker>,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .mark_sealed(
+                svc_name,
+                api_name,
+                state,
+                epoch,
+                fingerprint,
+                superseded_marker,
+            )
+            .await
+    }
+
+    async fn release_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError> {
+        self.inner
+            .release_agent(svc_name, api_name, state, epoch)
+            .await
+    }
+
+    async fn unseal_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+        record_epoch: ShardEpoch,
+        valid_until: std::time::SystemTime,
+        fingerprint: golem_common::model::AgentFingerprint,
+    ) -> Result<UnsealAgentResult, IndexedStorageError> {
+        self.inner
+            .unseal_agent(
+                svc_name,
+                api_name,
+                state,
+                epoch,
+                record_epoch,
+                valid_until,
+                fingerprint,
+            )
+            .await
+    }
+
+    async fn remove_key_epoch_if_empty(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .remove_key_epoch_if_empty(svc_name, api_name, namespace, key, epoch)
+            .await
+    }
+
     async fn number_of_replicas(
         &self,
         svc_name: &'static str,
@@ -605,6 +729,7 @@ impl IndexedStorage for FixedPages {
         id: u64,
         value: Vec<u8>,
         expected_epoch: Option<golem_common::model::ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.inner
             .append(
@@ -616,6 +741,7 @@ impl IndexedStorage for FixedPages {
                 id,
                 value,
                 expected_epoch,
+                stage_token,
             )
             .await
     }
@@ -629,6 +755,7 @@ impl IndexedStorage for FixedPages {
         key: &str,
         pairs: Arc<[(u64, bytes::Bytes)]>,
         expected_epoch: Option<golem_common::model::ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.inner
             .append_many(
@@ -639,6 +766,32 @@ impl IndexedStorage for FixedPages {
                 key,
                 pairs,
                 expected_epoch,
+                stage_token,
+            )
+            .await
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+        stage_token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .move_if_absent(
+                svc_name,
+                api_name,
+                source_namespace,
+                source_key,
+                target_namespace,
+                target_key,
+                expected_last_id,
+                stage_token,
             )
             .await
     }
@@ -650,9 +803,19 @@ impl IndexedStorage for FixedPages {
         namespace: IndexedStorageNamespace,
         key: &str,
         epoch: golem_common::model::ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
+        presence_namespaces: &[IndexedStorageNamespace],
+        remove_if_absent: bool,
+    ) -> Result<crate::storage::indexed::KeyEpochClaim, IndexedStorageError> {
         self.inner
-            .set_key_epoch(svc_name, api_name, namespace, key, epoch)
+            .set_key_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                epoch,
+                presence_namespaces,
+                remove_if_absent,
+            )
             .await
     }
 
@@ -663,9 +826,17 @@ impl IndexedStorage for FixedPages {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
         self.inner
-            .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
+            .delete_with_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                expected_epoch,
+                retain_epoch,
+            )
             .await
     }
 
@@ -1362,7 +1533,12 @@ async fn seed_layer(
 ) {
     let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
     let layer = archive
-        .open(&owned_agent_id, AgentMode::Ephemeral, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            None,
+            golem_common::model::AgentFingerprint::new(),
+        )
         .await
         .unwrap();
     layer
@@ -1782,6 +1958,7 @@ async fn a_completed_pass_drops_the_agents_that_left_the_layer() {
         .delete(
             &OwnedAgentId::new(environment_id, &transient),
             AgentMode::Ephemeral,
+            None,
         )
         .await
         .unwrap();
@@ -2047,11 +2224,12 @@ impl OplogArchiveService for Miscounting {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(MiscountingArchive {
             inner: self
                 .inner
-                .open(owned_agent_id, agent_mode, shard_epoch)
+                .open(owned_agent_id, agent_mode, shard_epoch, fingerprint)
                 .await?,
             keeps_entries: self.keeps_entries,
             appends: self.appends.clone(),
@@ -2063,23 +2241,38 @@ impl OplogArchiveService for Miscounting {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(MiscountingArchive {
             inner: self
                 .inner
-                .open_fresh(owned_agent_id, agent_mode, shard_epoch)
+                .open_fresh(owned_agent_id, agent_mode, shard_epoch, fingerprint)
                 .await?,
             keeps_entries: self.keeps_entries,
             appends: self.appends.clone(),
         }))
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+            .await
+    }
+
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()> {
-        self.inner.delete(owned_agent_id, agent_mode).await
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .delete(owned_agent_id, agent_mode, expected_epoch)
+            .await
     }
 
     async fn read_source(
@@ -2481,10 +2674,15 @@ async fn a_sweep_holding_a_lapsed_lease_does_nothing() {
 
     // Expires as it is granted, so the lease has lapsed by the time a tick reads it.
     let shards = Arc::new(ShardServiceDefault::new());
+    let wall_anchor = std::time::SystemTime::now();
     shards.register(
         1,
         &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
-        Some(Instant::now()),
+        Some(golem_common::model::ShardLeaseClock {
+            sent_at: Instant::now(),
+            wall_anchor,
+            ttl: Duration::ZERO,
+        }),
         revision_of(MANAGER, 0),
         NonZeroUsize::MIN,
     );

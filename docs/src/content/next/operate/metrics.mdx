@@ -257,6 +257,7 @@ Process-local observations of how long an executor takes to release the resource
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
+| `golem_stage_reservation_cleanup_failed_total` | counter |  | Stage reservation cleanup failures after retries or at the shutdown cutoff |
 | `golem_oplog_svc_call_total` | counter | `api` | Calls to the oplog layer |
 | `golem_oplog_scheduled_archive_seconds` | histogram | `type` | Time of a scheduled archive step of the oplog of a worker; `type` is `intermediate` or `final` |
 | `golem_oplog_rate_limited_total` | counter |  | Oplog add calls that were delayed by the rate limiter |

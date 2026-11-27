@@ -15,6 +15,93 @@
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) fn retired_for_seal(&self) -> bool {
+        self.state_actor.retired_for_seal()
+    }
+
+    /// Evicts a disposable frozen observation before deletion opens a writable generation.
+    /// The caller holds the cold lifecycle guard and worker-service write gate.
+    pub(crate) async fn retire_frozen_for_deletion(
+        self: &Arc<Self>,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut cleanup = self.owner_cleanup.lock().await;
+        let instance = self.instance.lock().await;
+        instance.ensure_not_deleting()?;
+        self.state_actor.retire_for_seal();
+        self.owner_retirement_requested.cancel();
+        self.durable_stream_producer.fence();
+        drop(instance);
+        let forwarding = downcast_oplog::<ForwardingOplog>(&self.oplog);
+        let quiesced = self
+            .quiesce_for_owner_retirement(None, forwarding.as_deref())
+            .await;
+        self.remove_from_active_agents().await;
+        let stopped = self
+            .oplog
+            .stop_and_wait()
+            .await
+            .map_err(WorkerExecutorError::runtime);
+        *cleanup = OwnerCleanupState::Retired;
+        quiesced?;
+        stopped
+    }
+
+    /// The caller holds both the cold oplog lifecycle guard and the worker-service write gate.
+    /// No deletion state or lost-shard reason is installed for this disposable generation.
+    pub(in crate::worker) async fn retire_for_seal(
+        self: &Arc<Self>,
+    ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
+        let mut cleanup = self.owner_cleanup.lock().await;
+        let active_agent = self.active_agent_for_this_owner().await;
+        let instance = self.instance.lock().await;
+        instance.ensure_not_deleting()?;
+        if self.owner_retirement_requested.is_cancelled()
+            || self.oplog.fence().is_some()
+            || !self.is_current_cached_owner().await
+        {
+            return Err(WorkerExecutorError::ShardingNotReady);
+        }
+        let status = self.get_repaired_status().await?;
+        if !crate::services::worker::seal_status_is_eligible(&status) {
+            return Ok(None);
+        }
+        if !self.is_resident_idle_for_seal(&instance).await
+            || active_agent
+                .as_ref()
+                .is_some_and(|agent| agent.try_fence_idle_entity_bodies().is_none())
+        {
+            self.seal_waiting_for_idle.store(true, Ordering::Release);
+            return Ok(None);
+        }
+        self.state_actor.retire_for_seal();
+        self.owner_retirement_requested.cancel();
+        self.durable_stream_producer.fence();
+        drop(instance);
+
+        let forwarding = downcast_oplog::<ForwardingOplog>(&self.oplog);
+        let quiesced = self
+            .quiesce_for_owner_retirement(None, forwarding.as_deref())
+            .await;
+        self.remove_from_active_agents().await;
+        // Capture only after the actors have completed their FIFO drain. Stop every oplog layer
+        // even if quiescence failed, so this generation cannot be reacquired on the next attempt.
+        let stopped = self
+            .oplog
+            .stop_and_wait()
+            .await
+            .map_err(WorkerExecutorError::runtime);
+        *cleanup = OwnerCleanupState::Retired;
+        quiesced?;
+        stopped?;
+        if self.oplog.fence().is_some() {
+            return Err(WorkerExecutorError::ShardingNotReady);
+        }
+        Ok(Some(AgentMetadata {
+            last_known_status: self.last_known_status.load_full().as_ref().clone(),
+            ..self.get_initial_worker_metadata()
+        }))
+    }
+
     /// Records retirement without taking the lifecycle lock. Owner writes stop immediately;
     /// `interrupt_and_retire` carries out the shared stop after that lock is released.
     pub(crate) fn record_retirement(&self, kind: InterruptKind, reason: RetirementReason) {
@@ -84,7 +171,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// What a caller of a retired worker is told. A lost shard is answered with the routing miss
     /// the worker service retries on the shard's new owner; any other retirement is final here.
     pub(crate) fn retirement_error(&self) -> WorkerExecutorError {
-        if self.retired_for_lost_shard() {
+        if self.retired_for_lost_shard() || self.retired_for_seal() {
             WorkerExecutorError::ShardingNotReady
         } else {
             WorkerExecutorError::runtime("Worker ownership has retired")
@@ -220,7 +307,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             FinalWorkerState::Unloaded {
                 startup_failure: None,
             },
-            PendingLiveInvocationDisposition::Fail,
+            if self.retired_for_seal() {
+                PendingLiveInvocationDisposition::Preserve
+            } else {
+                PendingLiveInvocationDisposition::Fail
+            },
         )
         .await;
         // Retired after the stop: the interrupted invocation writes the terminal of its
@@ -324,7 +415,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
 /// The shard epoch the agent's oplog is opened to assert, read from this executor's current
 /// assignment. See [`shard_epoch_to_assert`].
-pub(in crate::worker) fn owned_shard_epoch<T: HasShardService>(
+pub(crate) fn owned_shard_epoch<T: HasShardService>(
     this: &T,
     agent_id: &AgentId,
 ) -> Result<Option<ShardEpoch>, WorkerExecutorError> {

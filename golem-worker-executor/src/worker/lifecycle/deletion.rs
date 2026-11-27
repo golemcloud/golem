@@ -15,6 +15,48 @@
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Constructs a private generation while its cache entry is pending. Both preparation
+    /// guards remain held by the caller until this generation has claimed deletion.
+    pub(crate) async fn initialize_for_deletion(
+        self: &Arc<Self>,
+        lifecycle: &mut OplogLifecycleGuard,
+        record: &crate::services::oplog::seal::SealRecord,
+        epoch: ShardEpoch,
+    ) -> Result<(DeleteOutcome, Option<DeletionSender>), WorkerExecutorError> {
+        let metadata = Self::hydrate_existing_worker_metadata(
+            &self.deps,
+            lifecycle,
+            &self.owned_agent_id,
+            GetWorkerMetadataResult {
+                initial_worker_metadata: record.metadata.clone(),
+                last_known_status: Some(record.metadata.last_known_status.clone()),
+            },
+            Some(epoch),
+        )
+        .await?;
+        let worker = self.clone();
+        let build = async move {
+            worker
+                .finish_construction(
+                    std::time::Instant::now(),
+                    Ok(metadata),
+                    crate::services::oplog::OplogOpenPurpose::Delete,
+                )
+                .await
+        }
+        .boxed();
+        let (_, result) = self
+            .initialize_with(build, crate::services::oplog::OplogOpenPurpose::Delete)
+            .await;
+        result.map_err(WorkerExecutorError::from)?;
+        let mut instance = self.instance.lock().await;
+        let (outcome, sender) = instance.claim_deletion().ok_or_else(|| {
+            WorkerExecutorError::runtime("Prepared deletion found no initialized runtime")
+        })?;
+        drop(instance);
+        Ok((outcome, sender))
+    }
+
     /// For a caller that pinned this incarnation by its expected fingerprint, an error is
     /// replaced by the answer the deletion of this generation gives, see
     /// [`Self::pinned_deletion_refusal`]; without a deletion it is returned unchanged.
@@ -117,9 +159,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Worker deletion found no initialized runtime",
             ));
         };
-        let started = matches!(outcome, DeleteOutcome::Started(_));
         drop(instance);
         drop(cleanup);
+        Ok(Some(self.spawn_deletion_attempt(
+            outcome,
+            sender,
+            retry_cleanup,
+        )))
+    }
+
+    pub(crate) fn spawn_deletion_attempt(
+        self: &Arc<Self>,
+        outcome: DeleteOutcome,
+        sender: Option<DeletionSender>,
+        retry_cleanup: bool,
+    ) -> DeleteOutcome {
+        let started = matches!(outcome, DeleteOutcome::Started(_));
         if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
             let handle = match &outcome {
                 DeleteOutcome::Started(handle) | DeleteOutcome::AlreadyDeleting(handle) => {
@@ -134,7 +189,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         match &outcome {
             DeleteOutcome::Started(_) => {}
-            DeleteOutcome::AlreadyDeleting(_) => return Ok(Some(outcome)),
+            DeleteOutcome::AlreadyDeleting(_) => return outcome,
         }
 
         let worker = self.clone();
@@ -151,7 +206,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let _ = sender.send(result);
         });
 
-        Ok(Some(outcome))
+        outcome
     }
     /// Runs monotonic cleanup. A retry skips every stage already completed by an earlier attempt.
     pub(in crate::worker) async fn run_deletion_attempt(
@@ -228,6 +283,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if !self
             .deletion_stage_completed(WorkerDeletionStage::StreamsCleaned)
             .await
+            && !(downcast_oplog::<crate::services::oplog::sealed_reader::SealedOplog>(&self.oplog)
+                .is_some()
+                && !self.last_known_status.load().has_durable_stream_history)
         {
             self.before_deletion_stage(WorkerDeletionStage::StreamsCleaned)
                 .await?;

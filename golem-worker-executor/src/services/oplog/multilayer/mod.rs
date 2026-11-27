@@ -32,13 +32,13 @@ use crate::services::oplog::{
 use crate::storage::indexed::{IndexedStorageError, IndexedStorageMetaNamespace};
 use async_trait::async_trait;
 use futures::FutureExt;
-use golem_common::model::ShardEpoch;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, RawOplogPayload,
 };
 use golem_common::model::type_id::TypeId;
+use golem_common::model::{AgentFingerprint, ShardEpoch};
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_common::related_span;
@@ -91,6 +91,7 @@ impl OplogArchiveError {
             IndexedStorageError::Conflict(_)
             | IndexedStorageError::InvalidResume(_)
             | IndexedStorageError::Other(_)
+            | IndexedStorageError::StageInvalidated { .. }
             | IndexedStorageError::Fenced { .. } => Self::Failed(details.into()),
         }
     }
@@ -193,11 +194,13 @@ pub trait OplogArchiveService: Debug + Send + Sync {
     /// primary oplog does at open, and asserts it on every write; a newer owner's record refuses
     /// them. `None` records and asserts nothing: for read-only opens, and for executors without a
     /// shard assignment.
+    /// `fingerprint` identifies the incarnation whose chunks this handle writes.
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>>;
 
     /// Opens a new, known-empty archive without probing persistent storage. The epoch as for
@@ -207,15 +210,26 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>>;
 
-    /// Deletes the oplog archive for a worker completely, together with any writer generation
-    /// recorded for it.
+    /// Confirms ownership with the monotonic epoch claim an open makes, without opening a handle.
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError>;
+
+    /// Deletes the archive index and its writer generation atomically, then its backing objects.
+    /// With an expected epoch, an absent or different recorded epoch refuses the deletion with
+    /// `OplogError::Fenced`. `None` deletes unconditionally.
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()>;
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError>;
 
     /// Reads the entries physically present in this archive within the requested range.
     async fn read_source(

@@ -64,6 +64,7 @@ pub struct EphemeralOplog {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     fingerprint: AgentFingerprint,
+    shard_epoch: Option<ShardEpoch>,
     primary_service: Arc<dyn OplogService>,
     jobs: UnboundedSender<EphemeralJob>,
     closed: OplogCloseCompletion,
@@ -327,6 +328,7 @@ impl EphemeralOplog {
         transfer_fiber: TransferFiber,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Self {
         let target = lower.first().clone();
         // A layer that refused its opening record, or this oplog's first entry, has latched
@@ -555,6 +557,7 @@ impl EphemeralOplog {
             owned_agent_id,
             agent_mode,
             fingerprint,
+            shard_epoch,
             primary_service,
             jobs,
             closed,
@@ -907,16 +910,19 @@ impl EphemeralOplog {
         multi_layer_oplog_service: &MultiLayerOplogService,
         fresh: bool,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> Result<NEVec<Arc<dyn OplogArchive + Send + Sync>>, UnreadableOplog> {
         let mut shard_epoch = shard_epoch;
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in lower_services.iter().enumerate() {
             let raw = if fresh {
                 layer
-                    .open_fresh(owned_agent_id, agent_mode, shard_epoch)
+                    .open_fresh(owned_agent_id, agent_mode, shard_epoch, fingerprint)
                     .await
             } else {
-                layer.open(owned_agent_id, agent_mode, shard_epoch).await
+                layer
+                    .open(owned_agent_id, agent_mode, shard_epoch, fingerprint)
+                    .await
             }
             .map_err(|error| {
                 UnreadableOplog::new(
@@ -1388,6 +1394,10 @@ impl Oplog for EphemeralOplog {
                 md5_hash,
             )
             .await
+    }
+
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.shard_epoch
     }
 
     fn fence(&self) -> Option<OplogFence> {

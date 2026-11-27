@@ -111,7 +111,7 @@ impl PrimaryOplogState {
             }
         }
 
-        if entries.is_empty() {
+        if entries.is_empty() && self.stage_token.is_none() {
             return Ok(BTreeMap::new());
         }
 
@@ -142,6 +142,7 @@ impl PrimaryOplogState {
             &self.key,
             SerializedOplogAppend::Batch(serialized_pairs),
             self.shard_epoch,
+            self.stage_token,
         )
         .await
         .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err));
@@ -163,6 +164,8 @@ impl PrimaryOplogState {
                         "Oplog append fenced: the shard has a new owner, refusing further writes"
                     );
                 }
+                self.retain_refused(pairs.into_iter().map(|(_, entry)| entry));
+            } else if matches!(error, OplogError::StageInvalidated { .. }) {
                 self.retain_refused(pairs.into_iter().map(|(_, entry)| entry));
             }
             return Err(error);
@@ -232,7 +235,10 @@ impl PrimaryOplogState {
 
     /// Names the agent on a refused write, so the worker that hit it can be given up by id.
     fn as_oplog_error(owned_agent_id: &OwnedAgentId, err: IndexedStorageError) -> OplogError {
-        OplogError::Fenced(OplogFence::refused(owned_agent_id.agent_id(), err))
+        match err {
+            IndexedStorageError::StageInvalidated { key } => OplogError::StageInvalidated { key },
+            error => OplogError::Fenced(OplogFence::refused(owned_agent_id.agent_id(), error)),
+        }
     }
 
     /// Pushes an entry into the in-memory buffer and advances the oplog index,
@@ -295,7 +301,7 @@ impl PrimaryOplogState {
         &mut self,
         previously_committed_through: OplogIndex,
         mut newly_committed: BTreeMap<OplogIndex, OplogEntry>,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         let committed_through = self.last_committed_idx;
         let mut retained: BTreeMap<_, _> = std::mem::take(&mut self.retained_auto_commits)
             .into_iter()
@@ -308,15 +314,24 @@ impl PrimaryOplogState {
             let start = self.last_reported_commit_idx.next();
             let count = u64::from(read_through) - u64::from(self.last_reported_commit_idx);
             let entries = self.reader().read_source(start, count).await;
-            exact_from_source(OplogReadSource::Primary, start, count, entries)
-                .unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
+            match exact_from_source(OplogReadSource::Primary, start, count, entries) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    if self.stage_token.is_some() {
+                        // Cleanup may remove a stage between its commit and this report.
+                        // Recheck ownership before treating missing committed rows as corruption.
+                        self.append(Vec::new()).await?;
+                    }
+                    panic!("Oplog read failed: {error}");
+                }
+            }
         } else {
             BTreeMap::new()
         };
         entries.append(&mut retained);
         entries.append(&mut newly_committed);
         self.last_reported_commit_idx = committed_through;
-        entries
+        Ok(entries)
     }
 
     /// Trims the entries an archive transfer has copied, asserting the epoch this oplog was opened

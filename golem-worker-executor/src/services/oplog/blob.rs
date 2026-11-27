@@ -26,7 +26,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::type_id::TypeId;
-use golem_common::model::{OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
+use golem_common::model::{AgentFingerprint, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, agent_path_segment, join_blob_key,
@@ -78,6 +78,23 @@ impl BlobOplogArchiveService {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) async fn manifest_snapshot(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogArchiveResult<BTreeMap<OplogIndex, BlobChunkRef>> {
+        Ok(self
+            .manifest(owned_agent_id, agent_mode)
+            .read(
+                OplogIndex::NONE,
+                OplogIndex::from_u64(crate::storage::indexed::MAX_INDEXED_ID),
+            )
+            .await?
+            .into_iter()
+            .collect())
+    }
+
     /// The level's manifest for an agent, asserting no epoch.
     fn manifest(
         &self,
@@ -102,6 +119,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(
             BlobOplogArchive::opened(
@@ -112,6 +130,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 self.level,
                 self.retry_config.clone(),
                 shard_epoch,
+                Some(fingerprint),
             )
             .await?,
         ))
@@ -122,36 +141,51 @@ impl OplogArchiveService for BlobOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
-        self.open(owned_agent_id, agent_mode, shard_epoch).await
+        self.open(owned_agent_id, agent_mode, shard_epoch, fingerprint)
+            .await
     }
 
-    /// Removes the manifest with its recorded generation, then every object of the agent. Runs
-    /// after the fenced delete of the agent's primary oplog, as for the compressed levels. The
-    /// manifest goes first, so a failure in between leaves objects nothing lists, not a manifest
-    /// listing objects that are gone.
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.manifest(owned_agent_id, agent_mode)
+            .assert_owning_epoch(expected_epoch)
+            .await
+    }
+
+    /// Removes the manifest with its recorded generation, then every object of the agent. The
+    /// manifest goes first, so a refusal leaves the objects alone and a failure in between leaves
+    /// objects nothing lists, not a manifest listing objects that are gone.
     async fn delete(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<()> {
-        self.manifest(owned_agent_id, agent_mode).delete().await?;
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
+        self.manifest(owned_agent_id, agent_mode)
+            .delete(expected_epoch)
+            .await?;
         self.blob_storage
             .with("blob_oplog", "delete")
             .delete_dir(
                 BlobOplogArchive::blob_namespace(owned_agent_id, agent_mode, self.level),
-                Path::new(&agent_path_segment(&owned_agent_id.agent_id)),
+                Path::new(&join_blob_key(
+                    "chunks",
+                    &agent_path_segment(&owned_agent_id.agent_id),
+                )),
             )
             .await
             .map(|_| ())
             .map_err(|error| {
-                OplogArchiveError::of_blob(
-                    &error,
-                    format!(
-                        "failed to drop compressed oplog for worker {} in blob storage: {error}",
-                        owned_agent_id.agent_id
-                    ),
-                )
+                OplogError::Maintenance(format!(
+                    "failed to drop compressed oplog for worker {} in blob storage: {error}",
+                    owned_agent_id.agent_id
+                ))
             })
     }
 
@@ -162,12 +196,18 @@ impl OplogArchiveService for BlobOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
-        let archive = self
-            .open(owned_agent_id, agent_mode, None)
-            .await
-            .map_err(|error| {
-                OplogReadError::of_archive(OplogReadSource::Archive(self.level), error)
-            })?;
+        let archive = BlobOplogArchive::opened(
+            owned_agent_id.clone(),
+            agent_mode,
+            self.blob_storage.clone(),
+            self.indexed_storage.clone(),
+            self.level,
+            self.retry_config.clone(),
+            None,
+            None,
+        )
+        .await
+        .map_err(|error| OplogReadError::of_archive(OplogReadSource::Archive(self.level), error))?;
         archive.read_source(idx, n).await
     }
 
@@ -213,17 +253,19 @@ impl OplogArchiveService for BlobOplogArchiveService {
 
 /// A chunk's entry in the manifest: the object holding its bytes, and how many oplog entries it
 /// holds. The manifest keys it by the chunk's last oplog index.
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
-struct BlobChunkRef {
-    object: String,
-    count: u64,
+pub(crate) struct BlobChunkRef {
+    pub(crate) object: String,
+    pub(crate) count: u64,
 }
 
 #[derive(Debug)]
 struct BlobOplogArchive {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
+    /// Absent on private read-only handles, including persisted-entry verification.
+    fingerprint: Option<AgentFingerprint>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     level: usize,
@@ -259,6 +301,7 @@ impl BlobOplogArchive {
         level: usize,
         retry_config: RetryConfig,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: Option<AgentFingerprint>,
     ) -> OplogArchiveResult<Self> {
         let manifest = FencedIndexedStream::opened(
             owned_agent_id.clone(),
@@ -280,6 +323,7 @@ impl BlobOplogArchive {
         Ok(BlobOplogArchive {
             owned_agent_id,
             agent_mode,
+            fingerprint,
             blob_storage,
             indexed_storage,
             level,
@@ -319,12 +363,21 @@ impl BlobOplogArchive {
     }
 
     /// A name no other write uses, so no writer can overwrite an object the manifest refers to.
-    /// The objects of an agent are in the directory of its agent ID.
-    fn new_object(&self, last_idx: OplogIndex) -> String {
-        join_blob_key(
-            &agent_path_segment(&self.owned_agent_id.agent_id),
+    /// The directory isolates the chunks of each incarnation of an agent.
+    fn new_object(&self, last_idx: OplogIndex) -> Result<String, OplogError> {
+        let fingerprint = self.fingerprint.ok_or_else(|| {
+            OplogError::Maintenance("cannot write chunks through a read-only blob archive".into())
+        })?;
+        Ok(join_blob_key(
+            &join_blob_key(
+                "chunks",
+                &join_blob_key(
+                    &agent_path_segment(&self.owned_agent_id.agent_id),
+                    &fingerprint.to_string(),
+                ),
+            ),
             &format!("{last_idx}-{}", Uuid::new_v4()),
-        )
+        ))
     }
 
     /// Deletes objects no manifest entry refers to. Best effort: an object left behind is never
@@ -579,7 +632,7 @@ impl OplogArchive for BlobOplogArchive {
 
         for sub_chunk in chunk.chunks(BlobOplogArchiveService::MAX_CHUNK_SIZE) {
             let last_idx = sub_chunk.last().unwrap().0;
-            let object = self.new_object(last_idx);
+            let object = self.new_object(last_idx)?;
 
             let entries: Vec<OplogEntry> =
                 sub_chunk.iter().map(|(_, entry)| entry.clone()).collect();
@@ -692,6 +745,7 @@ impl OplogArchive for BlobOplogArchive {
             self.indexed_storage.clone(),
             self.level,
             self.retry_config.clone(),
+            None,
             None,
         )
         .await?;

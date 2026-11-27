@@ -847,13 +847,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         status: &AgentStatusRecord,
         read: impl FnOnce(&SnapshotExclusions) -> T,
     ) -> Result<T, WorkerExecutorError> {
-        let persisted = self
-            .worker_service()
-            .get_rejected_periodic_snapshots(
-                &self.owned_agent_id,
-                self.initial_worker_metadata.fingerprint,
-            )
-            .await?;
+        let moved = self
+            .initial_moved_snapshot_rejections
+            .lock()
+            .unwrap()
+            .clone();
+        let persisted = match moved {
+            Some(moved) => {
+                self.worker_service()
+                    .get_rejected_periodic_snapshots_with_moved(
+                        &self.owned_agent_id,
+                        self.initial_worker_metadata.fingerprint,
+                        &moved,
+                    )
+                    .await?
+            }
+            None => {
+                self.worker_service()
+                    .get_rejected_periodic_snapshots(
+                        &self.owned_agent_id,
+                        self.initial_worker_metadata.fingerprint,
+                    )
+                    .await?
+            }
+        };
         Ok(self.update_exclusions(
             |exclusions| exclusions.with_persisted(persisted, status),
             read,
@@ -875,6 +892,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
         }
         self.clear_unavailable_periodic();
+        self.initial_moved_snapshot_rejections
+            .lock()
+            .unwrap()
+            .take();
         Ok(())
     }
     /// Rejects the automatic snapshot entry at `index` for the starts of this incarnation: its

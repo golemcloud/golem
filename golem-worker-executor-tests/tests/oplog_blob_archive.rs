@@ -22,7 +22,9 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
 use golem_common::model::type_id::TypeId;
-use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
+use golem_common::model::{
+    AgentFingerprint, AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch,
+};
 use golem_common::redis::RedisPool;
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -99,8 +101,8 @@ impl GetBlobStorage for S3Test {
 
 impl S3Test {
     /// Gives an S3 blob storage on a new RustFS container, which this dependency keeps alive. The
-    /// container has the buckets of two levels of the compressed oplog and of the custom data of
-    /// a guest, or with `shared_bucket` one bucket for all of them.
+    /// container has every configured bucket. With `shared_bucket`, two compressed oplog levels
+    /// and the custom data of a guest share one bucket.
     pub(crate) async fn s3_storage(&self) -> s3::S3BlobStorage {
         let s3_server = DockerRustFs::new().await;
 
@@ -160,7 +162,14 @@ async fn create_buckets(s3_server: &dyn S3Server, config: &S3BlobStorageConfig) 
     let buckets = config
         .compressed_oplog_buckets
         .iter()
-        .chain([&config.custom_data_bucket])
+        .chain([
+            &config.custom_data_bucket,
+            &config.oplog_payload_bucket,
+            &config.compilation_cache_bucket,
+            &config.initial_agent_files_bucket,
+            &config.components_bucket,
+            &config.filesystem_snapshots_bucket,
+        ])
         .collect::<BTreeSet<_>>();
     for bucket in buckets {
         client.create_bucket().bucket(bucket).send().await.unwrap();
@@ -200,7 +209,7 @@ async fn append_worker(
     agent_mode: AgentMode,
 ) {
     let archive = service
-        .open(owned_agent_id, agent_mode, None)
+        .open(owned_agent_id, agent_mode, None, AgentFingerprint::new())
         .await
         .unwrap();
     archive
@@ -476,8 +485,14 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
         (OplogIndex::from_u64(2), log()),
     ];
 
+    let fingerprint = AgentFingerprint::new();
     let former_owner = through_relay
-        .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(ShardEpoch(5)),
+            fingerprint,
+        )
         .await
         .unwrap();
     let appending = tokio::spawn({
@@ -489,7 +504,12 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
         .await
         .expect("the manifest append never reached Redis");
     let new_owner = direct
-        .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(ShardEpoch(6)),
+            fingerprint,
+        )
         .await
         .unwrap();
     relay.resume.notify_one();
@@ -535,6 +555,41 @@ impl<B> ReadCounting<B> {
 
 #[async_trait]
 impl<B: BlobStorageBackend> BlobStorageBackend for ReadCounting<B> {
+    async fn list_page_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
+        self.read()
+            .list_page_at(
+                target_label,
+                op_label,
+                namespace,
+                prefix,
+                start_after,
+                max_keys,
+            )
+            .await
+    }
+
+    async fn put_raw_if_absent_once_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<PutIfAbsent> {
+        self.inner
+            .put_raw_if_absent_once_at(target_label, op_label, namespace, path, data, timeout)
+            .await
+    }
+
     async fn get_raw_at(
         &self,
         target_label: &'static str,
@@ -747,6 +802,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
     let owned_agent_id = crate::fresh_owned_agent_id();
     let environment_id = owned_agent_id.environment_id;
     let agent_id = owned_agent_id.agent_id;
+    let fingerprint = AgentFingerprint::new();
     storage
         .put_raw(
             "blob_oplog",
@@ -757,7 +813,10 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
                 agent_mode: AgentMode::Durable,
                 level: 0,
             },
-            &std::path::Path::new(&agent_path_segment(&agent_id)).join("2"),
+            &std::path::Path::new("chunks")
+                .join(agent_path_segment(&agent_id))
+                .join(fingerprint.to_string())
+                .join("2-unlisted"),
             b"not-an-oplog-chunk",
         )
         .await
@@ -774,7 +833,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
         .await
         .unwrap();
     let archive = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(&owned_agent_id, AgentMode::Durable, None, fingerprint)
         .await
         .unwrap();
     let length = archive.length().await.unwrap();
@@ -790,7 +849,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
         .await
         .unwrap();
     let appended = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(&owned_agent_id, AgentMode::Durable, None, fingerprint)
         .await
         .unwrap()
         .read_source(OplogIndex::INITIAL, 2)
@@ -856,6 +915,7 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
     };
     let (first, second) = (level(0), level(1));
     let owned_agent_id = crate::fresh_owned_agent_id();
+    let fingerprint = AgentFingerprint::new();
     let log = |message: &str| {
         OplogEntry::log(
             None,
@@ -866,14 +926,14 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
         )
     };
     first
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(&owned_agent_id, AgentMode::Durable, None, fingerprint)
         .await
         .unwrap()
         .append(&[(OplogIndex::INITIAL, log("first"))])
         .await
         .unwrap();
     second
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(&owned_agent_id, AgentMode::Durable, None, fingerprint)
         .await
         .unwrap()
         .append(&[
@@ -888,7 +948,7 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
         durable_entries(&second, &owned_agent_id, 2).await,
     );
     first
-        .delete(&owned_agent_id, AgentMode::Durable)
+        .delete(&owned_agent_id, AgentMode::Durable, None)
         .await
         .unwrap();
     let after_delete = (

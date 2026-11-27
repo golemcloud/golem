@@ -14,6 +14,7 @@ impl<'a> StatusOplogReader<'a> {
             owned_agent_id,
             agent_mode,
             horizon,
+            attempt: None,
         }
     }
 
@@ -29,6 +30,17 @@ impl<'a> StatusOplogReader<'a> {
         match self.opened {
             Some(oplog) => oplog.read_exact(first, count).await,
             None => {
+                if let Some(attempt) = self.attempt {
+                    return attempt
+                        .read_exact(
+                            self.service.as_ref(),
+                            self.owned_agent_id,
+                            self.agent_mode,
+                            first,
+                            count,
+                        )
+                        .await;
+                }
                 self.service
                     .read_exact(self.owned_agent_id, self.agent_mode, first, count)
                     .await
@@ -154,6 +166,57 @@ where
         .get_last_index(owned_agent_id, agent_mode)
         .await?;
     let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, None, horizon);
+    calculate_status_with_reader(this, &reader, last_known, read_checkpoint).await
+}
+
+pub async fn calculate_last_known_status_with_checkpoint_attempt<T>(
+    this: &T,
+    id: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
+    mode: AgentMode,
+    last_known: Option<AgentStatusRecord>,
+    attempt: &crate::services::oplog::OplogReadAttempt,
+) -> Result<Option<AgentStatusRecord>, StatusError>
+where
+    T: HasOplogService + HasConfig + HasComponentService + HasWorkerService + Sync,
+{
+    let service = this.worker_service();
+    calculate_last_known_status_with_checkpoint_attempt_reader(
+        this,
+        id,
+        mode,
+        last_known,
+        attempt,
+        || async move {
+            service
+                .read_status_checkpoint(id, fingerprint, mode)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::error!(agent_id = %id, %error, "Failed to read the status checkpoint");
+                    None
+                })
+        },
+    )
+    .await
+}
+
+pub(crate) async fn calculate_last_known_status_with_checkpoint_attempt_reader<T, Fut>(
+    this: &T,
+    id: &OwnedAgentId,
+    mode: AgentMode,
+    last_known: Option<AgentStatusRecord>,
+    attempt: &crate::services::oplog::OplogReadAttempt,
+    read_checkpoint: impl FnOnce() -> Fut,
+) -> Result<Option<AgentStatusRecord>, StatusError>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+    Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
+{
+    let horizon = attempt
+        .get_last_index(this.oplog_service().as_ref(), id, mode)
+        .await?;
+    let mut reader = StatusOplogReader::new(this, id, mode, None, horizon);
+    reader.attempt = Some(attempt);
     calculate_status_with_reader(this, &reader, last_known, read_checkpoint).await
 }
 

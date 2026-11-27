@@ -46,6 +46,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             metadata.agent_mode,
             &metadata.last_known_status,
+            None,
         )
         .await;
 
@@ -177,6 +178,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &worker_metadata.owned_agent_id(),
                 worker_metadata.agent_mode,
                 &worker_metadata.last_known_status,
+                None,
             )
             .await;
             let worker_metadata = self.with_expected_requests(worker_metadata).await;

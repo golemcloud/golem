@@ -297,11 +297,19 @@ fn listed_entry_gives_none_only_for_a_missing_entry_or_a_directory_that_became_a
         listed_entry::<u8>(Err(std::io::Error::from(ErrorKind::NotADirectory))).unwrap(),
         listed_entry::<u8>(Err(std::io::Error::from(ErrorKind::PermissionDenied)))
             .map_err(|error| error.kind()),
+        listed_entry::<u8>(Err(std::io::Error::from(ErrorKind::Other)))
+            .map_err(|error| error.kind()),
     );
 
     assert_eq!(
         answers,
-        (Some(1), None, None, Err(ErrorKind::PermissionDenied))
+        (
+            Some(1),
+            None,
+            None,
+            Err(ErrorKind::PermissionDenied),
+            Err(ErrorKind::Other)
+        )
     );
 }
 

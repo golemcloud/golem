@@ -20,7 +20,7 @@ use super::{
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, WorkerUpdateMode, common_model,
     extract_caller, extract_owned_agent_id, from_proto_invocation_context, golem,
 };
-use crate::services::{HasAgentTypesService, HasComponentService};
+use crate::services::{HasActiveAgents, HasAgentTypesService, HasComponentService};
 use crate::worker::{CancelInvocationOutcome, CreateIntent};
 use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, ScheduleId};
 use golem_common::model::caller::Principal;
@@ -82,6 +82,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await?
             }
         };
+        let agent_mode = target.agent_mode;
         let owned_agent_id = target.owned_agent_id;
         let owner = target
             .new_owner
@@ -98,7 +99,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             InvocationFreshnessDisposition::MayExist
         };
-        if let Some(key) = request.idempotency_key.clone() {
+        if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+            let key = request.idempotency_key.clone().ok_or_else(|| {
+                WorkerExecutorError::invalid_request("KnownFresh requires an idempotency key")
+            })?;
             Worker::<Ctx>::validate_invocation_freshness(
                 self,
                 &owned_agent_id,
@@ -107,13 +111,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Some(&owner),
             )
             .await?;
-        } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-            return Err(WorkerExecutorError::invalid_request(
-                "KnownFresh requires an idempotency key",
-            ));
         }
 
-        let caller = extract_caller(&request.caller)?;
+        let caller = extract_caller(&request.caller);
+        let defer_validation = freshness_disposition == InvocationFreshnessDisposition::MayExist
+            && request.idempotency_key.is_some();
+        if !defer_validation {
+            caller.clone()?;
+        }
+        let admission = crate::worker::AcquisitionAdmission {
+            mode: agent_mode,
+            freshness_key: (freshness_disposition == InvocationFreshnessDisposition::MayExist)
+                .then(|| request.idempotency_key.clone().map(Into::into))
+                .flatten(),
+            after_freshness: caller.as_ref().map(|_| ()).map_err(Clone::clone),
+            check_health: false,
+            observe_failed: false,
+        };
 
         let env: Vec<(String, String)> = request
             .env
@@ -130,37 +144,43 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!(
                     "Failed parsing local agent config: {err}"
                 ))
-            })?;
+            });
+        if !defer_validation {
+            config.as_ref().map_err(Clone::clone)?;
+        }
 
         let invocation_context = self.limit_invocation_context_stack_depth(
             from_proto_invocation_context(&request.invocation_context),
         );
 
-        let worker = Worker::get_or_create_suspended_with_freshness(
-            self,
-            &owned_agent_id,
-            Some(env),
-            config,
-            None,
-            None,
-            &invocation_context,
-            caller,
-            freshness_disposition,
-            if request.invocation.is_some() {
-                CreateIntent::Invocation {
-                    owner,
-                    idempotency_key: request.idempotency_key.map(Into::into),
-                    invocation: request.invocation.map(Box::new),
-                }
-            } else {
-                CreateIntent::Create {
-                    owner,
-                    exclusive: !request.ignore_already_existing,
-                    idempotency_key: request.idempotency_key.clone().map(Into::into),
-                }
-            },
-        )
-        .await?;
+        let worker = self
+            .active_agents()
+            .get_or_add_with_freshness(
+                self,
+                &owned_agent_id,
+                Some(env),
+                config,
+                None,
+                None,
+                &invocation_context,
+                caller,
+                freshness_disposition,
+                if request.invocation.is_some() {
+                    CreateIntent::Invocation {
+                        owner,
+                        idempotency_key: request.idempotency_key.map(Into::into),
+                        invocation: request.invocation.map(Box::new),
+                    }
+                } else {
+                    CreateIntent::Create {
+                        owner,
+                        exclusive: !request.ignore_already_existing,
+                        idempotency_key: request.idempotency_key.clone().map(Into::into),
+                    }
+                },
+                Some(admission),
+            )
+            .await?;
 
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let agent_id = owned_agent_id.agent_id;

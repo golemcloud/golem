@@ -296,6 +296,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &self.owned_agent_id,
                 self.agent_mode(),
                 &latest_status,
+                None,
             )
             .await
         } else {

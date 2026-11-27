@@ -417,10 +417,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         last_oplog_index: OplogIndex,
         wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError> {
+        if let Some(seal) = self.all.oplog_service().seal_service() {
+            let _lifecycle = self
+                .all
+                .oplog_service()
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await;
+            if !matches!(
+                seal.state(owned_agent_id)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+                crate::services::oplog::seal::AgentSealState::Present
+            ) {
+                if let Some(worker) = self.all.active_agents().try_get(owned_agent_id).await {
+                    worker.remove_from_active_agents().await;
+                }
+                return Ok(None);
+            }
+        }
         match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id)
+            .get_existing_for_archive(&self.all, owned_agent_id)
             .await
         {
             Ok(worker) => worker.archive_oplog(last_oplog_index, wait).await,

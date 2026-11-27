@@ -71,7 +71,7 @@ use golem_common::model::tool::ToolName;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment,
-    ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
+    ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseClock, ShardLeaseRevision, TransactionId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -180,10 +180,11 @@ use golem_worker_executor::worker::{
 };
 pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
-    CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
-    FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, ResultRecordedAt,
-    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
+    CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement,
+    ExistingWorkerAcquisitionHook, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    P3HttpBodyProducerHook, ResultRecordedAt, StatusManagement, UpdateManagement, WorkerCtx,
+    WorkerFilesystemContext,
 };
 use golem_worker_executor::{
     Bootstrap, RunDetails, bootstrap_and_run_worker_executor, derive_disjoint_sqlite_config,
@@ -239,6 +240,16 @@ impl TestTempDir {
         match self {
             Self::Owned(td) => td.path(),
             Self::Borrowed(p) => p.as_path(),
+        }
+    }
+}
+
+impl Drop for TestTempDir {
+    fn drop(&mut self) {
+        if let Self::Owned(directory) = self
+            && directory.path().join(".retain-on-failure").exists()
+        {
+            directory.disable_cleanup(true);
         }
     }
 }
@@ -1611,6 +1622,14 @@ impl TestWorkerExecutor {
         self.additional_test_deps.set_worker_deletion_hook(hook);
     }
 
+    pub fn set_existing_worker_acquisition_hook(&self, hook: Arc<ExistingWorkerAcquisitionHook>) {
+        *self
+            .additional_test_deps
+            .existing_worker_acquisition_hook
+            .lock()
+            .unwrap() = Some(hook);
+    }
+
     /// Rejects one linear-memory growth after the next RPC creation completes.
     pub fn fail_memory_growth_after_rpc_creation(&self, agent_id: &AgentId) {
         self.additional_test_deps
@@ -1743,6 +1762,54 @@ impl TestWorkerExecutor {
                 },
             );
         (entered_rx, release_tx)
+    }
+
+    /// After the next successful service open, pauses this agent's next lifecycle acquisition
+    /// before taking its guard. Dropping the release sender also unblocks it.
+    pub fn gate_lifecycle_after_next_successful_open(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .oplog_lifecycle_after_open_gates
+            .lock()
+            .unwrap()
+            .insert(
+                *agent_id,
+                (
+                    false,
+                    OplogReadGate {
+                        entered_tx,
+                        release_rx,
+                    },
+                ),
+            );
+        (entered_rx, release_tx)
+    }
+
+    /// Pauses this agent's next lifecycle acquisition before taking its guard.
+    /// Dropping the release sender also unblocks it.
+    pub fn gate_next_oplog_lifecycle(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let gate = self.gate_lifecycle_after_next_successful_open(agent_id);
+        self.additional_test_deps
+            .oplog_lifecycle_after_open_gates
+            .lock()
+            .unwrap()
+            .get_mut(agent_id)
+            .expect("lifecycle gate was just installed")
+            .0 = true;
+        gate
     }
 
     /// Holds one external-payload download in the oplog dependency wrapper. The receipt
@@ -3189,6 +3256,8 @@ pub async fn take_agent_oplog_over_at_epoch(
             },
             &owned_agent_id.storage_key(),
             ShardEpoch(epoch),
+            &[],
+            false,
         )
         .await?;
     Ok(())
@@ -3298,6 +3367,7 @@ pub async fn truncate_archived_oplog_chunk(
                 *id,
                 value,
                 None,
+                None,
             )
             .await?;
     }
@@ -3350,6 +3420,7 @@ pub async fn copy_create_entry_to(
             id,
             golem_common::serialization::serialize(&entry).map_err(|err| anyhow!(err))?,
             None,
+            None,
         )
         .await?;
     Ok(())
@@ -3400,6 +3471,7 @@ pub async fn copy_agent_oplog_to(
                 &target.storage_key(),
                 id,
                 value,
+                None,
                 None,
             )
             .await?;
@@ -3991,12 +4063,14 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
+        reader: Option<golem_worker_executor::services::oplog::OplogReadContext<'_>>,
     ) -> Option<LastError> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
             agent_mode,
             latest_worker_status,
+            reader,
         )
         .await
     }
@@ -4276,6 +4350,16 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_deletion_hook(extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
         extra_deps.worker_deletion_hook()
+    }
+
+    fn existing_worker_acquisition_hook(
+        extra_deps: &Self::ExtraDeps,
+    ) -> Option<Arc<ExistingWorkerAcquisitionHook>> {
+        extra_deps
+            .existing_worker_acquisition_hook
+            .lock()
+            .unwrap()
+            .clone()
     }
 
     async fn create(
@@ -4783,8 +4867,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         ))
     }
 
-    fn create_shard_service(&self) -> Arc<dyn ShardService> {
-        let shard_service: Arc<dyn ShardService> = Arc::new(ShardServiceDefault::new());
+    fn create_shard_service(&self, config: &OplogConfig) -> Arc<dyn ShardService> {
+        let shard_service: Arc<dyn ShardService> = Arc::new(
+            ShardServiceDefault::with_max_lease_ttl(config.shard_lease_max_ttl),
+        );
 
         if let Some(wrap) = &self.overrides.wrap_shard_service {
             wrap(shard_service)
@@ -5084,8 +5170,10 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         ))
     }
 
-    fn create_shard_service(&self) -> Arc<dyn ShardService> {
-        let shard_service: Arc<dyn ShardService> = Arc::new(ShardServiceDefault::new());
+    fn create_shard_service(&self, config: &OplogConfig) -> Arc<dyn ShardService> {
+        let shard_service: Arc<dyn ShardService> = Arc::new(
+            ShardServiceDefault::with_max_lease_ttl(config.shard_lease_max_ttl),
+        );
 
         if let Some(wrap) = &self.wrap_shard_service {
             wrap(shard_service)
@@ -7189,6 +7277,8 @@ pub struct AdditionalTestDeps {
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     non_snapshot_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    oplog_lifecycle_after_open_gates:
+        Arc<std::sync::Mutex<HashMap<AgentId, (bool, OplogReadGate)>>>,
     oplog_payload_read_gates: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, Uuid), OplogReadGate>>>,
     oplog_delete_gates: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, AgentMode), OplogReadGate>>>,
     runtime_card_audit_gates:
@@ -7229,6 +7319,7 @@ pub struct AdditionalTestDeps {
     agent_invocation_success_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<AgentInvocationSuccessGate>>>>,
     worker_deletion_hook: Arc<Mutex<Option<Arc<dyn WorkerDeletionHook>>>>,
+    existing_worker_acquisition_hook: Arc<Mutex<Option<Arc<ExistingWorkerAcquisitionHook>>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -7279,6 +7370,7 @@ impl AdditionalTestDeps {
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             non_snapshot_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_lifecycle_after_open_gates: Arc::default(),
             oplog_payload_read_gates: Arc::default(),
             oplog_delete_gates: Arc::default(),
             runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -7303,6 +7395,7 @@ impl AdditionalTestDeps {
             direct_replay_wait_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             worker_deletion_hook: Arc::new(Mutex::new(None)),
+            existing_worker_acquisition_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
             websocket_connection_pool: Arc::new(std::sync::OnceLock::new()),
         }
@@ -8912,6 +9005,19 @@ impl ShardService for FakeOwnership {
         self.inner.check_admission(agent_id)
     }
 
+    fn clamp_lease(&self, lease: ShardLeaseClock) -> ShardLeaseClock {
+        self.inner.clamp_lease(lease)
+    }
+
+    fn lease_valid_until(
+        &self,
+        agent_id: &AgentId,
+        epoch: ShardEpoch,
+        skew_margin: Duration,
+    ) -> Option<std::time::SystemTime> {
+        self.inner.lease_valid_until(agent_id, epoch, skew_margin)
+    }
+
     fn assign_shards(
         &self,
         number_of_shards: usize,
@@ -8927,14 +9033,14 @@ impl ShardService for FakeOwnership {
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<std::time::Instant>,
+        lease: Option<ShardLeaseClock>,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         self.inner.register(
             number_of_shards,
             shard_epochs,
-            expires_at,
+            lease,
             revision,
             executor_count,
         )
@@ -8962,12 +9068,12 @@ impl ShardService for FakeOwnership {
     fn update_lease(
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: std::time::Instant,
+        clock: ShardLeaseClock,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
-            .update_lease(shard_epochs, expires_at, revision, executor_count)
+            .update_lease(shard_epochs, clock, revision, executor_count)
     }
 
     fn clear_assignment(&self) {

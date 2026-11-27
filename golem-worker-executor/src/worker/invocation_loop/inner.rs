@@ -109,6 +109,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
         mark_idle(&self.idle_since_millis);
         self.waiting_for_command.store(true, Ordering::Release);
+        self.parent.schedule_seal_after_resident_idle().await;
         loop {
             let cmd = match self.next_wakeup_or_initial().await {
                 ResidentWakeup::Command(cmd) => cmd,
@@ -263,6 +264,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
             mark_idle(&self.idle_since_millis);
             self.waiting_for_command.store(true, Ordering::Release);
+            self.parent.schedule_seal_after_resident_idle().await;
         }
         self.abort_idle_snapshot_task();
         self.waiting_for_command.store(false, Ordering::Release);
