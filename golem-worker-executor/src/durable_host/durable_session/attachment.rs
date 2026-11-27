@@ -136,6 +136,31 @@ impl StreamSession {
         }
     }
 
+    /// Returns the attachment epoch that authors a consumer cancellation in this session.
+    ///
+    /// A session that no transport has prepared or attached, such as the internal session of a
+    /// tool invocation, has no attachment authority: its local owner holds the session itself,
+    /// so the epoch of this runtime is authoritative. Every other session cancels in the epoch of
+    /// its current attachment.
+    pub(super) async fn cancellation_epoch(&self) -> Result<u64, SessionError> {
+        let status = self
+            .oplog
+            .raw_durable_stream_session_status(&self.session_key)
+            .await
+            .status?;
+        match status {
+            None => Ok(self.attachment_epoch),
+            Some(status)
+                if status.lifecycle_error.is_none()
+                    && status.first_prepared.is_none()
+                    && status.attachment_epoch.is_none() =>
+            {
+                Ok(self.attachment_epoch)
+            }
+            Some(_) => Ok(self.authoritative_attachment_state().await?.epoch),
+        }
+    }
+
     /// Durably detaches the current transport without cancelling producer streams.
     pub async fn detach_current(&self) -> Result<bool, SessionError> {
         let session = self.clone();
