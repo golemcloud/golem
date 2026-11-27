@@ -9,35 +9,24 @@
 use async_trait::async_trait;
 
 use golem_api_grpc::proto::golem::worker::{
-    DurableStreamMapping, InvocationAccepted, StreamInvocationIdentity, UpdateMode,
-    invocation_request, invocation_response,
+    DurableStreamMapping, InvocationAccepted, StreamInvocationIdentity,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionRequest, CreateWorkerRequest, ForkWorkerRequest, ResumeWorkerRequest,
-    StreamSessionCreationIntent, create_worker_response, fork_worker_response,
-    resume_worker_response, worker_executor_client::WorkerExecutorClient,
+    CreateStreamSessionRequest, StreamSessionCreationIntent,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
-use golem_common::model::agent::{
-    AgentInvocationMode, AgentOrigin, AgentTypeName, InvocationFreshnessDisposition,
-};
+use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::{AgentOrigin, AgentTypeName, InvocationFreshnessDisposition};
 use golem_common::model::caller::Caller;
-use golem_common::model::card::{CardId, ScopeCard, StoredCard};
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::{
     DurableStreamReadRequest, StreamAttachmentControlRequest, StreamSessionRecord,
 };
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, PromiseId,
-};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor::services::rpc::{
@@ -45,21 +34,14 @@ use golem_worker_executor::services::rpc::{
     RpcError,
 };
 use golem_worker_executor::services::shard::ShardService;
-use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
-    start_with_overrides,
+    EmulatedWorkerService, RemoteRpcEvidence, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, WorkerServiceOptions, start_with_overrides,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use tokio_stream::StreamExt;
-use tonic::transport::Channel;
-use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-
-type Client = WorkerExecutorClient<OtelGrpcService<Channel>>;
+use std::sync::{Arc, OnceLock};
 
 /// Routes fork activation back to the single test executor instead of requiring worker-service.
 pub(crate) async fn start_with_local_resume(
@@ -158,68 +140,39 @@ pub(crate) fn fresh_fork_target(source: &OwnedAgentId) -> OwnedAgentId {
     )
 }
 
-#[derive(Default)]
-pub(crate) struct RemoteRpcEvidence {
-    pub(crate) sessions: std::sync::atomic::AtomicUsize,
-    pub(crate) joined_observer_acceptances: std::sync::atomic::AtomicUsize,
-    pub(crate) resume_attach_requests: std::sync::atomic::AtomicUsize,
-}
-
-/// Keeps fork activation local, but forces durable streaming RPC through the executor's tonic API.
+/// Keeps fork activation local, but forces durable streaming RPC through the worker service.
 pub(crate) async fn start_with_remote_streaming_rpc(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<(TestWorkerExecutor, Arc<RemoteRpcEvidence>)> {
-    let client = Arc::new(Mutex::new(None));
-    let proxy = Arc::new(OnceLock::<Arc<dyn WorkerProxy>>::new());
-    let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
-    let evidence = Arc::new(RemoteRpcEvidence::default());
-    let account_id = context.account_id;
-    let executor = start_with_overrides(
-        deps,
-        context,
-        TestExecutorOverrides {
-            wrap_shard_service: Some(Arc::new({
-                let shard = shard.clone();
-                move |inner| {
-                    let _ = shard.set(inner.clone());
-                    inner
-                }
-            })),
-            wrap_worker_proxy: Some(Arc::new({
-                let client = client.clone();
-                let proxy = proxy.clone();
-                let evidence = evidence.clone();
-                move |inner| {
-                    let wrapped: Arc<dyn WorkerProxy> = Arc::new(LocalResumeProxy {
-                        inner,
-                        client: client.clone(),
-                        component_owner_account_id: Some(account_id),
-                        fork_owner: None,
-                        evidence: Some(evidence.clone()),
-                        lose_response: Arc::new(AtomicBool::new(false)),
-                        checkpoint: Arc::new(Mutex::new(None)),
-                        prepare_on_executor: false,
-                    });
-                    let _ = proxy.set(wrapped.clone());
-                    wrapped
-                }
-            })),
-            wrap_rpc: Some(Arc::new(move |inner| {
-                Arc::new(StreamingRemoteRpc {
-                    inner,
-                    remote: RemoteInvocationRpc::new(
-                        proxy.get().expect("worker proxy initialized").clone(),
-                        shard.get().expect("shard service initialized").clone(),
-                    ),
-                })
-            })),
-            ..Default::default()
-        },
+    let worker_service = EmulatedWorkerService::start(
+        WorkerServiceOptions::default().component_owner(context.account_id),
     )
     .await?;
-    *client.lock().unwrap() = Some(executor.client.clone());
-    Ok((executor, evidence))
+    let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
+    let overrides = TestExecutorOverrides {
+        wrap_shard_service: Some(Arc::new({
+            let shard = shard.clone();
+            move |inner| {
+                let _ = shard.set(inner.clone());
+                inner
+            }
+        })),
+        wrap_rpc: Some(Arc::new({
+            let worker_service = worker_service.clone();
+            move |inner| {
+                Arc::new(StreamingRemoteRpc {
+                    inner,
+                    remote: worker_service
+                        .remote_rpc(shard.get().expect("shard service initialized").clone()),
+                })
+            }
+        })),
+        ..Default::default()
+    }
+    .with_worker_service(&worker_service);
+    let executor = start_with_overrides(deps, context, overrides).await?;
+    Ok((executor, worker_service.session_evidence()))
 }
 
 async fn start_with_resume_checkpoint(
@@ -250,32 +203,23 @@ async fn start_with_resume_checkpoint_and_fork_owner(
     overrides: TestExecutorOverrides,
     fork_owner: Option<AccountId>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let client = Arc::new(Mutex::new(None));
-    let target = client.clone();
-    let lose_response = Arc::new(AtomicBool::new(lose_resume_response));
-    let checkpoint = Arc::new(Mutex::new(checkpoint));
-    let executor = start_with_overrides(
+    let mut options = WorkerServiceOptions::default();
+    if let Some(owner) = fork_owner {
+        options = options.component_owner(owner);
+    }
+    if let Some(checkpoint) = checkpoint {
+        options = options.hold_after_resume(checkpoint);
+    }
+    if lose_resume_response {
+        options = options.lose_resume_response();
+    }
+    let worker_service = EmulatedWorkerService::start(options).await?;
+    start_with_overrides(
         deps,
         context,
-        TestExecutorOverrides {
-            wrap_worker_proxy: Some(Arc::new(move |inner| {
-                Arc::new(LocalResumeProxy {
-                    inner,
-                    client: target.clone(),
-                    component_owner_account_id: None,
-                    fork_owner,
-                    evidence: None,
-                    lose_response: lose_response.clone(),
-                    checkpoint: checkpoint.clone(),
-                    prepare_on_executor: false,
-                })
-            })),
-            ..overrides
-        },
+        overrides.with_worker_service(&worker_service),
     )
-    .await?;
-    *client.lock().unwrap() = Some(executor.client.clone());
-    Ok(executor)
+    .await
 }
 
 struct StreamingRemoteRpc {
@@ -513,511 +457,6 @@ impl Rpc for StreamingRemoteRpc {
                 callee_caller,
                 config,
                 auth,
-            )
-            .await
-    }
-}
-
-struct LocalResumeProxy {
-    inner: Arc<dyn WorkerProxy>,
-    client: Arc<Mutex<Option<Client>>>,
-    component_owner_account_id: Option<AccountId>,
-    /// The account that owns the components whose agents are forked on the test executor.
-    fork_owner: Option<AccountId>,
-    evidence: Option<Arc<RemoteRpcEvidence>>,
-    lose_response: Arc<AtomicBool>,
-    checkpoint: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
-    /// Sends preparations to the test executor the way worker-service forwards them.
-    prepare_on_executor: bool,
-}
-
-/// Remote RPC whose target preparation reaches the test executor's `prepare_worker`, as it does
-/// through worker-service when the target lives on another executor.
-pub(crate) fn remote_rpc_preparing_on(
-    executor: &TestWorkerExecutor,
-    component_owner_account_id: AccountId,
-    inner: Arc<dyn WorkerProxy>,
-    shard_service: Arc<dyn ShardService>,
-) -> RemoteInvocationRpc {
-    RemoteInvocationRpc::new(
-        Arc::new(LocalResumeProxy {
-            inner,
-            client: Arc::new(Mutex::new(Some(executor.client.clone()))),
-            component_owner_account_id: Some(component_owner_account_id),
-            fork_owner: None,
-            evidence: None,
-            lose_response: Arc::new(AtomicBool::new(false)),
-            checkpoint: Arc::new(Mutex::new(None)),
-            prepare_on_executor: true,
-        }),
-        shard_service,
-    )
-}
-
-#[async_trait]
-impl WorkerProxy for LocalResumeProxy {
-    async fn prepare(
-        &self,
-        agent: &ResolvedTarget,
-        method: &str,
-        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
-        caller: &AgentId,
-        env: HashMap<String, String>,
-        stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        request_caller: golem_common::model::caller::Caller,
-        auth: &AuthCtx,
-        key: Option<IdempotencyKey>,
-        freshness: InvocationFreshnessDisposition,
-    ) -> Result<AgentFingerprint, WorkerProxyError> {
-        if self.prepare_on_executor {
-            let mut client = self
-                .client
-                .lock()
-                .unwrap()
-                .clone()
-                .expect("test executor connected");
-            let target = agent.to_proto().map_err(WorkerProxyError::InternalError)?;
-            let (constructor, unkeyed_id) = match (target.target.target, target.constructor) {
-                (Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Key(key)), _) => {
-                    (Some(key), None)
-                }
-                (
-                    Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id)),
-                    constructor,
-                ) => (constructor, Some(id)),
-                (None, constructor) => (constructor, None),
-            };
-            let response = client
-                .prepare_worker(CreateWorkerRequest {
-                    constructor,
-                    unkeyed_id,
-                    invocation,
-                    component_id: target.component_id,
-                    env,
-                    config: config.into_iter().map(Into::into).collect(),
-                    component_owner_account_id: self.component_owner_account_id.map(Into::into),
-                    environment_id: Some(agent.owned_agent_id.environment_id.into()),
-                    ignore_already_existing: true,
-                    auth_ctx: Some(auth.clone().into()),
-                    caller: Some(request_caller.into()),
-                    invocation_context: Some(
-                        golem_api_grpc::proto::golem::worker::InvocationContext {
-                            parent: Some((*caller).into()),
-                            env: HashMap::new(),
-                            tracing: Some(stack.into()),
-                        },
-                    ),
-                    idempotency_key: key.map(Into::into),
-                    freshness_disposition: match freshness {
-                        InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
-                        InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
-                    },
-                })
-                .await
-                .map_err(|status| {
-                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
-                        status.to_string(),
-                    ))
-                })?
-                .into_inner();
-            return match response.result {
-                Some(create_worker_response::Result::Success(success)) => Ok(AgentFingerprint(
-                    success
-                        .instance_id
-                        .ok_or_else(|| {
-                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(
-                                "prepare_worker returned no fingerprint",
-                            ))
-                        })?
-                        .into(),
-                )),
-                Some(create_worker_response::Result::Failure(error)) => {
-                    Err(WorkerProxyError::InternalError(
-                        WorkerExecutorError::unknown(format!("{error:?}")),
-                    ))
-                }
-                None => Err(WorkerProxyError::InternalError(
-                    WorkerExecutorError::unknown("prepare_worker returned no result"),
-                )),
-            };
-        }
-        self.inner
-            .prepare(
-                agent,
-                method,
-                invocation,
-                caller,
-                env,
-                stack,
-                config,
-                request_caller,
-                auth,
-                key,
-                freshness,
-            )
-            .await
-    }
-
-    async fn resume(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        force: bool,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        let mut client = self
-            .client
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("test executor connected");
-        let response = client
-            .resume_worker(ResumeWorkerRequest {
-                agent_id: Some(owned_agent_id.agent_id.into()),
-                environment_id: Some(owned_agent_id.environment_id.into()),
-                force: Some(force),
-                auth_ctx: Some(auth_ctx.clone().into()),
-                caller: Some(callers::anonymous().into()),
-                expected_fingerprint: None,
-            })
-            .await?
-            .into_inner();
-        match response.result {
-            Some(resume_worker_response::Result::Success(_)) => {
-                let checkpoint = self.checkpoint.lock().unwrap().take();
-                if let Some(checkpoint) = checkpoint {
-                    checkpoint.notify_one();
-                    std::future::pending::<()>().await;
-                }
-                if self.lose_response.swap(false, Ordering::SeqCst) {
-                    Err(WorkerProxyError::InternalError(
-                        WorkerExecutorError::runtime("lost fork resume response"),
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
-            Some(resume_worker_response::Result::Failure(error)) => Err(
-                WorkerProxyError::InternalError(WorkerExecutorError::try_from(error).map_err(
-                    |error| WorkerProxyError::InternalError(WorkerExecutorError::runtime(error)),
-                )?),
-            ),
-            None => Err(WorkerProxyError::InternalError(
-                WorkerExecutorError::runtime("missing resume result"),
-            )),
-        }
-    }
-
-    async fn create(
-        &self,
-        agent: &ResolvedTarget,
-        exclusive: bool,
-        caller: &AgentId,
-        env: HashMap<String, String>,
-        stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        request_caller: golem_common::model::caller::Caller,
-        auth: &AuthCtx,
-        idempotency_key: Option<IdempotencyKey>,
-    ) -> Result<AgentFingerprint, WorkerProxyError> {
-        self.inner
-            .create(
-                agent,
-                exclusive,
-                caller,
-                env,
-                stack,
-                config,
-                request_caller,
-                auth,
-                idempotency_key,
-            )
-            .await
-    }
-
-    async fn invoke_agent(
-        &self,
-        agent: &ResolvedTarget,
-        method: String,
-        input: SchemaValue,
-        mode: AgentInvocationMode,
-        schedule_at: Option<jiff::Timestamp>,
-        key: Option<IdempotencyKey>,
-        freshness: InvocationFreshnessDisposition,
-        expected_callee_fingerprint: Option<AgentFingerprint>,
-        caller: AgentId,
-        env: HashMap<String, String>,
-        stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        request_caller: golem_common::model::caller::Caller,
-        environment: EnvironmentId,
-        auth: &AuthCtx,
-        card: Option<ScopeCard>,
-    ) -> Result<AgentInvocationOutput, WorkerProxyError> {
-        self.inner
-            .invoke_agent(
-                agent,
-                method,
-                input,
-                mode,
-                schedule_at,
-                key,
-                freshness,
-                expected_callee_fingerprint,
-                caller,
-                env,
-                stack,
-                config,
-                request_caller,
-                environment,
-                auth,
-                card,
-            )
-            .await
-    }
-
-    async fn invoke_agent_session(
-        &self,
-        request: golem_worker_executor::services::worker_proxy::InvocationRequestStream,
-    ) -> Result<
-        golem_worker_executor::services::worker_proxy::InvocationResponseStream,
-        WorkerProxyError,
-    > {
-        let evidence = self.evidence.clone();
-        let account_id = self.component_owner_account_id;
-        let (requests, receiver) = tokio::sync::mpsc::channel(8);
-        tokio::spawn(async move {
-            let mut request = request;
-            while let Some(mut request) = request.next().await {
-                if let Some(evidence) = &evidence {
-                    evidence.sessions.fetch_add(1, Ordering::SeqCst);
-                    match &mut request.request {
-                        Some(invocation_request::Request::Start(start)) => {
-                            start.component_owner_account_id = account_id.map(Into::into);
-                        }
-                        Some(invocation_request::Request::ResumeAttach(_)) => {
-                            evidence
-                                .resume_attach_requests
-                                .fetch_add(1, Ordering::SeqCst);
-                        }
-                        _ => {}
-                    }
-                }
-                if requests.send(request).await.is_err() {
-                    break;
-                }
-            }
-        });
-        let mut client = self
-            .client
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("test executor connected");
-        let mut responses = client
-            .invoke_agent_session(tokio_stream::wrappers::ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let evidence = self.evidence.clone();
-        let (outbound, inbound) = tokio::sync::mpsc::channel(8);
-        tokio::spawn(async move {
-            loop {
-                let response = responses.message().await;
-                if let Ok(Some(response)) = &response
-                    && let Some(invocation_response::Response::Accepted(accepted)) =
-                        &response.response
-                    && accepted.joined_origin_observer
-                    && let Some(evidence) = &evidence
-                {
-                    evidence
-                        .joined_observer_acceptances
-                        .fetch_add(1, Ordering::SeqCst);
-                }
-                let response = match response {
-                    Ok(Some(response)) => Ok(response),
-                    Ok(None) => break,
-                    Err(error) => Err(error),
-                };
-                if outbound.send(response).await.is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
-            inbound,
-        )))
-    }
-
-    async fn control_durable_stream_attachment(
-        &self,
-        request: golem_common::model::durable_stream::StreamAttachmentControlRequest,
-        auth: &AuthCtx,
-    ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
-        self.inner
-            .control_durable_stream_attachment(request, auth)
-            .await
-    }
-
-    async fn read_durable_stream_segment(
-        &self,
-        request: golem_common::model::durable_stream::DurableStreamReadRequest,
-        auth: &AuthCtx,
-    ) -> Result<
-        Vec<u8>,
-        golem_worker_executor::services::rpc::DurableStreamRemoteError<WorkerProxyError>,
-    > {
-        self.inner.read_durable_stream_segment(request, auth).await
-    }
-
-    async fn deliver_card_transfer(
-        &self,
-        agent: &AgentId,
-        environment: EnvironmentId,
-        transfer: uuid::Uuid,
-        source_card: CardId,
-        card: &StoredCard,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .deliver_card_transfer(agent, environment, transfer, source_card, card)
-            .await
-    }
-
-    async fn update(
-        &self,
-        agent: &OwnedAgentId,
-        revision: ComponentRevision,
-        mode: UpdateMode,
-        disable_wakeup: bool,
-        requester: golem_common::model::caller::Caller,
-        auth: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .update(agent, revision, mode, disable_wakeup, requester, auth)
-            .await
-    }
-
-    async fn fork_worker(
-        &self,
-        source: &OwnedAgentId,
-        target: &AgentId,
-        cut: &OplogIndex,
-        caller: golem_common::model::caller::Caller,
-        auth: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        let Some(owner) = self.fork_owner else {
-            return self
-                .inner
-                .fork_worker(source, target, cut, caller, auth)
-                .await;
-        };
-        let mut client = self
-            .client
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("test executor connected");
-        let response = client
-            .fork_worker(ForkWorkerRequest {
-                component_owner_account_id: Some(owner.into()),
-                source_agent_id: Some(source.agent_id.into()),
-                target_agent_id: Some((*target).into()),
-                oplog_index_cutoff: (*cut).into(),
-                environment_id: Some(source.environment_id.into()),
-                auth_ctx: Some(auth.clone().into()),
-                caller: Some(caller.into()),
-                component_owner_account_email: String::new(),
-                expected_fingerprint: None,
-            })
-            .await?
-            .into_inner();
-        match response.result {
-            Some(fork_worker_response::Result::Success(_)) => Ok(()),
-            Some(fork_worker_response::Result::Failure(error)) => Err(
-                WorkerProxyError::InternalError(WorkerExecutorError::try_from(error).map_err(
-                    |error| WorkerProxyError::InternalError(WorkerExecutorError::runtime(error)),
-                )?),
-            ),
-            None => Err(WorkerProxyError::InternalError(
-                WorkerExecutorError::runtime("missing fork result"),
-            )),
-        }
-    }
-
-    async fn revert(
-        &self,
-        agent: &OwnedAgentId,
-        target: RevertWorkerTarget,
-        resolved: Option<ResolvedRevert>,
-        auth: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner.revert(agent, target, resolved, auth).await
-    }
-
-    async fn complete_promise(
-        &self,
-        environment_id: EnvironmentId,
-        id: PromiseId,
-        data: Vec<u8>,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .complete_promise(environment_id, id, data, auth)
-            .await
-    }
-
-    async fn cancel_invocation(
-        &self,
-        agent: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner.cancel_invocation(agent, key, auth).await
-    }
-
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::agent::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
-    async fn lookup_invocation_status(
-        &self,
-        agent: &AgentId,
-        key: golem_common::model::InvocationId,
-        env: Option<EnvironmentId>,
-        auth: &AuthCtx,
-    ) -> Result<InvocationStatus, WorkerProxyError> {
-        self.inner
-            .lookup_invocation_status(agent, key, env, auth)
-            .await
-    }
-
-    async fn process_oplog_entries(
-        &self,
-        agent: &AgentId,
-        env: EnvironmentId,
-        component: golem_common::model::component::ComponentId,
-        revision: ComponentRevision,
-        key: golem_common::model::InvocationId,
-        account: AccountId,
-        config: Vec<(String, String)>,
-        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
-        first: OplogIndex,
-        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
-        auth: &AuthCtx,
-        caller: &golem_common::model::caller::Caller,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .process_oplog_entries(
-                agent, env, component, revision, key, account, config, metadata, first, entries,
-                auth, caller,
             )
             .await
     }

@@ -36,7 +36,9 @@ Put a test double at the boundary where the executor leaves its process, and kee
 production code on the executor's side. To change some blob-storage operations, implement
 `BlobStorageDecorator` and pass `wrap_blob_storage()`. For calls the executor makes to the worker
 service, such as card transfers, start an `EmulatedWorkerService` and pass it with
-`TestExecutorOverrides::with_worker_service`. For permission cards that the registry keeps,
+`TestExecutorOverrides::with_worker_service`. To prepare, fork or open a session on an agent of
+another executor, give it `WorkerServiceOptions::component_owner`, and reach it with
+`EmulatedWorkerService::remote_rpc`. For permission cards that the registry keeps,
 start an `EmulatedRegistryService`, add the initial cards, and pass it with `with_registry`.
 Do not write another wrapper of `BlobStorageBackend`, `WorkerProxy` or `CardService` for these
 cases.

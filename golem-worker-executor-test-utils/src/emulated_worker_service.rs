@@ -22,15 +22,24 @@
 //! under test, as the real worker service does when it routes a call to the executor that owns
 //! the agent.
 //!
+//! It emulates `DeliverCardTransfer`, `ResumeWorker` and the invocation session
+//! `InvokeAgentSession`. With [`WorkerServiceOptions::component_owner`], it also emulates
+//! `PrepareWorker` and `ForkWorker`, and fills the owner into the start of a session: the calls
+//! that the executor sends through the worker service when the target agent lives on another
+//! executor. The real worker service finds the owner of the component; the emulated service gets
+//! it as an option.
+//!
 //! It does not emulate routing, authentication beyond the system-only check of
 //! `DeliverCardTransfer`, or the error mapping of the real worker service: an executor failure
 //! reaches the proxy unchanged, as an internal error. A test therefore checks the error code of
 //! the executor, not the code that a production caller sees.
 //!
-//! Every failure is an answer in the response body, never a gRPC status, so the client of the
-//! proxy never retries a call and never delivers a card transfer twice. An RPC that the service
-//! does not emulate answers `Status::unimplemented` with its name.
+//! Every failure of a unary call is an answer in the response body, never a gRPC status, so the
+//! client of the proxy never retries a call and never delivers a card transfer twice. A session
+//! passes a status from the executor through unchanged. An RPC that the service does not emulate
+//! answers `Status::unimplemented` with its name.
 
+use futures::StreamExt;
 use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::{
@@ -42,25 +51,36 @@ use golem_api_grpc::proto::golem::worker::v1::{
     DurableStreamAttachmentControlRequest, DurableStreamAttachmentControlResponse,
     DurableStreamSegmentReadRequest, DurableStreamSegmentReadResponse, ForkWorkerRequest,
     ForkWorkerResponse, InvokeAgentRequest, InvokeAgentResponse, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerExecutionError, agent_error,
-    deliver_card_transfer_response, resume_worker_response,
+    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ProcessOplogEntriesRequest,
+    ProcessOplogEntriesResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerExecutionError,
+    agent_error, deliver_card_transfer_response, fork_worker_response, launch_new_worker_response,
+    resume_worker_response,
 };
-use golem_api_grpc::proto::golem::worker::{InvocationRequest, InvocationResponse};
+use golem_api_grpc::proto::golem::worker::{
+    InvocationRequest, InvocationResponse, invocation_request, invocation_response,
+};
 use golem_api_grpc::proto::golem::workerexecutor::v1 as executor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::AgentId;
+use golem_common::model::account::AccountId;
 use golem_common::model::card::{CardId, StoredCard};
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_schema::proto::golem::common::Empty;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::GATE_TIMEOUT;
+use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::golem_config::WorkerServiceGrpcConfig;
+use golem_worker_executor::services::rpc::RemoteInvocationRpc;
+use golem_worker_executor::services::shard::ShardService;
+use golem_worker_executor::services::worker_proxy::RemoteWorkerProxy;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::task::AbortOnDropHandle;
 use tonic::codec::CompressionEncoding;
@@ -69,6 +89,9 @@ use tonic::{Request, Response, Status};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 type ExecutorClient = WorkerExecutorClient<OtelGrpcService<Channel>>;
+
+/// The default gRPC message limit of the real worker service.
+const MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 
 /// A permission-card transfer that the executor sent to the worker service.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,11 +103,25 @@ pub struct RecordedCardTransfer {
     pub card: StoredCard,
 }
 
+/// What the invocation sessions through an [`EmulatedWorkerService`] carried.
+#[derive(Debug, Default)]
+pub struct RemoteRpcEvidence {
+    /// The request messages of every session, including each `Start`.
+    pub session_requests: AtomicUsize,
+    /// The `Accepted` responses that joined the observer of an existing invocation.
+    pub joined_observer_acceptances: AtomicUsize,
+    /// The `ResumeAttach` requests.
+    pub resume_attach_requests: AtomicUsize,
+}
+
 /// What an [`EmulatedWorkerService`] does with the calls it gets.
 #[derive(Clone, Debug)]
 pub struct WorkerServiceOptions {
     deliver_card_transfers: bool,
     record_card_transfer_attempts: bool,
+    component_owner: Option<AccountId>,
+    hold_after_resume: Option<Arc<Notify>>,
+    lose_resume_response: bool,
 }
 
 impl Default for WorkerServiceOptions {
@@ -92,6 +129,9 @@ impl Default for WorkerServiceOptions {
         Self {
             deliver_card_transfers: true,
             record_card_transfer_attempts: false,
+            component_owner: None,
+            hold_after_resume: None,
+            lose_resume_response: false,
         }
     }
 }
@@ -102,6 +142,7 @@ impl WorkerServiceOptions {
         Self {
             deliver_card_transfers: false,
             record_card_transfer_attempts: true,
+            ..self
         }
     }
 
@@ -113,13 +154,53 @@ impl WorkerServiceOptions {
             ..self
         }
     }
+
+    /// Emulates `PrepareWorker`, `ForkWorker` and `InvokeAgentSession` with `account_id` as the
+    /// owner of every component: the service sets it in each request it forwards, and in the
+    /// `Start` of each session. Without an owner, `PrepareWorker` and `ForkWorker` answer
+    /// `Status::unimplemented`, and a session is forwarded unchanged.
+    pub fn component_owner(self, account_id: AccountId) -> Self {
+        Self {
+            component_owner: Some(account_id),
+            ..self
+        }
+    }
+
+    /// Makes the first successful `ResumeWorker` notify `notify`, then never answer.
+    pub fn hold_after_resume(self, notify: Arc<Notify>) -> Self {
+        Self {
+            hold_after_resume: Some(notify),
+            ..self
+        }
+    }
+
+    /// Makes the service answer the first successful `ResumeWorker` that it does not hold with
+    /// the error "lost fork resume response", after the executor resumed the agent.
+    pub fn lose_resume_response(self) -> Self {
+        Self {
+            lose_resume_response: true,
+            ..self
+        }
+    }
+}
+
+/// The executor under test that the service forwards to.
+#[derive(Clone)]
+struct Attached {
+    client: ExecutorClient,
+    /// The component service of the executor, where `PrepareWorker` finds the environment of a
+    /// component. The production bootstrap of the test utils gives none.
+    component_service: Option<Arc<dyn ComponentService>>,
 }
 
 struct State {
     options: WorkerServiceOptions,
-    executor: watch::Sender<Option<ExecutorClient>>,
+    executor: watch::Sender<Option<Attached>>,
     card_transfers: Mutex<Vec<RecordedCardTransfer>>,
     lost_card_transfer_responses: Mutex<HashSet<uuid::Uuid>>,
+    held_resume: Mutex<Option<Arc<Notify>>>,
+    lose_resume_response: AtomicBool,
+    evidence: Arc<RemoteRpcEvidence>,
 }
 
 /// An in-process worker service that forwards the calls of the executor under test back to it.
@@ -136,14 +217,19 @@ impl EmulatedWorkerService {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let state = Arc::new(State {
+            held_resume: Mutex::new(options.hold_after_resume.clone()),
+            lose_resume_response: AtomicBool::new(options.lose_resume_response),
             options,
             executor: watch::Sender::new(None),
             card_transfers: Mutex::default(),
             lost_card_transfer_responses: Mutex::default(),
+            evidence: Arc::default(),
         });
         let service = WorkerServiceServer::new(Handler(state.clone()))
             .accept_compressed(CompressionEncoding::Gzip)
-            .send_compressed(CompressionEncoding::Gzip);
+            .send_compressed(CompressionEncoding::Gzip)
+            .max_decoding_message_size(MAX_MESSAGE_SIZE)
+            .max_encoding_message_size(MAX_MESSAGE_SIZE);
         let server = tokio::spawn(async move {
             if let Err(error) = tonic::transport::Server::builder()
                 .add_service(service)
@@ -181,10 +267,33 @@ impl EmulatedWorkerService {
         self.state.card_transfers.lock().unwrap().clone()
     }
 
+    /// What the invocation sessions through the service carried.
+    pub fn session_evidence(&self) -> Arc<RemoteRpcEvidence> {
+        self.state.evidence.clone()
+    }
+
+    /// A remote RPC over a production `RemoteWorkerProxy` that calls this service, as an
+    /// executor calls the worker service for a target on another executor.
+    pub fn remote_rpc(&self, shard_service: Arc<dyn ShardService>) -> RemoteInvocationRpc {
+        let config = WorkerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port: self.port,
+            ..WorkerServiceGrpcConfig::default()
+        };
+        RemoteInvocationRpc::new(Arc::new(RemoteWorkerProxy::new(&config)), shard_service)
+    }
+
     /// Sends the calls to `client` from now on. Each start of a test executor that uses the
     /// service calls it.
-    pub(crate) fn attach(&self, client: ExecutorClient) {
-        self.state.executor.send_replace(Some(client));
+    pub(crate) fn attach(
+        &self,
+        client: ExecutorClient,
+        component_service: Option<Arc<dyn ComponentService>>,
+    ) {
+        self.state.executor.send_replace(Some(Attached {
+            client,
+            component_service,
+        }));
     }
 }
 
@@ -193,10 +302,10 @@ struct Handler(Arc<State>);
 impl Handler {
     /// The client of the executor under test. A call that arrives before an executor started
     /// waits for one, for at most [`GATE_TIMEOUT`].
-    async fn executor(&self) -> Result<ExecutorClient, AgentError> {
+    async fn executor(&self) -> Result<Attached, AgentError> {
         let mut executor = self.0.executor.subscribe();
         match tokio::time::timeout(GATE_TIMEOUT, executor.wait_for(Option::is_some)).await {
-            Ok(Ok(client)) => Ok(client.clone().expect("waited for a client")),
+            Ok(Ok(attached)) => Ok(attached.clone().expect("waited for an executor")),
             _ => Err(internal_error(WorkerExecutorError::runtime(
                 "emulated worker service: no executor started",
             ))),
@@ -230,6 +339,7 @@ impl Handler {
         let response = self
             .executor()
             .await?
+            .client
             .deliver_card_transfer(executor::DeliverCardTransferRequest {
                 target_agent_id: request.target_agent_id,
                 environment_id: request.environment_id,
@@ -270,6 +380,7 @@ impl Handler {
         let response = self
             .executor()
             .await?
+            .client
             .resume_worker(executor::ResumeWorkerRequest {
                 agent_id: request.agent_id,
                 force: request.force,
@@ -282,11 +393,108 @@ impl Handler {
             .map_err(transport_error)?
             .into_inner();
         match response.result {
-            Some(executor::resume_worker_response::Result::Success(_)) => Ok(()),
+            Some(executor::resume_worker_response::Result::Success(_)) => {}
             Some(executor::resume_worker_response::Result::Failure(error)) => {
+                return Err(executor_failure(error));
+            }
+            None => return Err(no_result("resume_worker")),
+        }
+        let held = self.0.held_resume.lock().unwrap().take();
+        if let Some(held) = held {
+            held.notify_one();
+            std::future::pending::<()>().await;
+        }
+        if self.0.lose_resume_response.swap(false, Ordering::SeqCst) {
+            return Err(internal_error(WorkerExecutorError::runtime(
+                "lost fork resume response",
+            )));
+        }
+        Ok(())
+    }
+
+    async fn prepare(
+        &self,
+        owner: AccountId,
+        request: LaunchNewWorkerRequest,
+    ) -> Result<LaunchNewWorkerSuccessResponse, AgentError> {
+        let executor = self.executor().await?;
+        let component_id: ComponentId = request
+            .component_id
+            .ok_or_else(|| bad_request("Missing component_id"))?
+            .try_into()
+            .map_err(|error| bad_request(format!("invalid component_id: {error}")))?;
+        let component = executor
+            .component_service
+            .ok_or_else(|| {
+                internal_error(WorkerExecutorError::runtime(
+                    "emulated worker service: the executor has no component service",
+                ))
+            })?
+            .get_metadata(component_id, None)
+            .await
+            .map_err(internal_error)?;
+        let response = executor
+            .client
+            .clone()
+            .prepare_worker(executor::CreateWorkerRequest {
+                constructor: request.constructor,
+                unkeyed_id: request.unkeyed_id,
+                invocation: request.invocation,
+                component_id: request.component_id,
+                env: request.env,
+                config: request.config,
+                component_owner_account_id: Some(owner.into()),
+                environment_id: Some(component.environment_id.into()),
+                ignore_already_existing: request.ignore_already_existing,
+                auth_ctx: request.auth_ctx,
+                caller: request.caller,
+                invocation_context: request.context,
+                idempotency_key: request.idempotency_key,
+                freshness_disposition: request.freshness_disposition,
+            })
+            .await
+            .map_err(transport_error)?
+            .into_inner();
+        match response.result {
+            Some(executor::create_worker_response::Result::Success(success)) => {
+                Ok(LaunchNewWorkerSuccessResponse {
+                    agent_id: success.agent_id,
+                    component_version: component.revision.into(),
+                    instance_id: success.instance_id,
+                })
+            }
+            Some(executor::create_worker_response::Result::Failure(error)) => {
                 Err(executor_failure(error))
             }
-            None => Err(no_result("resume_worker")),
+            None => Err(no_result("prepare_worker")),
+        }
+    }
+
+    async fn fork(&self, owner: AccountId, request: ForkWorkerRequest) -> Result<(), AgentError> {
+        let response = self
+            .executor()
+            .await?
+            .client
+            .fork_worker(executor::ForkWorkerRequest {
+                source_agent_id: request.source_agent_id,
+                target_agent_id: request.target_agent_id,
+                oplog_index_cutoff: request.oplog_index_cutoff,
+                environment_id: request.environment_id,
+                component_owner_account_id: Some(owner.into()),
+                component_owner_account_email: String::new(),
+                auth_ctx: request.auth_ctx,
+                caller: request.caller,
+                expected_fingerprint: None,
+            })
+            .await
+            .map_err(transport_error)?
+            .into_inner();
+        match response.result {
+            Some(executor::fork_worker_response::Result::Success(_)) => Ok(()),
+            Some(executor::fork_worker_response::Result::Failure(error)) => {
+                Err(executor_failure(error))
+            }
+            None => Err(no_result("fork_worker")),
         }
     }
 }
@@ -373,9 +581,18 @@ impl WorkerService for Handler {
 
     async fn prepare_worker(
         &self,
-        _request: Request<LaunchNewWorkerRequest>,
+        request: Request<LaunchNewWorkerRequest>,
     ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
-        unimplemented("PrepareWorker")
+        let Some(owner) = self.0.options.component_owner else {
+            return unimplemented("PrepareWorker");
+        };
+        let result = match self.prepare(owner, request.into_inner()).await {
+            Ok(success) => launch_new_worker_response::Result::Success(success),
+            Err(error) => launch_new_worker_response::Result::Error(error),
+        };
+        Ok(Response::new(LaunchNewWorkerResponse {
+            result: Some(result),
+        }))
     }
 
     async fn update_worker(
@@ -400,9 +617,18 @@ impl WorkerService for Handler {
 
     async fn fork_worker(
         &self,
-        _request: Request<ForkWorkerRequest>,
+        request: Request<ForkWorkerRequest>,
     ) -> Result<Response<ForkWorkerResponse>, Status> {
-        unimplemented("ForkWorker")
+        let Some(owner) = self.0.options.component_owner else {
+            return unimplemented("ForkWorker");
+        };
+        let result = match self.fork(owner, request.into_inner()).await {
+            Ok(()) => fork_worker_response::Result::Success(Empty {}),
+            Err(error) => fork_worker_response::Result::Error(error),
+        };
+        Ok(Response::new(ForkWorkerResponse {
+            result: Some(result),
+        }))
     }
 
     async fn revert_worker(
@@ -428,11 +654,63 @@ impl WorkerService for Handler {
 
     type InvokeAgentSessionStream = BoxStream<'static, Result<InvocationResponse, Status>>;
 
+    /// Forwards a session to the executor message by message, in both directions, and counts
+    /// what it carries in [`RemoteRpcEvidence`]. A status of the executor reaches the proxy
+    /// unchanged.
     async fn invoke_agent_session(
         &self,
-        _request: Request<tonic::Streaming<InvocationRequest>>,
+        request: Request<tonic::Streaming<InvocationRequest>>,
     ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
-        unimplemented("InvokeAgentSession")
+        let mut client = match self.executor().await {
+            Ok(executor) => executor.client,
+            Err(_) => {
+                return Err(Status::internal(
+                    "emulated worker service: no executor started",
+                ));
+            }
+        };
+        let owner = self.0.options.component_owner;
+        let evidence = self.0.evidence.clone();
+        let requests = request
+            .into_inner()
+            .take_while(|request| std::future::ready(request.is_ok()))
+            .filter_map(|request| std::future::ready(request.ok()))
+            .map({
+                let evidence = evidence.clone();
+                move |mut request: InvocationRequest| {
+                    evidence.session_requests.fetch_add(1, Ordering::SeqCst);
+                    match &mut request.request {
+                        Some(invocation_request::Request::Start(start)) => {
+                            if let Some(owner) = owner {
+                                start.component_owner_account_id = Some(owner.into());
+                            }
+                        }
+                        Some(invocation_request::Request::ResumeAttach(_)) => {
+                            evidence
+                                .resume_attach_requests
+                                .fetch_add(1, Ordering::SeqCst);
+                        }
+                        _ => {}
+                    }
+                    request
+                }
+            });
+        let responses = client
+            .invoke_agent_session(Box::pin(requests))
+            .await?
+            .into_inner()
+            .inspect(move |response| {
+                if let Ok(response) = response
+                    && let Some(invocation_response::Response::Accepted(accepted)) =
+                        &response.response
+                    && accepted.joined_origin_observer
+                {
+                    evidence
+                        .joined_observer_acceptances
+                        .fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        Ok(Response::new(responses.boxed()))
     }
 
     async fn cancel_invocation(

@@ -8104,7 +8104,7 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
                 "the fork must join the original provider invocation"
             );
             if let Some(evidence) = &remote_evidence {
-                assert!(evidence.sessions.load(Ordering::SeqCst) > 0);
+                assert!(evidence.session_requests.load(Ordering::SeqCst) > 0);
                 if cut_point != "end" {
                     assert!(
                         evidence.joined_observer_acceptances.load(Ordering::SeqCst) > 0,

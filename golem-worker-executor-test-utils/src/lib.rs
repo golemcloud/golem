@@ -36,7 +36,7 @@ pub use blob_storage_decorator::{
 };
 pub use emulated_registry_service::EmulatedRegistryService;
 pub use emulated_worker_service::{
-    EmulatedWorkerService, RecordedCardTransfer, WorkerServiceOptions,
+    EmulatedWorkerService, RecordedCardTransfer, RemoteRpcEvidence, WorkerServiceOptions,
 };
 pub use invocation_error::{InvocationError, InvocationErrorExt};
 pub use oplog_shape::OplogShape;
@@ -187,7 +187,7 @@ use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use golem_worker_executor::services::{
-    HasActiveAgents, HasAll, HasWorkerService, NoAdditionalDeps, rdbms,
+    HasActiveAgents, HasAll, HasComponentService, HasWorkerService, NoAdditionalDeps, rdbms,
 };
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
@@ -3023,7 +3023,6 @@ type WrapComponentServiceFn =
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 type WrapWorkerEnumerationServiceFn =
     dyn Fn(Arc<dyn WorkerEnumerationService>) -> Arc<dyn WorkerEnumerationService> + Send + Sync;
-type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
 type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
 type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
 type WrapShardServiceFn = dyn Fn(Arc<dyn ShardService>) -> Arc<dyn ShardService> + Send + Sync;
@@ -3051,7 +3050,6 @@ pub struct TestExecutorOverrides {
     /// including the periodic re-check a caller parked in
     /// `Worker::wait_for_invocation_result` runs.
     pub wrap_shard_service: Option<Arc<WrapShardServiceFn>>,
-    pub wrap_worker_proxy: Option<Arc<WrapWorkerProxyFn>>,
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
@@ -3100,8 +3098,13 @@ impl TestExecutorOverrides {
 
     /// Points the executor's `public_worker_api` at `worker_service`, after any `configure`
     /// already set, and connects the service to the executor on each start, including
-    /// `restart`.
+    /// `restart`. Panics when the overrides already have a worker service, because replacing
+    /// it would silently drop what the caller's emulator records.
     pub fn with_worker_service(self, worker_service: &EmulatedWorkerService) -> Self {
+        assert!(
+            self.worker_service.is_none(),
+            "the overrides already have an emulated worker service"
+        );
         let configure = self.configure.clone();
         let port = worker_service.port();
         Self {
@@ -3579,7 +3582,12 @@ async fn start_executor_with_config(
                 .max_decoding_message_size(32 * 1024 * 1024)
                 .max_encoding_message_size(32 * 1024 * 1024);
             if let Some(worker_service) = &worker_service {
-                worker_service.attach(client.clone());
+                let component_service = services
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|services| services.component_service());
+                worker_service.attach(client.clone(), component_service);
             }
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
@@ -4872,12 +4880,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     }
 
     fn create_worker_proxy(&self, golem_config: &GolemConfig) -> Arc<dyn WorkerProxy> {
-        let worker_proxy = Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api));
-        if let Some(wrap) = &self.overrides.wrap_worker_proxy {
-            wrap(worker_proxy)
-        } else {
-            worker_proxy
-        }
+        Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api))
     }
 
     fn filesystem_snapshot_store(
@@ -5432,7 +5435,7 @@ async fn run_production_context_bootstrap(
                 .max_decoding_message_size(32 * 1024 * 1024)
                 .max_encoding_message_size(32 * 1024 * 1024);
             if let Some(worker_service) = &worker_service {
-                worker_service.attach(client.clone());
+                worker_service.attach(client.clone(), None);
             }
             return Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
