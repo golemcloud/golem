@@ -44,11 +44,15 @@ pub(super) fn skipped_attachment_failure(
     terminal: &SerializableToolOperationTerminal,
 ) -> ByteStreamFailure {
     match &terminal.result {
-        Err(SerializableToolRpcError::ResourceExhausted(_)) => ByteStreamFailure::ResourceExhausted,
-        Err(SerializableToolRpcError::Cancelled) => ByteStreamFailure::Cancelled,
-        Err(SerializableToolRpcError::RemoteInternalError(details))
-            if terminal.body_execution == SerializableEntityBodyExecution::Trapped =>
-        {
+        golem_common::model::oplog::payload::types::RecordedToolResult::Inline(Err(
+            SerializableToolRpcError::ResourceExhausted(_),
+        )) => ByteStreamFailure::ResourceExhausted,
+        golem_common::model::oplog::payload::types::RecordedToolResult::Inline(Err(
+            SerializableToolRpcError::Cancelled,
+        )) => ByteStreamFailure::Cancelled,
+        golem_common::model::oplog::payload::types::RecordedToolResult::Inline(Err(
+            SerializableToolRpcError::RemoteInternalError(details),
+        )) if terminal.body_execution == SerializableEntityBodyExecution::Trapped => {
             ByteStreamFailure::Failed(details.clone())
         }
         _ => ByteStreamFailure::Failed("tool body was skipped during replay".to_string()),
@@ -1663,9 +1667,11 @@ where
                 stdout_controller.as_ref(),
                 stderr_controller.as_ref(),
             );
-            let response =
-                streams::restore_response(&result_streams, decode_tool_terminal(*response)?)
-                    .await?;
+            let response = streams::restore_response(
+                &result_streams,
+                terminal_from_response(&response)?.result.clone(),
+            )
+            .await?;
             operation.settle().await?;
             Ok(response)
         }

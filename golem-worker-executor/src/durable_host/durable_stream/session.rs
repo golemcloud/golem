@@ -612,7 +612,7 @@ impl DurableStreamStore {
             .iter()
             .enumerate()
             .filter_map(|(position, record)| match record {
-                StreamSessionRecord::InvocationResult(record) => {
+                StreamSessionRecord::RemoteResult(record) => {
                     Some((position, self.qualify_session(&record.session_key)))
                 }
                 _ => None,

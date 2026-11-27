@@ -189,7 +189,16 @@ fn request(request: HostRequest) -> TypedSchemaValue {
 }
 
 fn response(response: HostResponse) -> TypedSchemaValue {
-    response.into_typed_schema_value().unwrap()
+    match response {
+        HostResponse::GolemRpcInvokeAndAwait(response) => {
+            golem_common::model::oplog::payload::types::PublicRpcResponse {
+                result: response.result.into_inline().unwrap(),
+            }
+            .into_typed_schema_value()
+            .unwrap()
+        }
+        response => response.into_typed_schema_value().unwrap(),
+    }
 }
 
 fn rendered(
@@ -1731,7 +1740,9 @@ fn rpc_generic_values_reported() {
     let result = end(
         6,
         response(HostResponse::GolemRpcInvokeAndAwait(
-            HostResponseGolemRpcInvokeAndAwait { result: Ok(input) },
+            HostResponseGolemRpcInvokeAndAwait {
+                result: Ok(input).into(),
+            },
         )),
     );
     let out = rendered(
@@ -1753,7 +1764,9 @@ fn end_only_generic_rpc_with_and_without_start_function() {
     let result = end(
         6,
         response(HostResponse::GolemRpcInvokeAndAwait(
-            HostResponseGolemRpcInvokeAndAwait { result: Ok(input) },
+            HostResponseGolemRpcInvokeAndAwait {
+                result: Ok(input).into(),
+            },
         )),
     );
     let out = rendered(KeepFlags::default(), &result, None);
@@ -1846,7 +1859,8 @@ fn bare_entity_and_mcp_values_are_customer() {
         HostResponseGolemRpcInvokeAndAwait {
             result: Err(SerializableRpcError::Denied {
                 details: "MARKER".into(),
-            }),
+            })
+            .into(),
         },
     ));
     let entity_end = end(4, forged.clone());
@@ -2341,7 +2355,8 @@ fn error_subtree_customer_error_stays_customer() {
                             .into_typed_schema_value()
                             .unwrap(),
                     )),
-                }),
+                })
+                .into(),
             },
         )),
     );
@@ -2530,7 +2545,7 @@ fn rpc_typed_and_generic_give_same_tokens() {
         6,
         response(HostResponse::GolemRpcInvokeAndAwait(
             HostResponseGolemRpcInvokeAndAwait {
-                result: Ok(generic),
+                result: Ok(generic).into(),
             },
         )),
     );
@@ -3431,7 +3446,8 @@ fn rpc_other_cases_not_reported() {
                 HostResponseGolemRpcInvokeAndAwait {
                     result: Err(SerializableRpcError::NotFound {
                         details: "x".into(),
-                    }),
+                    })
+                    .into(),
                 },
             )),
         ),

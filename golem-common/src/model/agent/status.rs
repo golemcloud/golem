@@ -1093,7 +1093,7 @@ impl DurableStreamSessionStatus {
             _ => None,
         };
         let relative_record_key = match record {
-            StreamSessionRecord::InvocationResult(v) => Some(&v.session_key),
+            StreamSessionRecord::RemoteResult(v) => Some(&v.session_key),
             StreamSessionRecord::Finished(v) => Some(&v.session_key),
             StreamSessionRecord::Tombstoned(v) => Some(&v.session_key),
             StreamSessionRecord::CancelRequested(v) => Some(&v.session_key),
@@ -1228,7 +1228,7 @@ impl DurableStreamSessionStatus {
                     }
                 }
             }
-            StreamSessionRecord::InvocationResult(_) => self.invocation_result = Some(oplog_idx),
+            StreamSessionRecord::RemoteResult(_) => self.invocation_result = Some(oplog_idx),
             StreamSessionRecord::Finished(_) => {
                 self.finished.get_or_insert(oplog_idx);
             }

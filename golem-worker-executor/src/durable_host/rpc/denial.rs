@@ -197,7 +197,13 @@ pub(super) async fn replay_async_rpc_denial<Ctx: WorkerCtx>(
     let response = replay_rpc_denial(ctx, handle).await?;
     bake_closed_async_error(
         ctx.table(),
-        denied_rpc_failure(start_index, response.result)?,
+        denied_rpc_failure(
+            start_index,
+            response
+                .result
+                .into_inline()
+                .map_err(WorkerExecutorError::runtime)?,
+        )?,
     )
 }
 
@@ -219,7 +225,14 @@ pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
             ))
         })
         .await?;
-    Ok(Err(denied_rpc_failure(start_index, response.result)?.into()))
+    Ok(Err(denied_rpc_failure(
+        start_index,
+        response
+            .result
+            .into_inline()
+            .map_err(WorkerExecutorError::runtime)?,
+    )?
+    .into()))
 }
 
 pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
@@ -264,7 +277,7 @@ pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
     );
     let serializable_error: SerializableRpcError = error.clone().into();
     let expected = HostResponseGolemRpcInvokeAndAwait {
-        result: Err(serializable_error.clone()),
+        result: Err(serializable_error.clone()).into(),
     };
     let mut handle = match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
@@ -394,7 +407,13 @@ pub(super) async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
     finish_span_in_memory(ctx, span.span_id())?;
     bake_closed_async_error(
         ctx.table(),
-        denied_rpc_failure(start_index, response.result)?,
+        denied_rpc_failure(
+            start_index,
+            response
+                .result
+                .into_inline()
+                .map_err(WorkerExecutorError::runtime)?,
+        )?,
     )
 }
 

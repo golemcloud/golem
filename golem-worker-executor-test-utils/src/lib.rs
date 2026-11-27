@@ -144,8 +144,8 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogService, OrderedOplogStart, RawOplogPayloadDownloadError, ReservedRawStartBuilder,
-    UnreadableOplog,
+    OplogOps, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
+    ReservedRawStartBuilder, UnreadableOplog,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -958,6 +958,29 @@ impl TestWorkerExecutor {
             .expect("the oplog of the test agent reads")
             .into_values()
             .collect()
+    }
+
+    pub async fn stored_payload<T>(
+        &self,
+        agent_id: &AgentId,
+        payload: OplogPayload<T>,
+    ) -> anyhow::Result<T>
+    where
+        T: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq + Send + Sync + 'static,
+    {
+        use golem_worker_executor::services::{HasOplogService, oplog::OplogServiceOps};
+        let service = match (&self.services, &self.production_oplog) {
+            (Some(services), _) => services.oplog_service(),
+            (None, Some(oplog)) => Arc::clone(oplog),
+            (None, None) => panic!("the executor has no captured oplog service"),
+        };
+        Ok(service
+            .download_payload(
+                &OwnedAgentId::new(self.context.default_environment_id, agent_id),
+                AgentMode::Durable,
+                payload,
+            )
+            .await?)
     }
 
     pub async fn export_fork_admission_records(
@@ -5780,7 +5803,11 @@ impl TestOplog {
         }
     }
 
-    async fn pause_after_rpc_checkpoint(&self, index: OplogIndex, entry: &OplogEntry) {
+    async fn pause_after_rpc_checkpoint(
+        &self,
+        index: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<(), golem_worker_executor::services::oplog::OplogError> {
         let checkpoint = match entry {
             OplogEntry::Start {
                 function_name:
@@ -5800,6 +5827,25 @@ impl TestOplog {
             {
                 Some(RpcCheckpoint::End)
             }
+            OplogEntry::StreamSession { record, .. }
+                if self
+                    .additional_test_deps
+                    .has_rpc_commit_gate(
+                        &self.owned_agent_id.agent_id,
+                        RpcCheckpoint::ResultJournal,
+                    )
+                    .await =>
+            {
+                match self
+                    .oplog
+                    .download_payload::<StreamSessionRecord>(record.clone())
+                    .await
+                    .expect("the result journal payload reads")
+                {
+                    StreamSessionRecord::RemoteResult(_) => Some(RpcCheckpoint::ResultJournal),
+                    _ => None,
+                }
+            }
             _ => None,
         };
         if let Some(checkpoint) = checkpoint
@@ -5811,11 +5857,12 @@ impl TestOplog {
             self.oplog
                 .commit(CommitLevel::Always)
                 .await
-                .expect("oplog commit failed at the fire-and-forget RPC gate");
+                .expect("oplog commit failed at the RPC result checkpoint");
             self.additional_test_deps
                 .pause_after_rpc_commit(&self.owned_agent_id.agent_id, checkpoint)
-                .await;
+                .await?;
         }
+        Ok(())
     }
 
     /// Recognizes the `End` of a tracked consume-body chunk `Start` whose
@@ -6176,6 +6223,9 @@ impl Oplog for TestOplog {
                 let _ = deps
                     .consume_body_scope_end_gates
                     .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
+                let _ = deps
+                    .rpc_commit_gates
+                    .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
             },
             move || {
                 let close = close.clone();
@@ -6252,7 +6302,7 @@ impl Oplog for TestOplog {
         if let Some(start_index) = delivered_start {
             self.observe_rpc_memory_delivery(start_index);
         }
-        self.pause_after_rpc_checkpoint(index, &entry).await;
+        self.pause_after_rpc_checkpoint(index, &entry).await?;
         if track_scope_start
             && self
                 .additional_test_deps
@@ -6406,8 +6456,9 @@ impl Oplog for TestOplog {
     ) -> Result<Vec<(OplogIndex, OplogEntry)>, golem_worker_executor::services::oplog::OplogError>
     {
         let entries = self.oplog.add_durable_stream_batch(make_batch).await?;
-        for (_, entry) in &entries {
+        for (index, entry) in &entries {
             self.pause_at_test_append(entry, true).await?;
+            self.pause_after_rpc_checkpoint(*index, entry).await?;
         }
         Ok(entries)
     }
@@ -6740,7 +6791,7 @@ impl Oplog for TestOplog {
         }
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
-            .await;
+            .await?;
         if matches!(
             &ordered.entry,
             OplogEntry::Start {
@@ -6798,7 +6849,7 @@ impl Oplog for TestOplog {
         }
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
-            .await;
+            .await?;
         if matches!(
             &ordered.entry,
             OplogEntry::Start {
@@ -7687,6 +7738,7 @@ impl AdditionalTestDeps {
         let gate = Arc::new(RpcCommitGate {
             armed: AtomicBool::new(true),
             abort_return: AtomicBool::new(false),
+            shutdown: tokio_util::sync::CancellationToken::new(),
             checkpoint,
             committed_tx: std::sync::Mutex::new(Some(committed_tx)),
             release: tokio::sync::Semaphore::new(0),
@@ -7699,16 +7751,20 @@ impl AdditionalTestDeps {
         RpcCommitGateHandle { committed_rx, gate }
     }
 
-    async fn pause_after_rpc_commit(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) {
+    async fn pause_after_rpc_commit(
+        &self,
+        agent_id: &AgentId,
+        checkpoint: RpcCheckpoint,
+    ) -> Result<(), golem_worker_executor::services::oplog::OplogError> {
         let Some(gate) = self
             .rpc_commit_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
         else {
-            return;
+            return Ok(());
         };
         if gate.checkpoint != checkpoint || !gate.armed.swap(false, Ordering::SeqCst) {
-            return;
+            return Ok(());
         }
         if let Some(committed_tx) = gate.committed_tx.lock().unwrap().take() {
             let _ = committed_tx.send(());
@@ -7720,8 +7776,12 @@ impl AdditionalTestDeps {
             .expect("the RPC commit gate semaphore was closed");
         permit.forget();
         if gate.abort_return.load(Ordering::SeqCst) {
-            std::future::pending().await
+            gate.shutdown.cancelled().await;
+            return Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                "RPC receipt abandoned by its test gate".into(),
+            ));
         }
+        Ok(())
     }
 
     async fn has_rpc_commit_gate(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) -> bool {
@@ -8685,12 +8745,14 @@ impl Drop for ConsumeBodyScopeEndGateHandle {
 pub enum RpcCheckpoint {
     Start,
     StartSpan,
+    ResultJournal,
     End,
 }
 
 struct RpcCommitGate {
     armed: AtomicBool,
     abort_return: AtomicBool,
+    shutdown: tokio_util::sync::CancellationToken,
     checkpoint: RpcCheckpoint,
     committed_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,

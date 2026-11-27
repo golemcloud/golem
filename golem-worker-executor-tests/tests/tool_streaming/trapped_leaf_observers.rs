@@ -263,7 +263,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
             _ => None,
         })
         .expect("isolated child has a durable terminal response");
-    let terminal = SerializableToolOperationTerminal::from_value(terminal.value())?;
+    let terminal = PublicToolOperationTerminal::from_value(terminal.value())?;
     assert_eq!(
         terminal.body_execution,
         SerializableEntityBodyExecution::Trapped

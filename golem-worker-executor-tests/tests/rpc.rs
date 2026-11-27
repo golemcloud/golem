@@ -4323,7 +4323,7 @@ async fn streaming_output_resume_restores_exact_cursors(
             .await?;
         assert!(!public.iter().any(|entry| matches!(&entry.entry,
             PublicOplogEntry::StreamSession(record)
-                if matches!(StreamSessionRecord::from_value(record.record.value()), Ok(StreamSessionRecord::InvocationResult(_)))
+                if matches!(StreamSessionRecord::from_value(record.record.value()), Ok(StreamSessionRecord::RemoteResult(_)))
         )), "the callee writes no session result copy");
     }
     if restart_executor {
@@ -7243,7 +7243,7 @@ fn input_observations(
         {
             StreamSessionRecord::Prepared(record) => record.stream_mappings,
             StreamSessionRecord::Mapping(record) => vec![record.mapping],
-            StreamSessionRecord::InvocationResult(record) => record.stream_mappings,
+            StreamSessionRecord::RemoteResult(record) => record.stream_mappings,
             StreamSessionRecord::ConsumerItemValue(record) => record.recursive_mappings,
             _ => anyhow::bail!("consumer reader entry has no binding table"),
         };
@@ -12315,6 +12315,159 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
         )), "recovery must close the embedded invocation span at {checkpoint:?}");
     }
 
+    Ok(())
+}
+
+#[test]
+#[timeout("4 minutes")]
+async fn rpc_result_journal_survives_a_crash_before_the_referring_terminal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::HostResponse;
+    use golem_common::model::oplog::payload::types::RecordedRpcResult;
+
+    for synchronous in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let key = agent_key!(
+            "StreamingRpcCaller",
+            format!("result-journal-{synchronous}")
+        );
+        let caller = executor.start_agent(&component.id, key.clone()).await?;
+        let invocation_key = IdempotencyKey::fresh();
+        let mut gate = executor
+            .gate_next_rpc_commit(&caller.agent_id, RpcCheckpoint::ResultJournal)
+            .await;
+        let invocation = tokio::spawn({
+            let executor = executor.clone();
+            let component = component.clone();
+            let key = key.clone();
+            let invocation_key = invocation_key.clone();
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &key,
+                        &invocation_key,
+                        "streaming_increment",
+                        data_value!(synchronous),
+                    )
+                    .await
+            }
+        });
+        gate.committed().await;
+        let before = executor.stored_oplog(&caller.agent_id).await;
+        let mut journals = Vec::new();
+        for (offset, entry) in before.iter().enumerate() {
+            if let OplogEntry::StreamSession { record, .. } = entry
+                && let StreamSessionRecord::RemoteResult(result) = executor
+                    .stored_payload(&caller.agent_id, record.clone())
+                    .await?
+            {
+                journals.push((OplogIndex::from_u64(offset as u64 + 1), result));
+            }
+        }
+        assert_eq!(journals.len(), 1);
+        assert_eq!(journals[0].1.stream_mappings.len(), 1);
+        assert!(!invocation.is_finished());
+        // The committed prefix contains the journal, not a duplicate host-call value.
+        for entry in &before {
+            if let OplogEntry::End {
+                response: Some(response),
+                ..
+            } = entry
+            {
+                assert!(!matches!(
+                    executor
+                        .stored_payload(&caller.agent_id, response.clone())
+                        .await?,
+                    HostResponse::GolemRpcInvokeAndAwait(_)
+                ));
+            }
+        }
+        gate.abort_return();
+        invocation.abort();
+        let _ = invocation.await;
+        drop(gate);
+        drop(executor);
+        let executor = start(deps, &context).await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &key,
+                    &invocation_key,
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            vec![1]
+        );
+        let after = executor.stored_oplog(&caller.agent_id).await;
+        let mut recovered_journals = Vec::new();
+        let mut responses = Vec::new();
+        for (offset, entry) in after.iter().enumerate() {
+            match entry {
+                OplogEntry::StreamSession { record, .. } => {
+                    if let StreamSessionRecord::RemoteResult(result) = executor
+                        .stored_payload(&caller.agent_id, record.clone())
+                        .await?
+                    {
+                        recovered_journals.push((OplogIndex::from_u64(offset as u64 + 1), result));
+                    }
+                }
+                OplogEntry::End {
+                    response: Some(response),
+                    ..
+                } => {
+                    if let HostResponse::GolemRpcInvokeAndAwait(result) = executor
+                        .stored_payload(&caller.agent_id, response.clone())
+                        .await?
+                    {
+                        responses.push(result.result);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            recovered_journals, journals,
+            "replay must retain the value and mappings"
+        );
+        let [RecordedRpcResult::Remote(reference)] = responses.as_slice() else {
+            anyhow::bail!("expected one reference-only response: {responses:?}");
+        };
+        assert_eq!(reference.index, journals[0].0);
+        assert_eq!(reference.session_key, journals[0].1.session_key);
+        let public = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        let rpc_starts = public.iter().filter_map(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Start(start) if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await"
+        ).then_some(entry.oplog_index)).collect::<Vec<_>>();
+        assert!(public.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::End(end) if rpc_starts.contains(&end.start_index)
+        )));
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &key,
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            vec![2],
+            "the target executes exactly once"
+        );
+    }
     Ok(())
 }
 

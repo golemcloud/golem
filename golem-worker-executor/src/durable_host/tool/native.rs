@@ -490,7 +490,8 @@ pub(super) fn resource_exhausted_terminal(
         admission_refusal: None,
         result: Err(SerializableToolRpcError::ResourceExhausted(
             "tool stdin exceeded the attachment byte limit".to_string(),
-        )),
+        ))
+        .into(),
     }
 }
 

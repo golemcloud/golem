@@ -96,7 +96,7 @@ impl ProducerMetadataKey {
         let bindings: &[StreamBindingRecord] = match record {
             StreamSessionRecord::Mapping(record) => std::slice::from_ref(&record.mapping),
             StreamSessionRecord::Prepared(record) => &record.stream_mappings,
-            StreamSessionRecord::InvocationResult(record) => &record.stream_mappings,
+            StreamSessionRecord::RemoteResult(record) => &record.stream_mappings,
             _ => &[],
         };
         keys.extend(bindings.iter().filter_map(|binding| {

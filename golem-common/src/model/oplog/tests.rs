@@ -276,9 +276,9 @@ fn log_trace_context_binary_and_raw_protobuf_roundtrip() {
 fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_payloads() {
     use crate::model::durable_stream::{
         LocalStreamId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
-        StreamRegistrationInvocation, StreamSessionFinishedRecord,
-        StreamSessionInvocationResultRecord, StreamSessionRecord, StreamTerminal,
-        StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
+        StreamRegistrationInvocation, StreamSessionFinishedRecord, StreamSessionRecord,
+        StreamSessionRemoteResultRecord, StreamTerminal, StreamTerminalAuthor,
+        StreamTerminalOrigin, StreamTerminalRecord,
     };
     use crate::model::oplog::PayloadId;
     use crate::model::oplog::raw_types::{
@@ -323,13 +323,12 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
         session_key: session_key.clone(),
         result: Err(vec![8]),
     });
-    let session_result =
-        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
-            format_version: 1,
-            session_key: session_key.clone(),
-            result: vec![7],
-            stream_mappings: vec![],
-        });
+    let session_result = StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
+        format_version: 1,
+        session_key: session_key.clone(),
+        result: vec![7],
+        stream_mappings: vec![],
+    });
     let session_cancellation = StreamSessionRecord::CancelRequested(
         crate::model::durable_stream::StreamSessionCancelRequestedRecord {
             format_version: 1,

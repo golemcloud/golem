@@ -595,7 +595,7 @@ oplog_payload! {
             request: Result<SerializableRdbmsRequest, SerializableRdbmsError>
         },
         GolemRpcInvokeAndAwait {
-            result: Result<SchemaValue, SerializableRpcError>
+            result: types::RecordedRpcResult
         },
         GolemRpcInvokeGet {
             result: SerializableInvokeResult

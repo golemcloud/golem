@@ -1124,7 +1124,7 @@ pub(crate) fn stream_session_record_key(
             owner,
             owner_fingerprint,
         )),
-        StreamSessionRecord::InvocationResult(record) => Some(record.session_key.qualify(
+        StreamSessionRecord::RemoteResult(record) => Some(record.session_key.qualify(
             owner_environment_id,
             owner,
             owner_fingerprint,
@@ -1195,9 +1195,7 @@ pub(crate) fn stream_session_record_reference(
         StreamSessionRecord::Mapping(record) => {
             (&record.session_key, std::slice::from_ref(&record.mapping))
         }
-        StreamSessionRecord::InvocationResult(record) => {
-            (&record.session_key, &record.stream_mappings)
-        }
+        StreamSessionRecord::RemoteResult(record) => (&record.session_key, &record.stream_mappings),
         StreamSessionRecord::ConsumerItemValue(record) if record.reobserves.is_none() => {
             (&record.session_key, &record.recursive_mappings)
         }

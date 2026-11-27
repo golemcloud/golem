@@ -1725,7 +1725,7 @@ async fn session_value_maps_canonical_indices_to_binding_local_transport_ids() {
             SchemaValueStreamReference { stream_id },
         )),
     };
-    let record = StreamSessionInvocationResultRecord {
+    let record = StreamSessionRemoteResultRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         result: ProtoSchemaValue {
@@ -1765,7 +1765,7 @@ async fn session_value_maps_canonical_indices_to_binding_local_transport_ids() {
         mappings
     );
 
-    let invalid = StreamSessionInvocationResultRecord {
+    let invalid = StreamSessionRemoteResultRecord {
         result: reference(2).encode_to_vec(),
         ..record
     };
@@ -1794,6 +1794,65 @@ fn system_durable_stream_cancellation_is_a_permanent_stream_error() {
 }
 
 struct TestConsumerJournal(Arc<dyn Oplog>);
+
+#[test]
+async fn unattributed_native_tool_client_result_stays_in_its_session_journal() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut prepared = crate::services::worker_fork::lineage::tests::prepared(&identity.invocation);
+    prepared.attempt.invocation.target = PersistedInvocationTarget::ExternalTool {
+        tool_name: "native".into(),
+        command_path: vec!["run".into()],
+    };
+    producer
+        .append_session_record(None, StreamSessionRecord::Prepared(prepared))
+        .await
+        .unwrap();
+    let streams = StreamSession::new(
+        producer.clone(),
+        oplog.clone(),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    );
+    let value = SchemaValue::String("outer ToolInvocationOutput".into());
+    let graph = SchemaGraph::anonymous(SchemaType::string());
+    streams
+        .materialize_result(
+            value.clone(),
+            &graph,
+            &graph.root,
+            ComponentRevision::INITIAL,
+        )
+        .await
+        .unwrap();
+    let reference = streams.remote_result_reference().await.unwrap().unwrap();
+    assert!(matches!(
+        oplog.read(reference.index).await.unwrap(),
+        OplogEntry::StreamSession {
+            entity_parent_start_index: None,
+            ..
+        }
+    ));
+    let reloaded = StreamSession::new(
+        producer,
+        oplog,
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    );
+    assert_eq!(
+        reloaded.resolve_remote_result(&reference).await.unwrap(),
+        value
+    );
+}
 
 #[async_trait::async_trait]
 #[golem_async_trait::region_simple]
@@ -12423,7 +12482,7 @@ async fn remote_result_schema_validation_accepts_a_stream_in_union_branch_one() 
         [local],
     )
     .await
-    .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
+    .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
     let value = encode_recursive_stream_value_with_schema(
         &stream_union_value(SchemaValueStream::from_host_endpoint(())),
         &graph,
@@ -12454,6 +12513,63 @@ async fn remote_result_schema_validation_accepts_a_stream_in_union_branch_one() 
         )
         .await
         .unwrap();
+
+    use golem_common::model::oplog::payload::types::RecordedRpcResult;
+    let recorded = streams.record_rpc_result(Ok(result.clone())).await.unwrap();
+    let RecordedRpcResult::Remote(reference) = &recorded else {
+        panic!("a journalled RPC result must not store another inline copy");
+    };
+    let expected = SchemaValue::Union(UnionValuePayload {
+        tag: "stream".into(),
+        body: Box::new(SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("stream".into()),
+                SchemaValue::Tuple { elements: vec![] },
+            ],
+        }),
+    });
+    let reconstructed = StreamSession::new(
+        streams.producer.clone(),
+        oplog.clone(),
+        streams.session_reference.clone(),
+        [],
+    )
+    .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
+    let restored = reconstructed
+        .resolve_rpc_result(recorded.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(strip_streams(restored), expected);
+    assert_eq!(
+        reconstructed.materialized_mappings(),
+        streams.materialized_mappings()
+    );
+    let mut wrong = reference.clone();
+    wrong.index = wrong.index.next();
+    assert!(
+        reconstructed
+            .resolve_rpc_result(RecordedRpcResult::Remote(wrong))
+            .await
+            .is_err()
+    );
+    let mut wrong = reference.clone();
+    wrong.session_key = StreamRegistrationInvocation::Local(Uuid::from_u128(0x991).into());
+    assert!(
+        reconstructed
+            .resolve_rpc_result(RecordedRpcResult::Remote(wrong))
+            .await
+            .is_err()
+    );
+    let scalar = SchemaValue::String("not from the stream journal".into());
+    assert_eq!(
+        reconstructed
+            .resolve_rpc_result(RecordedRpcResult::Inline(Ok(scalar.clone())))
+            .await
+            .unwrap()
+            .unwrap(),
+        scalar
+    );
 
     let SchemaValue::Union(result) = result else {
         panic!("expected union result")

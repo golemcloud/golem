@@ -2723,7 +2723,7 @@ fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
     ));
     let terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Skipped,
-        result: Err(error.clone()),
+        result: Err(error.clone()).into(),
         admission_refusal: None,
     };
     let request = HostRequestGolemToolInvocationRejected {
@@ -2774,7 +2774,7 @@ fn named_custom_tool_error_payload_roundtrips() {
     let response = HostResponseEntityInvocation {
         result: Ok(SerializableToolOperationTerminal {
             body_execution: SerializableEntityBodyExecution::Executed,
-            result: Err(error),
+            result: Err(error).into(),
             admission_refusal: None,
         }
         .into_typed_schema_value()
@@ -2803,7 +2803,8 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
         body_execution: SerializableEntityBodyExecution::Skipped,
         result: Err(SerializableToolRpcError::ResourceExhausted(
             "max_tool_attachment_bytes".to_string(),
-        )),
+        ))
+        .into(),
     };
     let typed = terminal.clone().into_typed_schema_value().unwrap();
     let decoded = SerializableToolOperationTerminal::from_value(typed.value()).unwrap();
@@ -2812,7 +2813,7 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
     let success = SerializableToolOperationTerminal {
         admission_refusal: None,
         body_execution: SerializableEntityBodyExecution::Executed,
-        result: Ok(SerializableToolStructuredResult { result: None }),
+        result: Ok(SerializableToolStructuredResult { result: None }).into(),
     };
     assert_eq!(
         SerializableToolOperationTerminal::from_value(
@@ -2883,12 +2884,15 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult {
             result: Some(SerializableToolResultValue::from_typed(&structured).unwrap()),
-        }),
+        })
+        .into(),
     };
     let typed = success.into_typed_schema_value().unwrap();
     let decoded = SerializableToolOperationTerminal::from_value(typed.value()).unwrap();
     let decoded = decoded
         .result
+        .into_inline()
+        .unwrap()
         .unwrap()
         .result
         .unwrap()
@@ -3298,4 +3302,118 @@ fn p2_tcp_stream_error_keeps_its_errno_and_kind_through_the_oplog() {
     let closed = SerializableTcpStreamError::from_stream_error(StreamError::Closed).unwrap();
     assert!(matches!(StreamError::from(closed), StreamError::Closed));
     assert!(SerializableTcpStreamError::from_stream_error(StreamError::trap("trap")).is_err());
+}
+
+#[test]
+fn referring_rpc_and_tool_results_roundtrip_without_an_inline_value() {
+    use super::types::{
+        RecordedRpcResult, RecordedToolResult, RemoteResultReference,
+        SerializableEntityBodyExecution, SerializableToolOperationTerminal,
+    };
+    use crate::model::durable_stream::StreamRegistrationInvocation;
+    use crate::schema::{FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaGraph, SchemaType};
+
+    let reference = RemoteResultReference {
+        index: crate::model::OplogIndex::from_u64(137),
+        session_key: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(991).into()),
+    };
+    for result in [
+        RecordedRpcResult::Remote(reference.clone()),
+        RecordedRpcResult::Inline(Ok(SchemaValue::String("scalar result".into()))),
+        RecordedRpcResult::Inline(Err(SerializableRpcError::Denied {
+            details: "denied".into(),
+        })),
+    ] {
+        let response = super::HostResponseGolemRpcInvokeAndAwait {
+            result: result.clone(),
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&HostResponse::from(response)).unwrap();
+        let decoded: HostResponse = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(
+            super::HostResponseGolemRpcInvokeAndAwait::try_from(decoded)
+                .unwrap()
+                .result,
+            result
+        );
+        assert_eq!(
+            RecordedRpcResult::from_value(&result.to_value()).unwrap(),
+            result
+        );
+    }
+    for custom_error in [None, Some("partial".to_string())] {
+        let terminal = SerializableToolOperationTerminal {
+            body_execution: SerializableEntityBodyExecution::Executed,
+            result: RecordedToolResult::Remote {
+                reference: reference.clone(),
+                graph: SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::u32()))),
+                custom_error,
+            },
+            admission_refusal: None,
+        };
+        let response = super::HostResponseEntityInvocation {
+            result: Ok(terminal.clone().into_typed_schema_value().unwrap()),
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&HostResponse::from(response)).unwrap();
+        let decoded: HostResponse = desert_rust::deserialize(&bytes).unwrap();
+        let value = super::HostResponseEntityInvocation::try_from(decoded)
+            .unwrap()
+            .result
+            .unwrap();
+        assert_eq!(
+            SerializableToolOperationTerminal::from_value(value.value()).unwrap(),
+            terminal
+        );
+        assert!(terminal.result.into_inline().is_err());
+    }
+    let public_rpc = super::types::PublicRpcResponse {
+        result: Ok(SchemaValue::String("public scalar".into())),
+    }
+    .into_typed_schema_value()
+    .unwrap();
+    let public_tool = super::types::PublicToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Executed,
+        result: Ok(super::types::SerializableToolStructuredResult { result: None }),
+        admission_refusal: None,
+    }
+    .into_typed_schema_value()
+    .unwrap();
+    for (value, id, name, result_field) in [
+        (
+            &public_rpc,
+            "golem_common.model.oplog.payload.HostResponseGolemRpcInvokeAndAwait",
+            "HostResponseGolemRpcInvokeAndAwait",
+            0,
+        ),
+        (
+            &public_tool,
+            "golem_common.model.oplog.payload.types.SerializableToolOperationTerminal",
+            "SerializableToolOperationTerminal",
+            1,
+        ),
+    ] {
+        let definition = value
+            .graph()
+            .defs
+            .iter()
+            .find(|definition| definition.id == crate::schema::TypeId::new(id))
+            .unwrap();
+        assert_eq!(definition.name.as_deref(), Some(name));
+        let SchemaValue::Record { fields } = value.value() else {
+            panic!("public response is a record")
+        };
+        assert!(
+            matches!(&fields[result_field], SchemaValue::Result(_)),
+            "the public result must not expose the raw Inline/Remote enum"
+        );
+        assert!(
+            !value
+                .graph()
+                .defs
+                .iter()
+                .any(
+                    |definition| definition.name.as_deref() == Some("RecordedRpcResult")
+                        || definition.name.as_deref() == Some("RecordedToolResult")
+                )
+        );
+    }
 }

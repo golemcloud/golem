@@ -322,7 +322,7 @@ impl DurableStreamEventSummary {
     pub fn session(record: &crate::model::durable_stream::StreamSessionRecord) -> Option<Self> {
         use crate::model::durable_stream::StreamSessionRecord;
         match record {
-            StreamSessionRecord::InvocationResult(_) => None,
+            StreamSessionRecord::RemoteResult(_) => None,
             StreamSessionRecord::Finished(record) => Some(Self::SessionFinished {
                 outcome: if record.result.is_ok() {
                     DurableStreamOutcome::Success

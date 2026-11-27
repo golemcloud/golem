@@ -1173,7 +1173,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         mappings.push(record.mapping.clone());
                     }
                 }
-                StreamSessionRecord::InvocationResult(record) => {
+                StreamSessionRecord::RemoteResult(record) => {
                     for mapping in &record.stream_mappings {
                         if !mappings.contains(mapping) {
                             mappings.push(mapping.clone());

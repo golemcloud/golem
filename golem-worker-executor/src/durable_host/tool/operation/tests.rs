@@ -345,7 +345,8 @@ async fn attachment_admission_rejection_preselects_ordinary_terminal() {
             golem_common::model::oplog::payload::types::SerializableToolRpcError::ResourceExhausted(
                 "limit".to_string(),
             ),
-        ),
+        )
+        .into(),
     });
     operation
         .resolve_ordinary(terminal, TerminalResolution::Committed)
@@ -796,7 +797,7 @@ async fn empty_incomplete_activation_does_not_skip_later_capable_attachments() {
                 golem_common::model::oplog::payload::types::SerializableToolRpcError::ResourceExhausted(
                     "limit".to_string(),
                 ),
-            ),
+            ).into(),
         }),
         TerminalResolution::Committed,
     ).await.unwrap();
@@ -1898,7 +1899,8 @@ async fn later_trap_preserves_committed_sibling_terminals() {
             golem_common::model::oplog::payload::types::SerializableToolRpcError::ResourceExhausted(
                 "limit".to_string(),
             ),
-        ),
+        )
+        .into(),
     });
 
     assert!(ordinary.begin_ordinary());
@@ -2073,7 +2075,8 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
             golem_common::model::oplog::payload::types::SerializableToolRpcError::ResourceExhausted(
                 "limit".to_string(),
             ),
-        ),
+        )
+        .into(),
     });
     let sibling = accept_provisional(_operations.create(context()), 3);
     assert!(sibling.begin_ordinary());
@@ -2156,7 +2159,7 @@ async fn committed_terminal_cleanup_failure_retains_lane_until_owner_drain() {
             operation.resolve_ordinary_with_cleanup(Arc::new(SerializableToolOperationTerminal {
                 admission_refusal: None,
                 body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
-                result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+                result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled).into(),
             }), cleanup).await
         };
         assert!(matches!(
@@ -2525,7 +2528,7 @@ async fn cancellation_does_not_mask_trap_election_waiting_on_a_sibling() {
     sibling.resolve_ordinary(Arc::new(SerializableToolOperationTerminal {
         admission_refusal: None,
         body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
-        result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+        result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled).into(),
     }), TerminalResolution::Committed).await.unwrap();
     assert!(election.await.unwrap());
     assert!(matches!(
@@ -2692,7 +2695,7 @@ async fn wrong_terminal_kind_and_duplicate_resolution_preserve_the_winner() {
         let terminal = Arc::new(SerializableToolOperationTerminal {
             admission_refusal: None,
             body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
-            result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+            result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled).into(),
         });
         if cancelled {
             assert!(operation.begin_cancel());
@@ -2804,7 +2807,7 @@ async fn nonterminal_settlement_preserves_registration_and_allows_later_resoluti
             operation.resolve_ordinary(Arc::new(SerializableToolOperationTerminal {
                 admission_refusal: None,
                 body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
-                result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+                result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled).into(),
             }), TerminalResolution::RolledBack).await.unwrap();
         }
     }

@@ -3824,7 +3824,7 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
                         && matches!(&start.entry, PublicOplogEntry::Start(p)
                             if p.function_name == "golem::entity::invoke")) => end.response.as_ref(),
                 _ => None,
-            }).any(|response| SerializableToolOperationTerminal::from_value(response.value())
+            }).any(|response| PublicToolOperationTerminal::from_value(response.value())
                 .is_ok_and(|terminal| terminal.body_execution == SerializableEntityBodyExecution::Trapped));
             if trapped
                 && worker.owner_execution().tool_operation_metadata().operations.len() == 3
@@ -3909,7 +3909,7 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
         .iter()
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::End(end) if starts.contains(&end.start_index) => Some(
-                SerializableToolOperationTerminal::from_value(
+                PublicToolOperationTerminal::from_value(
                     end.response
                         .as_ref()
                         .expect("entity terminal response")

@@ -15,7 +15,7 @@
 use super::index::registration_coordinate_depth;
 use super::*;
 use golem_common::model::InvocationId;
-use golem_common::model::durable_stream::StreamSessionInvocationResultRecord;
+use golem_common::model::durable_stream::StreamSessionRemoteResultRecord;
 use golem_common::model::oplog::ReturnedValue;
 
 #[derive(Debug, PartialEq)]
@@ -689,7 +689,7 @@ impl DurableStreamStore {
                     },
                     None => DurableStreamOplogRecord::Session(
                         entity_parent_start_index,
-                        Box::new(StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+                        Box::new(StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: result_session_reference,
                             result: returned_value.value,
@@ -784,7 +784,7 @@ impl DurableStreamStore {
                         &self.producer,
                         self.producer_fingerprint,
                     );
-                    if let StreamSessionRecord::InvocationResult(record) = record {
+                    if let StreamSessionRecord::RemoteResult(record) = record {
                         invocation_returned = Some((
                             oplog_index,
                             ReturnedValue {
@@ -856,7 +856,7 @@ impl DurableStreamStore {
             let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await? else {
                 return Err(StreamStoreError::RegistrationDivergence);
             };
-            let StreamSessionRecord::InvocationResult(record) = self
+            let StreamSessionRecord::RemoteResult(record) = self
                 .oplog
                 .download_payload(record)
                 .await

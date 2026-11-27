@@ -14,9 +14,9 @@
 
 use super::{
     SerializableToolError, SerializableToolResultValue, SerializableToolRpcError,
-    SerializableToolStructuredResult, ToolInvokeResponse, encode_tool_operation_terminal,
+    SerializableToolStructuredResult, ToolInvokeResponse,
 };
-use crate::durable_host::durable_session::{StreamSession, strip_typed_streams};
+use crate::durable_host::durable_session::StreamSession;
 use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasOplog;
@@ -29,6 +29,7 @@ use golem_common::model::durable_stream::{
 };
 use golem_common::model::entity::EntityInvocationScope;
 use golem_common::model::oplog::payload::HostResponseEntityInvocation;
+use golem_common::model::oplog::payload::types::RecordedToolResult;
 use golem_common::schema::TypedSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -60,15 +61,15 @@ impl MaterializeResponse {
         let result = async {
             let response =
                 materialize_response(&streams, revision, response, &output_tasks).await?;
-            let response = response.map(|result| SerializableToolStructuredResult {
-                result: result
-                    .result
-                    .as_deref()
-                    .map(SerializableToolResultValue::from_typed)
-                    .transpose()
-                    .expect("a materialized tool result is serializable"),
-            });
-            encode_tool_operation_terminal(response).await
+            super::encode_tool_terminal(
+                super::SerializableToolOperationTerminal {
+                    body_execution: super::SerializableEntityBodyExecution::Executed,
+                    result: response,
+                    admission_refusal: None,
+                },
+                "failed to encode durable tool operation terminal",
+            )
+            .await
         }
         .await;
         let _ = completed.send(result);
@@ -135,26 +136,37 @@ fn payload(response: &mut ToolInvokeResponse) -> Option<&mut TypedSchemaValue> {
     }
 }
 
-fn strip_response(mut response: ToolInvokeResponse) -> ToolInvokeResponse {
-    if let Some(value) = payload(&mut response) {
-        *value = strip_typed_streams(value);
-    }
-    response
-}
-
 pub(super) async fn restore_response(
     streams: &StreamSession,
-    mut response: ToolInvokeResponse,
+    response: RecordedToolResult,
 ) -> Result<ToolInvokeResponse, WorkerExecutorError> {
-    if let Some(value) = payload(&mut response)
-        && let Some(materialized) = streams
-            .replay_remote_result()
-            .await
-            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
-    {
-        *value = TypedSchemaValue::new(value.graph().clone(), materialized);
+    match response {
+        RecordedToolResult::Inline(result) => super::response::decode_tool_result(result),
+        RecordedToolResult::Remote {
+            reference,
+            graph,
+            custom_error,
+        } => {
+            let value = streams
+                .resolve_remote_result(&reference)
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+            let value = TypedSchemaValue::new(graph, value);
+            Ok(match custom_error {
+                Some(name) => Err(SerializableToolRpcError::RemoteToolError(Box::new(
+                    SerializableToolError::CustomError(Box::new(
+                        super::SerializableCustomToolError {
+                            name,
+                            payload: value,
+                        },
+                    )),
+                ))),
+                None => Ok(super::SerializableToolInvocationResult {
+                    result: Some(Box::new(value)),
+                }),
+            })
+        }
     }
-    Ok(response)
 }
 
 pub(super) async fn materialize_response(
@@ -162,19 +174,47 @@ pub(super) async fn materialize_response(
     revision: ComponentRevision,
     mut response: ToolInvokeResponse,
     output_tasks: &NativeReconstructionSpawner,
-) -> Result<ToolInvokeResponse, WorkerExecutorError> {
-    let Some(value) = payload(&mut response) else {
-        return Ok(response);
+) -> Result<RecordedToolResult, WorkerExecutorError> {
+    let custom_error = match &response {
+        Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+            SerializableToolError::CustomError(error) => Some(error.name.clone()),
+            _ => None,
+        },
+        _ => None,
     };
-    if !contains_stream(value.value()) {
-        return Ok(response);
+    if let Some(value) = payload(&mut response)
+        && contains_stream(value.value())
+    {
+        let graph = value.graph().clone();
+        let value = value.value().clone();
+        streams
+            .spawn_materialize_result(value, &graph, &graph.root, revision, None, output_tasks)?
+            .await
+            .map_err(|_| {
+                WorkerExecutorError::runtime("tool result materialization owner stopped")
+            })??;
+        let reference = streams
+            .remote_result_reference()
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("materialized tool result has no journal record")
+            })?;
+        return Ok(RecordedToolResult::Remote {
+            reference,
+            graph,
+            custom_error,
+        });
     }
-    let graph = value.graph().clone();
-    let value = value.value().clone();
-    let stripped = strip_response(response);
-    streams
-        .spawn_materialize_result(value, &graph, &graph.root, revision, None, output_tasks)?
-        .await
-        .map_err(|_| WorkerExecutorError::runtime("tool result materialization owner stopped"))??;
-    Ok(stripped)
+    Ok(RecordedToolResult::Inline(match response {
+        Ok(result) => Ok(SerializableToolStructuredResult {
+            result: result
+                .result
+                .as_deref()
+                .map(SerializableToolResultValue::from_typed)
+                .transpose()
+                .map_err(WorkerExecutorError::runtime)?,
+        }),
+        Err(error) => Err(error),
+    }))
 }

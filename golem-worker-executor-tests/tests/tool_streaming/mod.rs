@@ -55,7 +55,7 @@ use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::mcp_import::{McpImport, McpImportSource};
 use golem_common::model::oplog::PublicExternalToolResult;
 use golem_common::model::oplog::payload::types::{
-    SerializableEntityBodyExecution, SerializableToolError, SerializableToolOperationTerminal,
+    PublicToolOperationTerminal, SerializableEntityBodyExecution, SerializableToolError,
     SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
@@ -3164,9 +3164,9 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
         if let PublicOplogEntry::End(end) = &entry.entry
             && starts.contains(&end.start_index)
             && end.response.as_ref().is_some_and(|response| {
-                SerializableToolOperationTerminal::from_value(response.value()).is_ok_and(
-                    |terminal| terminal.body_execution == SerializableEntityBodyExecution::Trapped,
-                )
+                PublicToolOperationTerminal::from_value(response.value()).is_ok_and(|terminal| {
+                    terminal.body_execution == SerializableEntityBodyExecution::Trapped
+                })
             })
         {
             trapped += 1;
@@ -6004,6 +6004,258 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn component_tool_result_journal_survives_a_crash_before_its_entity_terminal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::StreamSessionRecord;
+    use golem_common::model::oplog::payload::types::{
+        RecordedToolResult, SerializableToolOperationTerminal,
+    };
+    use golem_common::model::oplog::{HostResponse, OplogEntry};
+    use golem_worker_executor_test_utils::RpcCheckpoint;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let (provider_port, provider_server, mut provider_arrivals) =
+        start_promise_checkpoint_server().await;
+    let (caller_port, caller_server, mut caller_arrivals) = start_promise_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_key!("ToolStreamingCaller", "journal-before-tool-end");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_PROMISE_CHECKPOINT_PORT".into(),
+                    provider_port.to_string(),
+                ),
+                (
+                    "CALLER_PROMISE_CHECKPOINT_PORT".into(),
+                    caller_port.to_string(),
+                ),
+            ]),
+            vec![],
+        )
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor
+        .gate_next_rpc_commit(&worker.agent_id, RpcCheckpoint::ResultJournal)
+        .await;
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = caller_component.clone();
+        let agent = agent.clone();
+        let key = key.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent,
+                    &key,
+                    "consume_typed_output",
+                    data_value!(false, "journal"),
+                )
+                .await
+        }
+    });
+    gate.committed().await;
+    let prefix = executor.stored_oplog(&worker.agent_id).await;
+    let mut journals = Vec::new();
+    for (offset, entry) in prefix.iter().enumerate() {
+        if let OplogEntry::StreamSession {
+            record,
+            entity_parent_start_index,
+            ..
+        } = entry
+            && let StreamSessionRecord::RemoteResult(result) = executor
+                .stored_payload(&worker.agent_id, record.clone())
+                .await?
+        {
+            journals.push((
+                OplogIndex::from_u64(offset as u64 + 1),
+                *entity_parent_start_index,
+                result,
+            ));
+        }
+    }
+    assert_eq!(journals.len(), 1);
+    let (index, Some(entity), _) = &journals[0] else {
+        panic!("tool journal must have entity attribution")
+    };
+    assert!(!prefix.iter().any(
+        |entry| matches!(entry, OplogEntry::End { start_index, .. } if start_index == entity)
+    ));
+    gate.abort_return();
+    invocation.abort();
+    let _ = invocation.await;
+    drop(gate);
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let resumed = tokio::spawn({
+        let executor = executor.clone();
+        let component = caller_component.clone();
+        let agent = agent.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent,
+                    &key,
+                    "consume_typed_output",
+                    data_value!(false, "journal"),
+                )
+                .await
+        }
+    });
+    let provider_checkpoint =
+        next_promise_checkpoint(&mut provider_arrivals, "typed-output-after-first").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &provider_checkpoint).await?;
+    executor
+        .complete_promise(
+            &context.default_environment_id,
+            &PromiseId {
+                agent_id: worker.agent_id,
+                fingerprint: executor.get_worker_metadata(&worker).await?.fingerprint,
+                oplog_idx: provider_checkpoint.oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+    let caller_checkpoint =
+        next_promise_checkpoint(&mut caller_arrivals, "caller-consumed-first-typed-output").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &caller_checkpoint).await?;
+    executor
+        .complete_promise(
+            &context.default_environment_id,
+            &PromiseId {
+                agent_id: worker.agent_id,
+                fingerprint: executor.get_worker_metadata(&worker).await?.fingerprint,
+                oplog_idx: caller_checkpoint.oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+    let result = resumed.await??.into_typed::<Vec<TypedOutputEvidence>>()?;
+    assert_eq!(
+        result,
+        vec![
+            TypedOutputEvidence {
+                label: "journal-first".into(),
+                ordinal: 11
+            },
+            TypedOutputEvidence {
+                label: "journal-second".into(),
+                ordinal: 29
+            },
+            TypedOutputEvidence {
+                label: "journal-third".into(),
+                ordinal: 47
+            },
+        ]
+    );
+    let history = executor.stored_oplog(&worker.agent_id).await;
+    let mut recovered = Vec::new();
+    let mut terminals = Vec::new();
+    for (offset, entry) in history.iter().enumerate() {
+        match entry {
+            OplogEntry::StreamSession {
+                record,
+                entity_parent_start_index,
+                ..
+            } => {
+                if let StreamSessionRecord::RemoteResult(result) = executor
+                    .stored_payload(&worker.agent_id, record.clone())
+                    .await?
+                {
+                    recovered.push((
+                        OplogIndex::from_u64(offset as u64 + 1),
+                        *entity_parent_start_index,
+                        result,
+                    ));
+                }
+            }
+            OplogEntry::End {
+                start_index,
+                response: Some(response),
+                ..
+            } if start_index == entity => {
+                let HostResponse::EntityInvocation(response) = executor
+                    .stored_payload(&worker.agent_id, response.clone())
+                    .await?
+                else {
+                    panic!("expected entity terminal")
+                };
+                terminals.push(
+                    SerializableToolOperationTerminal::from_value(response.result.unwrap().value())
+                        .unwrap(),
+                );
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(recovered, journals);
+    let [terminal] = terminals.as_slice() else {
+        panic!("expected one entity terminal")
+    };
+    let RecordedToolResult::Remote { reference, .. } = &terminal.result else {
+        panic!("terminal duplicates the result")
+    };
+    assert_eq!(reference.index, *index);
+    assert_eq!(reference.session_key, journals[0].2.session_key);
+    let public = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(public.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == *entity)
+    ));
+    assert!(
+        provider_arrivals.try_recv().is_err(),
+        "replay must not repeat the producer effect"
+    );
+    provider_server.abort();
+    caller_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -7294,7 +7546,7 @@ async fn native_incomplete_replay_rejects_attachment_upgrade_without_fencing(
         })
         .collect::<Vec<_>>();
     assert_eq!(ends.len(), 1);
-    let terminal = SerializableToolOperationTerminal::from_value(ends[0].1.value())?;
+    let terminal = PublicToolOperationTerminal::from_value(ends[0].1.value())?;
     assert_eq!(
         terminal.body_execution,
         SerializableEntityBodyExecution::Executed
@@ -8349,9 +8601,7 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
                 PublicOplogEntry::End(params) => params.response.as_ref(),
                 _ => None,
             })
-            .filter_map(|response| {
-                SerializableToolOperationTerminal::from_value(response.value()).ok()
-            })
+            .filter_map(|response| PublicToolOperationTerminal::from_value(response.value()).ok())
             .collect::<Vec<_>>();
         assert_eq!(terminals.len(), 2, "both same-tool operations settle");
         assert_eq!(
@@ -8435,9 +8685,7 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
                 PublicOplogEntry::End(params) => params.response.as_ref(),
                 _ => None,
             })
-            .filter_map(|response| {
-                SerializableToolOperationTerminal::from_value(response.value()).ok()
-            })
+            .filter_map(|response| PublicToolOperationTerminal::from_value(response.value()).ok())
             .collect::<Vec<_>>();
         assert_eq!(
             replayed_terminals.len(),
@@ -9000,7 +9248,7 @@ async fn detached_and_fire_and_forget_traps_settle_without_failing_the_owner(
             })
             .collect::<Vec<_>>();
         assert_eq!(responses.len(), 1, "{method} has exactly one terminal");
-        let terminal = SerializableToolOperationTerminal::from_value(responses[0].value())?;
+        let terminal = PublicToolOperationTerminal::from_value(responses[0].value())?;
         assert_eq!(
             terminal.body_execution,
             SerializableEntityBodyExecution::Trapped
@@ -11310,7 +11558,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         })
         .expect("tool entity End");
     assert!(write_ends[0] < discards[0] && discards[0] < entity_end);
-    let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
+    let terminal = PublicToolOperationTerminal::from_value(terminal_response.value())?;
     assert!(matches!(
         terminal.result,
         Err(SerializableToolRpcError::ResourceExhausted(_))
@@ -11996,7 +12244,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
             _ => None,
         })
         .expect("incomplete attachment upgrade rejection has one durable terminal");
-    let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
+    let terminal = PublicToolOperationTerminal::from_value(terminal_response.value())?;
     assert_eq!(
         terminal.body_execution,
         SerializableEntityBodyExecution::Executed

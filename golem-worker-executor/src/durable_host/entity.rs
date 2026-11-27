@@ -242,11 +242,21 @@ fn tool_terminal_outcome(
         SerializableToolOperationTerminal::from_value(value.value()).map_err(|error| {
             WorkerExecutorError::runtime(format!("invalid durable tool terminal: {error}"))
         })?;
+    use golem_common::model::oplog::payload::types::RecordedToolResult;
     Ok(match terminal.result {
-        Ok(_) => SpanOutcome::Completed,
-        Err(SerializableToolRpcError::Denied(_)) => SpanOutcome::Denied,
-        Err(SerializableToolRpcError::Cancelled) => SpanOutcome::Cancelled,
-        Err(_) => SpanOutcome::Failed,
+        RecordedToolResult::Inline(Ok(_))
+        | RecordedToolResult::Remote {
+            custom_error: None, ..
+        } => SpanOutcome::Completed,
+        RecordedToolResult::Inline(Err(SerializableToolRpcError::Denied(_))) => SpanOutcome::Denied,
+        RecordedToolResult::Inline(Err(SerializableToolRpcError::Cancelled)) => {
+            SpanOutcome::Cancelled
+        }
+        RecordedToolResult::Inline(Err(_))
+        | RecordedToolResult::Remote {
+            custom_error: Some(_),
+            ..
+        } => SpanOutcome::Failed,
     })
 }
 
@@ -1325,7 +1335,7 @@ async fn skipped_tool_terminal(
     encode_tool_terminal(
         SerializableToolOperationTerminal {
             body_execution: SerializableEntityBodyExecution::Skipped,
-            result: Err(error),
+            result: Err(error).into(),
             admission_refusal: None,
         },
         "failed to encode skipped tool terminal",
@@ -1339,7 +1349,7 @@ pub(crate) async fn cancelled_tool_terminal(
     encode_tool_terminal(
         SerializableToolOperationTerminal {
             body_execution,
-            result: Err(SerializableToolRpcError::Cancelled),
+            result: Err(SerializableToolRpcError::Cancelled).into(),
             admission_refusal: None,
         },
         "failed to encode entity cancellation terminal",
@@ -1898,7 +1908,7 @@ pub(crate) mod tests {
             HostResponseEntityInvocation {
                 result: Ok(SerializableToolOperationTerminal {
                     body_execution: SerializableEntityBodyExecution::Executed,
-                    result,
+                    result: result.into(),
                     admission_refusal: None,
                 }
                 .into_typed_schema_value()

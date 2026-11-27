@@ -209,18 +209,18 @@ impl StreamSession {
         } = metadata.materialization_state();
         let prepared_position = metadata.prepared_position();
         drop(metadata);
-        let method_name = if self.entity_parent_start_index.is_none()
+        let (method_name, invocation_return) = if self.entity_parent_start_index.is_none()
             && let Some(index) = prepared_position
         {
             match self.session_record_at(index).await? {
                 StreamSessionRecord::Prepared(prepared) => match prepared.attempt.invocation.target {
-                    golem_common::model::durable_stream::PersistedInvocationTarget::AgentMethod { method_name } => Some(method_name),
-                    _ => None,
+                    golem_common::model::durable_stream::PersistedInvocationTarget::AgentMethod { method_name } => (Some(method_name), true),
+                    golem_common::model::durable_stream::PersistedInvocationTarget::ExternalTool { .. } => (None, false),
                 },
                 _ => return Err("session prepared position names a different record".into()),
             }
         } else {
-            None
+            (None, self.entity_parent_start_index.is_none())
         };
         let cancellation_epoch = if first_result && (cancel_session || !deleted_outputs.is_empty())
         {
@@ -496,7 +496,7 @@ impl StreamSession {
             ..
         } = admission
             .submit(move |owner, context| async move {
-                let result = if attribution.is_some() {
+                let result = if !invocation_return {
                     owner
                         .register_result_streams(
                             Some(&context),
@@ -823,7 +823,7 @@ impl StreamSession {
                 .ok_or_else(|| "durable result handle index overflow".to_string())?;
             Ok(result)
         })?;
-        let record = StreamSessionInvocationResultRecord {
+        let record = StreamSessionRemoteResultRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: self.session_reference.clone(),
             result: canonical.encode_to_vec(),
@@ -836,7 +836,7 @@ impl StreamSession {
                 ));
             }
         } else {
-            self.append_record(None, StreamSessionRecord::InvocationResult(record))
+            self.append_record(None, StreamSessionRecord::RemoteResult(record))
                 .await?;
             self.commit_consumer_journal().await?;
         }
@@ -893,15 +893,75 @@ impl StreamSession {
             .map(Some)
     }
 
+    pub(crate) async fn remote_result_reference(
+        &self,
+    ) -> Result<
+        Option<golem_common::model::oplog::payload::types::RemoteResultReference>,
+        SessionError,
+    > {
+        let Some(index) = self.current_control_metadata().await?.result_position() else {
+            return Ok(None);
+        };
+        self.remote_result_record().await?;
+        Ok(Some(
+            golem_common::model::oplog::payload::types::RemoteResultReference {
+                index,
+                session_key: self.session_reference.clone(),
+            },
+        ))
+    }
+
+    pub(crate) async fn resolve_remote_result(
+        &self,
+        reference: &golem_common::model::oplog::payload::types::RemoteResultReference,
+    ) -> Result<SchemaValue, SessionError> {
+        if self.remote_result_reference().await?.as_ref() != Some(reference) {
+            return Err("remote result reference names another session or journal position".into());
+        }
+        self.replay_remote_result()
+            .await?
+            .ok_or_else(|| "remote result reference has no journal record".into())
+    }
+
+    pub(crate) async fn record_rpc_result(
+        &self,
+        result: Result<SchemaValue, golem_common::model::oplog::types::SerializableRpcError>,
+    ) -> Result<golem_common::model::oplog::payload::types::RecordedRpcResult, SessionError> {
+        use golem_common::model::oplog::payload::types::RecordedRpcResult;
+        if result.is_ok()
+            && let Some(reference) = self.remote_result_reference().await?
+        {
+            Ok(RecordedRpcResult::Remote(reference))
+        } else {
+            Ok(RecordedRpcResult::Inline(result.map(super::strip_streams)))
+        }
+    }
+
+    pub(crate) async fn resolve_rpc_result(
+        &self,
+        result: golem_common::model::oplog::payload::types::RecordedRpcResult,
+    ) -> Result<
+        Result<SchemaValue, golem_common::model::oplog::types::SerializableRpcError>,
+        SessionError,
+    > {
+        use golem_common::model::oplog::payload::types::RecordedRpcResult;
+        match result {
+            RecordedRpcResult::Inline(result) => Ok(result),
+            RecordedRpcResult::Remote(reference) => {
+                self.resolve_remote_result(&reference).await.map(Ok)
+            }
+        }
+    }
+
     pub(super) async fn remote_result_record(
         &self,
-    ) -> Result<Option<StreamSessionInvocationResultRecord>, SessionError> {
+    ) -> Result<Option<StreamSessionRemoteResultRecord>, SessionError> {
         let index = self.current_control_metadata().await?.result_position();
         let Some(index) = index else {
             return Ok(None);
         };
         match self.session_record_at(index).await? {
-            StreamSessionRecord::InvocationResult(record)
+            StreamSessionRecord::RemoteResult(record)
                 if record.session_key == self.session_reference =>
             {
                 Ok(Some(record))
@@ -1928,7 +1988,7 @@ impl Drop for OutputDrainRegistration {
 impl SessionValue {
     pub(super) async fn from_persisted(
         producer: &DurableStreamStore,
-        result: StreamSessionInvocationResultRecord,
+        result: StreamSessionRemoteResultRecord,
     ) -> Result<Self, SessionError> {
         Self::from_value_and_bindings(producer, &result.result, &result.stream_mappings).await
     }

@@ -242,7 +242,7 @@ async fn a_scalar_result_with_an_open_input_is_terminal_at_return(
         }
     ));
     assert!(!raw.iter().any(|entry| matches!(entry, OplogEntry::AgentInvocationReturned { invocation_id, .. } if *invocation_id == terminal.1)));
-    assert!(!history.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::StreamSession(record) if matches!(StreamSessionRecord::from_value(record.record.value()), Ok(StreamSessionRecord::InvocationResult(_))))));
+    assert!(!history.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::StreamSession(record) if matches!(StreamSessionRecord::from_value(record.record.value()), Ok(StreamSessionRecord::RemoteResult(_))))));
     drop(requests);
     drop(responses);
     drop(executor);

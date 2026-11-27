@@ -863,7 +863,7 @@ impl DurableTopologyRecoveryCache {
                         | StreamSessionRecord::CancelRequested(_)
                         | StreamSessionRecord::Tombstoned(_)
                         | StreamSessionRecord::Mapping(_)
-                        | StreamSessionRecord::InvocationResult(_)
+                        | StreamSessionRecord::RemoteResult(_)
                         | StreamSessionRecord::ConsumerItemValue(_)
                 ) {
                     continue;

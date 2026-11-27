@@ -1651,7 +1651,7 @@ async fn rest_retry_of_a_session_result_uses_the_recorded_revision(
     assert!(!public.iter().any(|entry| matches!(&entry.entry,
         PublicOplogEntry::StreamSession(record)
             if matches!(golem_common::model::durable_stream::StreamSessionRecord::from_value(record.record.value()),
-                Ok(golem_common::model::durable_stream::StreamSessionRecord::InvocationResult(_)))
+                Ok(golem_common::model::durable_stream::StreamSessionRecord::RemoteResult(_)))
     )));
 
     // The latest revision has no `RustMethodFailure` type.

@@ -29,7 +29,6 @@ use crate::durable_host::durability::ClassifiedHostError;
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::durability::InternalRetryResult;
 use crate::durable_host::durability::retry_backoff_waits_durably;
-use crate::durable_host::durable_session::strip_streams;
 use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::rpc::execution::classify_rpc_error;
 use crate::durable_host::secrets::secret_hold_targets_for_value;
@@ -170,6 +169,21 @@ where
     }
 }
 
+async fn record_result(
+    streaming: Option<&DurableStreamingTaskParams>,
+    result: Result<SchemaValue, InternalRpcError>,
+) -> anyhow::Result<golem_common::model::oplog::payload::types::RecordedRpcResult> {
+    let result = result.map_err(Into::into);
+    match streaming {
+        Some(streaming) => streaming
+            .streams
+            .record_rpc_result(result)
+            .await
+            .map_err(SessionError::into_trap),
+        None => Ok(result.into()),
+    }
+}
+
 /// Projects a background RPC task result (as produced for the [`FutureInvokeResultState::Baked`]
 /// path) into the wire result shape returned by `future-invoke-result.get`. A hard task failure
 /// (`Err`) is surfaced as a `get` trap.
@@ -254,7 +268,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
             accessor,
             accessor.getter(),
             Some(HostResponseGolemRpcInvokeAndAwait {
-                result: partial_result.clone(),
+                result: partial_result.clone().into(),
             }),
         )
         .await
@@ -539,9 +553,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                         accessor,
                                         accessor.getter(),
                                         HostResponseGolemRpcInvokeAndAwait {
-                                            result: rpc_result
-                                                .map(strip_streams)
-                                                .map_err(Into::into),
+                                            result: record_result(streaming.as_ref(), rpc_result)
+                                                .await?,
                                         },
                                         finish_span,
                                     )
@@ -711,9 +724,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                                 accessor,
                                                 accessor.getter(),
                                                 HostResponseGolemRpcInvokeAndAwait {
-                                                    result: rpc_result
-                                                        .map(strip_streams)
-                                                        .map_err(Into::into),
+                                                    result: record_result(
+                                                        streaming.as_ref(),
+                                                        rpc_result,
+                                                    )
+                                                    .await?,
                                                 },
                                                 finish_span,
                                             )
@@ -729,17 +744,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     }
                 };
 
-                let mut response = response;
-                if let Some(streaming) = &streaming
-                    && response.result.is_ok()
-                    && let Some(value) = streaming
+                let response = match &streaming {
+                    Some(streaming) => streaming
                         .streams
-                        .replay_remote_result()
+                        .resolve_rpc_result(response.result)
                         .await
-                        .map_err(SessionError::into_trap)?
-                {
-                    response.result = Ok(value);
-                }
+                        .map_err(SessionError::into_trap)?,
+                    None => response.result.into_inline().map_err(anyhow::Error::msg)?,
+                };
 
                 if delivery.is_replay_discarded() {
                     // The recorded run persisted the terminal span closure but the guest
@@ -783,7 +795,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             .downcast_mut::<FutureInvokeResultState>()
                             .unwrap();
                         *state = FutureInvokeResultState::Consumed;
-                        invoke_and_await_response_to_wire(response.result, ctx)
+                        invoke_and_await_response_to_wire(response, ctx)
                     });
                     match finalize {
                         Ok(wire) => {
@@ -818,7 +830,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         Ok::<_, anyhow::Error>(())
                     })?;
                     let wire = accessor.with(|mut access| {
-                        invoke_and_await_response_to_wire(response.result, access.get())
+                        invoke_and_await_response_to_wire(response, access.get())
                     });
                     delivery.deliver_at_accessor_terminal(accessor).await?;
                     wire

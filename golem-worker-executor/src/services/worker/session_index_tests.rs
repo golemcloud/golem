@@ -45,7 +45,7 @@ use golem_common::model::durable_stream::{
     StreamForkCutRecord, StreamInvocationId, StreamRegistrationInvocation, StreamResumeOperation,
     StreamSessionAttachedRecord, StreamSessionDetachedRecord, StreamSessionExpiredRecord,
     StreamSessionExpiryPolicy, StreamSessionExpiryRefreshedRecord, StreamSessionFinishedRecord,
-    StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
+    StreamSessionPreparedRecord, StreamSessionRecord, StreamSessionRemoteResultRecord,
     StreamSessionResumeAttemptRecord,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -4093,8 +4093,8 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
         )
     };
     let records = [
-        session_entry(StreamSessionRecord::InvocationResult(
-            StreamSessionInvocationResultRecord {
+        session_entry(StreamSessionRecord::RemoteResult(
+            StreamSessionRemoteResultRecord {
                 format_version: 1,
                 session_key: remote_registration(&outgoing_session),
                 result: vec![],
@@ -4847,7 +4847,7 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
     let first_key = first_value.attempt.session_key.clone();
     let remote = owned_agent("remote-callee");
     let second_key = session_key(&remote, &idempotency_key);
-    let second = StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+    let second = StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
         format_version: 1,
         session_key: remote_registration(&second_key),
         result: vec![],

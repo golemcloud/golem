@@ -1102,6 +1102,57 @@ pub struct SerializableToolStructuredResult {
     pub result: Option<SerializableToolResultValue>,
 }
 
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct RemoteResultReference {
+    pub index: crate::model::OplogIndex,
+    pub session_key: StreamRegistrationInvocation,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum RecordedRpcResult {
+    Inline(Result<SchemaValue, SerializableRpcError>),
+    Remote(RemoteResultReference),
+}
+
+#[derive(Debug, Clone, PartialEq, golem_schema_derive::FromSchema)]
+pub struct PublicRpcResponse {
+    pub result: Result<SchemaValue, SerializableRpcError>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum RecordedToolResult {
+    Inline(Result<SerializableToolStructuredResult, SerializableToolRpcError>),
+    Remote {
+        reference: RemoteResultReference,
+        graph: crate::schema::SchemaGraph,
+        custom_error: Option<String>,
+    },
+}
+
 /// Schema-native terminal of the generic tool entity invocation. Stdout is deliberately absent:
 /// attachment events and their terminal are owned by the live operation rather than the oplog
 /// response.
@@ -1115,6 +1166,14 @@ pub struct SerializableToolStructuredResult {
 )]
 #[desert(evolution())]
 pub struct SerializableToolOperationTerminal {
+    pub body_execution: SerializableEntityBodyExecution,
+    pub result: RecordedToolResult,
+    pub admission_refusal: Option<SerializableToolAdmissionRefusal>,
+}
+
+/// The public oplog projects result references to stripped values.
+#[derive(Debug, Clone, PartialEq, golem_schema_derive::FromSchema)]
+pub struct PublicToolOperationTerminal {
     pub body_execution: SerializableEntityBodyExecution,
     pub result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
     pub admission_refusal: Option<SerializableToolAdmissionRefusal>,

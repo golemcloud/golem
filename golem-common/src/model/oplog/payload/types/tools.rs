@@ -18,11 +18,129 @@ use super::{
     SerializableDiscoveredTools, SerializableToolPositionalRequest, SerializableToolResultValue,
 };
 use crate::schema::TypedSchemaValue;
-use crate::schema::conversion::{FromSchemaError, SchemaBuilder, value_kind};
+use crate::schema::conversion::{FromSchemaError, IntoSchema, SchemaBuilder, value_kind};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 use crate::schema::tool::DiscoveredTool;
+
+impl IntoSchema for super::PublicRpcResponse {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.model.oplog.payload.HostResponseGolemRpcInvokeAndAwait")
+    }
+
+    fn register_in(builder: &mut SchemaBuilder) -> SchemaType {
+        let id = Self::type_id();
+        if !builder.is_registered(&id) {
+            builder.reserve(id.clone());
+            let body = SchemaType::record_from_fields([(
+                "result",
+                <Result<SchemaValue, super::SerializableRpcError>>::register_in(builder),
+            )]);
+            builder.commit(
+                id.clone(),
+                Some("HostResponseGolemRpcInvokeAndAwait".into()),
+                Default::default(),
+                body,
+            );
+        }
+        SchemaType::ref_to(id)
+    }
+
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::Record {
+            fields: vec![self.result.to_value()],
+        }
+    }
+}
+
+impl IntoSchema for super::PublicToolOperationTerminal {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.model.oplog.payload.types.SerializableToolOperationTerminal")
+    }
+
+    fn register_in(builder: &mut SchemaBuilder) -> SchemaType {
+        let id = Self::type_id();
+        if !builder.is_registered(&id) {
+            builder.reserve(id.clone());
+            let body = SchemaType::record_from_fields([
+                (
+                    "body_execution",
+                    super::SerializableEntityBodyExecution::register_in(builder),
+                ),
+                (
+                    "result",
+                    <Result<
+                        super::SerializableToolStructuredResult,
+                        super::SerializableToolRpcError,
+                    >>::register_in(builder),
+                ),
+                (
+                    "admission_refusal",
+                    <Option<super::SerializableToolAdmissionRefusal>>::register_in(builder),
+                ),
+            ]);
+            builder.commit(
+                id.clone(),
+                Some("SerializableToolOperationTerminal".into()),
+                Default::default(),
+                body,
+            );
+        }
+        SchemaType::ref_to(id)
+    }
+
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::Record {
+            fields: vec![
+                self.body_execution.to_value(),
+                self.result.to_value(),
+                self.admission_refusal.to_value(),
+            ],
+        }
+    }
+}
+
+impl From<Result<SchemaValue, super::SerializableRpcError>> for super::RecordedRpcResult {
+    fn from(value: Result<SchemaValue, super::SerializableRpcError>) -> Self {
+        Self::Inline(value)
+    }
+}
+
+impl super::RecordedRpcResult {
+    pub fn into_inline(self) -> Result<Result<SchemaValue, super::SerializableRpcError>, String> {
+        match self {
+            Self::Inline(value) => Ok(value),
+            Self::Remote(_) => Err("scalar RPC response refers to a stream journal".to_string()),
+        }
+    }
+}
+
+impl From<Result<super::SerializableToolStructuredResult, super::SerializableToolRpcError>>
+    for super::RecordedToolResult
+{
+    fn from(
+        value: Result<super::SerializableToolStructuredResult, super::SerializableToolRpcError>,
+    ) -> Self {
+        Self::Inline(value)
+    }
+}
+
+impl super::RecordedToolResult {
+    pub fn into_inline(
+        self,
+    ) -> Result<
+        Result<super::SerializableToolStructuredResult, super::SerializableToolRpcError>,
+        String,
+    > {
+        match self {
+            Self::Inline(value) => Ok(value),
+            Self::Remote { .. } => {
+                Err("tool result reference requires its stream session".to_string())
+            }
+        }
+    }
+}
 
 impl crate::schema::conversion::IntoSchema for SerializableDiscoveredTools {
     fn type_id() -> TypeId {

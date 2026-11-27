@@ -26,7 +26,7 @@ fn denied(denial: &str) -> SerializableRpcError {
 
 pub fn invoke_and_await<R>(_request: &R, denial: &str) -> HostResponseGolemRpcInvokeAndAwait {
     HostResponseGolemRpcInvokeAndAwait {
-        result: Err(denied(denial)),
+        result: Err(denied(denial)).into(),
     }
 }
 

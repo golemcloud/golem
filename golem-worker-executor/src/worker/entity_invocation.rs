@@ -1493,7 +1493,7 @@ mod tests {
             let response = HostResponseEntityInvocation {
                 result: Ok(SerializableToolOperationTerminal {
                     body_execution: execution,
-                    result: Err(SerializableToolRpcError::Denied("denied".into())),
+                    result: Err(SerializableToolRpcError::Denied("denied".into())).into(),
                     admission_refusal: None,
                 }
                 .into_typed_schema_value()
