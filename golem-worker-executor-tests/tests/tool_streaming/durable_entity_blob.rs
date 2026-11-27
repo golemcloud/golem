@@ -696,19 +696,12 @@ async fn capture_snapshot(
                 ..
             } => Some(RecordedPayload::Result(Box::new(
                 golem_worker_executor::services::oplog::resolve_finished_result(
+                    &oplog,
                     OplogIndex::from_u64(offset as u64 + 1),
                     *invocation_id,
                     result.clone(),
-                    |index| {
-                        let oplog = &oplog;
-                        async move { oplog.read(index).await.map_err(|error| error.to_string()) }
-                    },
-                    |payload| oplog.download_payload(payload),
-                    |payload| oplog.download_payload(payload),
-                    std::convert::identity,
                 )
-                .await
-                .map_err(anyhow::Error::msg)?,
+                .await?,
             ))),
             OplogEntry::Start {
                 request: Some(request),

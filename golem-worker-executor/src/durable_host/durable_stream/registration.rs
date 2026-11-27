@@ -950,8 +950,24 @@ impl DurableStreamStore {
                 result,
                 ..
             } if recorded == invocation_id => match result {
-                FinishedResult::Returned(returned) if returned < index => {
-                    self.read_invocation_returned(returned, invocation_id).await
+                FinishedResult::Returned(returned) => {
+                    let payload = crate::services::oplog::read_invocation_returned(
+                        &self.oplog,
+                        index,
+                        invocation_id,
+                        returned,
+                    )
+                    .await
+                    .map_err(|error| {
+                        match error.downcast::<crate::services::oplog::UnreadableOplog>() {
+                            Ok(error) => StreamStoreError::from(error),
+                            Err(error) => StreamStoreError::CorruptHistory(error.to_string()),
+                        }
+                    })?;
+                    self.oplog
+                        .download_payload(payload)
+                        .await
+                        .map_err(StreamStoreError::Oplog)
                 }
                 FinishedResult::Payload(payload) => {
                     let result = self
@@ -975,7 +991,6 @@ impl DurableStreamStore {
                         stream_bindings: Vec::new(),
                     })
                 }
-                _ => Err(StreamStoreError::RegistrationDivergence),
             },
             _ => Err(StreamStoreError::RegistrationDivergence),
         }

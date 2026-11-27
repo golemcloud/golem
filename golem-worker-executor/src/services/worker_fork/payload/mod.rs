@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::{InvocationResultReader, read_invocation_returned};
 use desert_rust::BinaryCodec;
 use golem_common::model::oplog::{
-    OplogEntry, OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
+    FinishedResult, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
+    UpdateDescription,
 };
 use std::fmt::Debug;
 use std::future::Future;
@@ -23,6 +25,8 @@ use std::future::Future;
 /// already independent of the source. Cached external values are not durable ownership.
 pub(super) async fn copy_entry_payloads<Copy, CopyFuture>(
     entry: &mut OplogEntry,
+    index: OplogIndex,
+    reader: &impl InvocationResultReader,
     mut copy: Copy,
 ) -> Result<(), String>
 where
@@ -56,7 +60,7 @@ where
             copy_payload(result, &mut copy).await?
         }
         OplogEntry::AgentInvocationFinished { result, .. } => {
-            if let golem_common::model::oplog::FinishedResult::Payload(payload) = result {
+            if let FinishedResult::Payload(payload) = result {
                 copy_payload(payload, &mut copy).await?;
             }
         }
@@ -122,6 +126,16 @@ where
         | OplogEntry::ToolAttachmentControl { .. }
         | OplogEntry::SnapshotConfirmed { .. }
         | OplogEntry::SpanClosed { .. } => {}
+    }
+    if let OplogEntry::AgentInvocationFinished {
+        invocation_id,
+        result: FinishedResult::Returned(returned),
+        ..
+    } = entry
+    {
+        read_invocation_returned(reader, index, *invocation_id, *returned)
+            .await
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }

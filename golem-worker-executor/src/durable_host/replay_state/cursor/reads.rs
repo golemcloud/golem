@@ -1185,24 +1185,18 @@ impl ReplayState {
                 },
             ) => {
                 let oplog = &self.cursor.oplog;
-                let result =
-                    crate::services::oplog::resolve_finished_result(
-                        index,
-                        invocation_id,
-                        result,
-                        |index| async move {
-                            oplog.read(index).await.map_err(|error| error.to_string())
-                        },
-                        |payload| oplog.download_payload(payload),
-                        |payload| oplog.download_payload(payload),
-                        std::convert::identity,
-                    )
-                    .await
-                    .map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "failed to deserialize agent invocation result payload: {err}"
-                        ))
-                    })?;
+                let result = crate::services::oplog::resolve_finished_result(
+                    oplog,
+                    index,
+                    invocation_id,
+                    result,
+                )
+                .await
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to deserialize agent invocation result payload: {err}"
+                    ))
+                })?;
                 Ok((index, result))
             }
             (index, entry) => Err(WorkerExecutorError::unexpected_oplog_entry(

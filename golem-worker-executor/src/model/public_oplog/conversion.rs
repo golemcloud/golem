@@ -479,35 +479,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 awaits_settlement: _,
             } => {
                 let invocation_result = crate::services::oplog::resolve_finished_result(
+                    &(oplog_service.as_ref(), owned_agent_id, agent_mode),
                     oplog_index,
                     invocation_id,
                     result,
-                    |index| {
-                        let oplog_service = &oplog_service;
-                        async move {
-                            oplog_service
-                                .read_exact(owned_agent_id, agent_mode, index, 1)
-                                .await
-                                .map_err(|error| error.to_string())?
-                                .remove(&index)
-                                .ok_or_else(|| format!("missing invocation return {index}"))
-                        }
-                    },
-                    |payload| async {
-                        oplog_service
-                            .download_payload(owned_agent_id, agent_mode, payload)
-                            .await
-                            .map_err(|error| error.to_string())
-                    },
-                    |payload| async {
-                        oplog_service
-                            .download_payload(owned_agent_id, agent_mode, payload)
-                            .await
-                            .map_err(|error| error.to_string())
-                    },
-                    std::convert::identity,
                 )
-                .await?;
+                .await
+                .map_err(|error| error.to_string())?;
 
                 let public_result = agent_invocation_result_to_public(
                     components.clone(),

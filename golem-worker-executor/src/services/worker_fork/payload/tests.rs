@@ -26,6 +26,25 @@ use golem_common::model::OplogIndex;
 use std::sync::Arc;
 use test_r::test;
 
+struct Reader(Option<OplogEntry>);
+
+#[async_trait::async_trait]
+impl InvocationResultReader for Reader {
+    async fn read(&self, _: OplogIndex) -> anyhow::Result<OplogEntry> {
+        Ok(self
+            .0
+            .clone()
+            .expect("only a returned reference reads history"))
+    }
+
+    async fn download<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static>(
+        &self,
+        _: OplogPayload<T>,
+    ) -> anyhow::Result<T> {
+        panic!("fork validation must not download a value; copying owns the only download")
+    }
+}
+
 #[test]
 async fn shared_pending_and_started_payloads_rehome_independently() {
     use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
@@ -74,7 +93,7 @@ async fn shared_pending_and_started_payloads_rehome_independently() {
     let mut targets = Vec::new();
     for entry in &mut entries {
         let target_id = PayloadId::new();
-        copy_entry_payloads(entry, |id, hash| {
+        copy_entry_payloads(entry, OplogIndex::INITIAL, &Reader(None), |id, hash| {
             assert_eq!(id, source_id);
             assert_eq!(hash, source_hash);
             std::future::ready(Ok(RawOplogPayload::External {
@@ -139,6 +158,8 @@ async fn inline_and_absent_payloads_do_not_touch_blob_storage() {
     let mut entry = OplogEntry::end(OplogIndex::INITIAL, None, false, None, None);
     copy_entry_payloads(
         &mut entry,
+        OplogIndex::INITIAL,
+        &Reader(None),
         |_, _| -> std::future::Ready<Result<RawOplogPayload, String>> {
             panic!("absent payload must not be copied")
         },
@@ -148,8 +169,54 @@ async fn inline_and_absent_payloads_do_not_touch_blob_storage() {
 }
 
 #[test]
+async fn a_fork_downloads_an_external_finished_payload_only_to_copy_it() {
+    let source_id = PayloadId::new();
+    let source_hash = vec![3; 16];
+    let mut terminal = OplogEntry::agent_invocation_finished(
+        test_invocation_id("scalar".into()),
+        FinishedResult::Payload(OplogPayload::External {
+            payload_id: source_id.clone(),
+            md5_hash: source_hash.clone(),
+            cached: None,
+        }),
+        Some("scalar".into()),
+        29,
+        golem_common::model::component::ComponentRevision::INITIAL,
+        false,
+    );
+    let mut downloads = 0;
+    copy_entry_payloads(
+        &mut terminal,
+        OplogIndex::from_u64(18),
+        &Reader(None),
+        |id, hash| {
+            assert_eq!(id, source_id);
+            assert_eq!(hash, source_hash);
+            downloads += 1;
+            std::future::ready(Ok(RawOplogPayload::SerializedInline(vec![3, 19, 41])))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(downloads, 1);
+    assert!(matches!(terminal, OplogEntry::AgentInvocationFinished {
+        result: FinishedResult::Payload(OplogPayload::SerializedInline { bytes, .. }), ..
+    } if bytes == vec![3, 19, 41]));
+}
+
+#[test]
 async fn a_fork_preserves_a_finished_return_reference_without_copying_another_payload() {
     let reference = OplogIndex::from_u64(17);
+    let returned = OplogEntry::agent_invocation_returned(
+        test_invocation_id("stream".into()),
+        OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: vec![7; 16],
+            cached: None,
+        },
+        Some("stream".into()),
+        golem_common::model::component::ComponentRevision::INITIAL,
+    );
     let mut terminal = OplogEntry::agent_invocation_finished(
         test_invocation_id("stream".into()),
         golem_common::model::oplog::FinishedResult::Returned(reference),
@@ -161,6 +228,8 @@ async fn a_fork_preserves_a_finished_return_reference_without_copying_another_pa
     let expected = terminal.clone();
     copy_entry_payloads(
         &mut terminal,
+        reference.next(),
+        &Reader(Some(returned)),
         |_, _| -> std::future::Ready<Result<RawOplogPayload, String>> {
             panic!("the early return is the only payload a fork must copy")
         },
@@ -245,7 +314,7 @@ async fn visits_every_stream_payload_and_snapshot_update() {
     ];
     for entry in &mut entries {
         let mut copies = 0;
-        copy_entry_payloads(entry, |_, _| {
+        copy_entry_payloads(entry, OplogIndex::INITIAL, &Reader(None), |_, _| {
             copies += 1;
             std::future::ready(Ok(RawOplogPayload::SerializedInline(vec![3, 19, 41])))
         })
@@ -254,6 +323,8 @@ async fn visits_every_stream_payload_and_snapshot_update() {
         assert_eq!(copies, 1);
         copy_entry_payloads(
             entry,
+            OplogIndex::INITIAL,
+            &Reader(None),
             |_, _| -> std::future::Ready<Result<RawOplogPayload, String>> {
                 panic!("copied inline payload must not retain a source reference")
             },
@@ -272,6 +343,8 @@ async fn visits_every_stream_payload_and_snapshot_update() {
     }
     copy_entry_payloads(
         &mut entries[0],
+        OplogIndex::INITIAL,
+        &Reader(None),
         |_, _| -> std::future::Ready<Result<RawOplogPayload, String>> {
             panic!("reobservation must not own another body")
         },

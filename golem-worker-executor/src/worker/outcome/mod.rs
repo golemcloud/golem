@@ -1314,15 +1314,18 @@ impl InvocationResult {
                         )
                     };
                     let invocation_result = crate::services::oplog::resolve_finished_result(
+                        &oplog,
                         oplog_idx,
                         invocation_id,
                         result,
-                        |index| oplog.read(index),
-                        |payload| async { oplog.download_payload(payload).await.map_err(corrupt) },
-                        |payload| async { oplog.download_payload(payload).await.map_err(corrupt) },
-                        corrupt,
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        match error.downcast::<UnreadableOplog>() {
+                            Ok(error) => error,
+                            Err(error) => corrupt(error.to_string()),
+                        }
+                    })?;
                     let background_failure = match background_failure_idx {
                         Some(failure_idx) => Some(
                             read_background_failure(

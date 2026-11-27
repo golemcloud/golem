@@ -74,7 +74,9 @@ mod compressed;
 mod ephemeral;
 mod fenced_stream;
 mod invocation_result;
-pub use invocation_result::resolve_finished_result;
+pub use invocation_result::{
+    InvocationResultReader, read_invocation_returned, resolve_finished_result,
+};
 mod multilayer;
 pub mod plugin;
 mod primary;
