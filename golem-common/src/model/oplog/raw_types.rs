@@ -276,6 +276,7 @@ pub enum DurableStreamEventSummary {
         outcome: DurableStreamTerminalOutcome,
         origin: crate::model::durable_stream::StreamTerminalOrigin,
     },
+    SessionResult,
     SessionFinished {
         outcome: DurableStreamOutcome,
     },
@@ -322,7 +323,7 @@ impl DurableStreamEventSummary {
     pub fn session(record: &crate::model::durable_stream::StreamSessionRecord) -> Option<Self> {
         use crate::model::durable_stream::StreamSessionRecord;
         match record {
-            StreamSessionRecord::RemoteResult(_) => None,
+            StreamSessionRecord::RemoteResult(_) => Some(Self::SessionResult),
             StreamSessionRecord::Finished(record) => Some(Self::SessionFinished {
                 outcome: if record.result.is_ok() {
                     DurableStreamOutcome::Success

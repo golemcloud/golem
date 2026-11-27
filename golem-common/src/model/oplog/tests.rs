@@ -429,7 +429,7 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
             outcome: DurableStreamOutcome::Error
         })
     );
-    assert_eq!(summaries[7], None);
+    assert_eq!(summaries[7], Some(DurableStreamEventSummary::SessionResult));
     assert_eq!(
         summaries[8],
         Some(DurableStreamEventSummary::SessionCancellation)

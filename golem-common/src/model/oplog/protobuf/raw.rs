@@ -79,6 +79,7 @@ impl From<DurableStreamEventSummary>
                 None,
                 None,
             ),
+            DurableStreamEventSummary::SessionResult => (Kind::SessionResult, None, None),
             DurableStreamEventSummary::SessionFinished { outcome } => {
                 (Kind::SessionFinished, None, Some(outcome))
             }
@@ -151,6 +152,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary>
                 outcome: DurableStreamTerminalOutcome::ConsumerCancelled,
                 origin,
             }),
+            (Kind::SessionResult, None, None, None) => Ok(Self::SessionResult),
             (Kind::SessionFinished, None, Some(outcome), None) => {
                 Ok(Self::SessionFinished { outcome })
             }

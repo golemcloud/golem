@@ -1749,9 +1749,10 @@ const (
 	DurableStreamEventSummaryRegistered          uint8 = 0
 	DurableStreamEventSummaryItems               uint8 = 1
 	DurableStreamEventSummaryTerminal            uint8 = 2
-	DurableStreamEventSummarySessionFinished     uint8 = 3
-	DurableStreamEventSummarySessionCancellation uint8 = 4
-	DurableStreamEventSummarySessionExpired      uint8 = 5
+	DurableStreamEventSummarySessionResult       uint8 = 3
+	DurableStreamEventSummarySessionFinished     uint8 = 4
+	DurableStreamEventSummarySessionCancellation uint8 = 5
+	DurableStreamEventSummarySessionExpired      uint8 = 6
 )
 
 type DurableStreamEventSummary struct {
@@ -1790,6 +1791,9 @@ func MakeDurableStreamEventSummaryItems(value uint64) DurableStreamEventSummary 
 }
 func MakeDurableStreamEventSummaryTerminal(value DurableStreamTerminalSummary) DurableStreamEventSummary {
 	return DurableStreamEventSummary{DurableStreamEventSummaryTerminal, value}
+}
+func MakeDurableStreamEventSummarySessionResult() DurableStreamEventSummary {
+	return DurableStreamEventSummary{DurableStreamEventSummarySessionResult, nil}
 }
 func MakeDurableStreamEventSummarySessionFinished(value DurableStreamOutcome) DurableStreamEventSummary {
 	return DurableStreamEventSummary{DurableStreamEventSummarySessionFinished, value}
@@ -6722,18 +6726,22 @@ func wasm_lower_1_t415(pinner *runtime.Pinner, value DurableStreamEventSummary, 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
 		wasm_lower_1_t414(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
+	case DurableStreamEventSummarySessionResult:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+
 	case DurableStreamEventSummarySessionFinished:
 		payload := value.SessionFinished()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 8)) = int8(int32(payload))
 
 	case DurableStreamEventSummarySessionCancellation:
 
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
 
 	case DurableStreamEventSummarySessionExpired:
 
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(6))
 
 	default:
 		panic("unreachable")

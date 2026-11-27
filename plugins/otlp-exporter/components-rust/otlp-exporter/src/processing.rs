@@ -61,6 +61,13 @@ pub(crate) fn process_entries_from(
             OplogEntry::AgentInvocationFinished(params) => {
                 handle_invocation_finished(state, params, &mut completed_spans, &mut metrics);
             }
+            OplogEntry::AgentInvocationReturned(params) => {
+                handle_stream_summary(
+                    &params.timestamp,
+                    DurableStreamEventSummary::SessionResult,
+                    &mut metrics,
+                );
+            }
             OplogEntry::AgentInvocationSettled(params) => {
                 let time_ns = datetime_to_nanos(&params.timestamp).to_string();
                 push_fuel_consumed(&mut metrics, time_ns, params.consumed_fuel);
@@ -280,6 +287,7 @@ fn handle_stream_summary(
                 StreamTerminalOrigin::Control => "control",
             }),
         ),
+        DurableStreamEventSummary::SessionResult => ("session-result", 1, None, None),
         DurableStreamEventSummary::SessionFinished(value) => (
             "session-finished",
             1,
@@ -1354,6 +1362,7 @@ mod tests {
             agent_id: AgentId { uuid: uuid(1) },
             agent_type_name: Some("Agent".to_string()),
             owner_kind: OwnerKind::ComponentAgent,
+            standalone_tool: None,
             agent_mode: AgentMode::Durable,
             component_revision: 1,
             env: Vec::new(),
@@ -1510,6 +1519,41 @@ mod tests {
     }
 
     #[test]
+    fn caller_remote_results_count_once_each_but_scalar_results_do_not() {
+        use golem_rust::bindings::golem::api::oplog::RawDurableStreamRecordParameters;
+        let mut state = state();
+        let output = process_entries(
+            &mut state,
+            vec![
+                OplogEntry::StreamSession(RawDurableStreamRecordParameters {
+                    timestamp: instant(12, 0),
+                    record: OplogPayload::Inline(vec![17, 29]),
+                    summary: Some(DurableStreamEventSummary::SessionResult),
+                }),
+                invocation_finished(),
+                OplogEntry::StreamSession(RawDurableStreamRecordParameters {
+                    timestamp: instant(14, 0),
+                    record: OplogPayload::Inline(vec![31, 43]),
+                    summary: Some(DurableStreamEventSummary::SessionResult),
+                }),
+            ],
+        );
+        let events: Vec<_> = output
+            .metrics
+            .iter()
+            .filter(|metric| metric.name == "golem.durable_stream.event_count")
+            .collect();
+        assert_eq!(events.len(), 2);
+        for event in events {
+            let point = &event.sum.as_ref().unwrap().data_points[0];
+            assert_eq!(point.as_int.as_deref(), Some("1"));
+            assert_eq!(point.attributes.len(), 1);
+            assert_eq!(point.attributes[0].key, "event");
+            assert_eq!(point.attributes[0].value.string_value, "session-result");
+        }
+    }
+
+    #[test]
     fn an_early_return_does_not_finish_or_count_the_invocation_twice() {
         use golem_rust::bindings::golem::api::oplog::{
             FinishedResult, RawAgentInvocationReturnedParameters,
@@ -1529,7 +1573,14 @@ mod tests {
             )],
         );
         assert!(returned.spans.is_empty());
-        assert!(returned.metrics.is_empty());
+        assert_eq!(returned.metrics.len(), 1);
+        let result_event = &returned.metrics[0];
+        assert_eq!(result_event.name, "golem.durable_stream.event_count");
+        let point = &result_event.sum.as_ref().unwrap().data_points[0];
+        assert_eq!(point.as_int.as_deref(), Some("1"));
+        assert_eq!(point.attributes.len(), 1);
+        assert_eq!(point.attributes[0].key, "event");
+        assert_eq!(point.attributes[0].value.string_value, "session-result");
         assert!(state.invocation_start_ns.is_some());
         let OplogEntry::AgentInvocationFinished(mut finished) = invocation_finished() else {
             unreachable!()
@@ -1541,6 +1592,12 @@ mod tests {
             vec![OplogEntry::AgentInvocationFinished(finished)],
         );
         assert!(state.invocation_start_ns.is_none());
+        assert!(
+            !output
+                .metrics
+                .iter()
+                .any(|metric| metric.name == "golem.durable_stream.event_count")
+        );
         assert_eq!(
             output
                 .metrics

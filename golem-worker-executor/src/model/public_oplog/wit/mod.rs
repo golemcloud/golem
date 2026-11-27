@@ -164,6 +164,7 @@ fn durable_stream_summary_to_wit(
                 },
             })
         }
+        S::SessionResult => oplog::DurableStreamEventSummary::SessionResult,
         S::SessionFinished { outcome: value } => {
             oplog::DurableStreamEventSummary::SessionFinished(outcome(value))
         }
@@ -198,6 +199,7 @@ fn durable_stream_summary_from_wit(
                 },
             }
         }
+        oplog::DurableStreamEventSummary::SessionResult => S::SessionResult,
         oplog::DurableStreamEventSummary::SessionFinished(value) => S::SessionFinished {
             outcome: outcome(value),
         },

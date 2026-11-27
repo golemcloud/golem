@@ -1097,6 +1097,7 @@ interface oplog {
         registered,
         items(u64),
         terminal(durable-stream-terminal-summary),
+        session-result,
         session-finished(durable-stream-outcome),
         session-cancellation,
         session-expired,

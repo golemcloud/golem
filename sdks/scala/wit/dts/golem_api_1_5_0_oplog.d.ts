@@ -1180,6 +1180,9 @@ declare module 'golem:api/oplog@1.5.0' {
     val: DurableStreamTerminalSummary
   } |
   {
+    tag: 'session-result'
+  } |
+  {
     tag: 'session-finished'
     val: DurableStreamOutcome
   } |

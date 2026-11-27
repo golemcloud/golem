@@ -225,6 +225,8 @@ Item counts are aggregated into the metric value. The plugin does not create one
 
 `session-cancellation` counts cancellation-related journal records (request, consumer intent, and application), not unique logical cancellations. One cancellation can produce several records. A session result and its eventual stream or session terminal are separate events; an early result is not stream completion.
 
+`session-result` counts each callee `AgentInvocationReturned` and each caller `RemoteResult` journal summary. Scalar invocation terminals do not contribute. The later callee `AgentInvocationFinished(Returned)` does not count the early result again.
+
 Collector delivery is best effort even though source lifecycle state advances when a batch is accepted.
 
 </div>
