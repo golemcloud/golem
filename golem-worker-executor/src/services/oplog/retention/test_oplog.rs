@@ -751,7 +751,7 @@ impl OplogService for RecordingOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.record(format!(
             "try_get_last_index({owned_agent_id}, {agent_mode:?})"
         ));

@@ -638,7 +638,7 @@ impl OplogService for PrimaryOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         record_oplog_call("get_last_index");
         Self::try_get_last_index_from_storage(
             &*self.indexed_storage,
@@ -647,6 +647,15 @@ impl OplogService for PrimaryOplogService {
             &self.retry_config,
         )
         .await
+        .map_err(|error| {
+            UnreadableOplog::new(
+                &owned_agent_id.agent_id,
+                crate::services::oplog::OplogReadError::source_failure(
+                    OplogReadSource::Primary,
+                    error,
+                ),
+            )
+        })
     }
 
     async fn assert_owning_epoch(

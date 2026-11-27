@@ -24,9 +24,9 @@ use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog,
     OplogAddPairReceipt, OplogAddReceipt, OplogCloseCompletion, OplogError, OplogLifecycleGuard,
-    OplogReadError, OplogReadSource, OplogService, OrderedOplogStart,
-    RawDurableStreamSessionStatus, RawOplogPayloadDownloadError, ReservedRawStartBuilder, ScanPage,
-    StagePublication, StreamSessionIndexService, UnreadableOplog, WorkerTasks,
+    OplogService, OrderedOplogStart, RawDurableStreamSessionStatus, RawOplogPayloadDownloadError,
+    ReservedRawStartBuilder, ScanPage, StagePublication, StreamSessionIndexService,
+    UnreadableOplog, WorkerTasks,
 };
 use crate::storage::keyvalue::KeyValueStorage;
 use async_trait::async_trait;
@@ -222,16 +222,7 @@ impl Oplog for RetentionOplog {
         let last = self
             .service
             .try_get_last_index(&self.owner, self.mode)
-            .await
-            .map_err(|error| {
-                UnreadableOplog::new(
-                    &self.owner.agent_id,
-                    OplogReadError::source_failure(
-                        OplogReadSource::Other("retained oplog tail"),
-                        error,
-                    ),
-                )
-            })?;
+            .await?;
         Ok(self.retention.retained_length(last))
     }
 
@@ -243,7 +234,8 @@ impl Oplog for RetentionOplog {
         let last = self
             .service
             .try_get_last_index(&self.owner, self.mode)
-            .await?;
+            .await
+            .map_err(|error| error.to_string())?;
         Ok(self.retention.retained_length(last))
     }
 
@@ -541,7 +533,7 @@ impl OplogService for RetentionOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner
             .try_get_last_index(owned_agent_id, agent_mode)
             .await

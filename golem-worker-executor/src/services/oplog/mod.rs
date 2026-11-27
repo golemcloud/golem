@@ -302,17 +302,13 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, UnreadableOplog>;
 
-    /// The last index for archive maintenance: every storage failure is returned, not only an
-    /// unreadable archive.
+    /// The last index without panicking on a primary storage failure.
     async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
-        Ok(self
-            .get_last_index(owned_agent_id, agent_mode)
-            .await
-            .map_err(|error| error.to_string())?)
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.get_last_index(owned_agent_id, agent_mode).await
     }
 
     /// The retention of the oplog of the agent: where its retained entries start; see

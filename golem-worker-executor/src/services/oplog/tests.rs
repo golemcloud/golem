@@ -9497,6 +9497,55 @@ async fn an_ephemeral_length_over_an_unavailable_archive_is_transient(_tracing: 
 }
 
 #[test]
+async fn retained_length_keeps_an_unavailable_archive_tail_transient(_tracing: &Tracing) {
+    use crate::services::oplog::retention::{RetentionOplogService, advance_oplog_retention};
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+
+    let storage = Arc::new(ReadCountingIndexedStorage {
+        archive_last_id_error: Some(IndexedStorageError::Transient(
+            "injected archive tail outage".to_string(),
+        )),
+        ..ReadCountingIndexedStorage::default()
+    });
+    let archives = Arc::new(archive_open_service(storage).await);
+    let kv = Arc::new(InMemoryKeyValueStorage::new());
+    let service = RetentionOplogService::new(archives, kv.clone());
+    let (_, owner, mut metadata) = archive_open_agent("retained-archive-tail-outage");
+    let mode = AgentMode::Ephemeral;
+    metadata.agent_mode = mode;
+    advance_oplog_retention(kv.as_ref(), &owner, mode, OplogIndex::from_u64(2))
+        .await
+        .unwrap();
+    let mut lifecycle = service.lock_lifecycle(&owner.agent_id).await;
+    let oplog = service
+        .open(
+            &mut lifecycle,
+            &owner,
+            mode,
+            Some(OplogIndex::from_u64(3)),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(mode),
+            None,
+        )
+        .await
+        .expect("open with a known tail must succeed");
+
+    let error = oplog
+        .length()
+        .await
+        .expect_err("the stored tail is unavailable");
+    assert!(
+        matches!(
+            &error.error,
+            OplogReadError::SourceUnavailable { source: OplogReadSource::Archive(0), detail }
+                if detail.contains("injected archive tail outage")
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
 async fn an_archive_last_index_that_does_not_read_fails_the_open(_tracing: &Tracing) {
     let storage = Arc::new(ReadCountingIndexedStorage {
         archive_last_id_error: Some(IndexedStorageError::Other(

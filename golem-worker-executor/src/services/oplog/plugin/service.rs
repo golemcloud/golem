@@ -375,7 +375,7 @@ impl OplogService for ForwardingOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner
             .try_get_last_index(owned_agent_id, agent_mode)
             .await
