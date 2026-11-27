@@ -26,9 +26,9 @@ use crate::worker::status::{
     InvocationRequests, StatusOplogReader, calculate_last_known_status,
     calculate_last_known_status_for_existing_worker,
     calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
-    calculate_oplog_processor_checkpoints, calculate_status_with_reader,
-    calculate_total_linear_memory_size, fold_committed_status, fold_invocation_result_entries,
-    hydrate_initial_pending_evidence, try_fold_status_from, try_fold_status_from_reader,
+    calculate_plugin_status, calculate_status_with_reader, calculate_total_linear_memory_size,
+    fold_committed_status, fold_invocation_result_entries, hydrate_initial_pending_evidence,
+    try_fold_status_from, try_fold_status_from_reader,
 };
 use crate::worker::status::{RegionFold, fold_regions_from};
 use async_trait::async_trait;
@@ -442,10 +442,11 @@ fn successful_update_resets_total_linear_memory_size() {
 }
 
 /// Why `commit_and_update_state` still compares the folded record against the previous one
-/// instead of taking "the commit produced entries" as the answer: the fold's `finalize` step
-/// prunes oplog-processor checkpoints that are neither active nor in-flight, and it runs
-/// whether or not there were entries. So an empty fold can still change the record, and
-/// skipping it would drop that change.
+/// instead of taking "the commit produced entries" as the answer: the comparison guards a start
+/// status that another path built. Before it applies the entries, the fold removes the oplog
+/// processor checkpoints that are neither active nor in flight, also when there are no entries.
+/// A fold never gives such a checkpoint, but a start status that another path built can hold
+/// one. So an empty fold can still change the record, and skipping it would drop that change.
 #[test]
 fn empty_fold_is_not_the_identity() {
     let retry = RetryConfig::default();
@@ -1136,7 +1137,6 @@ fn export_fork_admission_fold_ignores_ancestor_after_reverting_before_fork_cut()
         &RetryConfig::default(),
         regions_without_updates(deleted),
         std::collections::VecDeque::new(),
-        true,
     )
     .unwrap();
 
@@ -5423,6 +5423,224 @@ async fn committed_acceptance_retains_attachment_authority_before_and_after_prep
     }
 }
 
+/// A live append keeps a stream session record in its cached form (`SerializedInline` or
+/// `External` with the decoded value), not `Inline`. The fold of the commit receipt reads these
+/// records as a fold of the stored entries reads them: of two consumer cancel intents, the one
+/// that a `ConsumerCancelApplied` record applies is gone and the other is pending, and the
+/// `Attached` record validates its `PendingAgentInvocation`.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_stored_entries() {
+    use crate::services::oplog::{CommitLevel, OplogOps, gated_ephemeral_fixture};
+    use futures::{StreamExt, TryStreamExt};
+    use golem_common::model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord, StreamEndpointSide,
+        StreamError, StreamRecordReference, StreamRegistrationInvocation, StreamTerminal,
+        StreamTerminalAuthor,
+    };
+
+    let test_case = TestCase::builder(0)
+        .agent_mode(AgentMode::Ephemeral)
+        .build();
+    let fixture = gated_ephemeral_fixture(100).await;
+    let key = StreamInvocationId {
+        callee_environment_id: test_case.owned_agent_id.environment_id,
+        callee: test_case.owned_agent_id.agent_id(),
+        callee_fingerprint: AgentFingerprint::new(),
+        idempotency_key: InvocationId(Uuid::new_v4()),
+    };
+    let prepared = crate::services::worker_fork::lineage::tests::prepared(&key);
+    let pending_invocation_index = OplogIndex::from_u64(2);
+    let attached = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+        format_version: 1,
+        session_key: key.idempotency_key,
+        attachment_id: prepared.attempt.attachment_id,
+        attempt_id: prepared.attempt.attempt_id,
+        epoch: 7,
+        pending_invocation_oplog_index: pending_invocation_index,
+        acceptance: prepared.acceptance(),
+    });
+    let intent = StreamConsumerCancelIntentRecord {
+        format_version: 1,
+        session_key: StreamRegistrationInvocation::Remote(key.clone()),
+        consumer_invocation: InvocationId(Uuid::from_u128(3)),
+        source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(29))),
+        epoch: 11,
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
+        },
+    };
+    let applied = StreamConsumerCancelIntentRecord {
+        source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(31))),
+        epoch: 12,
+        ..intent.clone()
+    };
+    fixture
+        .oplog
+        .add(test_case.entries[0].oplog_entry.clone())
+        .await
+        .unwrap();
+    fixture
+        .oplog
+        .add(pending_invocation_entry(&key.idempotency_key))
+        .await
+        .unwrap();
+    let records = [
+        attached,
+        StreamSessionRecord::ConsumerCancelIntent(applied.clone()),
+        StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
+        StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
+            format_version: 1,
+            intent: applied,
+        }),
+    ];
+    let payloads = futures::future::try_join_all(
+        records
+            .iter()
+            .map(|record| fixture.oplog.upload_payload(record)),
+    )
+    .await
+    .unwrap();
+    assert!(payloads.iter().all(|payload| matches!(
+        payload,
+        OplogPayload::SerializedInline {
+            cached: Some(_),
+            ..
+        } | OplogPayload::External {
+            cached: Some(_),
+            ..
+        }
+    )));
+    let appended: Vec<OplogIndex> = futures::stream::iter(payloads)
+        .then(|record| {
+            fixture.oplog.add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record,
+                summary: None,
+            })
+        })
+        .try_collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        appended,
+        (3..=6).map(OplogIndex::from_u64).collect::<Vec<_>>()
+    );
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    let horizon = *receipt.last_key_value().unwrap().0;
+    assert_eq!(horizon, OplogIndex::from_u64(6));
+
+    let (committed, gap, _) = fold_committed_status(
+        &test_case,
+        &test_case.owned_agent_id,
+        fixture.oplog.as_ref(),
+        AgentMode::Ephemeral,
+        CommitLevel::Deferred,
+        horizon,
+        AgentStatusRecord::default(),
+        receipt,
+    )
+    .await;
+    let committed = committed.unwrap().unwrap();
+    assert!(!gap);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Ephemeral,
+        Some(fixture.oplog.as_ref()),
+        horizon,
+    );
+    let stored = try_fold_status_from_reader(&test_case, &reader, AgentStatusRecord::default())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let pending = HashMap::from([((intent.source.clone(), intent.epoch), vec![intent])]);
+    assert_eq!(stored.pending_durable_stream_cancellations, pending);
+    assert_eq!(committed.pending_durable_stream_cancellations, pending);
+    assert_eq!(
+        stored
+            .durable_stream_sessions
+            .get(&key.idempotency_key)
+            .unwrap()
+            .validated_initial_pending_invocation,
+        Some(pending_invocation_index)
+    );
+    assert_eq!(committed, stored);
+    fixture.archive.release(1);
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
+/// The fold of a commit receipt does not load a stream session record in a region that a later
+/// entry of the same receipt reverts. A record that no region deletes must load, or the fold fails.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_committed_fold_does_not_load_a_stream_session_record_that_the_receipt_reverts() {
+    use crate::services::oplog::{CommitLevel, gated_ephemeral_fixture};
+
+    let test_case = TestCase::builder(1)
+        .agent_mode(AgentMode::Ephemeral)
+        .build();
+    let fixture = gated_ephemeral_fixture(100).await;
+    let baseline = test_case.entries[0].expected_status.clone();
+    let unloadable = OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: vec![0; 16],
+            cached: None,
+        },
+        summary: None,
+    };
+    let revert = OplogEntry::revert(OplogRegion {
+        start: OplogIndex::from_u64(2),
+        end: OplogIndex::from_u64(2),
+    });
+    let folds = futures::future::join_all(
+        [vec![unloadable.clone(), revert], vec![unloadable]]
+            .into_iter()
+            .map(|receipt| {
+                let entries: BTreeMap<OplogIndex, OplogEntry> =
+                    (2..).map(OplogIndex::from_u64).zip(receipt).collect();
+                let horizon = *entries.last_key_value().unwrap().0;
+                fold_committed_status(
+                    &test_case,
+                    &test_case.owned_agent_id,
+                    fixture.oplog.as_ref(),
+                    AgentMode::Ephemeral,
+                    CommitLevel::Always,
+                    horizon,
+                    baseline.clone(),
+                    entries,
+                )
+            }),
+    )
+    .await;
+    let [(reverted, reverted_gap, _), (retained, retained_gap, _)] =
+        <[_; 2]>::try_from(folds).unwrap();
+
+    let reverted = reverted
+        .expect("a reverted stream session record must not be loaded")
+        .unwrap();
+    assert!(!reverted_gap);
+    assert_eq!(reverted.oplog_idx, OplogIndex::from_u64(3));
+    assert!(reverted.durable_stream_sessions.iter().next().is_none());
+    assert!(
+        retained.is_err(),
+        "a stream session record that no region deletes must load"
+    );
+    assert!(!retained_gap);
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
 #[test]
 #[test_r::timeout("30s")]
 async fn bounded_reconstruction_reads_handoff_without_flushing_newer_buffer() {
@@ -7313,7 +7531,7 @@ async fn incremental_fold_does_not_download_payload_reverted_in_later_chunk() {
 }
 
 // --------------------------------------------------------------------------
-// U2: Checkpoint state tracking — calculate_oplog_processor_checkpoints
+// U2: Checkpoint state tracking — calculate_plugin_status
 // --------------------------------------------------------------------------
 
 #[test]
@@ -7352,13 +7570,8 @@ fn checkpoint_latest_per_grant_id_wins() {
         ),
     ]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     assert_eq!(result.len(), 1);
     let state = result.get(&grant_id).unwrap();
@@ -7405,13 +7618,8 @@ fn checkpoint_different_plugins_tracked_independently() {
         ),
     ]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     assert_eq!(result.len(), 2);
 
@@ -7445,13 +7653,8 @@ fn checkpoint_target_agent_id_preserved() {
         },
     )]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     let state = result.get(&grant_id).unwrap();
     assert_eq!(state.target_agent_id, Some(target));
@@ -7481,13 +7684,7 @@ fn deactivated_plugin_evicted_from_checkpoints() {
     )]);
 
     let entries = BTreeMap::new();
-    let result = calculate_oplog_processor_checkpoints(
-        initial,
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result = calculate_plugin_status(active_plugins, initial, &deleted_regions, &entries).1;
 
     assert!(
         !result.contains_key(&grant_id),
@@ -7515,13 +7712,7 @@ fn deactivated_plugin_retained_when_in_flight() {
     )]);
 
     let entries = BTreeMap::new();
-    let result = calculate_oplog_processor_checkpoints(
-        initial,
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result = calculate_plugin_status(active_plugins, initial, &deleted_regions, &entries).1;
 
     assert!(
         result.contains_key(&grant_id),
@@ -7537,8 +7728,8 @@ fn successful_update_drops_old_grant_retains_new() {
     let old_grant = EnvironmentPluginGrantId::new();
     let new_grant = EnvironmentPluginGrantId::new();
     let deleted_regions = DeletedRegions::default();
-    // After SuccessfulUpdate, only new_grant is active
-    let active_plugins = HashSet::from([new_grant]);
+    // Before SuccessfulUpdate, only old_grant is active
+    let active_plugins = HashSet::from([old_grant]);
 
     // Pre-seed old checkpoint
     let initial = HashMap::from([(
@@ -7580,13 +7771,7 @@ fn successful_update_drops_old_grant_retains_new() {
         ),
     ]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        initial,
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result = calculate_plugin_status(active_plugins, initial, &deleted_regions, &entries).1;
 
     assert!(
         !result.contains_key(&old_grant),
@@ -7617,13 +7802,8 @@ fn activate_plugin_initializes_checkpoint() {
         },
     )]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     assert_eq!(result.len(), 1);
     let state = result.get(&grant_id).unwrap();
@@ -7668,13 +7848,7 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
         },
     )]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        initial,
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result = calculate_plugin_status(active_plugins, initial, &deleted_regions, &entries).1;
 
     let state = result.get(&grant_id).unwrap();
     assert_eq!(
@@ -7686,30 +7860,25 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
     assert_eq!(state.sending_up_to, OplogIndex::from_u64(8));
 }
 
+/// A fold of the oplog processor checkpoints in chunks of any size, and a fold from a status
+/// baseline at any index, give the result of a fold of the whole oplog. After a deactivation, a
+/// confirmation of the last entries in flight and a new activation, the state starts at the new
+/// activation.
 #[test]
-fn oplog_processor_checkpoint_fold_is_chunk_composable() {
-    fn fold(entries: &BTreeMap<OplogIndex, OplogEntry>, chunk_size: usize) -> AgentStatusRecord {
-        let mut status = AgentStatusRecord::default();
-        let last_index = *entries.keys().next_back().unwrap();
-        let all_entries: Vec<_> = entries.iter().collect();
-        for chunk in all_entries.chunks(chunk_size) {
-            let chunk: BTreeMap<_, _> = chunk
-                .iter()
-                .map(|(index, entry)| (**index, (**entry).clone()))
-                .collect();
-            let finalize = chunk.keys().next_back() == Some(&last_index);
-            status = super::update_status_with_precomputed_regions(
-                AgentMode::Durable,
-                status,
-                chunk,
-                &RetryConfig::default(),
-                regions_without_updates(DeletedRegions::new()),
-                std::collections::VecDeque::new(),
-                finalize,
-            )
-            .unwrap();
-        }
-        status
+fn oplog_processor_checkpoints_fold_to_one_result_from_every_baseline_and_in_every_chunk_size() {
+    fn fold(
+        baseline: AgentStatusRecord,
+        entries: BTreeMap<OplogIndex, OplogEntry>,
+    ) -> AgentStatusRecord {
+        super::update_status_with_precomputed_regions(
+            AgentMode::Durable,
+            baseline,
+            entries,
+            &RetryConfig::default(),
+            regions_without_updates(DeletedRegions::new()),
+            std::collections::VecDeque::new(),
+        )
+        .unwrap()
     }
 
     let grant_id = EnvironmentPluginGrantId::new();
@@ -7765,15 +7934,415 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
         ),
     ]);
 
-    let unchunked = fold(&entries, entries.len());
-    assert_eq!(fold(&entries, 1), unchunked);
-    assert_eq!(fold(&entries, 2), unchunked);
-    let checkpoint = unchunked
-        .oplog_processor_checkpoints
-        .get(&grant_id)
-        .unwrap();
-    assert_eq!(checkpoint.target_agent_id, Some(target));
-    assert_eq!(checkpoint.confirmed_up_to, OplogIndex::from_u64(4));
+    let whole = fold(AgentStatusRecord::default(), entries.clone());
+    let pairs: Vec<_> = entries.clone().into_iter().collect();
+    (1..=pairs.len()).for_each(|chunk_size| {
+        let chunked = pairs
+            .chunks(chunk_size)
+            .fold(AgentStatusRecord::default(), |status, chunk| {
+                fold(status, chunk.iter().cloned().collect())
+            });
+        assert_eq!(chunked, whole, "chunk size {chunk_size}");
+    });
+    entries.keys().for_each(|at| {
+        let (before, after): (BTreeMap<_, _>, BTreeMap<_, _>) = entries
+            .clone()
+            .into_iter()
+            .partition(|(index, _)| index <= at);
+        let baseline = fold(AgentStatusRecord::default(), before);
+        assert_eq!(fold(baseline, after), whole, "baseline at {at}");
+    });
+    let activation = OplogIndex::from_u64(5);
+    assert_eq!(
+        whole.oplog_processor_checkpoints.get(&grant_id),
+        Some(&OplogProcessorCheckpointState {
+            target_agent_id: None,
+            confirmed_up_to: activation,
+            sending_up_to: activation,
+            last_batch_start: activation,
+            delivery: None,
+        })
+    );
+}
+
+/// A checkpoint that confirms the last entries in flight of a plugin that is not active drops
+/// the state of the plugin, so that a later activation starts a fresh state.
+#[test]
+fn a_confirmed_checkpoint_of_an_inactive_plugin_drops_its_state() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let target = AgentId::from_parts(7, 21);
+    let in_flight = HashMap::from([(
+        grant_id,
+        OplogProcessorCheckpointState {
+            target_agent_id: Some(target),
+            confirmed_up_to: OplogIndex::from_u64(1),
+            sending_up_to: OplogIndex::from_u64(4),
+            last_batch_start: OplogIndex::from_u64(1),
+            delivery: None,
+        },
+    )]);
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(5),
+        OplogEntry::OplogProcessorCheckpoint {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+            target_agent_id: target,
+            confirmed_up_to: OplogIndex::from_u64(4),
+            sending_up_to: OplogIndex::from_u64(4),
+            last_batch_start: OplogIndex::from_u64(1),
+            source_component_revision: ComponentRevision::INITIAL,
+            delivery: None,
+        },
+    )]);
+
+    let result = calculate_plugin_status(
+        HashSet::new(),
+        in_flight,
+        &DeletedRegions::default(),
+        &entries,
+    )
+    .1;
+
+    assert_eq!(result, HashMap::new());
+}
+
+/// A second activation of an active plugin that has nothing in flight keeps the progress of the
+/// plugin.
+#[test]
+fn a_second_activation_keeps_the_progress_of_an_active_plugin() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let progress = OplogProcessorCheckpointState {
+        target_agent_id: Some(AgentId::from_parts(7, 22)),
+        confirmed_up_to: OplogIndex::from_u64(6),
+        sending_up_to: OplogIndex::from_u64(6),
+        last_batch_start: OplogIndex::from_u64(3),
+        delivery: None,
+    };
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(10),
+        OplogEntry::ActivatePlugin {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+        },
+    )]);
+
+    let (_, result) = calculate_plugin_status(
+        HashSet::from([grant_id]),
+        HashMap::from([(grant_id, progress.clone())]),
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(result, HashMap::from([(grant_id, progress)]));
+}
+
+/// A successful update keeps the progress of a plugin that stays active in the new revision,
+/// and gives a fresh state at the update to a plugin that the new revision adds.
+#[test]
+fn a_successful_update_keeps_the_progress_of_a_plugin_that_stays_active() {
+    let staying = EnvironmentPluginGrantId::new();
+    let added = EnvironmentPluginGrantId::new();
+    let progress = OplogProcessorCheckpointState {
+        target_agent_id: Some(AgentId::from_parts(7, 23)),
+        confirmed_up_to: OplogIndex::from_u64(6),
+        sending_up_to: OplogIndex::from_u64(6),
+        last_batch_start: OplogIndex::from_u64(3),
+        delivery: None,
+    };
+    let update = OplogIndex::from_u64(10);
+    let entries = BTreeMap::from([(
+        update,
+        OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            200,
+            None,
+            HashSet::from([staying, added]),
+            None,
+            None,
+        ),
+    )]);
+
+    let (active, result) = calculate_plugin_status(
+        HashSet::from([staying]),
+        HashMap::from([(staying, progress.clone())]),
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(active, HashSet::from([staying, added]));
+    assert_eq!(
+        result,
+        HashMap::from([
+            (staying, progress),
+            (
+                added,
+                OplogProcessorCheckpointState {
+                    target_agent_id: None,
+                    confirmed_up_to: update,
+                    sending_up_to: update,
+                    last_batch_start: update,
+                    delivery: None,
+                },
+            ),
+        ])
+    );
+}
+
+/// The `Create` entry of an agent whose initial active plugins are `initial_active_plugins`.
+fn create_with_plugins(initial_active_plugins: HashSet<EnvironmentPluginGrantId>) -> OplogEntry {
+    let mut create = TestCase::builder(0).build().entries[0].oplog_entry.clone();
+    let OplogEntry::Create { parameters, .. } = &mut create else {
+        unreachable!()
+    };
+    parameters.initial_active_plugins = initial_active_plugins;
+    create
+}
+
+/// A `Create` gives the initial active plugins of the agent.
+#[test]
+fn a_create_gives_the_initial_active_plugins() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let entries = BTreeMap::from([(
+        OplogIndex::INITIAL,
+        create_with_plugins(HashSet::from([grant_id])),
+    )]);
+
+    assert_eq!(
+        calculate_plugin_status(
+            HashSet::new(),
+            HashMap::new(),
+            &DeletedRegions::default(),
+            &entries
+        ),
+        (HashSet::from([grant_id]), HashMap::new())
+    );
+}
+
+/// A deactivation of a plugin that has entries in flight keeps the checkpoint state of the
+/// plugin, so that the processor can confirm the entries in flight.
+#[test]
+fn a_deactivation_keeps_the_checkpoint_state_of_a_plugin_with_entries_in_flight() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let target = AgentId::from_parts(7, 24);
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::INITIAL,
+            create_with_plugins(HashSet::from([grant_id])),
+        ),
+        (
+            OplogIndex::from_u64(2),
+            OplogEntry::OplogProcessorCheckpoint {
+                timestamp: Timestamp::now_utc(),
+                plugin_grant_id: grant_id,
+                target_agent_id: target,
+                confirmed_up_to: OplogIndex::INITIAL,
+                sending_up_to: OplogIndex::from_u64(4),
+                last_batch_start: OplogIndex::INITIAL,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
+            },
+        ),
+        (
+            OplogIndex::from_u64(3),
+            OplogEntry::DeactivatePlugin {
+                timestamp: Timestamp::now_utc(),
+                plugin_grant_id: grant_id,
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        calculate_plugin_status(
+            HashSet::new(),
+            HashMap::new(),
+            &DeletedRegions::default(),
+            &entries
+        ),
+        (
+            HashSet::new(),
+            HashMap::from([(
+                grant_id,
+                OplogProcessorCheckpointState {
+                    target_agent_id: Some(target),
+                    confirmed_up_to: OplogIndex::INITIAL,
+                    sending_up_to: OplogIndex::from_u64(4),
+                    last_batch_start: OplogIndex::INITIAL,
+                    delivery: None,
+                },
+            )])
+        )
+    );
+}
+
+/// A checkpoint entry gives every field of the checkpoint state, also the start of the last
+/// batch and the pending delivery.
+#[test]
+fn a_checkpoint_entry_gives_every_field_of_the_checkpoint_state() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let target = AgentId::from_parts(7, 25);
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(12),
+        OplogEntry::OplogProcessorCheckpoint {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+            target_agent_id: target,
+            confirmed_up_to: OplogIndex::from_u64(10),
+            sending_up_to: OplogIndex::from_u64(11),
+            last_batch_start: OplogIndex::from_u64(7),
+            source_component_revision: ComponentRevision::INITIAL,
+            delivery: Some(vec![1, 2, 3]),
+        },
+    )]);
+
+    let (_, result) = calculate_plugin_status(
+        HashSet::from([grant_id]),
+        HashMap::new(),
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(
+        result,
+        HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(target),
+                confirmed_up_to: OplogIndex::from_u64(10),
+                sending_up_to: OplogIndex::from_u64(11),
+                last_batch_start: OplogIndex::from_u64(7),
+                delivery: Some(vec![1, 2, 3]),
+            },
+        )])
+    );
+}
+
+/// The fold does not apply an activation in a deleted region, as replay does not. The same
+/// activation outside the deleted region is applied.
+#[test]
+fn an_activation_in_a_deleted_region_is_not_applied() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let activation = OplogIndex::from_u64(5);
+    let entries = BTreeMap::from([(
+        activation,
+        OplogEntry::ActivatePlugin {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+        },
+    )]);
+    let activated = (
+        HashSet::from([grant_id]),
+        HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: None,
+                confirmed_up_to: activation,
+                sending_up_to: activation,
+                last_batch_start: activation,
+                delivery: None,
+            },
+        )]),
+    );
+
+    [
+        (
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::from_u64(4)..=OplogIndex::from_u64(6),
+            )]),
+            (HashSet::new(), HashMap::new()),
+        ),
+        (
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::from_u64(6)..=OplogIndex::from_u64(8),
+            )]),
+            activated,
+        ),
+    ]
+    .into_iter()
+    .for_each(|(deleted_regions, expected)| {
+        assert_eq!(
+            calculate_plugin_status(HashSet::new(), HashMap::new(), &deleted_regions, &entries),
+            expected,
+            "deleted regions {deleted_regions:?}"
+        );
+    });
+}
+
+/// The status fold applies a plugin activation and an oplog processor checkpoint that a later
+/// `Jump` skips. Only a deleted region removes these entries from the fold.
+#[test]
+fn the_status_fold_applies_plugin_entries_that_a_jump_skips() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let target = AgentId::from_parts(7, 23);
+    let test_case = TestCase::builder(0).build();
+    let timestamp = Timestamp::now_utc();
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::INITIAL,
+            test_case.entries[0].oplog_entry.clone(),
+        ),
+        (
+            OplogIndex::from_u64(2),
+            OplogEntry::ActivatePlugin {
+                timestamp,
+                plugin_grant_id: grant_id,
+            },
+        ),
+        (
+            OplogIndex::from_u64(3),
+            OplogEntry::OplogProcessorCheckpoint {
+                timestamp,
+                plugin_grant_id: grant_id,
+                target_agent_id: target,
+                confirmed_up_to: OplogIndex::from_u64(2),
+                sending_up_to: OplogIndex::from_u64(3),
+                last_batch_start: OplogIndex::from_u64(2),
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
+            },
+        ),
+        (
+            OplogIndex::from_u64(4),
+            OplogEntry::Interrupted { timestamp },
+        ),
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::Jump {
+                timestamp,
+                entity_parent_start_index: None,
+                jump: OplogRegion::from_index_range(
+                    OplogIndex::from_u64(2)..=OplogIndex::from_u64(4),
+                ),
+            },
+        ),
+    ]);
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert!(
+        status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(2))
+    );
+    assert_eq!(status.active_plugins, HashSet::from([grant_id]));
+    assert_eq!(
+        status.oplog_processor_checkpoints,
+        HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(target),
+                confirmed_up_to: OplogIndex::from_u64(2),
+                sending_up_to: OplogIndex::from_u64(3),
+                last_batch_start: OplogIndex::from_u64(2),
+                delivery: None,
+            },
+        )])
+    );
 }
 
 #[test]
@@ -7806,13 +8375,8 @@ fn deactivate_then_reactivate_seeds_new_checkpoint() {
         ),
     ]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     let state = result.get(&grant_id).unwrap();
     assert_eq!(
@@ -11218,5 +11782,778 @@ fn cancelled_standalone_retention_survives_every_checkpoint_cut() {
             Some(expected),
             "lost or shifted cancellation deadline at cut {cut}",
         );
+    }
+}
+
+pub(crate) mod status_baseline {
+    use super::region_fold::{
+        assisted_strategy, automatic_admission, failed, idx, manual_pending_update, revision,
+    };
+    use super::*;
+    use golem_common::model::card::{AgentCardHolder, CardHolder, CardId, StoredCard};
+    use golem_common::model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelIntentRecord, StreamEndpointSide, StreamError, StreamRecordReference,
+        StreamRegistrationInvocation, StreamSessionKey, StreamTerminal, StreamTerminalAuthor,
+    };
+    use golem_common::model::oplog::types::SerializableIpAddresses;
+    use golem_common::model::oplog::{
+        HostRequest, HostRequestSocketsResolveName, HostResponse, HostResponseSocketsResolveName,
+    };
+    use golem_common::model::retry_policy::RetryPolicyState;
+    use proptest::prelude::*;
+    use test_r::test;
+
+    /// One generated entry. A choice selects an earlier entry or value of the sequence by
+    /// position. A generated entry that has nothing to select gives a plain lifecycle entry.
+    #[derive(Clone, Debug)]
+    pub(crate) enum Generated {
+        Pending,
+        Started,
+        Finished,
+        FinishedAwaitingSettlement,
+        Settled,
+        Cancelled(u8),
+        InvocationFailed(u8),
+        InFunctionRetry(u8),
+        RecoveryFailed,
+        TerminalRecoveryFailure(u16),
+        RecoverySucceeded,
+        GrowMemory(u8),
+        CreateResource,
+        DropResource(u8),
+        Snapshot(bool),
+        SnapshotConfirmed,
+        Interrupted,
+        Suspended,
+        Exited,
+        Restarted,
+        ActivatePlugin(bool),
+        DeactivatePlugin(bool),
+        AutomaticAdmission,
+        SnapshotBasedAdmission,
+        AssistedStrategy(u8, u8),
+        UpdateSucceeded(u8),
+        UpdateFailed,
+        Jump(u8),
+        Revert(u8),
+        StreamSessionPrepared,
+        StreamCancelIntent(u8),
+        CardRevokeQueued,
+        CardRevoked(u8),
+        CardDerived,
+        CardTransferQueued(u8),
+        CardTransferStarted(u8),
+        CardTransferConfirmed(u8),
+        CardTransferReceived,
+        EntityStart(u8, bool),
+        EntityEnd(u8),
+        EntityDelivered(u8),
+        SetRetryPolicy(bool),
+        RemoveRetryPolicy(bool),
+        ProcessorCheckpoint(bool, u8),
+        CardInstallQueued,
+        CardInstalled(u8),
+        CardRevokedCascade(u8),
+        NameLookupStart(u8),
+        NameLookupEnd(u8),
+        ExportForkAdmitted(u8),
+    }
+
+    pub(crate) fn generated() -> impl Strategy<Value = Generated> {
+        prop_oneof![
+            Just(Generated::Pending),
+            Just(Generated::Started),
+            Just(Generated::Finished),
+            Just(Generated::FinishedAwaitingSettlement),
+            Just(Generated::Settled),
+            any::<u8>().prop_map(Generated::Cancelled),
+            any::<u8>().prop_map(Generated::InvocationFailed),
+            any::<u8>().prop_map(Generated::InFunctionRetry),
+            Just(Generated::RecoveryFailed),
+            any::<u16>().prop_map(Generated::TerminalRecoveryFailure),
+            Just(Generated::RecoverySucceeded),
+            any::<u8>().prop_map(Generated::GrowMemory),
+            Just(Generated::CreateResource),
+            any::<u8>().prop_map(Generated::DropResource),
+            any::<bool>().prop_map(Generated::Snapshot),
+            Just(Generated::SnapshotConfirmed),
+            Just(Generated::Interrupted),
+            Just(Generated::Suspended),
+            Just(Generated::Exited),
+            Just(Generated::Restarted),
+            any::<bool>().prop_map(Generated::ActivatePlugin),
+            any::<bool>().prop_map(Generated::DeactivatePlugin),
+            Just(Generated::AutomaticAdmission),
+            Just(Generated::SnapshotBasedAdmission),
+            (any::<u8>(), any::<u8>())
+                .prop_map(|(admission, snapshot)| Generated::AssistedStrategy(admission, snapshot)),
+            any::<u8>().prop_map(Generated::UpdateSucceeded),
+            Just(Generated::UpdateFailed),
+            any::<u8>().prop_map(Generated::Jump),
+            any::<u8>().prop_map(Generated::Revert),
+            Just(Generated::StreamSessionPrepared),
+            any::<u8>().prop_map(Generated::StreamCancelIntent),
+            Just(Generated::CardRevokeQueued),
+            any::<u8>().prop_map(Generated::CardRevoked),
+            Just(Generated::CardDerived),
+            any::<u8>().prop_map(Generated::CardTransferQueued),
+            any::<u8>().prop_map(Generated::CardTransferStarted),
+            any::<u8>().prop_map(Generated::CardTransferConfirmed),
+            Just(Generated::CardTransferReceived),
+            (any::<u8>(), any::<bool>())
+                .prop_map(|(parent, entity)| Generated::EntityStart(parent, entity)),
+            any::<u8>().prop_map(Generated::EntityEnd),
+            any::<u8>().prop_map(Generated::EntityDelivered),
+            any::<bool>().prop_map(Generated::SetRetryPolicy),
+            any::<bool>().prop_map(Generated::RemoveRetryPolicy),
+            (any::<bool>(), any::<u8>())
+                .prop_map(|(second, confirmed)| Generated::ProcessorCheckpoint(second, confirmed)),
+            Just(Generated::CardInstallQueued),
+            any::<u8>().prop_map(Generated::CardInstalled),
+            any::<u8>().prop_map(Generated::CardRevokedCascade),
+            any::<u8>().prop_map(Generated::NameLookupStart),
+            any::<u8>().prop_map(Generated::NameLookupEnd),
+            any::<u8>().prop_map(Generated::ExportForkAdmitted),
+        ]
+    }
+
+    /// The plugin grants of the generated oplog.
+    const GRANTS: [EnvironmentPluginGrantId; 2] = [
+        EnvironmentPluginGrantId(Uuid::from_u128(1)),
+        EnvironmentPluginGrantId(Uuid::from_u128(2)),
+    ];
+
+    /// The grants that the bits of `choice` select: bit 0 selects the first grant, bit 1 the
+    /// second.
+    fn grants(choice: u8) -> HashSet<EnvironmentPluginGrantId> {
+        GRANTS
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| choice & (1 << bit) != 0)
+            .map(|(_, grant_id)| *grant_id)
+            .collect()
+    }
+
+    /// A card transfer of the generated oplog: its id, its source card and the derived child.
+    #[derive(Clone)]
+    struct Transfer {
+        id: Uuid,
+        source_card_id: CardId,
+        child: StoredCard,
+    }
+
+    #[derive(Default)]
+    struct State {
+        keys: Vec<InvocationId>,
+        current: Option<InvocationId>,
+        settling: Option<InvocationId>,
+        automatic_admissions: Vec<u64>,
+        snapshots: Vec<u64>,
+        lookups: Vec<OplogIndex>,
+        resources: Vec<AgentResourceId>,
+        snapshot_name: Option<FilesystemSnapshotName>,
+        sessions: Vec<StreamSessionKey>,
+        queued_revokes: Vec<(OplogIndex, CardId)>,
+        queued_installs: Vec<(OplogIndex, CardId)>,
+        installed: Vec<CardId>,
+        transfers: Vec<Transfer>,
+        starts: Vec<OplogIndex>,
+        entries: BTreeMap<OplogIndex, OplogEntry>,
+    }
+
+    /// The element of `values` that `choice` selects, if `values` is not empty.
+    fn select<T: Clone>(values: &[T], choice: u8) -> Option<T> {
+        (!values.is_empty()).then(|| values[usize::from(choice) % values.len()].clone())
+    }
+
+    /// The region from an earlier entry after `Create`, selected by `choice`, to the entry before
+    /// `index`. `None` when no entry is between `Create` and `index - 1`.
+    fn earlier_region(choice: u8, index: u64) -> Option<OplogRegion> {
+        (index > 3).then(|| {
+            OplogRegion::from_index_range(idx(2 + u64::from(choice) % (index - 3))..=idx(index - 1))
+        })
+    }
+
+    /// The card holder agent of `name`. Each name of at most 11 bytes gives its own agent.
+    fn holder(name: &str) -> CardHolder {
+        CardHolder::Agent(AgentCardHolder {
+            environment_id: EnvironmentId(Uuid::from_u128(7)),
+            agent_id: AgentId::from_parts(
+                7,
+                name.bytes().fold(0, |h, byte| (h << 8) | u128::from(byte)),
+            ),
+        })
+    }
+
+    fn stream_session(record: StreamSessionRecord) -> OplogEntry {
+        OplogEntry::StreamSession {
+            timestamp: Timestamp::from(1_000),
+            entity_parent_start_index: None,
+            record: OplogPayload::Inline(Box::new(record)),
+            summary: None,
+        }
+    }
+
+    fn entity_start(parent: Option<OplogIndex>, entity: bool) -> OplogEntry {
+        OplogEntry::Start {
+            timestamp: Timestamp::from(1_000),
+            parent_start_index: parent,
+            function_name: if entity {
+                HostFunctionName::GolemEntityInvoke
+            } else {
+                HostFunctionName::Custom("protocol".into())
+            },
+            invocation_id: None,
+            observational_owner: None,
+            driver: None,
+            request: None,
+            durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: None,
+            denial: None,
+        }
+    }
+
+    /// The entry of `generated` at `index`, and the state after it.
+    fn entry(mut state: State, index: u64, generated: &Generated) -> (State, OplogEntry) {
+        let timestamp = Timestamp::from(1_000);
+        let retry_policy_names = ["first", "second"];
+        let resource_type_id = || ResourceTypeId {
+            name: "resource".to_string(),
+            owner: "test:resources".to_string(),
+        };
+        let entry = match generated {
+            Generated::Pending => {
+                let key = InvocationId(Uuid::new_v4());
+                state.keys.push(key);
+                pending_invocation_entry(&key)
+            }
+            Generated::Started => {
+                let key = state
+                    .keys
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
+                state.current = Some(key);
+                started_invocation(&key)
+            }
+            Generated::Finished => {
+                let key = state
+                    .current
+                    .take()
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
+                state.keys.retain(|pending| *pending != key);
+                finished_invocation(&key)
+            }
+            Generated::FinishedAwaitingSettlement => {
+                let key = state
+                    .current
+                    .take()
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
+                state.keys.retain(|pending| *pending != key);
+                state.settling = Some(key);
+                let mut entry = finished_invocation(&key);
+                if let OplogEntry::AgentInvocationFinished {
+                    awaits_settlement, ..
+                } = &mut entry
+                {
+                    *awaits_settlement = true;
+                }
+                entry
+            }
+            Generated::Settled => OplogEntry::AgentInvocationSettled {
+                timestamp,
+                invocation_id: state
+                    .settling
+                    .take()
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4())),
+                consumed_fuel: 0,
+            },
+            Generated::Cancelled(choice) => match select(&state.keys, *choice) {
+                Some(key) => {
+                    state.keys.retain(|pending| *pending != key);
+                    OplogEntry::CancelPendingInvocation {
+                        timestamp,
+                        invocation_id: key,
+                    }
+                }
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::InvocationFailed(count) => OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                Some(
+                    state
+                        .current
+                        .unwrap_or_else(|| InvocationId(Uuid::new_v4())),
+                ),
+                AgentError::TransientError("failed".to_string()),
+                OplogIndex::INITIAL,
+                Some(RetryPolicyState::Counter(u32::from(*count))),
+                None,
+                None,
+            ),
+            Generated::InFunctionRetry(choice) => match select(&state.starts, *choice) {
+                Some(start_index) => OplogEntry::error(
+                    None,
+                    OplogErrorKind::Invocation,
+                    state.current,
+                    AgentError::TransientError("retried in the call".to_string()),
+                    idx(index - 1),
+                    Some(RetryPolicyState::Counter(1)),
+                    Some(Timestamp::from(2_000 + u64::from(*choice))),
+                    Some(start_index),
+                ),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::RecoveryFailed => OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                None,
+                AgentError::TransientError("recovery failed".to_string()),
+                OplogIndex::INITIAL,
+                None,
+                None,
+                None,
+            ),
+            Generated::TerminalRecoveryFailure(offset) => OplogEntry::Error {
+                timestamp: Timestamp::from(1_000 + u64::from(*offset)),
+                entity_parent_start_index: None,
+                kind: OplogErrorKind::Recovery,
+                invocation_id: None,
+                error: AgentError::InternalError("recovery failed permanently".into()),
+                retry_from: OplogIndex::INITIAL,
+                retry_policy_state: Some(RetryPolicyState::Terminal),
+                retry_at: None,
+                retrying_start_index: None,
+            },
+            Generated::RecoverySucceeded => OplogEntry::RecoverySucceeded { timestamp },
+            Generated::GrowMemory(delta) => OplogEntry::GrowMemory {
+                timestamp,
+                delta: u64::from(*delta) * 65536,
+            },
+            Generated::CreateResource => {
+                let id = AgentResourceId(index);
+                state.resources.push(id);
+                OplogEntry::CreateResource {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    id,
+                    resource_type_id: resource_type_id(),
+                }
+            }
+            Generated::DropResource(choice) => match select(&state.resources, *choice) {
+                Some(id) => {
+                    state.resources.retain(|resource| *resource != id);
+                    OplogEntry::DropResource {
+                        timestamp,
+                        entity_parent_start_index: None,
+                        id,
+                        resource_type_id: resource_type_id(),
+                    }
+                }
+                None => OplogEntry::Suspend { timestamp },
+            },
+            Generated::Snapshot(named) => {
+                state.snapshots.push(index);
+                state.snapshot_name = named.then(FilesystemSnapshotName::periodic);
+                update_fields_snapshot(state.snapshot_name.clone())
+            }
+            Generated::SnapshotConfirmed => match state.snapshot_name.clone() {
+                Some(name) => OplogEntry::snapshot_confirmed(name),
+                None => OplogEntry::Exited { timestamp },
+            },
+            Generated::Interrupted => OplogEntry::Interrupted { timestamp },
+            Generated::Suspended => OplogEntry::Suspend { timestamp },
+            Generated::Exited => OplogEntry::Exited { timestamp },
+            Generated::Restarted => OplogEntry::Restart { timestamp },
+            Generated::ActivatePlugin(second) => OplogEntry::ActivatePlugin {
+                timestamp,
+                plugin_grant_id: GRANTS[usize::from(*second)],
+            },
+            Generated::DeactivatePlugin(second) => OplogEntry::DeactivatePlugin {
+                timestamp,
+                plugin_grant_id: GRANTS[usize::from(*second)],
+            },
+            Generated::AutomaticAdmission => {
+                state.automatic_admissions.push(index);
+                automatic_admission(index + 1)
+            }
+            Generated::SnapshotBasedAdmission => manual_pending_update(index + 1, None),
+            Generated::AssistedStrategy(admission, snapshot) => match (
+                select(&state.automatic_admissions, *admission),
+                select(&state.snapshots, *snapshot),
+            ) {
+                (Some(admission), Some(snapshot)) => {
+                    assisted_strategy(admission + 1, admission, 1, snapshot, None)
+                }
+                _ => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::UpdateSucceeded(choice) => OplogEntry::successful_update(
+                revision(index + 1),
+                10,
+                None,
+                grants(*choice),
+                None,
+                None,
+            ),
+            Generated::UpdateFailed => failed(index + 1, None),
+            Generated::Jump(choice) => earlier_region(*choice, index).map_or(
+                OplogEntry::Interrupted { timestamp },
+                |jump| OplogEntry::Jump {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    jump,
+                },
+            ),
+            Generated::Revert(choice) => earlier_region(*choice, index)
+                .map_or(OplogEntry::Interrupted { timestamp }, OplogEntry::revert),
+            Generated::StreamSessionPrepared => {
+                let mut key = crate::durable_host::durable_stream::tests::identity().invocation;
+                key.idempotency_key = InvocationId(Uuid::new_v4());
+                state.sessions.push(key.clone());
+                stream_session(StreamSessionRecord::Prepared(
+                    crate::services::worker_fork::lineage::tests::prepared(&key),
+                ))
+            }
+            Generated::StreamCancelIntent(choice) => match select(&state.sessions, *choice) {
+                Some(key) => stream_session(StreamSessionRecord::ConsumerCancelIntent(
+                    StreamConsumerCancelIntentRecord {
+                        format_version: 1,
+                        session_key: StreamRegistrationInvocation::Remote(key),
+                        consumer_invocation: InvocationId(Uuid::new_v4()),
+                        source: StreamRecordReference::Local(LocalStreamId(idx(index))),
+                        epoch: u64::from(*choice),
+                        cancellation: StreamCancellationRequest {
+                            direction: SessionStreamRole::Output,
+                            side: StreamEndpointSide::Consumer,
+                            authored_by: StreamTerminalAuthor::Host,
+                            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                                "stream cancelled".into(),
+                            )),
+                        },
+                    },
+                )),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::CardRevokeQueued => {
+                let card_id = CardId::new();
+                state.queued_revokes.push((idx(index), card_id));
+                OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id)))
+            }
+            Generated::CardRevoked(choice) => {
+                let (queued_event_index, card_id) = select(&state.queued_revokes, *choice)
+                    .unwrap_or_else(|| (idx(index), CardId::new()));
+                OplogEntry::CardRevoked {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    queued_event_index,
+                    card_id,
+                    wallet_generation: 1,
+                }
+            }
+            Generated::CardDerived => {
+                let transfer = Transfer {
+                    id: Uuid::new_v4(),
+                    source_card_id: CardId::new(),
+                    child: StoredCard::from(test_card(CardId::new())),
+                };
+                state.transfers.push(transfer.clone());
+                OplogEntry::CardDerived {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    card: Box::new(transfer.child),
+                    wallet_generation: 0,
+                    transfer_id: Some(transfer.id),
+                }
+            }
+            Generated::CardTransferQueued(choice) => match select(&state.transfers, *choice) {
+                Some(transfer) => OplogEntry::card_event_queued(
+                    None,
+                    Box::new(QueuedCardEvent::transfer_started_with_source(
+                        transfer.id,
+                        transfer.source_card_id,
+                        transfer.child,
+                        holder("target"),
+                    )),
+                ),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::CardTransferStarted(choice) => match select(&state.transfers, *choice) {
+                Some(transfer) => OplogEntry::card_transfer_started(
+                    None,
+                    transfer.id,
+                    transfer.source_card_id,
+                    holder("source"),
+                    holder("target"),
+                    1,
+                ),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::CardTransferConfirmed(choice) => match select(&state.transfers, *choice) {
+                Some(transfer) => OplogEntry::card_transfer_confirmed(
+                    None,
+                    transfer.id,
+                    transfer.source_card_id,
+                    transfer.child.card_id(),
+                    holder("target"),
+                ),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::CardTransferReceived => OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_received(
+                    Uuid::new_v4(),
+                    CardId::new(),
+                    test_card(CardId::new()),
+                )),
+            ),
+            Generated::EntityStart(choice, entity) => {
+                let parent = select(&state.starts, *choice);
+                state.starts.push(idx(index));
+                entity_start(parent, *entity)
+            }
+            Generated::EntityEnd(choice) => match select(&state.starts, *choice) {
+                Some(start_index) => OplogEntry::End {
+                    timestamp,
+                    start_index,
+                    response: None,
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                },
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::EntityDelivered(choice) => match select(&state.starts, *choice) {
+                Some(start_index) => OplogEntry::CompletionDelivered {
+                    timestamp,
+                    start_index,
+                },
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::SetRetryPolicy(second) => OplogEntry::SetRetryPolicy {
+                timestamp,
+                entity_parent_start_index: None,
+                policy: Box::new(golem_common::model::retry_policy::NamedRetryPolicy {
+                    name: retry_policy_names[usize::from(*second)].to_string(),
+                    priority: 1,
+                    predicate: golem_common::model::retry_policy::Predicate::True,
+                    policy: golem_common::model::retry_policy::RetryPolicy::Immediate,
+                }),
+            },
+            Generated::RemoveRetryPolicy(second) => OplogEntry::RemoveRetryPolicy {
+                timestamp,
+                entity_parent_start_index: None,
+                name: retry_policy_names[usize::from(*second)].to_string(),
+            },
+            Generated::ProcessorCheckpoint(second, confirmed) => {
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp,
+                    plugin_grant_id: GRANTS[usize::from(*second)],
+                    target_agent_id: AgentId::from_parts(8, 1),
+                    confirmed_up_to: idx((index - 1).saturating_sub(u64::from(*confirmed) % 3)),
+                    sending_up_to: idx(index - 1),
+                    last_batch_start: OplogIndex::NONE,
+                    source_component_revision: ComponentRevision::INITIAL,
+                    delivery: None,
+                }
+            }
+            Generated::CardInstallQueued => {
+                let card_id = CardId::new();
+                state.queued_installs.push((idx(index), card_id));
+                OplogEntry::card_event_queued(
+                    None,
+                    Box::new(QueuedCardEvent::install(test_card(card_id))),
+                )
+            }
+            Generated::CardInstalled(choice) => {
+                let (queued_event_index, card_id) = select(&state.queued_installs, *choice)
+                    .map_or((None, CardId::new()), |(queued, card_id)| {
+                        (Some(queued), card_id)
+                    });
+                state
+                    .queued_installs
+                    .retain(|(_, queued)| *queued != card_id);
+                state.installed.push(card_id);
+                OplogEntry::card_installed(
+                    None,
+                    queued_event_index,
+                    Box::new(test_card(card_id).into()),
+                    1,
+                )
+            }
+            Generated::CardRevokedCascade(choice) => {
+                let revoked_card_ids: Vec<CardId> = [
+                    select(&state.installed, *choice),
+                    select(&state.queued_revokes, *choice).map(|(_, card_id)| card_id),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                state
+                    .installed
+                    .retain(|card_id| !revoked_card_ids.contains(card_id));
+                OplogEntry::CardRevokedCascade {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    revoked_card_ids,
+                    affected_wallets: Vec::new(),
+                    local_wallet_generation: 1,
+                }
+            }
+            Generated::NameLookupStart(choice) => {
+                state.starts.push(idx(index));
+                state.lookups.push(idx(index));
+                OplogEntry::Start {
+                    timestamp,
+                    parent_start_index: None,
+                    function_name: HostFunctionName::SocketsIpNameLookupResolveAddresses,
+                    invocation_id: None,
+                    observational_owner: None,
+                    driver: None,
+                    request: Some(OplogPayload::Inline(Box::new(
+                        HostRequest::SocketsResolveName(HostRequestSocketsResolveName {
+                            name: format!("host-{}", choice % 3),
+                        }),
+                    ))),
+                    durable_function_type: DurableFunctionType::ReadRemote,
+                    span_started: None,
+                    denial: None,
+                }
+            }
+            Generated::NameLookupEnd(choice) => match select(&state.lookups, *choice) {
+                Some(start_index) => OplogEntry::End {
+                    timestamp,
+                    start_index,
+                    response: Some(OplogPayload::Inline(Box::new(
+                        HostResponse::SocketsResolveName(HostResponseSocketsResolveName {
+                            result: Ok(SerializableIpAddresses(vec![
+                                std::net::IpAddr::from([10, 0, 0, *choice]).into(),
+                            ])),
+                        }),
+                    ))),
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                },
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::ExportForkAdmitted(choice) => export_fork_admission(
+                AgentId::from_parts(8, u128::from(choice % 4)),
+                &format!("session-{}", choice % 3),
+                u64::from(*choice),
+            ),
+        };
+        (state, entry.rounded())
+    }
+
+    /// The oplog of `generated`: the `Create` of an agent at index 1, then one entry for each
+    /// generated value. The bits 0 and 1 of `create` select the initial plugins ([`grants`]), and
+    /// bit 2 sets `never_live`. The `Create` has the fingerprint that the generated export fork
+    /// admissions name as their source.
+    pub(crate) fn oplog(create: u8, generated: &[Generated]) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut create_entry = TestCase::builder(1).build().entries[0].oplog_entry.clone();
+        if let OplogEntry::Create { parameters, .. } = &mut create_entry {
+            parameters.initial_active_plugins = grants(create);
+            parameters.never_live = create & 0b100 != 0;
+            parameters.instance_id = export_owner_fingerprint().0;
+        }
+        let create = create_entry;
+        generated
+            .iter()
+            .zip(2..)
+            .fold(
+                State {
+                    entries: BTreeMap::from([(OplogIndex::INITIAL, create)]),
+                    ..State::default()
+                },
+                |state, (generated, index)| {
+                    let (mut state, entry) = entry(state, index, generated);
+                    state.entries.insert(idx(index), entry);
+                    state
+                },
+            )
+            .entries
+    }
+
+    /// The regions that `regions` skips, with its override merged.
+    fn merged_override(regions: &DeletedRegions) -> DeletedRegions {
+        let mut merged = regions.clone();
+        if merged.is_overridden() {
+            merged.merge_override();
+        }
+        merged
+    }
+
+    /// The status after `entries`, folded from `baseline`. `None` when the fold refuses
+    /// `baseline`.
+    pub(crate) fn fold(
+        baseline: AgentStatusRecord,
+        entries: BTreeMap<OplogIndex, OplogEntry>,
+    ) -> Option<AgentStatusRecord> {
+        update_status_with_new_entries(
+            AgentMode::Durable,
+            baseline,
+            entries,
+            &RetryConfig::default(),
+        )
+    }
+
+    proptest! {
+        /// A status baseline at any index, except one that a later `Jump` covers while a
+        /// snapshot-based update is pending, folds the rest of the oplog to the status of a fold
+        /// of the whole oplog, in every field. A fold can refuse a baseline only when a later
+        /// `Revert` deletes the index of the baseline, or when a later region uncovers a prefix
+        /// that the baseline does not cover. A later `Jump` gives such a region. A baseline is
+        /// also refused when a snapshot-based or snapshot-assisted update skips a prefix. The
+        /// fold must accept every other baseline. The reader then folds the whole oplog from
+        /// index 1. The write and the read of the stored baseline have their own
+        /// property in `services::worker::tests`.
+        #[test]
+        fn a_fold_from_a_status_baseline_equals_a_fold_of_the_whole_oplog(
+            create in any::<u8>(),
+            generated in proptest::collection::vec(generated(), 1..40),
+        ) {
+            let entries = oplog(create, &generated);
+            let whole = fold(AgentStatusRecord::default(), entries.clone()).unwrap();
+            let whole_skipped = merged_override(&whole.skipped_regions);
+
+            entries.keys().try_for_each(|at| {
+                let (before, after): (BTreeMap<_, _>, BTreeMap<_, _>) = entries
+                    .clone()
+                    .into_iter()
+                    .partition(|(index, _)| index <= at);
+                let baseline = fold(AgentStatusRecord::default(), before).unwrap();
+                let baseline_skipped = merged_override(&baseline.skipped_regions);
+                let uncovers_a_prefix = (1..=at.as_u64()).map(OplogIndex::from_u64).any(|index| {
+                    whole_skipped.is_in_deleted_region(index)
+                        != baseline_skipped.is_in_deleted_region(index)
+                });
+                let refusable =
+                    whole.deleted_regions.is_in_deleted_region(*at) || uncovers_a_prefix;
+                // The writers of the durable baseline write it only at a clean boundary, so no
+                // later `Jump` covers it. A start status that a later `Jump` covers while a
+                // snapshot-based update is pending is not checked: `baseline_is_invalidated`
+                // compares the skipped regions with the override of that update merged, so it
+                // accepts the start status, but `resolved_names` folds with the unreplayed
+                // regions, which have no override.
+                let covered_by_a_later_jump = after.values().any(|entry| {
+                    matches!(entry, OplogEntry::Jump { jump, .. } if jump.contains(*at))
+                });
+                if covered_by_a_later_jump && baseline.skipped_regions.is_overridden() {
+                    return Ok(());
+                }
+                match fold(baseline, after) {
+                    Some(status) => prop_assert_eq!(&status, &whole, "baseline at {}", at),
+                    None => prop_assert!(
+                        refusable,
+                        "the baseline at {} is refused, but no later revert deletes its index \
+                         and no later region uncovers a prefix that it does not cover",
+                        at
+                    ),
+                }
+                Ok(())
+            })?;
+        }
     }
 }

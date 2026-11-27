@@ -725,9 +725,15 @@ pub struct UsableAutomaticSnapshot {
 
 /// Contains status information about a worker according to a given oplog index.
 ///
-/// This status is just cached information, all fields must be computable by the oplog alone.
-/// By having an associated oplog_idx, the cached information can be used together with the
-/// tail of the oplog to determine the actual status of the worker.
+/// The status at `oplog_idx` is a fold of the oplog entries up to that index. The durable status
+/// baseline is a stored record of this type. The fold starts from a usable baseline and reads
+/// the entries after it. Without a usable baseline, the fold needs readable history from index 1.
+/// This contract covers the status fold, not the invocation-result index that a cold metadata
+/// load rebuilds separately.
+///
+/// One exception reads an entry before the baseline: when a fold finds the `Attached` record of a
+/// durable stream session, it reads the `PendingAgentInvocation` entry at the
+/// `pending_invocation_oplog_index` of that record, and that entry can be before the baseline.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct AgentStatusRecord {

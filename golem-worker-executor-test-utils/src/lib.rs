@@ -1533,6 +1533,54 @@ impl TestWorkerExecutor {
         &self,
         agent_id: &AgentId,
     ) -> anyhow::Result<Option<AgentStatusRecord>> {
+        let fingerprint = self.agent_fingerprint(agent_id).await?;
+        self.status_checkpoint_of(agent_id, fingerprint).await
+    }
+
+    /// The clean status checkpoint of the incarnation `fingerprint` of the durable agent. Reads no
+    /// oplog, so it also reads the checkpoint of a deleted incarnation.
+    pub async fn status_checkpoint_of(
+        &self,
+        agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
+    ) -> anyhow::Result<Option<AgentStatusRecord>> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        Ok(services
+            .worker_service()
+            .read_status_checkpoint(&owned_agent_id, fingerprint, AgentMode::Durable)
+            .await?)
+    }
+
+    /// The status of the durable agent that the status fold gives with no cached status: the
+    /// fold starts from the clean status checkpoint, or from index 1 when the agent has none or
+    /// the fold refuses it. It reads no invocation result index and writes nothing.
+    pub async fn folded_status(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Option<AgentStatusRecord>> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let fingerprint = self.agent_fingerprint(agent_id).await?;
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        golem_worker_executor::worker::status::calculate_last_known_status_with_checkpoint(
+            services,
+            &owned_agent_id,
+            fingerprint,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .map_err(anyhow::Error::msg)
+    }
+
+    /// The index of the last entry of the oplog of the durable agent.
+    pub async fn last_oplog_index(&self, agent_id: &AgentId) -> anyhow::Result<OplogIndex> {
         use golem_worker_executor::services::HasOplogService;
 
         let services = self
@@ -1540,22 +1588,9 @@ impl TestWorkerExecutor {
             .as_ref()
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let create = services
-            .oplog_service()
-            .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-            .await?
-            .remove(&OplogIndex::INITIAL)
-            .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
-        let OplogEntry::Create { parameters, .. } = create else {
-            return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
-        };
         Ok(services
-            .worker_service()
-            .read_status_checkpoint(
-                &owned_agent_id,
-                AgentFingerprint(parameters.instance_id),
-                AgentMode::Durable,
-            )
+            .oplog_service()
+            .get_last_index(&owned_agent_id, AgentMode::Durable)
             .await?)
     }
 

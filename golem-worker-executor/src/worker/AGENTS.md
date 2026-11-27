@@ -61,12 +61,16 @@ rewinding a cursor.
   completion can follow `Finished` without another invocation.
 - Reads that require the completion's fresh status must use the state actor's FIFO status read; it
   waits behind the queued fold. The separately persisted status cache remains asynchronous.
-- Status (`status.rs`) is folded from the oplog; caches and checkpoints are baselines, never a
-  source of truth. Checkpoint only at clean boundaries. A terminal with `awaits_settlement` keeps
-  the agent `Running` until its `AgentInvocationSettled`
-  (`AgentStatusRecord::settling_invocation`); lifecycle decisions that test for a running agent
-  (interrupts, assignment recovery, retirement, the `Resumed` decision in `startup.rs`) must use
-  the folded status, not the Store's record of the return.
+- The status fold (`status/`) starts from a start status and folds the oplog entries after it. A cold read
+  uses the stored status cache as its start status when it has one; the cache is disposable. The
+  state actor folds from its in-memory status. A failed state-actor fold rebuilds from the status
+  at the start of the invocation, then from the baseline, then from index 1. The clean
+  checkpoint (`AgentStatusCheckpoint`) is the durable status baseline: no expiry, kept by an
+  archive, removed only by agent deletion, and never read for another fingerprint. Checkpoint
+  only at clean boundaries. A terminal with `awaits_settlement` keeps the agent `Running` until
+  its `AgentInvocationSettled` (`AgentStatusRecord::settling_invocation`); lifecycle decisions
+  that test for a running agent (interrupts, assignment recovery, retirement, the `Resumed`
+  decision in `startup.rs`) must use the folded status, not the Store's record of the return.
 
 ## Eviction and retry
 

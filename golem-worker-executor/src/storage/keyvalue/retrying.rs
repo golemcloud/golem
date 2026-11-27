@@ -217,9 +217,9 @@ impl KeyValueStorage for RetryingKeyValueStorage {
     /// truth: the comparison row now holds what this call itself wrote, so it no longer matches
     /// `expected`.
     ///
-    /// The invocation-result index is the only caller, and a spurious `false` makes it reload and
-    /// reconcile the state this call may already have written. Refusing to retry instead would
-    /// surface a brief backend outage as a hard failure.
+    /// Each caller takes a spurious `false` as a mismatch: it reloads and reconciles the state that
+    /// this call may already have written. Refusing to retry instead would surface a brief backend
+    /// outage as a hard failure.
     ///
     /// If a caller ever branches on the flag in a way an incorrect `false` would break, this is the
     /// line to change, and `NonIdempotent` still expresses it.

@@ -49,7 +49,6 @@ impl NamespaceRoutedKeyValueStorage {
             KeyValueStorageNamespace::Worker { .. }
                 | KeyValueStorageNamespace::AgentStatus { .. }
                 | KeyValueStorageNamespace::AgentInvocationResultIndex { .. }
-                | KeyValueStorageNamespace::AgentStatusCheckpoint { .. }
                 | KeyValueStorageNamespace::AgentDurableStreamSessionIndex { .. }
         )
     }
@@ -403,36 +402,4 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
-    use golem_common::model::AgentId;
-    use test_r::test;
-
-    #[test]
-    fn snapshot_rejections_use_persistent_storage_not_status_cache() {
-        let storage = NamespaceRoutedKeyValueStorage::new(
-            Arc::new(InMemoryKeyValueStorage::new()),
-            Arc::new(InMemoryKeyValueStorage::new()),
-        );
-        let agent_id = golem_common::model::OwnedAgentId::new(
-            golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
-            &AgentId::from_parts(7, 1),
-        );
-        assert!(Arc::ptr_eq(
-            storage.backend_for_namespace(
-                &KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
-                    owned_agent_id: agent_id.clone(),
-                }
-            ),
-            &storage.persistent,
-        ));
-        assert!(Arc::ptr_eq(
-            storage.backend_for_namespace(&KeyValueStorageNamespace::AgentStatus {
-                owned_agent_id: agent_id,
-                fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
-            }),
-            &storage.cache,
-        ));
-    }
-}
+mod tests;

@@ -642,9 +642,10 @@ async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() 
     );
 
     service
-        .remove_split_status(
+        .remove_all_fields(
             &owned_agent_id,
             DefaultWorkerService::rejected_periodic_snapshots_namespace(&owned_agent_id),
+            "rejected periodic snapshots",
         )
         .await
         .unwrap();
@@ -801,6 +802,113 @@ async fn cold_status_publication_removes_orphan_transfers_without_a_core() {
     }
 }
 
+/// A worker service over `storage` whose oplog is empty, and the id of an agent.
+fn split_status_test_service(
+    storage: Arc<dyn KeyValueStorage + Send + Sync>,
+) -> (DefaultWorkerService, OwnedAgentId) {
+    let service = DefaultWorkerService::new(
+        storage,
+        Arc::new(ShardServiceDefault::new()),
+        Arc::new(IndexTestOplogService::new(BTreeMap::new())),
+        Arc::new(IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    (service, test_owned_agent_id("split-status"))
+}
+
+/// The fields that stay in the hash of `namespace_of` after a removal whose guarded delete loses
+/// a race against a concurrent publication of a new core.
+async fn fields_after_a_removal_that_loses_a_race(
+    namespace_of: fn(&OwnedAgentId, AgentFingerprint) -> KeyValueStorageNamespace,
+) -> Vec<String> {
+    let inner = Arc::new(InMemoryKeyValueStorage::new());
+    let faults = KeyValueStorageFaults::default();
+    let (service, owned_agent_id) = split_status_test_service(Arc::new(
+        FaultInjectingKeyValueStorage::new(inner.clone(), faults.clone()),
+    ));
+    let namespace = namespace_of(&owned_agent_id, AgentFingerprint::new());
+    service
+        .write_split_status(&owned_agent_id, namespace.clone(), None, sample_status())
+        .await
+        .unwrap();
+    // The first `remove` call is the read of the snapshot, the second is the guarded delete.
+    let read = faults.pause_next("remove");
+    let delete = faults.pause_next("remove");
+    read.release();
+
+    let removal = service.remove_split_status(&owned_agent_id, namespace.clone());
+    let (removed, ()) = tokio::join!(removal, async {
+        delete.entered().await;
+        inner
+            .with_entity("test", "concurrent_publication", "agent_status")
+            .set_raw(namespace.clone(), STATUS_CORE_FIELD, b"concurrent core")
+            .await
+            .unwrap();
+        delete.release();
+    });
+    removed.unwrap();
+
+    inner.keys("test", "test", namespace).await.unwrap()
+}
+
+/// A removal whose guarded delete loses a race against a concurrent publication reads the hash
+/// again and removes it, for the status cache and for the status baseline.
+#[test]
+async fn a_removal_that_loses_a_race_retries_and_removes_the_hash() {
+    assert_eq!(
+        fields_after_a_removal_that_loses_a_race(DefaultWorkerService::status_namespace).await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        fields_after_a_removal_that_loses_a_race(DefaultWorkerService::checkpoint_namespace).await,
+        Vec::<String>::new()
+    );
+}
+
+/// A delta write on a matching delta base deletes the card transfer fields that the new record
+/// no longer has.
+#[test]
+async fn a_matching_delta_base_deletes_dropped_transfer_fields() {
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let (service, owned_agent_id) = split_status_test_service(storage.clone());
+    let namespace =
+        DefaultWorkerService::status_namespace(&owned_agent_id, AgentFingerprint::new());
+    let first = service
+        .write_split_status(&owned_agent_id, namespace.clone(), None, sample_status())
+        .await
+        .unwrap();
+    let second = AgentStatusRecord {
+        received_card_transfers: ReceivedCardTransferIndex::default(),
+        source_card_transfers: SourceCardTransferIndex::default(),
+        ..first.clone()
+    };
+
+    service
+        .write_split_status(
+            &owned_agent_id,
+            namespace.clone(),
+            Some(&first),
+            second.clone(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .read_split_status(&owned_agent_id, namespace.clone())
+            .await
+            .unwrap(),
+        Some(second)
+    );
+    let fields = storage.keys("test", "test", namespace).await.unwrap();
+    [
+        status_received_card_transfer_field(&transfer_id(1)),
+        status_source_card_transfer_field(&transfer_id(1)),
+    ]
+    .iter()
+    .for_each(|field| assert!(!fields.contains(field), "{field} stays"));
+}
+
 fn assignment_tracking_test_service() -> (
     DefaultWorkerService,
     Arc<InMemoryKeyValueStorage>,
@@ -918,6 +1026,7 @@ fn sample_status() -> AgentStatusRecord {
         oplog_idx: OplogIndex::from_u64(42),
         component_revision: ComponentRevision::new(3).unwrap(),
         never_live: true,
+        withdrawn_again: Some(InvocationId(Uuid::from_u128(5))),
         ..AgentStatusRecord::default()
     };
     status
@@ -2040,6 +2149,10 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
             .await
             .unwrap();
         service
+            .write_status_checkpoint(&owned_agent_id, fingerprint, None, status.clone())
+            .await
+            .unwrap();
+        service
             .set_assignment_tracking(&owned_agent_id, fingerprint, status)
             .await
             .unwrap();
@@ -2121,6 +2234,20 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
     assert_eq!(
         service
             .read_cached_status(&owned_agent_id, second)
+            .await
+            .unwrap(),
+        Some(second_status.clone())
+    );
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, first, AgentMode::Durable)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, second, AgentMode::Durable)
             .await
             .unwrap(),
         Some(second_status.clone())
@@ -3875,4 +4002,855 @@ async fn a_background_failure_after_newer_results_is_not_answered_from_an_older_
         .map(positions_only)
         .unwrap();
     assert_eq!(lookup, InvocationResultIndexLookup::Incomplete);
+}
+
+/// A worker service over `storage` whose durable agent oplog holds a `Create` with
+/// `component_size` 3, followed by one interrupt, and the agent's fingerprint. No default and no
+/// marked baseline gives the component size 3.
+fn status_baseline_test_service(
+    storage: Arc<dyn KeyValueStorage + Send + Sync>,
+) -> (DefaultWorkerService, OwnedAgentId, AgentFingerprint) {
+    let owned_agent_id = test_owned_agent_id("status-baseline");
+    let fingerprint = AgentFingerprint(Uuid::new_v4());
+    let mut create = test_create_entry(&owned_agent_id, AgentMode::Durable, fingerprint);
+    if let OplogEntry::Create { parameters, .. } = &mut create {
+        parameters.component_size = 3;
+    }
+    let shard_service = Arc::new(ShardServiceDefault::new());
+    shard_service.install_unexpiring(4, &HashMap::new());
+    let service = DefaultWorkerService::new(
+        storage,
+        shard_service,
+        Arc::new(IndexTestOplogService::new(BTreeMap::from([
+            (OplogIndex::INITIAL, create),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::Interrupted {
+                    timestamp: Timestamp::now_utc(),
+                },
+            ),
+        ]))),
+        Arc::new(IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    (service, owned_agent_id, fingerprint)
+}
+
+/// A status baseline at the last index of the oplog of `status_baseline_test_service`, which
+/// no fold of that oplog gives: its component size is 7.
+fn marked_status_baseline() -> AgentStatusRecord {
+    AgentStatusRecord {
+        status: AgentStatus::Interrupted,
+        component_size: 7,
+        oplog_idx: OplogIndex::from_u64(2),
+        agent_mode: AgentMode::Durable,
+        ..AgentStatusRecord::default()
+    }
+}
+
+/// The status that a cold read of the agent of `status_baseline_test_service` gives, after the
+/// marked baseline is written for the incarnation `baseline_of`. `None` writes it for the agent's
+/// own incarnation.
+async fn cold_status_read_after_a_baseline_of(
+    baseline_of: Option<AgentFingerprint>,
+) -> AgentStatusRecord {
+    let (service, owned_agent_id, fingerprint) =
+        status_baseline_test_service(Arc::new(InMemoryKeyValueStorage::new()));
+    service
+        .write_status_checkpoint(
+            &owned_agent_id,
+            baseline_of.unwrap_or(fingerprint),
+            None,
+            marked_status_baseline(),
+        )
+        .await
+        .unwrap();
+    service
+        .get(&owned_agent_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .last_known_status
+        .unwrap()
+}
+
+#[test]
+async fn a_cold_status_read_folds_from_the_baseline_of_its_own_incarnation() {
+    let status = cold_status_read_after_a_baseline_of(None).await;
+
+    assert_eq!(
+        (status.component_size, status.oplog_idx),
+        (7, OplogIndex::from_u64(2))
+    );
+}
+
+#[test]
+async fn a_cold_status_read_ignores_the_baseline_of_another_incarnation() {
+    let status = cold_status_read_after_a_baseline_of(Some(AgentFingerprint(Uuid::new_v4()))).await;
+
+    assert_eq!(
+        (status.component_size, status.oplog_idx),
+        (3, OplogIndex::from_u64(2))
+    );
+}
+
+#[test]
+async fn removing_the_cached_status_keeps_the_status_baseline() {
+    let (service, owned_agent_id, fingerprint) =
+        status_baseline_test_service(Arc::new(InMemoryKeyValueStorage::new()));
+    let baseline = marked_status_baseline();
+    service
+        .write_cached_status(&owned_agent_id, fingerprint, None, baseline.clone())
+        .await
+        .unwrap();
+    service
+        .write_status_checkpoint(&owned_agent_id, fingerprint, None, baseline.clone())
+        .await
+        .unwrap();
+
+    service
+        .remove_cached_status(&owned_agent_id, fingerprint)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .read_cached_status(&owned_agent_id, fingerprint)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, fingerprint, AgentMode::Durable)
+            .await
+            .unwrap(),
+        Some(baseline)
+    );
+}
+
+#[test]
+async fn removing_the_cached_status_removes_the_cached_agent_mode_of_its_incarnation() {
+    let service = test_worker_service(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(FakeOplogService::default()),
+    );
+    let owned_agent_id = test_owned_agent_id("cached-agent-mode");
+    let fingerprint = AgentFingerprint::new();
+    service
+        .write_cached_agent_mode(
+            &owned_agent_id,
+            &CachedAgentMode {
+                agent_mode: AgentMode::Durable,
+                fingerprint,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        service
+            .read_cached_agent_mode(&owned_agent_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    service
+        .remove_cached_status(&owned_agent_id, fingerprint)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .read_cached_agent_mode(&owned_agent_id)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+/// A baseline with durable stream history catches up the stream session index to the index of
+/// the baseline before it is written.
+#[test]
+async fn writing_a_baseline_with_stream_history_catches_up_the_stream_session_index() {
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let (service, owned_agent_id, fingerprint) = status_baseline_test_service(storage.clone());
+    let index_fields = || async {
+        storage
+            .keys(
+                "test",
+                "test",
+                StreamSessionIndexService::namespace(&owned_agent_id, fingerprint),
+            )
+            .await
+            .unwrap()
+    };
+    assert!(index_fields().await.is_empty());
+
+    service
+        .write_status_checkpoint(
+            &owned_agent_id,
+            fingerprint,
+            None,
+            AgentStatusRecord {
+                has_durable_stream_history: true,
+                ..marked_status_baseline()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(!index_fields().await.is_empty());
+}
+
+/// A write and a removal of the split status give the live status cache the expiry of a
+/// derived cache, and give the status baseline no expiry.
+#[test]
+async fn the_status_cache_expires_and_the_status_baseline_does_not() {
+    let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
+    let (service, owned_agent_id) = split_status_test_service(storage.clone());
+    let fingerprint = AgentFingerprint(Uuid::new_v4());
+    let cache = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
+    let baseline = DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint);
+
+    futures::future::try_join_all([cache.clone(), baseline.clone()].map(|namespace| {
+        service.write_split_status(&owned_agent_id, namespace, None, sample_status())
+    }))
+    .await
+    .unwrap();
+    futures::future::try_join_all(
+        [cache.clone(), baseline.clone()]
+            .map(|namespace| service.remove_split_status(&owned_agent_id, namespace)),
+    )
+    .await
+    .unwrap();
+
+    let week = Some(DERIVED_CACHE_EXPIRY);
+    assert_eq!(
+        storage.writes(),
+        vec![
+            (cache.clone(), week),
+            (baseline.clone(), None),
+            (cache, week),
+            (baseline, None),
+        ]
+    );
+}
+
+/// One write of a key-value storage: its namespace and the expiry that it gives. `None` is a
+/// write that sets no expiry.
+type RecordedWrite = (KeyValueStorageNamespace, Option<std::time::Duration>);
+
+/// One `compare_and_set_many` of a key-value storage: its namespace, its expected value, the
+/// fields that it sets and the fields that it deletes.
+type RecordedCompareAndSet = (
+    KeyValueStorageNamespace,
+    Option<Vec<u8>>,
+    Vec<String>,
+    Vec<String>,
+);
+
+/// An in-memory key-value storage that records the namespace and the expiry of every call that
+/// sets a value or compares and changes fields. It does not record `del`, `del_many`,
+/// `remove_from_set` and `remove_from_sorted_set`, because these calls give no expiry. It also
+/// records the namespace and the API name of every `get_all`, and the arguments of every
+/// `compare_and_set_many`. A `compare_and_set_many` in the namespace `failing_compare_and_set`
+/// fails.
+#[derive(Debug, Default)]
+struct ExpiryRecordingKeyValueStorage {
+    inner: InMemoryKeyValueStorage,
+    writes: StdMutex<Vec<RecordedWrite>>,
+    hash_reads: StdMutex<Vec<(KeyValueStorageNamespace, &'static str)>>,
+    compare_and_sets: StdMutex<Vec<RecordedCompareAndSet>>,
+    failing_compare_and_set: StdMutex<Option<KeyValueStorageNamespace>>,
+}
+
+impl ExpiryRecordingKeyValueStorage {
+    fn record(&self, namespace: &KeyValueStorageNamespace, expiry: Option<std::time::Duration>) {
+        self.writes
+            .lock()
+            .unwrap()
+            .push((namespace.clone(), expiry));
+    }
+
+    fn writes(&self) -> Vec<RecordedWrite> {
+        self.writes.lock().unwrap().clone()
+    }
+
+    /// The number of `get_all` reads of `namespace` with the API name `api_name`.
+    fn hash_reads(&self, namespace: &KeyValueStorageNamespace, api_name: &str) -> usize {
+        self.hash_reads
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(read, api)| read == namespace && *api == api_name)
+            .count()
+    }
+
+    /// The `compare_and_set_many` calls on `namespace`, in their order.
+    fn compare_and_sets(&self, namespace: &KeyValueStorageNamespace) -> Vec<RecordedCompareAndSet> {
+        self.compare_and_sets
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(written, ..)| written == namespace)
+            .cloned()
+            .collect()
+    }
+}
+
+#[async_trait]
+impl KeyValueStorage for ExpiryRecordingKeyValueStorage {
+    async fn set(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), KeyValueStorageError> {
+        self.record(&namespace, None);
+        self.inner
+            .set(svc_name, api_name, entity_name, namespace, key, value)
+            .await
+    }
+
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: std::time::Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        self.record(&namespace, Some(expiry));
+        self.inner
+            .set_with_expiry(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                value,
+                expiry,
+            )
+            .await
+    }
+
+    async fn set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<(), KeyValueStorageError> {
+        self.record(&namespace, None);
+        self.inner
+            .set_many(svc_name, api_name, entity_name, namespace, pairs)
+            .await
+    }
+
+    async fn compare_and_set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        deletes: &[&str],
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, KeyValueStorageError> {
+        self.record(&namespace, None);
+        self.compare_and_sets.lock().unwrap().push((
+            namespace.clone(),
+            expected.map(<[u8]>::to_vec),
+            pairs.iter().map(|(field, _)| field.to_string()).collect(),
+            deletes.iter().map(|field| field.to_string()).collect(),
+        ));
+        if self.failing_compare_and_set.lock().unwrap().as_ref() == Some(&namespace) {
+            return Err(KeyValueStorageError::other(
+                "injected compare_and_set_many failure",
+            ));
+        }
+        self.inner
+            .compare_and_set_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                expected,
+                deletes,
+                pairs,
+            )
+            .await
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: std::time::Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        self.record(&namespace, Some(expiry));
+        self.inner
+            .compare_and_mutate_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                expected,
+                sets,
+                deletions,
+                expiry,
+            )
+            .await
+    }
+
+    async fn set_if_not_exists(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+    ) -> Result<bool, KeyValueStorageError> {
+        self.record(&namespace, None);
+        self.inner
+            .set_if_not_exists(svc_name, api_name, entity_name, namespace, key, value)
+            .await
+    }
+
+    async fn get(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+    ) -> Result<Option<Bytes>, KeyValueStorageError> {
+        self.inner
+            .get(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
+    async fn get_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        keys: Arc<[String]>,
+    ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
+        self.inner
+            .get_many(svc_name, api_name, entity_name, namespace, keys)
+            .await
+    }
+
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
+        self.hash_reads
+            .lock()
+            .unwrap()
+            .push((namespace.clone(), api_name));
+        self.inner
+            .get_all(svc_name, api_name, entity_name, namespace)
+            .await
+    }
+
+    async fn del(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+    ) -> Result<(), KeyValueStorageError> {
+        self.inner.del(svc_name, api_name, namespace, key).await
+    }
+
+    async fn del_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        keys: Arc<[String]>,
+    ) -> Result<(), KeyValueStorageError> {
+        self.inner
+            .del_many(svc_name, api_name, namespace, keys)
+            .await
+    }
+
+    async fn exists(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+    ) -> Result<bool, KeyValueStorageError> {
+        self.inner.exists(svc_name, api_name, namespace, key).await
+    }
+
+    async fn keys(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<String>, KeyValueStorageError> {
+        self.inner.keys(svc_name, api_name, namespace).await
+    }
+
+    async fn add_to_set(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), KeyValueStorageError> {
+        self.record(&namespace, None);
+        self.inner
+            .add_to_set(svc_name, api_name, entity_name, namespace, key, value)
+            .await
+    }
+
+    async fn remove_from_set(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), KeyValueStorageError> {
+        self.inner
+            .remove_from_set(svc_name, api_name, entity_name, namespace, key, value)
+            .await
+    }
+
+    async fn members_of_set(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+    ) -> Result<Vec<Bytes>, KeyValueStorageError> {
+        self.inner
+            .members_of_set(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
+    async fn add_to_sorted_set(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        score: f64,
+        value: &[u8],
+    ) -> Result<(), KeyValueStorageError> {
+        self.record(&namespace, None);
+        self.inner
+            .add_to_sorted_set(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                score,
+                value,
+            )
+            .await
+    }
+
+    async fn remove_from_sorted_set(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), KeyValueStorageError> {
+        self.inner
+            .remove_from_sorted_set(svc_name, api_name, entity_name, namespace, key, value)
+            .await
+    }
+
+    async fn get_sorted_set(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
+        self.inner
+            .get_sorted_set(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
+    async fn query_sorted_set(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        min: f64,
+        max: f64,
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
+        self.inner
+            .query_sorted_set(svc_name, api_name, entity_name, namespace, key, min, max)
+            .await
+    }
+}
+
+/// The worker service writes and removes the status baseline with no expiry, and the live
+/// status cache with the expiry of a derived cache, on the full write, the delta write and the
+/// removal. The removal is `WorkerService::remove` of an incarnation that is not the current one,
+/// which deletes no oplog. The removal keeps the baseline of the current incarnation. The delta
+/// write of the baseline on a matching delta base publishes the delta: one `compare_and_set_many`
+/// that expects the core of the first write, sets only the changed core and deletes nothing. It
+/// reads no snapshot of the hash, which a complete reconciliation reads.
+#[test]
+async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
+    let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
+    let (service, owned_agent_id, current) = status_baseline_test_service(storage.clone());
+    let fingerprint = AgentFingerprint(Uuid::new_v4());
+    let cache = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
+    let baseline = DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint);
+    let first = marked_status_baseline();
+    let second = AgentStatusRecord {
+        component_size: 8,
+        ..marked_status_baseline()
+    };
+
+    let cached = service
+        .write_cached_status(&owned_agent_id, fingerprint, None, first.clone())
+        .await
+        .unwrap();
+    service
+        .write_cached_status(&owned_agent_id, fingerprint, Some(&cached), second.clone())
+        .await
+        .unwrap();
+    let checkpoint = service
+        .write_status_checkpoint(&owned_agent_id, fingerprint, None, first)
+        .await
+        .unwrap();
+    assert_eq!(storage.hash_reads(&baseline, "update_status"), 1);
+    let first_core = serialize(&super::status::status_core(&checkpoint)).unwrap();
+    service
+        .write_status_checkpoint(&owned_agent_id, fingerprint, Some(&checkpoint), second)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.hash_reads(&baseline, "update_status"),
+        1,
+        "the delta write of the baseline on a matching delta base reads a snapshot of the hash"
+    );
+    assert_eq!(
+        storage.compare_and_sets(&baseline).last(),
+        Some(&(
+            baseline.clone(),
+            Some(first_core),
+            vec![super::status::STATUS_CORE_FIELD.to_string()],
+            Vec::new(),
+        )),
+        "the delta write of the baseline is not one compare-and-set of the changed core"
+    );
+    let current_baseline = service
+        .write_status_checkpoint(&owned_agent_id, current, None, marked_status_baseline())
+        .await
+        .unwrap();
+    service
+        .remove(
+            &mut crate::services::oplog::OpenOplogs::new("delete-test")
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            fingerprint,
+            None,
+            &|_| {},
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, fingerprint, AgentMode::Durable)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, current, AgentMode::Durable)
+            .await
+            .unwrap(),
+        Some(current_baseline),
+        "the removal of one incarnation removes the baseline of the current incarnation"
+    );
+    let week = Some(DERIVED_CACHE_EXPIRY);
+    assert_eq!(
+        storage
+            .writes()
+            .into_iter()
+            .filter(|(namespace, _)| *namespace == cache || *namespace == baseline)
+            .collect::<Vec<_>>(),
+        vec![
+            (cache.clone(), week),
+            (cache.clone(), week),
+            (baseline.clone(), None),
+            (baseline.clone(), None),
+            (cache, week),
+            (baseline, None),
+        ]
+    );
+}
+
+/// When the removal of the status baseline fails, `WorkerService::remove` fails before the oplog
+/// delete: the agent keeps its oplog and its status baseline, so the next owner folds the status
+/// from that baseline.
+#[test]
+async fn a_failed_baseline_removal_keeps_the_oplog() {
+    let owned_agent_id = test_owned_agent_id("failed-baseline-removal");
+    let fingerprint = AgentFingerprint::new();
+    let oplog_service = Arc::new(FakeOplogService {
+        initial_entries: HashMap::from([(
+            (owned_agent_id.clone(), AgentMode::Durable),
+            test_create_entry(&owned_agent_id, AgentMode::Durable, fingerprint),
+        )]),
+        ..FakeOplogService::default()
+    });
+    let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
+    let service = test_worker_service(storage.clone(), oplog_service.clone());
+    service
+        .write_status_checkpoint(&owned_agent_id, fingerprint, None, marked_status_baseline())
+        .await
+        .unwrap();
+    *storage.failing_compare_and_set.lock().unwrap() = Some(
+        DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint),
+    );
+    let deleted = AtomicBool::new(false);
+
+    let removed = service
+        .remove(
+            &mut crate::services::oplog::OpenOplogs::new("delete-test")
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            fingerprint,
+            None,
+            &|_| deleted.store(true, Ordering::SeqCst),
+        )
+        .await;
+
+    assert!(removed.is_err());
+    assert_eq!(oplog_service.delete_attempts.load(Ordering::Relaxed), 0);
+    assert!(!deleted.load(Ordering::SeqCst));
+}
+
+mod status_baseline_round_trip {
+    use super::*;
+    use crate::worker::status::test::status_baseline::{Generated, fold, generated, oplog};
+    use proptest::prelude::*;
+    use test_r::test;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Two status baselines of one generated oplog, written with `write_status_checkpoint`
+        /// and read back with `read_status_checkpoint`, are the statuses that were written, in
+        /// every field. The first write is a full write. The second write is a delta write on
+        /// the first. The oplogs have no `Revert`: the write of a baseline with stream history
+        /// catches up the stream session index, which refuses a revert of stream history with
+        /// no fork-cut marker after it, and the generator writes no such marker. Only a `Revert`
+        /// gives deleted regions, so no baseline that this property writes has one.
+        /// `split_status_round_trips_through_fields` writes deleted regions.
+        #[test]
+        fn a_written_status_baseline_reads_back_unchanged(
+            generated in proptest::collection::vec(
+                generated().prop_filter("no revert", |generated| {
+                    !matches!(generated, Generated::Revert(_))
+                }),
+                1..40,
+            ),
+            create in any::<u8>(),
+            first in any::<prop::sample::Index>(),
+            second in any::<prop::sample::Index>(),
+        ) {
+            let entries = oplog(create, &generated);
+            let indexes: Vec<OplogIndex> = entries.keys().copied().collect();
+            let (earlier, later) = (first.index(indexes.len()), second.index(indexes.len()));
+            let (earlier, later) = (earlier.min(later), earlier.max(later));
+            let status_at = |at: OplogIndex| {
+                fold(
+                    AgentStatusRecord::default(),
+                    entries
+                        .range(..=at)
+                        .map(|(index, entry)| (*index, entry.clone()))
+                        .collect(),
+                )
+                .unwrap()
+            };
+            let first = status_at(indexes[earlier]);
+            let second = status_at(indexes[later]);
+
+            let read = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let (service, _, owned_agent_id) = index_test_service(entries.clone());
+                    let fingerprint = AgentFingerprint(Uuid::new_v4());
+                    let read = || {
+                        service.read_status_checkpoint(
+                            &owned_agent_id,
+                            fingerprint,
+                            AgentMode::Durable,
+                        )
+                    };
+                    let written = service
+                        .write_status_checkpoint(&owned_agent_id, fingerprint, None, first.clone())
+                        .await
+                        .unwrap();
+                    let first_read = read().await.unwrap();
+                    service
+                        .write_status_checkpoint(
+                            &owned_agent_id,
+                            fingerprint,
+                            Some(&written),
+                            second.clone(),
+                        )
+                        .await
+                        .unwrap();
+                    (first_read, read().await.unwrap())
+                });
+
+            prop_assert_eq!(read, (Some(first), Some(second)));
+        }
+    }
 }

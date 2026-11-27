@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Persistence of the *clean* cached [`AgentStatusRecord`] checkpoint.
+//! Persistence of the durable status baseline: the *clean* [`AgentStatusRecord`] checkpoint.
 //!
 //! The live cached status blob (see [`crate::worker::status_flusher`]) is written in the background
 //! and is allowed to advance into replay/deleted oplog regions. That makes it useless as a fold
@@ -21,14 +21,22 @@
 //! from index 1.
 //!
 //! [`StatusCheckpointer`] maintains a *separate* copy of the status — the checkpoint — written only
-//! at structurally clean boundaries where no jumpable region is open: at snapshot save and at
-//! throttled idle boundaries. Because it is never advanced into an open region, it always holds a
-//! baseline that predates any later jump, so the recompute can fold forward from it
-//! (see [`crate::worker::status::calculate_last_known_status_with_checkpoint`]).
+//! at structurally clean boundaries where no jumpable region is open: at snapshot save, at
+//! throttled idle boundaries, and at throttled boundaries during a long invocation
+//! (`checkpoint_status_mid_invocation`). The boundary check does not test oplog regions: it tests
+//! that the worker does not replay, has no host call in flight and takes no snapshot. No
+//! production code appends a `Jump`, so no later `Jump` covers a written checkpoint. The
+//! recompute folds forward from it (see
+//! [`crate::worker::status::calculate_last_known_status_with_checkpoint`]).
 //!
-//! The checkpoint is best-effort: a failed (or stale, or missing) checkpoint only means a future
-//! recompute reads a few more oplog entries, never incorrect state — the oplog remains the single
-//! source of truth.
+//! The checkpoint is the durable status baseline of the agent. It has no expiry, and an archive of
+//! the oplog keeps it. Its namespace contains the fingerprint of the agent, so a re-created agent
+//! never reads the baseline of an earlier incarnation.
+//!
+//! A write is best-effort. Every oplog keeps its entries from index 1, so a failed, stale or
+//! missing checkpoint makes a later recompute read more oplog entries. The fold also reads the
+//! executor configuration (`retry` and `invocation_results`). Under the same configuration, the
+//! status that the recompute gives does not change.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,17 +84,17 @@ pub struct StatusCheckpointer {
     fingerprint: AgentFingerprint,
     /// Ephemeral workers never persist any cached status; every operation is a no-op for them.
     is_ephemeral: bool,
-    /// When `false`, no checkpoint is ever written (recompute falls back to a full from-scratch
-    /// fold).
+    /// When `false`, this checkpointer writes no checkpoint. A recompute with no cached status
+    /// folds from a checkpoint that an earlier run wrote, or else from index 1.
     enabled: bool,
     /// Minimum number of oplog entries appended since the last checkpoint before a throttled
-    /// (idle) checkpoint is written. Snapshot checkpoints ignore this.
+    /// (idle or mid-invocation) checkpoint is written. Snapshot checkpoints ignore this.
     min_oplog_delta: u64,
 
     worker_service: Arc<dyn WorkerService>,
 
     /// Set once the owning worker starts deleting. After this, no checkpoint is written, so an
-    /// in-flight write cannot resurrect the checkpoint after `remove_cached_status` deletes it.
+    /// in-flight write cannot resurrect the checkpoint after `WorkerService::remove` deletes it.
     delete_started: AtomicBool,
     /// Why the shard moved to another executor, once it has.
     lost_shard: super::LostShard,
@@ -130,7 +138,7 @@ impl StatusCheckpointer {
     /// early-out may be mid-write while holding the state lock and would complete after the delete.
     /// Acquiring the state lock here is a barrier — once held, no checkpoint write is in progress,
     /// and every subsequent call observes `delete_started == true` and bails before writing. Must be
-    /// called (and awaited) before `WorkerService::remove`/`remove_cached_status`.
+    /// called (and awaited) before `WorkerService::remove`.
     pub async fn begin_delete(&self) {
         self.delete_started.store(true, Ordering::Release);
         // Barrier: blocks until any in-flight checkpoint write completes.
@@ -144,16 +152,21 @@ impl StatusCheckpointer {
     /// - never for ephemeral workers or when disabled;
     /// - always for [`CheckpointReason::Snapshot`] (bypasses the throttle, aligning the checkpoint
     ///   with the snapshot index);
-    /// - for [`CheckpointReason::Idle`]: when no checkpoint exists yet, when the existing checkpoint
-    ///   is no longer a usable fold baseline (its index now sits in a skipped/deleted region — e.g.
-    ///   a logical revert appended a `Revert` marker and recorded a deleted region covering it), or
-    ///   when at least `min_oplog_delta` entries were appended since the last checkpoint.
+    /// - for [`CheckpointReason::Idle`] and [`CheckpointReason::MidInvocation`]: when this
+    ///   checkpointer has written no checkpoint yet (each load of the worker starts with none,
+    ///   also when a stored baseline exists), when the last checkpoint is no longer a usable fold
+    ///   baseline (its index now sits in a skipped/deleted region — e.g. a logical revert appended
+    ///   a `Revert` marker and recorded a deleted region covering it), or when at least
+    ///   `min_oplog_delta` entries were appended since the last checkpoint.
     ///
     /// Never written once [`Self::begin_delete`] has run, so an in-flight write cannot resurrect the
     /// checkpoint after it is deleted.
     ///
-    /// Best-effort: a write failure is logged and metered, the baseline is left unchanged, and the
-    /// worker continues. The oplog remains the source of truth.
+    /// Best-effort: a write failure is logged and metered, and the worker continues. A failed write
+    /// can come after the storage applied the new baseline, when a retry lost the response. Every
+    /// oplog keeps its entries from index 1, so an older or missing baseline makes a later fold
+    /// longer. Under the same executor configuration (`retry` and `invocation_results`), it does
+    /// not change the status.
     pub async fn maybe_checkpoint(&self, status: &AgentStatusRecord, reason: CheckpointReason) {
         if self.is_ephemeral || !self.enabled || self.writes_stopped() {
             return;

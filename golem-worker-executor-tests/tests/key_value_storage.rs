@@ -38,11 +38,30 @@ use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use url::Url;
 use uuid::{Uuid, uuid};
 
+struct KeyValueStorageFixture {
+    storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    redis: Option<RedisPool>,
+}
+
 #[async_trait]
 trait GetKeyValueStorage: Debug {
     async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync>;
 
+    /// A new storage, and the Redis pool of its Redis backend when it has one. The pool has the
+    /// key prefix of the storage.
+    async fn get_key_value_storage_and_redis(&self) -> KeyValueStorageFixture {
+        KeyValueStorageFixture {
+            storage: self.get_key_value_storage().await,
+            redis: None,
+        }
+    }
+
     fn observes_expiry(&self) -> bool {
+        false
+    }
+
+    /// Whether the storage keeps the status baseline in its Redis backend.
+    fn stores_the_baseline_in_redis(&self) -> bool {
         false
     }
 }
@@ -82,6 +101,10 @@ impl Debug for RedisKeyValueStorageWrapper {
 #[async_trait]
 impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
     async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        self.get_key_value_storage_and_redis().await.storage
+    }
+
+    async fn get_key_value_storage_and_redis(&self) -> KeyValueStorageFixture {
         let random_prefix = Uuid::new_v4();
         let redis_pool = RedisPool::configured(&RedisConfig {
             host: self.redis.public_host(),
@@ -97,11 +120,18 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
         })
         .await
         .unwrap();
-        let kvs = RedisKeyValueStorage::new(redis_pool);
-        Arc::new(kvs)
+        let kvs = RedisKeyValueStorage::new(redis_pool.clone());
+        KeyValueStorageFixture {
+            storage: Arc::new(kvs),
+            redis: Some(redis_pool),
+        }
     }
 
     fn observes_expiry(&self) -> bool {
+        true
+    }
+
+    fn stores_the_baseline_in_redis(&self) -> bool {
         true
     }
 }
@@ -267,6 +297,10 @@ impl Debug for NamespaceRoutedKeyValueStorageWrapper {
 #[async_trait]
 impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
     async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        self.get_key_value_storage_and_redis().await.storage
+    }
+
+    async fn get_key_value_storage_and_redis(&self) -> KeyValueStorageFixture {
         let random_prefix = Uuid::new_v4();
         let redis_pool = RedisPool::configured(&RedisConfig {
             host: self.redis.public_host(),
@@ -283,7 +317,7 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
         .await
         .expect("Cannot create redis pool for routed kvs");
         let redis_storage: Arc<dyn KeyValueStorage + Send + Sync> =
-            Arc::new(RedisKeyValueStorage::new(redis_pool));
+            Arc::new(RedisKeyValueStorage::new(redis_pool.clone()));
 
         let db_name = format!("kv_routed_{}", Uuid::new_v4().simple());
         let admin_pool = sqlx::postgres::PgPoolOptions::new()
@@ -317,10 +351,13 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
                 .expect("Cannot create postgres key value storage for routed kvs"),
         );
 
-        Arc::new(NamespaceRoutedKeyValueStorage::new(
-            redis_storage,
-            postgres_storage,
-        ))
+        KeyValueStorageFixture {
+            storage: Arc::new(NamespaceRoutedKeyValueStorage::new(
+                redis_storage,
+                postgres_storage,
+            )),
+            redis: Some(redis_pool),
+        }
     }
 
     fn observes_expiry(&self) -> bool {
@@ -1708,4 +1745,203 @@ async fn query_sorted_set(
     );
     assert_eq!(result4, vec![(2.0, value2.into()), (3.0, value3.into())]);
     assert_eq!(result5, vec![(4.0, value4.into())]);
+}
+
+/// The test writes the live status cache with an expiry and the status baseline without one, as
+/// the worker service writes them. The test writes the baseline two times: first with no expected
+/// core, then with the core of the first write as the expected core. In every backend, the
+/// baseline outlives the expiry of the cache. After both writes, the Redis backend stores the
+/// baseline hash with no TTL (`PTTL` gives -1). Namespace routing stores the baseline in its
+/// persistent backend, so its Redis backend has no key for it (`PTTL` gives -2). The SQL and
+/// in-memory backends store no expiry. For them, the test shows only that the hash stays.
+#[test]
+async fn the_status_baseline_outlives_the_expiry_of_the_status_cache(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let KeyValueStorageFixture { storage, redis } = kvs.get_key_value_storage_and_redis().await;
+    let owned_agent_id = crate::fresh_owned_agent_id();
+    let fingerprint = AgentFingerprint::new();
+    let baseline_key = format!(
+        "agent-status-checkpoint:{}:{fingerprint}",
+        owned_agent_id.storage_key()
+    );
+    let cache = KeyValueStorageNamespace::AgentStatus {
+        owned_agent_id: owned_agent_id.clone(),
+        fingerprint,
+    };
+    let baseline = KeyValueStorageNamespace::AgentStatusCheckpoint {
+        owned_agent_id,
+        fingerprint,
+    };
+
+    assert!(
+        storage
+            .compare_and_mutate_many(
+                "test",
+                "api",
+                "entity",
+                cache.clone(),
+                "core",
+                None,
+                &[("core", b"cache")],
+                &[],
+                Duration::from_millis(50),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .compare_and_set_many(
+                "test",
+                "api",
+                "entity",
+                baseline.clone(),
+                "core",
+                None,
+                &[],
+                &[("core", b"baseline")],
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .compare_and_set_many(
+                "test",
+                "api",
+                "entity",
+                baseline.clone(),
+                "core",
+                Some(b"baseline"),
+                &[],
+                &[("core", b"baseline-2")],
+            )
+            .await
+            .unwrap()
+    );
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let cached = storage
+        .get_all("test", "api", "entity", cache)
+        .await
+        .unwrap();
+    assert_eq!(cached.is_empty(), kvs.observes_expiry());
+    assert_eq!(
+        storage
+            .get_all("test", "api", "entity", baseline)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(field, value)| (field, value.to_vec()))
+            .collect::<Vec<_>>(),
+        vec![("core".to_string(), b"baseline-2".to_vec())]
+    );
+    if let Some(redis) = redis {
+        let pttl = redis
+            .with("test", "pttl")
+            .eval(
+                "return redis.call('PTTL', KEYS[1])",
+                &[&baseline_key],
+                vec![],
+                None,
+            )
+            .await
+            .unwrap()
+            .convert::<i64>()
+            .unwrap();
+        assert_eq!(
+            pttl,
+            if kvs.stores_the_baseline_in_redis() {
+                -1
+            } else {
+                -2
+            }
+        );
+    }
+}
+
+/// The status baseline of one agent is a separate hash for each fingerprint, in every backend: a
+/// re-created agent never reads the baseline of the deleted incarnation.
+#[test]
+#[tracing::instrument]
+async fn the_status_baseline_of_an_agent_is_separate_for_each_fingerprint(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let storage = kvs.get_key_value_storage().await;
+    let owned_agent_id = crate::fresh_owned_agent_id();
+    let baseline = |fingerprint| KeyValueStorageNamespace::AgentStatusCheckpoint {
+        owned_agent_id: owned_agent_id.clone(),
+        fingerprint: AgentFingerprint(fingerprint),
+    };
+    let deleted = baseline(uuid!("00000000-0000-0000-0000-000000000001"));
+    let recreated = baseline(uuid!("00000000-0000-0000-0000-000000000002"));
+
+    assert!(
+        storage
+            .compare_and_set_many(
+                "test",
+                "api",
+                "entity",
+                deleted.clone(),
+                "core",
+                None,
+                &[],
+                &[("core", b"deleted"), ("membership", b"deleted-membership")],
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        storage
+            .get_all("test", "api", "entity", recreated.clone())
+            .await
+            .unwrap(),
+        Vec::new(),
+        "the baseline of fingerprint F1 must be invisible to F2"
+    );
+    assert!(
+        storage
+            .compare_and_set_many(
+                "test",
+                "api",
+                "entity",
+                recreated.clone(),
+                "core",
+                None,
+                &[],
+                &[("core", b"recreated")],
+            )
+            .await
+            .unwrap(),
+        "the compare of F2 must not see the core of F1"
+    );
+
+    let fields = |namespace| {
+        let storage = storage.clone();
+        async move {
+            let mut fields: Vec<(String, Vec<u8>)> = storage
+                .get_all("test", "api", "entity", namespace)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(field, value)| (field, value.to_vec()))
+                .collect();
+            fields.sort();
+            fields
+        }
+    };
+    assert_eq!(
+        fields(deleted).await,
+        vec![
+            ("core".to_string(), b"deleted".to_vec()),
+            ("membership".to_string(), b"deleted-membership".to_vec()),
+        ]
+    );
+    assert_eq!(
+        fields(recreated).await,
+        vec![("core".to_string(), b"recreated".to_vec())]
+    );
 }

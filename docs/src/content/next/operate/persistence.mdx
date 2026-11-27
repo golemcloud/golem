@@ -137,7 +137,7 @@ These options have the following meaning:
 
 ## Agent metadata
 
-The **oplog** is the primary source of truth for agent state, but the **key-value store** also caches aggregated agent metadata for performance. This metadata records the oplog index from which it was calculated, and Golem can refresh it by processing newer entries. Once archival is complete, Golem clears the cached status and its checkpoint. If the agent is recovered later, Golem reconstructs the metadata from the archived oplog.
+The **oplog** is the primary source of truth for agent state. The **key-value store** keeps two records of agent status. The status cache speeds up the status fold. The status baseline is a durable record that Golem writes at clean points of the oplog and keeps until the agent is deleted. Each record holds the oplog index through which Golem calculated the status. Once archival is complete, Golem clears the status cache and keeps the baseline. On a later load, Golem folds the status from a usable baseline and the entries after it. A baseline can exist but no longer be usable, for example when a revert deletes its index. Without a usable baseline, the fold needs readable history from index 1. A durable stream attachment can also require the pending invocation that it references before the baseline. The baseline covers the status fold only. A cold metadata load still rebuilds the invocation-result index separately from index 1.
 
 ## Filesystem snapshots
 

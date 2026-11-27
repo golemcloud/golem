@@ -219,9 +219,11 @@ impl WorkerService for DefaultWorkerService {
                             agent_mode,
                             None,
                             || async {
-                                // The checkpoint is only a fold baseline: a read failure here
-                                // costs a full recompute, not correctness, and the function has
-                                // no way to report it. The live cached status above is the read
+                                // The function cannot report a read failure of the status
+                                // baseline. Every oplog keeps its entries from index 1, so the
+                                // full fold after a failed read takes more time. Under the same
+                                // executor configuration (`retry` and `invocation_results`), it
+                                // gives the same status. The live cached status above is the read
                                 // that propagates.
                                 self.read_status_checkpoint(owned_agent_id, fingerprint, agent_mode)
                                     .await
@@ -344,6 +346,12 @@ impl WorkerService for DefaultWorkerService {
         // removes nothing. A new owner claiming the shard between this check and the oplog delete
         // is still refused by that delete, which keeps the oplog: the state removed in between is
         // what the new owner rebuilds from it.
+        //
+        // The status baseline is part of that state. A refused delete keeps an oplog without its
+        // baseline. Every oplog keeps its entries from index 1, so a later fold reads from index 1,
+        // and a later clean boundary writes a new baseline when checkpoints are on. A missing
+        // baseline makes the fold longer. Under the same executor configuration (`retry` and
+        // `invocation_results`), it does not change the result of the fold.
         if delete_current_oplog && let Some(epoch) = expected_epoch {
             self.oplog_service
                 .assert_owning_epoch(owned_agent_id, agent_mode, epoch)
@@ -352,6 +360,11 @@ impl WorkerService for DefaultWorkerService {
 
         self.remove_cached_status(owned_agent_id, fingerprint)
             .await?;
+        self.remove_split_status(
+            owned_agent_id,
+            Self::checkpoint_namespace(owned_agent_id, fingerprint),
+        )
+        .await?;
         self.stream_session_index
             .clear(owned_agent_id, fingerprint)
             .await
@@ -420,18 +433,13 @@ impl WorkerService for DefaultWorkerService {
     ) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove_cached_status");
         // The result index is part of the status cache. Besides deletion, the cached status is
-        // removed when the oplog is fully archived, so that an archived agent keeps nothing in
-        // primary storage; the index goes with it and is rebuilt from the oplog on next access.
+        // removed when the oplog is fully archived. The index goes with it and is rebuilt from
+        // the oplog on next access. The status baseline stays.
         self.clear_invocation_result_index(owned_agent_id, fingerprint)
             .await?;
         self.remove_split_status(
             owned_agent_id,
             Self::status_namespace(owned_agent_id, fingerprint),
-        )
-        .await?;
-        self.remove_split_status(
-            owned_agent_id,
-            Self::checkpoint_namespace(owned_agent_id, fingerprint),
         )
         .await?;
         self.remove_cached_agent_mode_if_fingerprint(owned_agent_id, fingerprint)

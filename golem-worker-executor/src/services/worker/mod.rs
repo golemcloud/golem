@@ -212,8 +212,11 @@ pub trait WorkerService: Send + Sync {
         on_stale: OnStale<'_>,
     ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    /// Deletes the worker: its cached status, its indexes, its oplog and its entry in the recovery
-    /// index, in that order.
+    /// Removes the specified incarnation's invocation result index, cached status, agent mode
+    /// hint, status baseline, durable stream session index and rejected periodic snapshots, in
+    /// that order. It then deletes the oplog unless it belongs to another incarnation. It
+    /// requests deletion of the specified incarnation's filesystem snapshots, then removes its
+    /// promises and its entry in the recovery index.
     ///
     /// Returns `Err` when the storage could not be reached. Safe to run again, and it is: by
     /// `Worker::delete`'s staged deletion and by the worker service's re-dispatch. The oplog goes
@@ -251,8 +254,9 @@ pub trait WorkerService: Send + Sync {
         operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError>;
 
-    /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
-    /// key and the dedicated `agent_mode` key), leaving the oplog untouched.
+    /// Deletes the cached status of the worker (the live cache, the invocation result index, and
+    /// the dedicated `agent_mode` key when it belongs to `fingerprint`), and keeps the oplog and
+    /// the durable status baseline. Only [`Self::remove`] deletes the baseline.
     async fn remove_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -423,17 +427,14 @@ pub trait WorkerService: Send + Sync {
         status_value: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, WorkerExecutorError>;
 
-    /// Reads the worker's *clean* status checkpoint, if any.
+    /// Reads the durable status baseline of the worker (the *clean* status checkpoint), if any.
     ///
-    /// The checkpoint is a full `AgentStatusRecord` written only at structurally clean boundaries
-    /// (snapshot save / throttled idle) and stored in its own per-agent hash
-    /// (see [`KeyValueStorageNamespace::AgentStatusCheckpoint`]). Because it is never advanced into
-    /// an open jump region, it serves as a fold baseline for status recompute that predates any
-    /// later jump, avoiding a full re-read of the oplog from index 1.
+    /// The baseline is a full `AgentStatusRecord` stored in its own per-agent hash (see
+    /// [`KeyValueStorageNamespace::AgentStatusCheckpoint`]).
     ///
-    /// Returns `Ok(None)` on a cache miss or stale format, and `Err` when the storage could not be
-    /// read. The transient `agent_mode` field (not part of the persisted `core`) is restored from
-    /// `agent_mode`.
+    /// Returns `Ok(None)` when no baseline is stored or its format is stale, and `Err` when the
+    /// storage could not be read. The transient `agent_mode` field (not part of the persisted
+    /// `core`) is restored from `agent_mode`.
     async fn read_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -441,13 +442,13 @@ pub trait WorkerService: Send + Sync {
         agent_mode: AgentMode,
     ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError>;
 
-    /// Writes the worker's *clean* status checkpoint blob.
+    /// Writes the worker's *clean* status checkpoint blob, with no expiry.
     ///
     /// Same split layout and delta semantics as [`write_cached_status`](Self::write_cached_status),
     /// but targeting the [`KeyValueStorageNamespace::AgentStatusCheckpoint`] hash. No-op for
     /// ephemeral workers (returning the value unchanged). Returns the reassembled record so the
     /// caller can use it as the baseline for the next delta. Returns `Err` instead of panicking so
-    /// callers can treat checkpoint writes as best-effort (the oplog remains the source of truth).
+    /// callers can treat checkpoint writes as best-effort.
     async fn write_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,

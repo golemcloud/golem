@@ -106,8 +106,10 @@ where
         agent_mode,
         last_known,
         || async move {
-            // The checkpoint is only a fold baseline, and this function has no way to report a
-            // read failure: falling back to a full recompute costs time, not correctness.
+            // This function cannot report a read failure of the status baseline. Every oplog
+            // keeps its entries from index 1, so the full fold after a failed read takes more
+            // time. Under the same executor configuration (`retry` and `invocation_results`), it
+            // gives the same status.
             worker_service
                 .read_status_checkpoint(owned_agent_id, fingerprint, agent_mode)
                 .await
@@ -240,18 +242,31 @@ where
         _ => horizon == baseline.oplog_idx,
     };
     if contiguous {
-        // Live appends keep the decoded lookup payloads; only a payload without one downloads.
+        // Live appends keep the decoded payloads; only a payload without one downloads.
         let deleted = deleted_regions(baseline.deleted_regions.clone(), &entries);
-        let status = match hydrate_lookup_payloads(
+        let hydrated = match hydrate_stream_session_payloads(
             this,
             owned_agent_id,
             agent_mode,
-            &baseline,
             &deleted,
             &mut entries,
         )
         .await
         {
+            Ok(()) => {
+                hydrate_lookup_payloads(
+                    this,
+                    owned_agent_id,
+                    agent_mode,
+                    &baseline,
+                    &deleted,
+                    &mut entries,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        let status = match hydrated {
             Ok(()) => {
                 let reader =
                     StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);
@@ -380,15 +395,12 @@ where
             )
             .await?;
             hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
-            let finalize_oplog_processor_checkpoints =
-                entries.keys().next_back() == Some(&last_oplog_index);
             update_status_with_new_entries_internal(
                 agent_mode,
                 baseline,
                 entries,
                 &this.config().retry,
                 true,
-                finalize_oplog_processor_checkpoints,
             )
             .map_err(StatusError::from)
         }
@@ -475,9 +487,8 @@ where
         )
         .await?;
         hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
-        let finalize_oplog_processor_checkpoints =
-            entries.keys().next_back() == Some(&last_oplog_index);
-        let pending_updates = if finalize_oplog_processor_checkpoints {
+        let last_chunk = entries.keys().next_back() == Some(&last_oplog_index);
+        let pending_updates = if last_chunk {
             final_pending_updates.take().unwrap_or_default()
         } else {
             std::mem::take(&mut baseline.pending_updates)
@@ -494,7 +505,6 @@ where
                 steps: &regions.steps,
             },
             pending_updates,
-            finalize_oplog_processor_checkpoints,
         )?;
         first = baseline.oplog_idx.next();
     }

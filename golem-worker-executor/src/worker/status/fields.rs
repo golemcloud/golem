@@ -1020,129 +1020,135 @@ pub(super) fn collect_resources(
     result
 }
 
-pub(super) fn calculate_active_plugins(
-    initial: HashSet<EnvironmentPluginGrantId>,
-    deleted_regions: &DeletedRegions,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashSet<EnvironmentPluginGrantId> {
-    let mut result = initial;
-    for (idx, entry) in entries {
-        // Skipping entries in deleted regions as they are not applied during replay
-        if deleted_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
-        match entry {
-            OplogEntry::Create { parameters, .. } => {
-                result = parameters.initial_active_plugins.clone();
-            }
-            OplogEntry::ActivatePlugin {
-                plugin_grant_id, ..
-            } => {
-                result.insert(*plugin_grant_id);
-            }
-            OplogEntry::DeactivatePlugin {
-                plugin_grant_id, ..
-            } => {
-                result.remove(plugin_grant_id);
-            }
-            OplogEntry::SuccessfulUpdate {
-                new_active_plugins, ..
-            } => {
-                result = new_active_plugins.clone();
-            }
-            _ => {}
-        }
-    }
-    result
+/// True when the status keeps the [`OplogProcessorCheckpointState`] of `grant_id`: the plugin is
+/// active, or it has entries in flight (sent and not confirmed).
+fn keeps_processor_checkpoint(
+    active: &HashSet<EnvironmentPluginGrantId>,
+    grant_id: &EnvironmentPluginGrantId,
+    state: &OplogProcessorCheckpointState,
+) -> bool {
+    active.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
 }
 
-pub(super) fn calculate_oplog_processor_checkpoints(
-    mut result: HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
-    active_plugins: &HashSet<EnvironmentPluginGrantId>,
+/// The [`OplogProcessorCheckpointState`] of a plugin that starts at the activation at `idx`.
+fn fresh_processor_checkpoint(idx: OplogIndex) -> OplogProcessorCheckpointState {
+    OplogProcessorCheckpointState {
+        target_agent_id: None,
+        confirmed_up_to: idx,
+        sending_up_to: idx,
+        last_batch_start: idx,
+        delivery: None,
+    }
+}
+
+/// The active plugins and the oplog processor checkpoints of a status.
+pub(super) type PluginStatus = (
+    HashSet<EnvironmentPluginGrantId>,
+    HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
+);
+
+/// Applies `entry` to the active plugins and the oplog processor checkpoints of a status.
+/// `Create` sets the initial plugins. `ActivatePlugin` adds a plugin, and `DeactivatePlugin`
+/// removes it. `SuccessfulUpdate` sets the plugins of the new revision. An activation keeps the
+/// checkpoint state of a plugin that has one. After the entry, the status keeps a checkpoint
+/// state only for a plugin that is active or has entries in flight
+/// ([`keeps_processor_checkpoint`]).
+fn apply_plugin_entry(
+    (mut active, mut checkpoints): PluginStatus,
+    idx: OplogIndex,
+    entry: &OplogEntry,
+) -> PluginStatus {
+    match entry {
+        OplogEntry::Create { parameters, .. } => {
+            active = parameters.initial_active_plugins.clone();
+            checkpoints
+                .retain(|grant_id, state| keeps_processor_checkpoint(&active, grant_id, state));
+        }
+        OplogEntry::ActivatePlugin {
+            plugin_grant_id, ..
+        } => {
+            active.insert(*plugin_grant_id);
+            checkpoints
+                .entry(*plugin_grant_id)
+                .or_insert_with(|| fresh_processor_checkpoint(idx));
+        }
+        OplogEntry::DeactivatePlugin {
+            plugin_grant_id, ..
+        } => {
+            active.remove(plugin_grant_id);
+            if checkpoints
+                .get(plugin_grant_id)
+                .is_some_and(|state| !keeps_processor_checkpoint(&active, plugin_grant_id, state))
+            {
+                checkpoints.remove(plugin_grant_id);
+            }
+        }
+        OplogEntry::SuccessfulUpdate {
+            new_active_plugins, ..
+        } => {
+            active = new_active_plugins.clone();
+            checkpoints
+                .retain(|grant_id, state| keeps_processor_checkpoint(&active, grant_id, state));
+            new_active_plugins.iter().for_each(|grant_id| {
+                checkpoints
+                    .entry(*grant_id)
+                    .or_insert_with(|| fresh_processor_checkpoint(idx));
+            });
+        }
+        OplogEntry::OplogProcessorCheckpoint {
+            plugin_grant_id,
+            target_agent_id,
+            confirmed_up_to,
+            sending_up_to,
+            last_batch_start,
+            delivery,
+            ..
+        } => {
+            let state = OplogProcessorCheckpointState {
+                target_agent_id: Some(*target_agent_id),
+                confirmed_up_to: *confirmed_up_to,
+                sending_up_to: *sending_up_to,
+                last_batch_start: *last_batch_start,
+                delivery: delivery.clone(),
+            };
+            if keeps_processor_checkpoint(&active, plugin_grant_id, &state) {
+                checkpoints.insert(*plugin_grant_id, state);
+            } else {
+                checkpoints.remove(plugin_grant_id);
+            }
+        }
+        _ => {}
+    }
+    (active, checkpoints)
+}
+
+/// The active plugins and the oplog processor checkpoints after `entries`, folded from
+/// `active_plugins` and `checkpoints` of the status before `entries`. `deleted_regions` are the
+/// deleted regions of the whole range that the fold covers.
+///
+/// After every entry, the result holds a checkpoint state only for a plugin that is active or has
+/// entries in flight. Before the first entry, the fold removes every state of the start status
+/// that this rule does not keep. Thus a fold from a status that this fold gave (an accepted
+/// status baseline) gives the result of a fold of the whole oplog. A fold in chunks gives the
+/// same result.
+///
+/// A second activation of an active plugin does not reset its progress. After a deactivation, a
+/// confirmation of the last entries in flight and a new activation, the state starts at the new
+/// activation.
+pub(super) fn calculate_plugin_status(
+    active_plugins: HashSet<EnvironmentPluginGrantId>,
+    mut checkpoints: HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    finalize: bool,
-) -> HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState> {
-    for (idx, entry) in entries {
-        if deleted_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
-        match entry {
-            OplogEntry::OplogProcessorCheckpoint {
-                plugin_grant_id,
-                target_agent_id,
-                confirmed_up_to,
-                sending_up_to,
-                last_batch_start,
-                delivery,
-                ..
-            } => {
-                result.insert(
-                    *plugin_grant_id,
-                    OplogProcessorCheckpointState {
-                        target_agent_id: Some(*target_agent_id),
-                        confirmed_up_to: *confirmed_up_to,
-                        sending_up_to: *sending_up_to,
-                        last_batch_start: *last_batch_start,
-                        delivery: delivery.clone(),
-                    },
-                );
-            }
-            OplogEntry::ActivatePlugin {
-                plugin_grant_id, ..
-            } => {
-                result
-                    .entry(*plugin_grant_id)
-                    .or_insert(OplogProcessorCheckpointState {
-                        target_agent_id: None,
-                        confirmed_up_to: *idx,
-                        sending_up_to: *idx,
-                        last_batch_start: *idx,
-                        delivery: None,
-                    });
-            }
-            OplogEntry::DeactivatePlugin {
-                plugin_grant_id, ..
-            } => {
-                // Remove non-in-flight checkpoint so a later same-fold ActivatePlugin
-                // can seed a fresh checkpoint at the new activation index
-                let keep_in_flight = result
-                    .get(plugin_grant_id)
-                    .is_some_and(|state| state.sending_up_to > state.confirmed_up_to);
-                if !keep_in_flight {
-                    result.remove(plugin_grant_id);
-                }
-            }
-            OplogEntry::SuccessfulUpdate {
-                new_active_plugins, ..
-            } => {
-                result.retain(|grant_id, state| {
-                    new_active_plugins.contains(grant_id)
-                        || state.sending_up_to > state.confirmed_up_to
-                });
-                for grant_id in new_active_plugins {
-                    result
-                        .entry(*grant_id)
-                        .or_insert(OplogProcessorCheckpointState {
-                            target_agent_id: None,
-                            confirmed_up_to: *idx,
-                            sending_up_to: *idx,
-                            last_batch_start: *idx,
-                            delivery: None,
-                        });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if finalize {
-        result.retain(|grant_id, state| {
-            active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
-        });
-    }
-
-    result
+) -> PluginStatus {
+    checkpoints
+        .retain(|grant_id, state| keeps_processor_checkpoint(&active_plugins, grant_id, state));
+    // Replay does not apply the entries of a deleted region.
+    entries
+        .iter()
+        .filter(|(idx, _)| !deleted_regions.is_in_deleted_region(**idx))
+        .fold(
+            (active_plugins, checkpoints),
+            |plugin_status, (idx, entry)| apply_plugin_entry(plugin_status, *idx, entry),
+        )
 }

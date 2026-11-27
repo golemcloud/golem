@@ -175,6 +175,9 @@ pub trait KeyValueStorage: Debug {
     /// match. Pair writes win when a field is also listed in `deletes`.
     /// `None` requires absence, not an empty value. A mismatch changes nothing.
     /// Redis supports this operation only for namespaces stored as a single hash.
+    ///
+    /// Through the retry decorator, `false` reports that the final attempt did not match. It can
+    /// come after an earlier attempt that applied the change and lost its response.
     async fn compare_and_set_many(
         &self,
         svc_name: &'static str,
@@ -968,13 +971,23 @@ pub enum KeyValueStorageNamespace {
         owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
     },
-    /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
-    /// (one structure-per-agent split into `core` / `membership` / `regions` / `updates` and
-    /// per-transfer fields), but written only at structurally clean boundaries (snapshot save,
-    /// throttled idle) where no jumpable oplog region is open. It is never advanced by the
-    /// background status flusher, so it always holds a baseline before any later jump region and
-    /// lets the status recompute fold forward from it instead of re-reading the whole oplog from
-    /// index 1.
+    /// The durable status baseline of one agent (the *clean* status checkpoint). It has the same
+    /// physical layout as [`Self::AgentStatus`]: one hash for each agent, split into `core`,
+    /// `membership`, `regions`, `updates`, `resolved-names`, `followed-lookups`, the per-transfer
+    /// `tr:`/`ts:` fields, and the `entity-replay` marker with the per-entry
+    /// `er:`/`eo:`/`ep:`/`em:`/`ec:` fields.
+    ///
+    /// Only three writers write it: the snapshot save, the throttled idle boundary, and the
+    /// throttled `checkpoint_status_mid_invocation` during a long invocation. Each one writes at a
+    /// structurally clean boundary, where no jumpable oplog region is open. The background status
+    /// flusher never moves it forward. The boundary check does not test oplog regions, but no
+    /// production code appends a `Jump`. Thus no later jump region covers the baseline, and the
+    /// status recompute folds forward from it. The recompute folds from index 1 when no usable
+    /// baseline exists.
+    ///
+    /// This namespace is not a cache. It has no expiry, an archive of the oplog keeps it, and
+    /// namespace routing stores it in the persistent backend. Only the deletion of the agent
+    /// removes it.
     AgentStatusCheckpoint {
         owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
