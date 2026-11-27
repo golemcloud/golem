@@ -93,7 +93,7 @@ use golem_mcp_import::tool::{Limits, ProjectedTool};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component as ComponentMetadata;
 use golem_service_base::model::mcp_import::McpImportObservation;
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{SETTLE_TIMEOUT, TestDsl};
 use golem_worker_executor::durable_host::tool::{
     ToolAttachmentModeMetadata, ToolBodyAdmissionMetadata, ToolOperationLaneMetadata,
     ToolOperationMetadata, ToolOperationWinnerMetadata, ToolOwnerFailureMetadata,
@@ -108,8 +108,9 @@ use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::id_target;
 use golem_worker_executor_test_utils::standalone_tool::StandaloneToolCall;
 use golem_worker_executor_test_utils::{
-    AgentInvocationSuccessGateHandle, InvocationError, InvocationErrorExt, LastUniqueId,
-    OplogShape, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
+    AgentInvocationSuccessGateHandle, CrashCheckpoint, CrashCheckpointServer, InvocationError,
+    InvocationErrorExt, LastUniqueId, OplogShape, PrecompiledComponent, PromiseCheckpoint,
+    PromiseCheckpointServer, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
     TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
     native_test_tool_metadata, start_with_overrides,
 };
@@ -360,14 +361,8 @@ async fn run_single_store_http_probe(
         .component_dep(&context.default_environment_id, caller)
         .store()
         .await?;
-    let (port, gate_port, server, mut checkpoints) = start_crash_checkpoint_server().await;
-    let env = HashMap::from([
-        ("CALLER_CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
-        (
-            "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-            gate_port.to_string(),
-        ),
-    ]);
+    let mut checkpoints = CrashCheckpointServer::start().await?;
+    let env = checkpoints.agent_env("CALLER");
     // The shape under test has the host-side body scope complete before the guest's first
     // direct call, so that the gates below (not the recording) decide how the two interleave on
     // replay. The fixture only yields between dropping the body and the first direct call; a
@@ -398,15 +393,15 @@ async fn run_single_store_http_probe(
         );
         let release = async {
             for ordinal in 1..=8 {
-                let checkpoint =
-                    next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic")
-                        .await
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "recording attempt {attempt} checkpoint {ordinal}/8 failed: {error}"
-                            )
-                        })?;
-                checkpoint.release.send(()).map_err(|_| {
+                let checkpoint = checkpoints
+                    .reach("single-store-http-atomic")
+                    .await
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "recording attempt {attempt} checkpoint {ordinal}/8 failed: {error}"
+                        )
+                    })?;
+                checkpoint.release().map_err(|_| {
                     anyhow::anyhow!(
                         "recording attempt {attempt} checkpoint {ordinal}/8 gate was dropped"
                     )
@@ -534,15 +529,14 @@ async fn run_single_store_http_probe(
                 // The retained prefix cuts the probe invocation, so its remainder re-executes
                 // live and reaches the crash checkpoint gate for every remaining checkpoint.
                 for ordinal in 1..=8 {
-                    next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic")
+                    checkpoints.reach("single-store-http-atomic")
                         .await
                         .map_err(|error| {
                             anyhow::anyhow!(
                                 "replay checkpoint {ordinal}/8 failed for retained prefix {prefix:?}: {error}"
                             )
                         })?
-                        .release
-                        .send(())
+                        .release()
                         .map_err(|_| {
                             anyhow::anyhow!(
                                 "replay checkpoint {ordinal}/8 gate was dropped for retained prefix {prefix:?}"
@@ -556,7 +550,8 @@ async fn run_single_store_http_probe(
         Ok::<_, anyhow::Error>(result)
     };
     let replay = tokio::time::timeout(std::time::Duration::from_secs(60), replay).await;
-    server.abort();
+    let repeated_checkpoint = checkpoints.try_next();
+    drop(checkpoints);
     let replay = match replay {
         Ok(replay) => replay,
         Err(_) => {
@@ -575,7 +570,7 @@ async fn run_single_store_http_probe(
     let output: String = replay?.into_typed()?;
     assert_eq!(output, "R");
     assert!(
-        checkpoints.try_recv().is_err(),
+        repeated_checkpoint.is_none(),
         "replay must not repeat a recorded checkpoint"
     );
     let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -2706,153 +2701,10 @@ async fn start_trap_attempt_server() -> (u16, tokio::task::JoinHandle<()>, Arc<A
     (port, task, attempts)
 }
 
-struct CrashCheckpointArrival {
-    name: String,
-    release: tokio::sync::oneshot::Sender<()>,
-}
-
-async fn announce_crash_checkpoint(
-    Path(name): Path<String>,
-    State(current_name): State<Arc<tokio::sync::RwLock<Option<String>>>>,
-) -> axum::http::StatusCode {
-    *current_name.write().await = Some(name);
-    axum::http::StatusCode::NO_CONTENT
-}
-
-async fn start_crash_checkpoint_server() -> (
-    u16,
-    u16,
-    tokio_util::task::AbortOnDropHandle<()>,
-    tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
-) {
-    use tokio::io::AsyncWriteExt;
-
-    let announcement_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind crash checkpoint server");
-    let announcement_port = announcement_listener
-        .local_addr()
-        .expect("crash checkpoint address")
-        .port();
-    let gate_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind crash checkpoint gate");
-    let gate_port = gate_listener
-        .local_addr()
-        .expect("crash checkpoint gate address")
-        .port();
-    let (arrivals, received) = tokio::sync::mpsc::unbounded_channel();
-    let current_name = Arc::new(tokio::sync::RwLock::new(None));
-    let app = Router::new()
-        .route("/{name}", post(announce_crash_checkpoint))
-        .with_state(current_name.clone());
-    let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        let announcements = axum::serve(announcement_listener, app);
-        let gates = async move {
-            let mut connections = tokio::task::JoinSet::new();
-            loop {
-                tokio::select! {
-                    accepted = gate_listener.accept() => {
-                        let (mut connection, _) = accepted.expect("accept crash checkpoint gate");
-                        let name = current_name
-                            .read()
-                            .await
-                            .clone()
-                            .expect("checkpoint name announced before gate connection");
-                        let arrivals = arrivals.clone();
-                        connections.spawn(async move {
-                            eprintln!("crash checkpoint server received `{name}`");
-                            let (release, wait) = tokio::sync::oneshot::channel();
-                            arrivals
-                                .send(CrashCheckpointArrival { name, release })
-                                .expect("record crash checkpoint arrival");
-                            if wait.await.is_ok() {
-                                connection
-                                    .write_all(&[1])
-                                    .await
-                                    .expect("release crash checkpoint gate");
-                            }
-                        });
-                    }
-                    completed = connections.join_next(), if !connections.is_empty() => {
-                        completed
-                            .expect("crash checkpoint gate task exists")
-                            .expect("serve crash checkpoint gate");
-                    }
-                }
-            }
-        };
-        tokio::select! {
-            result = announcements => result.expect("serve crash checkpoint announcements"),
-            () = gates => unreachable!("crash checkpoint gate listener does not stop"),
-        }
-    }));
-    (announcement_port, gate_port, task, received)
-}
-
-#[derive(Debug)]
-struct PromiseCheckpointArrival {
-    name: String,
-    oplog_idx: OplogIndex,
-}
-
-async fn announce_promise_checkpoint(
-    Path(name): Path<String>,
-    State(arrivals): State<tokio::sync::mpsc::UnboundedSender<PromiseCheckpointArrival>>,
-    body: Bytes,
-) -> axum::http::StatusCode {
-    let oplog_idx = OplogIndex::from_u64(
-        std::str::from_utf8(&body)
-            .expect("promise checkpoint body is UTF-8")
-            .parse()
-            .expect("promise checkpoint body is an oplog index"),
-    );
-    arrivals
-        .send(PromiseCheckpointArrival { name, oplog_idx })
-        .expect("record promise checkpoint arrival");
-    axum::http::StatusCode::NO_CONTENT
-}
-
-async fn start_promise_checkpoint_server() -> (
-    u16,
-    tokio::task::JoinHandle<()>,
-    tokio::sync::mpsc::UnboundedReceiver<PromiseCheckpointArrival>,
-) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind promise checkpoint server");
-    let port = listener
-        .local_addr()
-        .expect("promise checkpoint address")
-        .port();
-    let (arrivals, received) = tokio::sync::mpsc::unbounded_channel();
-    let app = Router::new()
-        .route("/{name}", post(announce_promise_checkpoint))
-        .with_state(arrivals);
-    let task = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .expect("serve promise checkpoint announcements");
-    });
-    (port, task, received)
-}
-
-async fn next_promise_checkpoint(
-    arrivals: &mut tokio::sync::mpsc::UnboundedReceiver<PromiseCheckpointArrival>,
-    expected: &str,
-) -> anyhow::Result<PromiseCheckpointArrival> {
-    let arrival = tokio::time::timeout(std::time::Duration::from_secs(30), arrivals.recv())
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting for `{expected}` promise checkpoint"))?
-        .ok_or_else(|| anyhow::anyhow!("promise checkpoint server stopped before `{expected}`"))?;
-    assert_eq!(arrival.name, expected);
-    Ok(arrival)
-}
-
 async fn wait_for_promise_checkpoint_to_await(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
-    checkpoint: &PromiseCheckpointArrival,
+    checkpoint: &PromiseCheckpoint,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
@@ -2865,7 +2717,7 @@ async fn wait_for_promise_checkpoint_to_await(
                 )
                 .await?;
             let checkpoint_parent = oplog.iter().find_map(|entry| {
-                (entry.oplog_index == checkpoint.oplog_idx).then(|| match &entry.entry {
+                (entry.oplog_index == checkpoint.oplog_index).then(|| match &entry.entry {
                     PublicOplogEntry::Start(parameters)
                         if parameters.function_name == "golem::api::create_promise" =>
                     {
@@ -2874,7 +2726,7 @@ async fn wait_for_promise_checkpoint_to_await(
                     other => Err(anyhow::anyhow!(
                         "promise checkpoint `{}` announced index {} for {}",
                         checkpoint.name,
-                        checkpoint.oplog_idx,
+                        checkpoint.oplog_index,
                         describe_public_entry(other)
                     )),
                 })
@@ -2882,7 +2734,7 @@ async fn wait_for_promise_checkpoint_to_await(
             if let Some(checkpoint_parent) = checkpoint_parent {
                 let checkpoint_parent = checkpoint_parent?;
                 if oplog.iter().any(|entry| {
-                    entry.oplog_index > checkpoint.oplog_idx
+                    entry.oplog_index > checkpoint.oplog_index
                         && matches!(
                             &entry.entry,
                             PublicOplogEntry::Start(parameters)
@@ -2984,18 +2836,6 @@ async fn wait_for_completed_entity_terminal(
     .map_err(|_| anyhow::anyhow!("timed out waiting for completed entity terminal"))?
 }
 
-async fn next_crash_checkpoint(
-    arrivals: &mut tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
-    expected: &str,
-) -> anyhow::Result<CrashCheckpointArrival> {
-    let arrival = tokio::time::timeout(std::time::Duration::from_secs(30), arrivals.recv())
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out waiting for `{expected}` checkpoint"))?
-        .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped before `{expected}`"))?;
-    assert_eq!(arrival.name, expected);
-    Ok(arrival)
-}
-
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
@@ -3067,24 +2907,18 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
         caller_component.revision,
         Some(deployment),
     );
-    let (port, gate_port, server, _checkpoints) = start_crash_checkpoint_server().await;
-    let (promise_port, promise_server, mut promises) = start_promise_checkpoint_server().await;
+    let checkpoints = CrashCheckpointServer::start().await?;
+    let mut promises = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "nested-trap-isolation");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                ("CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    gate_port.to_string(),
-                ),
-                (
-                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-                    promise_port.to_string(),
-                ),
-            ]),
+            checkpoints
+                .agent_env("")
+                .into_iter()
+                .chain(promises.agent_env("PROVIDER"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -3100,12 +2934,12 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
         if mode == "parent-trap" {
             let admitted = tokio::select! {
                 result = call.as_mut() => panic!("parent settled before descendants admitted: {result:?}"),
-                checkpoint = next_promise_checkpoint(&mut promises, "parent-descendants-admitted") => checkpoint?,
+                checkpoint = promises.reach("parent-descendants-admitted") => checkpoint?,
             };
             executor
                 .complete_promise(
                     &executor.context.default_environment_id,
-                    &executor.promise_id(&worker, admitted.oplog_idx).await?,
+                    &executor.promise_id(&worker, admitted.oplog_index).await?,
                     vec![],
                 )
                 .await?;
@@ -3182,8 +3016,8 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
         }
     }
     assert_eq!(trapped, 3);
-    server.abort();
-    promise_server.abort();
+    drop(checkpoints);
+    drop(promises);
     Ok(())
 }
 
@@ -3696,17 +3530,13 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
         },
     );
 
-    let (checkpoint_port, checkpoint_server, mut checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "dynamic-mcp-middleware");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([(
-                "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
-                checkpoint_port.to_string(),
-            )]),
+            checkpoints.agent_env("MIDDLEWARE"),
             Vec::new(),
         )
         .await?;
@@ -3724,7 +3554,7 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
             .await?
             .into_typed::<Vec<String>>()
     });
-    let checkpoint = next_promise_checkpoint(&mut checkpoints, "mcp-pending-admitted").await?;
+    let checkpoint = checkpoints.reach("mcp-pending-admitted").await?;
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
         pending_started_rx.recv(),
@@ -3735,7 +3565,7 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .promise_id(&worker_id, checkpoint.oplog_index)
                 .await?,
             vec![],
         )
@@ -3796,7 +3626,7 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
     assert_eq!(environment_state.mcp_observation_requests().len(), 1);
     assert_eq!(environment_state.mcp_credential_requests().len(), 3);
 
-    checkpoint_server.abort();
+    drop(checkpoints);
 
     Ok(())
 }
@@ -4066,17 +3896,13 @@ async fn run_cancelled_mcp_body_probe(
         },
     );
 
-    let (checkpoint_port, checkpoint_server, mut checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "cancelled-mcp-body");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([(
-                "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
-                checkpoint_port.to_string(),
-            )]),
+            checkpoints.agent_env("MIDDLEWARE"),
             Vec::new(),
         )
         .await?;
@@ -4096,7 +3922,7 @@ async fn run_cancelled_mcp_body_probe(
     });
     // The middleware cancels the pending tool invocation when this checkpoint's promise
     // completes, and the server holds its `tools/call` until then.
-    let checkpoint = next_promise_checkpoint(&mut checkpoints, "mcp-pending-admitted").await?;
+    let checkpoint = checkpoints.reach("mcp-pending-admitted").await?;
     tokio::time::timeout(Duration::from_secs(30), pending_started_rx.recv())
         .await?
         .expect("the pending MCP request reached the server");
@@ -4104,7 +3930,7 @@ async fn run_cancelled_mcp_body_probe(
         .complete_promise(
             &worker_id.environment_id,
             &executor
-                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .promise_id(&worker_id, checkpoint.oplog_index)
                 .await?,
             vec![],
         )
@@ -4194,7 +4020,7 @@ async fn run_cancelled_mcp_body_probe(
         assert_reverted_cancelled_mcp_body_history(&retained_after_revert(&replayed, cut));
         drop(executor);
         drop(server);
-        checkpoint_server.abort();
+        drop(checkpoints);
         return Ok(());
     }
 
@@ -4255,7 +4081,7 @@ async fn run_cancelled_mcp_body_probe(
 
     drop(executor);
     drop(server);
-    checkpoint_server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -4700,20 +4526,17 @@ async fn cancelled_wasm_tool_body_with_an_open_websocket_receive_recovers_after_
             metadata.tools,
         )),
     );
-    let (checkpoint_port, checkpoint_server, mut checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "cancelled-open-receive");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                ("WEBSOCKET_HOLD_PORT".to_string(), peer_port.to_string()),
-            ]),
+            checkpoints
+                .agent_env("PROVIDER")
+                .into_iter()
+                .chain([("WEBSOCKET_HOLD_PORT".to_string(), peer_port.to_string())])
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -4735,7 +4558,7 @@ async fn cancelled_wasm_tool_body_with_an_open_websocket_receive_recovers_after_
             .into_typed::<String>()
     });
 
-    let checkpoint = next_promise_checkpoint(&mut checkpoints, "open-call-held").await?;
+    let checkpoint = checkpoints.reach("open-call-held").await?;
     wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &checkpoint).await?;
     let at_checkpoint = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let open_calls = at_checkpoint
@@ -4760,7 +4583,7 @@ async fn cancelled_wasm_tool_body_with_an_open_websocket_receive_recovers_after_
         anyhow::bail!("expected one WebSocket receive in flight: {open_calls:?}");
     };
     let open_call = *open_call;
-    let body = nearest_entity_body(&at_checkpoint, checkpoint.oplog_idx)
+    let body = nearest_entity_body(&at_checkpoint, checkpoint.oplog_index)
         .expect("the checkpoint runs in the tool body");
     assert_eq!(
         nearest_entity_body(&at_checkpoint, open_call),
@@ -4771,7 +4594,7 @@ async fn cancelled_wasm_tool_body_with_an_open_websocket_receive_recovers_after_
         .complete_promise(
             &worker_id.environment_id,
             &executor
-                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .promise_id(&worker_id, checkpoint.oplog_index)
                 .await?,
             vec![],
         )
@@ -4936,7 +4759,7 @@ async fn cancelled_wasm_tool_body_with_an_open_websocket_receive_recovers_after_
 
     drop(executor);
     drop(peer);
-    checkpoint_server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -5471,8 +5294,7 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
         },
     )
     .await?;
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -5541,16 +5363,7 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -5566,7 +5379,7 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
         result = invocation.as_mut() => {
             panic!("successful parent completed before child admission: {result:?}")
         }
-        child = next_crash_checkpoint(&mut checkpoint_arrivals, "middleware-early-child") => {
+        child = checkpoints.reach("middleware-early-child") => {
             child?
         }
     };
@@ -5576,15 +5389,39 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
             .is_err(),
         "successful parent completed while its admitted child effect was still blocked"
     );
-    child
-        .release
-        .send(())
-        .expect("release admitted middleware child");
+    child.release().expect("release admitted middleware child");
     let result: String = invocation.await?.into_typed()?;
     assert_eq!(result, "early-return(parent)");
 
-    checkpoint_server.abort();
+    drop(checkpoints);
     Ok(())
+}
+
+/// A provider promise checkpoint whose HTTP announcement stays pending until the test releases
+/// it.
+struct HeldPromiseCheckpoint {
+    promise: PromiseCheckpoint,
+    release: tokio::sync::oneshot::Sender<()>,
+}
+
+impl HeldPromiseCheckpoint {
+    fn release(self) -> anyhow::Result<()> {
+        self.release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("the held `{}` request was dropped", self.promise.name))
+    }
+}
+
+async fn next_held_promise_checkpoint(
+    arrivals: &mut tokio::sync::mpsc::UnboundedReceiver<HeldPromiseCheckpoint>,
+    expected: &str,
+) -> anyhow::Result<HeldPromiseCheckpoint> {
+    let arrival = tokio::time::timeout(SETTLE_TIMEOUT, arrivals.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for `{expected}` checkpoint"))?
+        .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped before `{expected}`"))?;
+    assert_eq!(arrival.promise.name, expected);
+    Ok(arrival)
 }
 
 #[test]
@@ -5611,17 +5448,23 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let provider_checkpoint_port = listener.local_addr()?.port();
     let (arrivals, mut provider_checkpoints) = tokio::sync::mpsc::unbounded_channel();
-    let (promises, mut provider_promises) = tokio::sync::mpsc::unbounded_channel();
     let app = Router::new().route(
         "/{name}",
         post(move |Path(name): Path<String>, body: Bytes| {
             let arrivals = arrivals.clone();
-            let promises = promises.clone();
             async move {
                 let (release, wait) = tokio::sync::oneshot::channel();
-                announce_promise_checkpoint(Path(name.clone()), State(promises), body).await;
+                let oplog_index = OplogIndex::from_u64(
+                    std::str::from_utf8(&body)
+                        .expect("promise checkpoint body is UTF-8")
+                        .parse()
+                        .expect("promise checkpoint body is an oplog index"),
+                );
                 arrivals
-                    .send(CrashCheckpointArrival { name, release })
+                    .send(HeldPromiseCheckpoint {
+                        promise: PromiseCheckpoint { name, oplog_index },
+                        release,
+                    })
                     .expect("record held HTTP checkpoint");
                 // Keep the HTTP request pending, not a promise wait that can unload the owner.
                 if wait.await.is_ok() {
@@ -5638,8 +5481,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
                 .await
                 .expect("serve held HTTP checkpoints");
         }));
-    let (caller_checkpoint_port, caller_checkpoint_server, mut caller_checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut caller_checkpoints = PromiseCheckpointServer::start().await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -5688,16 +5530,11 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         caller_component.revision,
         Some(plain_deployment.clone()),
     );
-    let env = HashMap::from([
-        (
-            "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-            provider_checkpoint_port.to_string(),
-        ),
-        (
-            "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-            caller_checkpoint_port.to_string(),
-        ),
-    ]);
+    let mut env = caller_checkpoints.agent_env("CALLER");
+    env.insert(
+        "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+        provider_checkpoint_port.to_string(),
+    );
     let direct_id = agent_key!("ToolStreamingCaller", "typed-output-direct");
     let direct_worker = executor
         .start_agent_with(
@@ -5722,9 +5559,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             .await
     });
     let provider =
-        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
-    let provider_promise =
-        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
+        next_held_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -5756,25 +5591,22 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&direct_worker, provider_promise.oplog_idx)
+                .promise_id(&direct_worker, provider.promise.oplog_index)
                 .await?,
             Vec::new(),
         )
         .await?;
     provider
-        .release
-        .send(())
+        .release()
         .expect("release direct typed output producer");
-    let caller = next_promise_checkpoint(
-        &mut caller_checkpoints,
-        "caller-consumed-first-typed-output",
-    )
-    .await?;
+    let caller = caller_checkpoints
+        .reach("caller-consumed-first-typed-output")
+        .await?;
     executor
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&direct_worker, caller.oplog_idx)
+                .promise_id(&direct_worker, caller.oplog_index)
                 .await?,
             Vec::new(),
         )
@@ -5854,9 +5686,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             .await
     });
     let _provider_gate =
-        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
-    let _provider_promise =
-        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
+        next_held_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -5931,32 +5761,30 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             .await
     });
     let replayed_provider_gate =
-        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
-    let replayed_provider_promise =
-        next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
+        next_held_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
     executor
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&decorated_worker, replayed_provider_promise.oplog_idx)
+                .promise_id(
+                    &decorated_worker,
+                    replayed_provider_gate.promise.oplog_index,
+                )
                 .await?,
             Vec::new(),
         )
         .await?;
     replayed_provider_gate
-        .release
-        .send(())
+        .release()
         .expect("release replayed typed output producer");
-    let caller_promise = next_promise_checkpoint(
-        &mut caller_checkpoints,
-        "caller-consumed-first-typed-output",
-    )
-    .await?;
+    let caller_promise = caller_checkpoints
+        .reach("caller-consumed-first-typed-output")
+        .await?;
     executor
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&decorated_worker, caller_promise.oplog_idx)
+                .promise_id(&decorated_worker, caller_promise.oplog_index)
                 .await?,
             Vec::new(),
         )
@@ -5994,10 +5822,9 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         "universal middleware, typed middleware, and provider terminate once each"
     );
     assert!(provider_checkpoints.try_recv().is_err());
-    assert!(provider_promises.try_recv().is_err());
-    assert!(caller_checkpoints.try_recv().is_err());
+    assert!(caller_checkpoints.try_next().is_none());
     provider_checkpoint_server.abort();
-    caller_checkpoint_server.abort();
+    drop(caller_checkpoints);
     Ok(())
 }
 
@@ -6018,18 +5845,8 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         ..Default::default()
     };
     let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
-    let (
-        provider_checkpoint_port,
-        provider_checkpoint_gate_port,
-        provider_checkpoint_server,
-        mut provider_checkpoints,
-    ) = start_crash_checkpoint_server().await;
-    let (
-        caller_checkpoint_port,
-        caller_checkpoint_gate_port,
-        caller_checkpoint_server,
-        mut caller_checkpoints,
-    ) = start_crash_checkpoint_server().await;
+    let mut provider_checkpoints = CrashCheckpointServer::start().await?;
+    let mut caller_checkpoints = CrashCheckpointServer::start().await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -6112,24 +5929,11 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_checkpoint_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_checkpoint_gate_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
-                    caller_checkpoint_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    caller_checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            provider_checkpoints
+                .agent_env("PROVIDER")
+                .into_iter()
+                .chain(caller_checkpoints.agent_env("CALLER"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -6149,8 +5953,9 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
             )
             .await
     });
-    let provider_gate =
-        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let provider_gate = provider_checkpoints
+        .reach("typed-output-after-first")
+        .await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -6179,7 +5984,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
 
     invocation.abort();
     let _ = invocation.await;
-    drop(provider_gate.release);
+    drop(provider_gate);
     drop(executor);
 
     let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
@@ -6198,8 +6003,9 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
             )
             .await
     });
-    let replayed_provider_gate =
-        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    let replayed_provider_gate = provider_checkpoints
+        .reach("typed-output-after-first")
+        .await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -6210,17 +6016,13 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         "the replayed typed stream must not reach the caller before producer completion"
     );
     replayed_provider_gate
-        .release
-        .send(())
+        .release()
         .expect("release replayed provider TCP atomic gate");
-    let replayed_caller_gate = next_crash_checkpoint(
-        &mut caller_checkpoints,
-        "caller-consumed-first-typed-output",
-    )
-    .await?;
+    let replayed_caller_gate = caller_checkpoints
+        .reach("caller-consumed-first-typed-output")
+        .await?;
     replayed_caller_gate
-        .release
-        .send(())
+        .release()
         .expect("release replayed caller TCP atomic gate");
     let result: Vec<TypedOutputEvidence> = resumed.await??.into_typed()?;
     assert_eq!(
@@ -6251,10 +6053,10 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         entity_ends, 3,
         "every middleware and provider layer settles once"
     );
-    assert!(provider_checkpoints.try_recv().is_err());
-    assert!(caller_checkpoints.try_recv().is_err());
-    provider_checkpoint_server.abort();
-    caller_checkpoint_server.abort();
+    assert!(provider_checkpoints.try_next().is_none());
+    assert!(caller_checkpoints.try_next().is_none());
+    drop(provider_checkpoints);
+    drop(caller_checkpoints);
     Ok(())
 }
 
@@ -6275,10 +6077,8 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
         ..Default::default()
     };
     let executor = start_with_overrides(deps, &context, overrides()).await?;
-    let (provider_port, provider_server, mut provider_checkpoints) =
-        start_promise_checkpoint_server().await;
-    let (caller_port, caller_server, mut caller_checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut provider_checkpoints = PromiseCheckpointServer::start().await?;
+    let mut caller_checkpoints = PromiseCheckpointServer::start().await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -6351,16 +6151,11 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
             ),
         ],
     );
-    let env = HashMap::from([
-        (
-            "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-            provider_port.to_string(),
-        ),
-        (
-            "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-            caller_port.to_string(),
-        ),
-    ]);
+    let env = provider_checkpoints
+        .agent_env("PROVIDER")
+        .into_iter()
+        .chain(caller_checkpoints.agent_env("CALLER"))
+        .collect::<HashMap<_, _>>();
     let mut invocations = Vec::new();
     let mut promises = Vec::new();
     let mut workers = Vec::new();
@@ -6399,16 +6194,14 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
                 )
                 .await
         });
-        let caller_promise =
-            next_promise_checkpoint(&mut caller_checkpoints, "typed-input-caller-produced-first")
-                .await?;
+        let caller_promise = caller_checkpoints
+            .reach("typed-input-caller-produced-first")
+            .await?;
         wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &caller_promise)
             .await?;
-        let provider_promise = next_promise_checkpoint(
-            &mut provider_checkpoints,
-            "typed-input-provider-consumed-first",
-        )
-        .await?;
+        let provider_promise = provider_checkpoints
+            .reach("typed-input-provider-consumed-first")
+            .await?;
         wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &provider_promise)
             .await?;
         assert!(
@@ -6431,7 +6224,7 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
             .complete_promise(
                 &executor.context.default_environment_id,
                 &executor
-                    .promise_id(&worker_id, caller_promise.oplog_idx)
+                    .promise_id(&worker_id, caller_promise.oplog_index)
                     .await?,
                 Vec::new(),
             )
@@ -6440,7 +6233,7 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
             .complete_promise(
                 &executor.context.default_environment_id,
                 &executor
-                    .promise_id(&worker_id, provider_promise.oplog_idx)
+                    .promise_id(&worker_id, provider_promise.oplog_index)
                     .await?,
                 Vec::new(),
             )
@@ -6497,12 +6290,12 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
         assert_eq!(starts.len(), if decorated { 3 } else { 1 });
         assert_eq!(ends, starts.len());
     }
-    if let Ok(unexpected) = provider_checkpoints.try_recv() {
+    if let Some(unexpected) = provider_checkpoints.try_next() {
         panic!("unexpected provider checkpoint after reconstruction: {unexpected:?}");
     }
-    assert!(caller_checkpoints.try_recv().is_err());
-    provider_server.abort();
-    caller_server.abort();
+    assert!(caller_checkpoints.try_next().is_none());
+    drop(provider_checkpoints);
+    drop(caller_checkpoints);
     Ok(())
 }
 
@@ -6527,18 +6320,8 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
         },
     )
     .await?;
-    let (
-        provider_checkpoint_port,
-        provider_checkpoint_gate_port,
-        provider_checkpoint_server,
-        mut provider_checkpoint_arrivals,
-    ) = start_crash_checkpoint_server().await;
-    let (
-        caller_checkpoint_port,
-        caller_checkpoint_gate_port,
-        caller_checkpoint_server,
-        mut caller_checkpoint_arrivals,
-    ) = start_crash_checkpoint_server().await;
+    let mut provider_checkpoints = CrashCheckpointServer::start().await?;
+    let mut caller_checkpoints = CrashCheckpointServer::start().await?;
 
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -6571,24 +6354,11 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_checkpoint_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_checkpoint_gate_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
-                    caller_checkpoint_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    caller_checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            provider_checkpoints
+                .agent_env("PROVIDER")
+                .into_iter()
+                .chain(caller_checkpoints.agent_env("CALLER"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -6607,41 +6377,33 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
         )
         .await
         .map_err(|_| anyhow::anyhow!("first activation lookup did not block"))?;
-        let original_provider = next_crash_checkpoint(
-            &mut provider_checkpoint_arrivals,
-            "attempt-identity-accepted",
-        )
-        .await?;
+        let original_provider = provider_checkpoints
+            .reach("attempt-identity-accepted")
+            .await?;
         original_provider
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("original accepted tool checkpoint was dropped"))?;
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         environment_state.release_first_call();
 
-        let original = next_crash_checkpoint(
-            &mut caller_checkpoint_arrivals,
-            "concurrent-attempt-identities",
-        )
-        .await?;
+        let original = caller_checkpoints
+            .reach("concurrent-attempt-identities")
+            .await?;
         assert_eq!(environment_state.activation_calls(), 2);
 
         executor.simulated_crash(&worker_id).await?;
-        drop(original.release);
+        drop(original);
 
         assert_eq!(
             environment_state.activation_calls(),
             2,
             "replay must claim both attempts without repeating admission"
         );
-        let replayed = next_crash_checkpoint(
-            &mut caller_checkpoint_arrivals,
-            "concurrent-attempt-identities",
-        )
-        .await?;
+        let replayed = caller_checkpoints
+            .reach("concurrent-attempt-identities")
+            .await?;
         replayed
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("replayed attempt-identity checkpoint was dropped"))?;
         Ok::<_, anyhow::Error>(())
     };
@@ -6682,8 +6444,8 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
     );
 
     executor.delete_worker(&worker_id).await?;
-    provider_checkpoint_server.abort();
-    caller_checkpoint_server.abort();
+    drop(provider_checkpoints);
+    drop(caller_checkpoints);
     Ok(())
 }
 
@@ -9206,16 +8968,13 @@ async fn direct_stdin_reversed_replay_admission(
         .component_dep(&context.default_environment_id, caller)
         .store()
         .await?;
-    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "stdin-wait-order");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
             agent.clone(),
-            HashMap::from([(
-                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                port.to_string(),
-            )]),
+            checkpoints.agent_env("CALLER"),
             Vec::new(),
         )
         .await?;
@@ -9243,24 +9002,22 @@ async fn direct_stdin_reversed_replay_admission(
     let synchronize = async {
         if let Some(gate) = &mut live_write {
             tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
-            let first =
-                next_promise_checkpoint(&mut checkpoints, "first-stdin-write-accepted").await?;
+            let first = checkpoints.reach("first-stdin-write-accepted").await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &first).await?;
             executor
                 .complete_promise(
                     &executor.context.default_environment_id,
-                    &executor.promise_id(&worker, first.oplog_idx).await?,
+                    &executor.promise_id(&worker, first.oplog_index).await?,
                     Vec::new(),
                 )
                 .await?;
             if !identical {
-                let second =
-                    next_promise_checkpoint(&mut checkpoints, "second-stdin-write-done").await?;
+                let second = checkpoints.reach("second-stdin-write-done").await?;
                 wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &second).await?;
                 executor
                     .complete_promise(
                         &executor.context.default_environment_id,
-                        &executor.promise_id(&worker, second.oplog_idx).await?,
+                        &executor.promise_id(&worker, second.oplog_index).await?,
                         Vec::new(),
                     )
                     .await?;
@@ -9268,18 +9025,17 @@ async fn direct_stdin_reversed_replay_admission(
             }
         }
         if same_watcher {
-            let started = next_promise_checkpoint(&mut checkpoints, "same-watcher-started").await?;
+            let started = checkpoints.reach("same-watcher-started").await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &started).await?;
             executor
                 .complete_promise(
                     &executor.context.default_environment_id,
-                    &executor.promise_id(&worker, started.oplog_idx).await?,
+                    &executor.promise_id(&worker, started.oplog_index).await?,
                     Vec::new(),
                 )
                 .await?;
         }
-        let checkpoint =
-            next_promise_checkpoint(&mut checkpoints, "direct-stdin-waits-done").await?;
+        let checkpoint = checkpoints.reach("direct-stdin-waits-done").await?;
         wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint).await?;
         if identical {
             live_write
@@ -9376,7 +9132,7 @@ async fn direct_stdin_reversed_replay_admission(
         executor
             .complete_promise(
                 &executor.context.default_environment_id,
-                &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
+                &executor.promise_id(&worker, checkpoint.oplog_index).await?,
                 Vec::new(),
             )
             .await?;
@@ -9423,7 +9179,7 @@ async fn direct_stdin_reversed_replay_admission(
             PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write_starts[1]
         )));
     }
-    server.abort();
+    drop(checkpoints);
     executor.delete_worker(&worker).await?;
     Ok(())
 }
@@ -9489,22 +9245,17 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             metadata.tools,
         )),
     );
-    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "piped-unread");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
             agent.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-                    port.to_string(),
-                ),
-                (
-                    "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                    port.to_string(),
-                ),
-            ]),
+            checkpoints
+                .agent_env("PROVIDER")
+                .into_iter()
+                .chain(checkpoints.agent_env("CALLER"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -9573,7 +9324,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
                 .complete_promise(
                     &executor.context.default_environment_id,
                     &executor
-                        .promise_id(&worker, before.expect("caller checkpoint").oplog_idx)
+                        .promise_id(&worker, before.expect("caller checkpoint").oplog_index)
                         .await?,
                     Vec::new(),
                 )
@@ -9643,7 +9394,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         if let Some(active) = executor.active_entity_metadata(&worker.clone()).await {
             assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
         }
-        server.abort();
+        drop(checkpoints);
         executor.delete_worker(&worker).await?;
         return Ok(());
     }
@@ -9677,7 +9428,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             executor
                 .complete_promise(
                     &executor.context.default_environment_id,
-                    &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
+                    &executor.promise_id(&worker, checkpoint.oplog_index).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -9750,7 +9501,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             executor
                 .complete_promise(
                     &executor.context.default_environment_id,
-                    &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
+                    &executor.promise_id(&worker, checkpoint.oplog_index).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -9758,7 +9509,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         Ok::<_, anyhow::Error>(())
     };
     let (result, ()) = tokio::try_join!(invocation, synchronize)?;
-    server.abort();
+    drop(checkpoints);
     let output: Vec<u8> = result.into_typed()?;
     let lengths = if direct {
         [11, 19, 34]
@@ -10037,17 +9788,13 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
             metadata.tools,
         )),
     );
-    let (checkpoint_port, _checkpoint_server, mut checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "crash-while-consumed");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
             agent.clone(),
-            HashMap::from([(
-                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                checkpoint_port.to_string(),
-            )]),
+            checkpoints.agent_env("CALLER"),
             Vec::new(),
         )
         .await?;
@@ -10060,11 +9807,9 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
     tokio::pin!(invocation);
     let crashes = async {
         for chunks_before_crash in [16, 128, 320] {
-            let checkpoint = next_promise_checkpoint(
-                &mut checkpoints,
-                &format!("large-output-consumed-{chunks_before_crash}"),
-            )
-            .await?;
+            let checkpoint = checkpoints
+                .reach(&format!("large-output-consumed-{chunks_before_crash}"))
+                .await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint).await?;
             // The paused consumer leaves the producer in a write without an End.
             tokio::time::timeout(Duration::from_secs(30), async {
@@ -10096,7 +9841,7 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
             executor
                 .complete_promise(
                     &executor.context.default_environment_id,
-                    &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
+                    &executor.promise_id(&worker, checkpoint.oplog_index).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -10218,23 +9963,13 @@ async fn tool_stdin_closed_wait_survives_a_crash_while_stdin_is_open(
             metadata.tools,
         )),
     );
-    let (checkpoint_port, gate_port, _checkpoint_server, mut checkpoints) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "crash-in-stdin-closed-wait");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
             agent.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env("PROVIDER"),
             Vec::new(),
         )
         .await?;
@@ -10246,7 +9981,7 @@ async fn tool_stdin_closed_wait_survives_a_crash_while_stdin_is_open(
     );
     tokio::pin!(invocation);
     let crash = async {
-        let held = next_crash_checkpoint(&mut checkpoints, CHECKPOINT).await?;
+        let held = checkpoints.reach(CHECKPOINT).await?;
         // Crash only inside the window: the entity's wait has a committed Start and no End.
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -10272,11 +10007,11 @@ async fn tool_stdin_closed_wait_survives_a_crash_while_stdin_is_open(
         })
         .await??;
         executor.simulated_crash(&worker).await?;
-        drop(held.release);
+        drop(held);
         // Replay reaches the checkpoint again; releasing it lets the recovered entity finish its
         // nested stdin.
-        let recovered = next_crash_checkpoint(&mut checkpoints, CHECKPOINT).await?;
-        let _ = recovered.release.send(());
+        let recovered = checkpoints.reach(CHECKPOINT).await?;
+        let _ = recovered.release();
         Ok::<(), anyhow::Error>(())
     };
     tokio::select! {
@@ -10717,7 +10452,7 @@ async fn retained_tool_output_reconstruction(
             metadata.tools,
         )),
     );
-    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     for (cancel_read, cancel_ready, cancel_positive) in [
         (false, false, false),
         (true, false, false),
@@ -10735,10 +10470,7 @@ async fn retained_tool_output_reconstruction(
                 .start_agent_with(
                     &caller_component.id,
                     agent.clone(),
-                    HashMap::from([(
-                        "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                        port.to_string(),
-                    )]),
+                    checkpoints.agent_env("CALLER"),
                     Vec::new(),
                 )
                 .await?;
@@ -10750,11 +10482,9 @@ async fn retained_tool_output_reconstruction(
             );
             let synchronize = async {
                 if cancel_positive {
-                    let checkpoint = next_promise_checkpoint(
-                        &mut checkpoints,
-                        "retained-output-before-positive-cancel",
-                    )
-                    .await?;
+                    let checkpoint = checkpoints
+                        .reach("retained-output-before-positive-cancel")
+                        .await?;
                     wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint)
                         .await?;
                     tokio::time::timeout(Duration::from_secs(30), async {
@@ -10777,7 +10507,7 @@ async fn retained_tool_output_reconstruction(
                     executor
                         .complete_promise(
                             &executor.context.default_environment_id,
-                            &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
+                            &executor.promise_id(&worker, checkpoint.oplog_index).await?,
                             Vec::new(),
                         )
                         .await?;
@@ -11025,10 +10755,10 @@ async fn retained_tool_output_reconstruction(
         executor.delete_worker(&worker).await?;
     }
     assert!(
-        checkpoints.try_recv().is_err(),
+        checkpoints.try_next().is_none(),
         "replay must not repeat checkpoint HTTP effects"
     );
-    server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -11162,16 +10892,13 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         "only the first rejection selects the exhaustion terminal"
     );
 
-    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let cancelled_agent = agent_key!("ToolStreamingCaller", "capable-cancelled-overflow");
     let cancelled_worker = executor
         .start_agent_with(
             &caller_component.id,
             cancelled_agent.clone(),
-            HashMap::from([(
-                "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-                port.to_string(),
-            )]),
+            checkpoints.agent_env("PROVIDER"),
             Vec::new(),
         )
         .await?;
@@ -11190,8 +10917,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         data_value!("cancel-stdout-over", vec![b'c']),
     );
     let synchronize = async {
-        let checkpoint =
-            next_promise_checkpoint(&mut checkpoints, "exhaustion-before-write-drop").await?;
+        let checkpoint = checkpoints.reach("exhaustion-before-write-drop").await?;
         wait_for_promise_checkpoint_to_await(&executor, &cancelled_worker.agent_id, &checkpoint)
             .await?;
         accepted.await?;
@@ -11213,7 +10939,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
             .complete_promise(
                 &executor.context.default_environment_id,
                 &executor
-                    .promise_id(&cancelled_worker, checkpoint.oplog_idx)
+                    .promise_id(&cancelled_worker, checkpoint.oplog_index)
                     .await?,
                 Vec::new(),
             )
@@ -11243,7 +10969,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         Ok::<_, anyhow::Error>(entity_start)
     };
     let (cancelled, entity_start) = tokio::try_join!(invoke, synchronize)?;
-    server.abort();
+    drop(checkpoints);
     let cancelled: StreamEvidence = cancelled.into_typed()?;
     assert!(
         cancelled.completion.contains("ResourceExhausted"),
@@ -11339,23 +11065,13 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         "completed output failures must validate on replay"
     );
 
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoint_arrivals = CrashCheckpointServer::start().await?;
     let overflow_agent = agent_key!("ToolStreamingCaller", "capable-overflow-replay");
     let overflow_worker = executor
         .start_agent_with(
             &caller_component.id,
             overflow_agent.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            checkpoint_arrivals.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -11406,7 +11122,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     .expect("capable overflow did not settle without a sidecar");
 
     executor.simulated_crash(&overflow_worker).await?;
-    drop(original_gate.release);
+    drop(original_gate);
     let mut replayed_gate = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         checkpoint_arrivals.recv(),
@@ -11518,7 +11234,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
                 }),
             )
             .await?;
-        drop(replayed_gate.release);
+        drop(replayed_gate);
         executor.resume(&overflow_worker, true).await?;
         replayed_gate = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -11536,8 +11252,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         );
     }
     replayed_gate
-        .release
-        .send(())
+        .release()
         .expect("release replayed capable overflow gate");
     assert!(
         executor
@@ -11546,7 +11261,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
             .is_err(),
         "replayed capable stdin overflow must not run a body"
     );
-    checkpoint_server.abort();
+    drop(checkpoint_arrivals);
 
     for owner in [owned_agent_id, cancelled_worker.clone()] {
         if let Some(active) = executor.active_entity_metadata(&owner).await {
@@ -11627,23 +11342,13 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
         )),
     );
 
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "completed-replay-memory-pressure");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -11657,13 +11362,11 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
             data_value!("/completed-under-pressure.bin", ATTACHMENT_BYTES as u64),
         )
         .await?;
-    let original_checkpoint = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        checkpoint_arrivals.recv(),
-    )
-    .await
-    .expect("original completed-attachment checkpoint timed out")
-    .expect("checkpoint server stopped");
+    let original_checkpoint =
+        tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+            .await
+            .expect("original completed-attachment checkpoint timed out")
+            .expect("checkpoint server stopped");
     assert_eq!(original_checkpoint.name, "completed-attachment-pressure");
     let target_memory = executor.worker_memory_requirement(&owned_agent_id).await?;
 
@@ -11716,24 +11419,21 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
     let mut reconstruction =
         executor.gate_next_completed_entity_reconstruction(&worker_id.agent_id);
     executor.simulated_crash(&worker_id).await?;
-    drop(original_checkpoint.release);
+    drop(original_checkpoint);
     tokio::time::timeout(std::time::Duration::from_secs(30), reconstruction.entered())
         .await
         .expect("completed tool body did not reexecute under attachment memory pressure");
     assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
     reconstruction.release();
 
-    let replayed_checkpoint = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        checkpoint_arrivals.recv(),
-    )
-    .await
-    .expect("replayed completed-attachment checkpoint timed out")
-    .expect("checkpoint server stopped");
+    let replayed_checkpoint =
+        tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+            .await
+            .expect("replayed completed-attachment checkpoint timed out")
+            .expect("checkpoint server stopped");
     assert_eq!(replayed_checkpoint.name, "completed-attachment-pressure");
     replayed_checkpoint
-        .release
-        .send(())
+        .release()
         .expect("release replayed completed-attachment checkpoint");
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
@@ -11753,7 +11453,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
         input,
         "completed replay must preserve the body-reconstructed filesystem state"
     );
-    checkpoint_server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -11824,23 +11524,13 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         )),
     );
 
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "incomplete-upgrade-rejection");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -11853,13 +11543,11 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         data_value!(),
     );
     let prepare_replay = async {
-        let original_checkpoint = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .expect("original incomplete-attachment checkpoint timed out")
-        .expect("checkpoint server stopped");
+        let original_checkpoint =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .expect("original incomplete-attachment checkpoint timed out")
+                .expect("checkpoint server stopped");
         assert_eq!(
             original_checkpoint.name,
             "after-dual-output-before-terminal"
@@ -11892,7 +11580,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
 
         let mut reconstructed_body = executor.gate_next_entity_body_start(&worker_id.agent_id);
         executor.simulated_crash(&worker_id).await?;
-        drop(original_checkpoint.release);
+        drop(original_checkpoint);
         executor.resume(&worker_id, true).await?;
         tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -12038,12 +11726,9 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
     }
 
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            checkpoint_arrivals.recv()
-        )
-        .await
-        .is_err(),
+        tokio::time::timeout(std::time::Duration::from_millis(200), checkpoints.recv())
+            .await
+            .is_err(),
         "rejected live repair must not reach the provider's live checkpoint"
     );
     executor.simulated_crash(&worker_id).await?;
@@ -12060,12 +11745,9 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
     .await
     .map_err(|_| anyhow::anyhow!("stable rejection replay did not settle"))??;
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            checkpoint_arrivals.recv()
-        )
-        .await
-        .is_err(),
+        tokio::time::timeout(std::time::Duration::from_millis(200), checkpoints.recv())
+            .await
+            .is_err(),
         "recorded rejection must reconstruct the body without repeating its live checkpoint"
     );
     let replayed_file = executor
@@ -12090,7 +11772,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         1,
         "replay must retain the original attachment rejection terminal"
     );
-    checkpoint_server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -12232,7 +11914,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         },
     )
     .await?;
-    let (port, gate_port, _server, mut checkpoints) = start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -12267,13 +11949,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         .start_agent_with(
             &caller_component.id,
             agent,
-            HashMap::from([
-                ("CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -12340,7 +12016,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         assert_eq!(staging.name, "fire-capable-staging");
         cards.revoke(trigger);
         executor.queue_card_revocation(&worker.agent_id, trigger).await?;
-        staging.release.send(()).unwrap();
+        staging.release().unwrap();
         let parent_open = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
         assert_eq!(parent_open.name, "fire-capable-ready-parent-open");
         executor.commit_oplog(&worker.agent_id).await?;
@@ -12350,7 +12026,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         assert_eq!(operation.admission, ToolBodyAdmissionMetadata::Ready);
         assert_eq!(operation.lane, ToolOperationLaneMetadata::None);
         load.arm();
-        parent_open.release.send(()).unwrap();
+        parent_open.release().unwrap();
         tokio::time::timeout(Duration::from_secs(30), load.entered()).await?;
         // Executable fetch precedes context/Store creation. The parent's next checkpoint
         // authorization invalidated its whole scope; only the accepted child retains marker.
@@ -12373,7 +12049,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         assert_eq!(body.name, "capable-body");
         assert!(!executor.active_agents().tracked_card_ids().await.contains(&marker),
             "the child's own authorization must invalidate its inherited revoked-root scope");
-        body.release.send(()).unwrap();
+        body.release().unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if executor.active_entity_metadata(&owner).await.is_some_and(|metadata| metadata.tool_operations.operations.is_empty()) { break; }
@@ -12463,8 +12139,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         ..Default::default()
     };
     let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
 
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -12491,16 +12166,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
             metadata.tools,
         )),
     );
-    let env = HashMap::from([
-        (
-            "CRASH_CHECKPOINT_PORT".to_string(),
-            checkpoint_port.to_string(),
-        ),
-        (
-            "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-            checkpoint_gate_port.to_string(),
-        ),
-    ]);
+    let env = checkpoints.agent_env("");
 
     let sync_agent = agent_key!("ToolStreamingCaller", "sync-capable-staging-boundary");
     let sync_worker = executor
@@ -12520,13 +12186,11 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         data_value!(sync_input.clone()),
     );
     let sync_gates = async {
-        let staging_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .expect("synchronous capable staging gate timed out")
-        .expect("checkpoint server stopped");
+        let staging_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .expect("synchronous capable staging gate timed out")
+                .expect("checkpoint server stopped");
         assert_eq!(staging_gate.name, "sync-capable-staging");
         let operation = executor
             .active_entity_metadata(&sync_owner)
@@ -12539,17 +12203,14 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(stdin.accepted_bytes, sync_input.len() as u64);
         assert!(!stdin.terminal_selected);
         staging_gate
-            .release
-            .send(())
+            .release()
             .expect("release synchronous capable staging gate");
 
-        let body_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .expect("synchronous capable body gate timed out")
-        .expect("checkpoint server stopped");
+        let body_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .expect("synchronous capable body gate timed out")
+                .expect("checkpoint server stopped");
         assert_eq!(body_gate.name, "capable-body");
         let operation = executor
             .active_entity_metadata(&sync_owner)
@@ -12564,8 +12225,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(stdout.mode, ToolAttachmentModeMetadata::CompletionStaged);
         assert_eq!(stdout.delivered_bytes, 0);
         body_gate
-            .release
-            .send(())
+            .release()
             .expect("release synchronous capable body gate");
     };
     let (sync_result, ()) = tokio::join!(sync_call, sync_gates);
@@ -12595,13 +12255,11 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         data_value!(fire_input.clone()),
     );
     let fire_gates = async {
-        let staging_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .expect("fire-and-forget capable staging gate timed out")
-        .expect("checkpoint server stopped");
+        let staging_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .expect("fire-and-forget capable staging gate timed out")
+                .expect("checkpoint server stopped");
         assert_eq!(staging_gate.name, "fire-capable-staging");
         let operation = executor
             .active_entity_metadata(&fire_owner)
@@ -12611,17 +12269,14 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(operation.admission, ToolBodyAdmissionMetadata::Staging);
         assert_eq!(operation.lane, ToolOperationLaneMetadata::None);
         staging_gate
-            .release
-            .send(())
+            .release()
             .expect("release fire-and-forget staging gate");
 
-        let parent_open_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .expect("fire-and-forget parent-open gate timed out")
-        .expect("checkpoint server stopped");
+        let parent_open_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .expect("fire-and-forget parent-open gate timed out")
+                .expect("checkpoint server stopped");
         assert_eq!(parent_open_gate.name, "fire-capable-ready-parent-open");
         let operation = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
@@ -12643,17 +12298,14 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(operation.admission, ToolBodyAdmissionMetadata::Ready);
         assert_eq!(operation.lane, ToolOperationLaneMetadata::None);
         parent_open_gate
-            .release
-            .send(())
+            .release()
             .expect("release fire-and-forget parent-open gate");
 
-        let body_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .expect("fire-and-forget capable body gate timed out")
-        .expect("checkpoint server stopped");
+        let body_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .expect("fire-and-forget capable body gate timed out")
+                .expect("checkpoint server stopped");
         assert_eq!(body_gate.name, "capable-body");
         let operation = executor
             .active_entity_metadata(&fire_owner)
@@ -12663,8 +12315,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(operation.admission, ToolBodyAdmissionMetadata::Running);
         assert_eq!(operation.lane, ToolOperationLaneMetadata::Granted);
         body_gate
-            .release
-            .send(())
+            .release()
             .expect("release fire-and-forget capable body gate");
     };
     let (fire_result, ()) = tokio::join!(fire_call, fire_gates);
@@ -12694,13 +12345,11 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         data_value!("/capable-publication.bin", publication_input.clone()),
     );
     let publication_gates = async {
-        let provider_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .expect("capable provider publication gate timed out")
-        .expect("checkpoint server stopped");
+        let provider_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .expect("capable provider publication gate timed out")
+                .expect("checkpoint server stopped");
         assert_eq!(provider_gate.name, "provider-capable-before-publication");
 
         let operation = executor
@@ -12717,21 +12366,18 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(stdout.buffered_bytes, publication_input.len());
         assert!(!stdout.terminal_selected);
         assert!(
-            checkpoint_arrivals.try_recv().is_err(),
+            checkpoints.try_next().is_none(),
             "caller must not observe capable stdout before lane return"
         );
 
         provider_gate
-            .release
-            .send(())
+            .release()
             .expect("release capable provider publication gate");
-        let caller_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .expect("caller publication observation gate timed out")
-        .expect("checkpoint server stopped");
+        let caller_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .expect("caller publication observation gate timed out")
+                .expect("checkpoint server stopped");
         assert_eq!(caller_gate.name, "caller-observed-capable-publication");
         let active = executor
             .active_entity_metadata(&publication_owner)
@@ -12743,8 +12389,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         ));
         assert_eq!(active.lane.active_invocation_count, 1);
         caller_gate
-            .release
-            .send(())
+            .release()
             .expect("release caller publication gate");
     };
     let (publication_result, ()) = tokio::join!(publication_call, publication_gates);
@@ -12762,36 +12407,13 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         b"observed".as_slice()
     );
 
-    let (
-        provider_checkpoint_port,
-        provider_checkpoint_gate_port,
-        provider_checkpoint_server,
-        mut provider_checkpoint_arrivals,
-    ) = start_crash_checkpoint_server().await;
-    let (
-        caller_checkpoint_port,
-        caller_checkpoint_gate_port,
-        caller_checkpoint_server,
-        mut caller_checkpoint_arrivals,
-    ) = start_crash_checkpoint_server().await;
-    let trap_env = HashMap::from([
-        (
-            "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-            provider_checkpoint_port.to_string(),
-        ),
-        (
-            "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-            provider_checkpoint_gate_port.to_string(),
-        ),
-        (
-            "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
-            caller_checkpoint_port.to_string(),
-        ),
-        (
-            "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-            caller_checkpoint_gate_port.to_string(),
-        ),
-    ]);
+    let mut provider_checkpoints = CrashCheckpointServer::start().await?;
+    let mut caller_checkpoints = CrashCheckpointServer::start().await?;
+    let trap_env = provider_checkpoints
+        .agent_env("PROVIDER")
+        .into_iter()
+        .chain(caller_checkpoints.agent_env("CALLER"))
+        .collect::<HashMap<_, _>>();
     let trap_agent = agent_key!("ToolStreamingCaller", "clean-stdout-before-trap");
     let trap_worker = executor
         .start_agent_with(
@@ -12811,7 +12433,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
     let trap_gates = async {
         let provider_gate = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            provider_checkpoint_arrivals.recv(),
+            provider_checkpoints.recv(),
         )
         .await
         .expect("provider clean-stdout gate timed out")
@@ -12819,7 +12441,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(provider_gate.name, "provider-clean-stdout-before-trap");
         let caller_gate = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            caller_checkpoint_arrivals.recv(),
+            caller_checkpoints.recv(),
         )
         .await
         .expect("caller clean-stdout gate timed out")
@@ -12838,12 +12460,10 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert_eq!(stdout.delivered_bytes, b"marker:".len() as u64);
 
         caller_gate
-            .release
-            .send(())
+            .release()
             .expect("release caller clean-stdout gate");
         provider_gate
-            .release
-            .send(())
+            .release()
             .expect("release provider clean-stdout gate");
     };
     let (trap_result, ()) = tokio::join!(trap_call, trap_gates);
@@ -12883,9 +12503,9 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
     .await
     .map_err(|_| anyhow::anyhow!("the fire-and-forget parent did not replay"))??;
 
-    checkpoint_server.abort();
-    provider_checkpoint_server.abort();
-    caller_checkpoint_server.abort();
+    drop(checkpoints);
+    drop(provider_checkpoints);
+    drop(caller_checkpoints);
     Ok(())
 }
 
@@ -12914,8 +12534,7 @@ async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_ca
         },
     )
     .await?;
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -12946,16 +12565,7 @@ async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_ca
         .start_agent_with(
             &caller_component.id,
             agent.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -12976,27 +12586,23 @@ async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_ca
         }
     });
     let mut next_checkpoint = async |name: &str| {
-        let arrival = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("checkpoint {name} timed out"))?
-        .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped"))?;
+        let arrival = tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("checkpoint {name} timed out"))?
+            .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped"))?;
         assert_eq!(arrival.name, name);
         Ok::<_, anyhow::Error>(arrival)
     };
     next_checkpoint("fire-capable-staging")
         .await?
-        .release
-        .send(())
+        .release()
         .expect("release the staging gate");
     let parent_open = next_checkpoint("fire-capable-ready-parent-open").await?;
     // The staged body is not held: whether the stop lets it start is not what this test checks.
     let _release_later_checkpoints =
         tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            while let Some(arrival) = checkpoint_arrivals.recv().await {
-                let _ = arrival.release.send(());
+            while let Some(arrival) = checkpoints.recv().await {
+                let _ = arrival.release();
             }
         }));
     let worker = executor
@@ -13007,10 +12613,7 @@ async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_ca
     let (at_result, release_result) = executor
         .gate_next_invocation_outcome_append(&worker_id.agent_id)
         .await;
-    parent_open
-        .release
-        .send(())
-        .expect("release the parent-open gate");
+    parent_open.release().expect("release the parent-open gate");
     tokio::time::timeout(std::time::Duration::from_secs(30), at_result)
         .await
         .map_err(|_| anyhow::anyhow!("the method's result was not recorded"))??;
@@ -13089,7 +12692,6 @@ async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_ca
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
         "the stop fails nothing: {oplog:#?}"
     );
-    checkpoint_server.abort();
     Ok(())
 }
 
@@ -13278,17 +12880,13 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         Some(deployment),
     );
 
-    let (promise_port, promise_server, mut promise_checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut promise_checkpoints = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "suspended-restart-completed-tool");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([(
-                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                promise_port.to_string(),
-            )]),
+            promise_checkpoints.agent_env("CALLER"),
             Vec::new(),
         )
         .await?;
@@ -13314,8 +12912,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         })
     };
 
-    let checkpoint =
-        next_promise_checkpoint(&mut promise_checkpoints, "completed-capable-tool").await?;
+    let checkpoint = promise_checkpoints.reach("completed-capable-tool").await?;
     executor
         .wait_for_status(
             &worker_id,
@@ -13336,7 +12933,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .promise_id(&worker_id, checkpoint.oplog_index)
                 .await?,
             Vec::new(),
         )
@@ -13400,23 +12997,13 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         .into_typed()?;
     assert_eq!(follow_up.into_bytes(), expected);
 
-    let (drain_checkpoint_port, drain_gate_port, drain_server, mut drain_checkpoints) =
-        start_crash_checkpoint_server().await;
+    let mut drain_checkpoints = CrashCheckpointServer::start().await?;
     let drain_agent_id = agent_key!("ToolStreamingCaller", "restart-drains-live-entity");
     let drain_worker_id = executor
         .start_agent_with(
             &caller_component.id,
             drain_agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    drain_checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    drain_gate_port.to_string(),
-                ),
-            ]),
+            drain_checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -13439,7 +13026,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
                 .await
         }
     });
-    let drain_checkpoint = next_crash_checkpoint(&mut drain_checkpoints, "capable-body").await?;
+    let drain_checkpoint = drain_checkpoints.reach("capable-body").await?;
     let held_operation = executor
         .active_entity_metadata(&owned_drain_agent)
         .await
@@ -13458,11 +13045,10 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         .await
         .map_err(|_| anyhow::anyhow!("restart did not cancel the blocked live entity body"))???;
     assert!(!drain_invocation.is_finished());
-    let replay_checkpoint = next_crash_checkpoint(&mut drain_checkpoints, "capable-body").await?;
-    drop(drain_checkpoint.release);
+    let replay_checkpoint = drain_checkpoints.reach("capable-body").await?;
+    drop(drain_checkpoint);
     replay_checkpoint
-        .release
-        .send(())
+        .release()
         .map_err(|_| anyhow::anyhow!("replayed tool checkpoint dropped before release"))?;
     let drained: StreamEvidence =
         tokio::time::timeout(std::time::Duration::from_secs(30), drain_invocation)
@@ -13529,8 +13115,8 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         .await?
         .into_typed()?;
     assert_eq!(drain_follow_up.as_bytes(), b"drain-me");
-    drain_server.abort();
-    promise_server.abort();
+    drop(drain_checkpoints);
+    drop(promise_checkpoints);
     Ok(())
 }
 
@@ -14175,41 +13761,18 @@ async fn completed_reconstruction_validates_before_delivering_result(
         )),
     );
 
-    let (
-        provider_checkpoint_port,
-        provider_checkpoint_gate_port,
-        provider_checkpoint_server,
-        mut provider_checkpoints,
-    ) = start_crash_checkpoint_server().await;
-    let (
-        caller_checkpoint_port,
-        caller_checkpoint_gate_port,
-        caller_checkpoint_server,
-        mut caller_checkpoints,
-    ) = start_crash_checkpoint_server().await;
+    let mut provider_checkpoints = CrashCheckpointServer::start().await?;
+    let mut caller_checkpoints = CrashCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "completed-reconstruction-barrier");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_checkpoint_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_checkpoint_gate_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
-                    caller_checkpoint_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    caller_checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            provider_checkpoints
+                .agent_env("PROVIDER")
+                .into_iter()
+                .chain(caller_checkpoints.agent_env("CALLER"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -14222,23 +13785,23 @@ async fn completed_reconstruction_validates_before_delivering_result(
         data_value!(),
     );
     let crash_and_validate = async {
-        let original_body =
-            next_crash_checkpoint(&mut provider_checkpoints, "historical-reconstruction-body")
-                .await?;
+        let original_body = provider_checkpoints
+            .reach("historical-reconstruction-body")
+            .await?;
         wait_for_active_tool_operations(&executor, &owned_agent_id, 1).await?;
         original_body
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("original reconstruction body gate was dropped"))?;
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
-        let original_live =
-            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-live-effect").await?;
+        let original_live = caller_checkpoints
+            .reach("reconstruction-live-effect")
+            .await?;
         let mut reconstruction_claim =
             executor.gate_next_entity_reconstruction_claim(&worker_id.agent_id);
         let mut reconstruction_body =
             executor.gate_next_completed_entity_reconstruction(&worker_id.agent_id);
         executor.simulated_crash(&worker_id).await?;
-        drop(original_live.release);
+        drop(original_live);
         let reconstruction_start = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             reconstruction_claim.entered(),
@@ -14258,7 +13821,7 @@ async fn completed_reconstruction_validates_before_delivering_result(
         .await
         .map_err(|_| anyhow::anyhow!("completed reconstruction body did not settle"))?;
         assert!(
-            caller_checkpoints.try_recv().is_err(),
+            caller_checkpoints.try_next().is_none(),
             "the tool result was delivered before completed reconstruction validation"
         );
         reconstruction_body.release();
@@ -14269,10 +13832,9 @@ async fn completed_reconstruction_validates_before_delivering_result(
         .await
         .map_err(|_| anyhow::anyhow!("replayed live effect remained blocked"))?
         .ok_or_else(|| anyhow::anyhow!("caller checkpoint server stopped"))?;
-        assert_eq!(replayed_live.name, original_live.name);
+        assert_eq!(replayed_live.name, "reconstruction-live-effect");
         replayed_live
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("replayed live-effect gate was dropped"))?;
         Ok::<_, anyhow::Error>(())
     };
@@ -14292,8 +13854,8 @@ async fn completed_reconstruction_validates_before_delivering_result(
             .count(),
         1
     );
-    provider_checkpoint_server.abort();
-    caller_checkpoint_server.abort();
+    drop(provider_checkpoints);
+    drop(caller_checkpoints);
     Ok(())
 }
 
@@ -14344,12 +13906,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         )),
     );
 
-    let (
-        caller_checkpoint_port,
-        caller_checkpoint_gate_port,
-        caller_checkpoint_server,
-        mut caller_checkpoints,
-    ) = start_crash_checkpoint_server().await;
+    let mut caller_checkpoints = CrashCheckpointServer::start().await?;
     let agent_id = agent_key!(
         "ToolStreamingCaller",
         "incomplete-custom-reconstruction-barrier"
@@ -14358,16 +13915,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
-                    caller_checkpoint_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    caller_checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            caller_checkpoints.agent_env("CALLER"),
             Vec::new(),
         )
         .await?;
@@ -14385,22 +13933,20 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         tokio::time::timeout(std::time::Duration::from_secs(30), original_body.entered())
             .await
             .map_err(|_| anyhow::anyhow!("original entity body did not complete"))?;
-        let original_before_custom = next_crash_checkpoint(
-            &mut caller_checkpoints,
-            "before-reconstruction-custom-effect",
-        )
-        .await?;
+        let original_before_custom = caller_checkpoints
+            .reach("before-reconstruction-custom-effect")
+            .await?;
         original_body.release();
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         executor.commit_oplog(&worker_id.agent_id).await?;
         let entity_start =
             wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?;
         original_before_custom
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("original custom-start gate was dropped"))?;
-        let original_custom =
-            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
+        let original_custom = caller_checkpoints
+            .reach("reconstruction-custom-effect")
+            .await?;
         let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let custom_start = original_oplog
             .iter()
@@ -14473,10 +14019,9 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         .ok_or_else(|| anyhow::anyhow!("caller checkpoint server stopped"))?;
         assert_eq!(replayed_custom.name, original_custom.name);
         replayed_custom
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("replayed custom-effect gate was dropped"))?;
-        drop(original_custom.release);
+        drop(original_custom);
         Ok::<_, anyhow::Error>(())
     };
     let _ = tokio::try_join!(invocation, crash_and_validate)?;
@@ -14488,7 +14033,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         b"C".as_slice(),
         "the repaired custom effect must commit exactly once after body validation"
     );
-    caller_checkpoint_server.abort();
+    drop(caller_checkpoints);
     Ok(())
 }
 
@@ -14547,18 +14092,8 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
         )),
     );
 
-    let (
-        provider_checkpoint_port,
-        provider_checkpoint_gate_port,
-        provider_checkpoint_server,
-        mut provider_checkpoints,
-    ) = start_crash_checkpoint_server().await;
-    let (
-        caller_checkpoint_port,
-        caller_checkpoint_gate_port,
-        caller_checkpoint_server,
-        mut caller_checkpoints,
-    ) = start_crash_checkpoint_server().await;
+    let mut provider_checkpoints = CrashCheckpointServer::start().await?;
+    let mut caller_checkpoints = CrashCheckpointServer::start().await?;
     let agent_id = agent_key!(
         "ToolStreamingCaller",
         "incomplete-custom-reconstruction-overlap"
@@ -14567,24 +14102,11 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_checkpoint_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_checkpoint_gate_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
-                    caller_checkpoint_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    caller_checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            provider_checkpoints
+                .agent_env("PROVIDER")
+                .into_iter()
+                .chain(caller_checkpoints.agent_env("CALLER"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -14599,26 +14121,23 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
     let crash_and_validate = async {
         // Both Stores reach their checkpoints while the other is still open, so the entity body's
         // remaining entries and the caller's checkpoint entries interleave in the shared oplog.
-        let original_body =
-            next_crash_checkpoint(&mut provider_checkpoints, "historical-reconstruction-body")
-                .await?;
-        let original_before_custom = next_crash_checkpoint(
-            &mut caller_checkpoints,
-            "before-reconstruction-custom-effect",
-        )
-        .await?;
+        let original_body = provider_checkpoints
+            .reach("historical-reconstruction-body")
+            .await?;
+        let original_before_custom = caller_checkpoints
+            .reach("before-reconstruction-custom-effect")
+            .await?;
         wait_for_active_tool_operations(&executor, &owned_agent_id, 1).await?;
         original_body
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("original reconstruction body gate was dropped"))?;
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         original_before_custom
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("original custom-start gate was dropped"))?;
-        let original_custom =
-            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
+        let original_custom = caller_checkpoints
+            .reach("reconstruction-custom-effect")
+            .await?;
         let entity_start =
             wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?;
         let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -14686,10 +14205,9 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
         .ok_or_else(|| anyhow::anyhow!("caller checkpoint server stopped"))?;
         assert_eq!(replayed_custom.name, original_custom.name);
         replayed_custom
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("replayed custom-effect gate was dropped"))?;
-        drop(original_custom.release);
+        drop(original_custom);
         Ok::<_, anyhow::Error>(())
     };
     let _ = tokio::try_join!(invocation, crash_and_validate)?;
@@ -14702,11 +14220,11 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
         "the repaired custom effect must commit exactly once after body validation"
     );
     assert!(
-        provider_checkpoints.try_recv().is_err(),
+        provider_checkpoints.try_next().is_none(),
         "the completed entity body must not re-execute during historical reconstruction"
     );
-    provider_checkpoint_server.abort();
-    caller_checkpoint_server.abort();
+    drop(provider_checkpoints);
+    drop(caller_checkpoints);
     Ok(())
 }
 
@@ -14754,8 +14272,7 @@ async fn run_clocked_stream_recovery(
         },
     )
     .await?;
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -14787,16 +14304,7 @@ async fn run_clocked_stream_recovery(
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -14824,7 +14332,7 @@ async fn run_clocked_stream_recovery(
                 gate.entered().await;
                 Ok(None)
             } else {
-                checkpoint_arrivals.recv().await.map(Some)
+                checkpoints.recv().await.map(Some)
                     .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))
             }
         } => checkpoint?,
@@ -14879,8 +14387,7 @@ async fn run_clocked_stream_recovery(
         let mut clock = executor.gate_next_monotonic_clock_start(&owner).await?;
         original_checkpoint
             .expect("capable body checkpoint")
-            .release
-            .send(())
+            .release()
             .expect("release original tool body");
         tokio::time::timeout(std::time::Duration::from_secs(30), clock.entered())
             .await
@@ -14941,7 +14448,7 @@ async fn run_clocked_stream_recovery(
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
         "clock and stream recovery must not write a replay error"
     );
-    checkpoint_server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -15112,8 +14619,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         },
     )
     .await?;
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoint_arrivals = CrashCheckpointServer::start().await?;
 
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -15217,16 +14723,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
             .start_agent_with(
                 &caller_component.id,
                 agent_id.clone(),
-                HashMap::from([
-                    (
-                        "CRASH_CHECKPOINT_PORT".to_string(),
-                        checkpoint_port.to_string(),
-                    ),
-                    (
-                        "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                        checkpoint_gate_port.to_string(),
-                    ),
-                ]),
+                checkpoint_arrivals.agent_env(""),
                 Vec::new(),
             )
             .await?;
@@ -15413,7 +14910,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
 
         executor.simulated_crash(&worker_id).await?;
         drop(original_body);
-        drop(original_checkpoint.release);
+        drop(original_checkpoint);
 
         let replayed_checkpoint = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -15541,8 +15038,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         }
 
         replayed_checkpoint
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("replayed component gate was dropped before release"))?;
         let cleanup = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
@@ -15585,7 +15081,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         executor.delete_worker(&worker_id).await?;
     }
 
-    checkpoint_server.abort();
+    drop(checkpoint_arrivals);
 
     Ok(())
 }
@@ -15636,8 +15132,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
             metadata.tools,
         )),
     );
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let (effect_port, mut effects, effect_server) =
         middleware_acceptance::start_probe_effect_server().await;
 
@@ -15678,20 +15173,14 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
             .start_agent_with(
                 &caller_component.id,
                 agent_id.clone(),
-                HashMap::from([
-                    (
-                        "CRASH_CHECKPOINT_PORT".to_string(),
-                        checkpoint_port.to_string(),
-                    ),
-                    (
-                        "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                        checkpoint_gate_port.to_string(),
-                    ),
-                    (
+                checkpoints
+                    .agent_env("")
+                    .into_iter()
+                    .chain([(
                         "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
                         effect_port.to_string(),
-                    ),
-                ]),
+                    )])
+                    .collect::<HashMap<_, _>>(),
                 Vec::new(),
             )
             .await?;
@@ -15710,7 +15199,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
         };
         assert_eq!(effect, format!("dual-reconstruct-{checkpoint}"));
         let original_checkpoint = tokio::select! {
-            checkpoint = next_crash_checkpoint(&mut arrivals, checkpoint) => checkpoint?,
+            checkpoint = checkpoints.reach(checkpoint) => checkpoint?,
             result = invocation.as_mut() => panic!("dual-output call settled before checkpoint: {result:?}"),
         };
         let (start, original_stdout, original_stderr) =
@@ -15733,9 +15222,9 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
             })?;
 
         executor.simulated_crash(&worker_id).await?;
-        drop(original_checkpoint.release);
+        drop(original_checkpoint);
         let replayed_checkpoint = tokio::select! {
-            checkpoint = next_crash_checkpoint(&mut arrivals, checkpoint) => checkpoint?,
+            checkpoint = checkpoints.reach(checkpoint) => checkpoint?,
             result = invocation.as_mut() => panic!("dual-output replay settled before checkpoint: {result:?}"),
         };
         let mut last_replayed_operation = None;
@@ -15768,15 +15257,14 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
             "replay repeated the external effect at {checkpoint}"
         );
         replayed_checkpoint
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("dual-output replay gate dropped at {checkpoint}"))?;
         let outputs: Vec<Vec<u8>> = invocation.await?.into_typed()?;
         assert_eq!(outputs, [expected_stdout, expected_stderr]);
         executor.delete_worker(&worker_id).await?;
     }
 
-    checkpoint_server.abort();
+    drop(checkpoints);
     effect_server.abort();
     Ok(())
 }
@@ -15802,8 +15290,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         },
     )
     .await?;
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
 
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -15836,16 +15323,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -15862,17 +15340,14 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         data_value!(output_path, input.clone()),
     );
     let crash_and_replay = async {
-        let original_child_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("original retained child checkpoint timed out"))?
-        .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
+        let original_child_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .map_err(|_| anyhow::anyhow!("original retained child checkpoint timed out"))?
+                .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(original_child_gate.name, "capable-terminal-retained-child");
         original_child_gate
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("original retained child gate dropped before release"))?;
         tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -16022,17 +15497,14 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         .map_err(|_| anyhow::anyhow!("fresh capable replay attachments were not reconstructed"))?;
         replayed_child_completion.release();
 
-        let published_gate = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("replayed capable publication checkpoint timed out"))?
-        .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
+        let published_gate =
+            tokio::time::timeout(std::time::Duration::from_secs(30), checkpoints.recv())
+                .await
+                .map_err(|_| anyhow::anyhow!("replayed capable publication checkpoint timed out"))?
+                .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(published_gate.name, "capable-terminal-published");
         published_gate
-            .release
-            .send(())
+            .release()
             .map_err(|_| anyhow::anyhow!("published caller gate dropped before release"))?;
 
         Ok::<_, anyhow::Error>((outer_start, child_start, original_terminal))
@@ -16115,7 +15587,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
     }
 
     executor.delete_worker(&worker_id).await?;
-    checkpoint_server.abort();
+    drop(checkpoints);
 
     Ok(())
 }
@@ -24483,7 +23955,7 @@ async fn standalone_tool_checkpoint_crashes_do_not_repeat_effects(
             );
         }
         drop(executor);
-        drop(checkpoint.release);
+        drop(checkpoint);
         executor = start_with_overrides(deps, context, overrides.clone()).await?;
         replay_effect_checkpoint(&mut fixture.checkpoints, &executor, &call, value).await?;
         // Before/after recorded effect → recovery adds only the missing effect, never a duplicate.
@@ -24519,15 +23991,15 @@ async fn standalone_tool_checkpoint_crashes_do_not_repeat_effects(
 }
 
 async fn stop_at_effect_checkpoint(
-    checkpoints: &mut tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
+    checkpoints: &mut CrashCheckpointServer,
     executor: &TestWorkerExecutor,
     call: &StandaloneToolCall,
     value: &str,
     effects: &AtomicUsize,
     before_crash: usize,
-) -> anyhow::Result<CrashCheckpointArrival> {
+) -> anyhow::Result<CrashCheckpoint> {
     call.start(executor).await?;
-    let checkpoint = next_crash_checkpoint(checkpoints, value).await?;
+    let checkpoint = checkpoints.reach(value).await?;
     assert_eq!(
         effects.load(Ordering::SeqCst),
         before_crash,
@@ -24537,16 +24009,12 @@ async fn stop_at_effect_checkpoint(
 }
 
 async fn replay_effect_checkpoint(
-    checkpoints: &mut tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
+    checkpoints: &mut CrashCheckpointServer,
     executor: &TestWorkerExecutor,
     call: &StandaloneToolCall,
     value: &str,
 ) -> anyhow::Result<()> {
-    next_crash_checkpoint(checkpoints, value)
-        .await?
-        .release
-        .send(())
-        .unwrap();
+    checkpoints.reach(value).await?.release().unwrap();
     call.result(executor).await?;
     Ok(())
 }
@@ -24578,13 +24046,13 @@ async fn suspend_standalone_at_promise(
     call: &StandaloneToolCall,
 ) -> anyhow::Result<PromiseId> {
     call.start(executor).await?;
-    let promise = next_promise_checkpoint(&mut fixture.promises, "standalone-promise").await?;
+    let promise = fixture.promises.reach("standalone-promise").await?;
     wait_for_promise_checkpoint_to_await(executor, &call.owned.agent_id, &promise).await?;
     let fingerprint = executor.get_worker_metadata(&call.owned).await?.fingerprint;
     Ok(PromiseId {
         agent_id: call.owned.agent_id,
         fingerprint,
-        oplog_idx: promise.oplog_idx,
+        oplog_idx: promise.oplog_index,
     })
 }
 
@@ -24735,8 +24203,7 @@ async fn commit_terminal_before_retention_timer_insert(
     } = fixture.call(executor, "retention-suspended", "standalone-promise")?;
     suspended.mode = ProtoInvocationMode::Schedule as i32;
     executor.invoke_agent_session(suspended).await?;
-    let suspended_promise =
-        next_promise_checkpoint(&mut fixture.promises, "standalone-promise").await?;
+    let suspended_promise = fixture.promises.reach("standalone-promise").await?;
     wait_for_promise_checkpoint_to_await(executor, &suspended_owner.agent_id, &suspended_promise)
         .await?;
     let StandaloneToolCall {
@@ -25858,7 +25325,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             metadata.tools,
         )),
     );
-    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     for (acknowledged, crash, markerless_crash, storage_failure) in [
         (true, false, false, false),
         (true, true, false, false),
@@ -25875,10 +25342,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             .start_agent_with(
                 &caller_component.id,
                 agent.clone(),
-                HashMap::from([(
-                    "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                    port.to_string(),
-                )]),
+                checkpoints.agent_env("CALLER"),
                 Vec::new(),
             )
             .await?;
@@ -25912,7 +25376,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         );
         tokio::pin!(invocation);
         let synchronize = async {
-            let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
+            let before = checkpoints.reach("unread-before-cancel").await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &before).await?;
             if let Some(mut write_start_gate) = write_start_gate {
                 // The checkpoint commit must not incidentally persist the output write.
@@ -25924,7 +25388,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 executor
                     .complete_promise(
                         &executor.context.default_environment_id,
-                        &executor.promise_id(&worker, before.oplog_idx).await?,
+                        &executor.promise_id(&worker, before.oplog_index).await?,
                         Vec::new(),
                     )
                     .await?;
@@ -25998,11 +25462,11 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             executor
                 .complete_promise(
                     &executor.context.default_environment_id,
-                    &executor.promise_id(&worker, before.oplog_idx).await?,
+                    &executor.promise_id(&worker, before.oplog_index).await?,
                     Vec::new(),
                 )
                 .await?;
-            let after = next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
+            let after = checkpoints.reach("unread-after-cancel").await?;
             wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &after).await?;
             let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
             let entity_start = entries
@@ -26021,7 +25485,8 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                     .then_some(entry.oplog_index)
             }).expect("tool cancellation before unread-output gate");
             assert!(
-                accepted.is_none_or(|accepted| accepted < cancelled) && cancelled < after.oplog_idx
+                accepted.is_none_or(|accepted| accepted < cancelled)
+                    && cancelled < after.oplog_index
             );
             if !acknowledged && !markerless_crash {
                 assert!(
@@ -26070,7 +25535,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             }
             eprintln!(
                 "accepted-unread acknowledged={acknowledged} crash={crash} markerless_crash={markerless_crash}: accepted log {accepted:?}, entity Start {entity_start}, cancellation {cancelled}, unread promise {}",
-                after.oplog_idx
+                after.oplog_index
             );
             if crash {
                 let mut regeneration = executor.gate_next_replay_access_admission(
@@ -26094,7 +25559,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 }
                 regeneration.release();
             }
-            Ok::<_, anyhow::Error>(Some(executor.promise_id(&worker, after.oplog_idx).await?))
+            Ok::<_, anyhow::Error>(Some(executor.promise_id(&worker, after.oplog_index).await?))
         };
         let after = tokio::select! {
             result = invocation.as_mut() => panic!("invocation settled before unread checkpoint: {result:?}"),
@@ -26238,7 +25703,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         );
         executor.delete_worker(&worker).await?;
     }
-    server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -26293,16 +25758,13 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
             metadata.tools,
         )),
     );
-    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent = agent_key!("ToolStreamingCaller", "accepted-uncommitted");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
             agent.clone(),
-            HashMap::from([(
-                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                port.to_string(),
-            )]),
+            checkpoints.agent_env("CALLER"),
             Vec::new(),
         )
         .await?;
@@ -26326,9 +25788,9 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
             data_value!(false),
         )
         .await?;
-    let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
+    let before = checkpoints.reach("unread-before-cancel").await?;
     wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &before).await?;
-    let before_promise = executor.promise_id(&worker, before.oplog_idx).await?;
+    let before_promise = executor.promise_id(&worker, before.oplog_index).await?;
     tokio::time::timeout(Duration::from_secs(30), write_start.entered()).await?;
     let committed = executor.stored_oplog(&worker.agent_id).await;
     write_start.release();
@@ -26378,12 +25840,12 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
             Vec::new(),
         )
         .await?;
-    let after = next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
+    let after = checkpoints.reach("unread-after-cancel").await?;
     wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &after).await?;
     executor
         .complete_promise(
             &executor.context.default_environment_id,
-            &executor.promise_id(&worker, after.oplog_idx).await?,
+            &executor.promise_id(&worker, after.oplog_index).await?,
             Vec::new(),
         )
         .await?;
@@ -26399,7 +25861,7 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
         .into_typed::<Vec<u8>>()?;
     assert_eq!(output, b"marker:");
     assert!(
-        checkpoints.try_recv().is_err(),
+        checkpoints.try_next().is_none(),
         "reconstruction must not repeat checkpoint HTTP effects"
     );
     let settled = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -26454,7 +25916,7 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
         "the provider must observe the write acknowledgment once"
     );
     executor.delete_worker(&worker).await?;
-    server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -28065,8 +27527,7 @@ async fn tool_calls_after_the_return_settle_between_the_result_and_settled(
         caller_component.revision,
         Some(deployment),
     );
-    let (promise_port, promise_server, mut promise_checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut promise_checkpoints = PromiseCheckpointServer::start().await?;
 
     for restart in [false, true] {
         let value = if restart { "replayed" } else { "live" };
@@ -28078,10 +27539,7 @@ async fn tool_calls_after_the_return_settle_between_the_result_and_settled(
             .start_agent_with(
                 &caller_component.id,
                 agent_id.clone(),
-                HashMap::from([(
-                    "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-                    promise_port.to_string(),
-                )]),
+                promise_checkpoints.agent_env("CALLER"),
                 Vec::new(),
             )
             .await?;
@@ -28098,8 +27556,7 @@ async fn tool_calls_after_the_return_settle_between_the_result_and_settled(
         .map_err(|_| anyhow::anyhow!("the result waited for the background tool calls"))??
         .into_typed()?;
         assert_eq!(result, format!("returned({value})"));
-        let checkpoint =
-            next_promise_checkpoint(&mut promise_checkpoints, "tool-calls-after-return").await?;
+        let checkpoint = promise_checkpoints.reach("tool-calls-after-return").await?;
 
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let invocation = after_return_invocation(&oplog);
@@ -28122,7 +27579,7 @@ async fn tool_calls_after_the_return_settle_between_the_result_and_settled(
             .complete_promise(
                 &worker_id.environment_id,
                 &executor
-                    .promise_id(&worker_id, checkpoint.oplog_idx)
+                    .promise_id(&worker_id, checkpoint.oplog_index)
                     .await?,
                 Vec::new(),
             )
@@ -28252,7 +27709,7 @@ async fn tool_calls_after_the_return_settle_between_the_result_and_settled(
         }
     }
 
-    promise_server.abort();
+    drop(promise_checkpoints);
     Ok(())
 }
 

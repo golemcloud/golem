@@ -89,7 +89,7 @@ struct OpenBody {
     body: OplogIndex,
     open_call: OplogIndex,
     http_connections: Arc<AtomicUsize>,
-    checkpoint_server: tokio::task::JoinHandle<()>,
+    checkpoints: PromiseCheckpointServer,
     peers: (
         tokio_util::task::AbortOnDropHandle<()>,
         tokio_util::task::AbortOnDropHandle<()>,
@@ -115,7 +115,7 @@ async fn cancel_body_with_open_call(
         .map_err(|_| {
             anyhow::anyhow!("the cancelled tool call returned no result within 60 s")
         })???;
-    open.checkpoint_server.abort();
+    drop(open.checkpoints);
     Ok(CancelledBody {
         context: open.context,
         overrides: open.overrides,
@@ -177,21 +177,20 @@ async fn open_body_with_open_call(
             metadata.tools,
         )),
     );
-    let (checkpoint_port, checkpoint_server, mut checkpoints) =
-        start_promise_checkpoint_server().await;
+    let mut checkpoints = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", mode);
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                ("WEBSOCKET_HOLD_PORT".to_string(), peer_port.to_string()),
-                ("HTTP_HOLD_PORT".to_string(), http_port.to_string()),
-            ]),
+            checkpoints
+                .agent_env("PROVIDER")
+                .into_iter()
+                .chain([
+                    ("WEBSOCKET_HOLD_PORT".to_string(), peer_port.to_string()),
+                    ("HTTP_HOLD_PORT".to_string(), http_port.to_string()),
+                ])
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -216,12 +215,12 @@ async fn open_body_with_open_call(
             .into_typed::<String>()
     });
 
-    let checkpoint = next_promise_checkpoint(&mut checkpoints, "open-call-held").await?;
+    let checkpoint = checkpoints.reach("open-call-held").await?;
     wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &checkpoint).await?;
     let (body, open_call) =
-        await_open_call(&executor, &worker_id, checkpoint.oplog_idx, open_function).await?;
+        await_open_call(&executor, &worker_id, checkpoint.oplog_index, open_function).await?;
     let promise = executor
-        .promise_id(&worker_id, checkpoint.oplog_idx)
+        .promise_id(&worker_id, checkpoint.oplog_index)
         .await?;
     Ok(OpenBody {
         context,
@@ -237,7 +236,7 @@ async fn open_body_with_open_call(
         body,
         open_call,
         http_connections,
-        checkpoint_server,
+        checkpoints,
         peers: (websocket_peer, http_peer),
     })
 }
@@ -516,7 +515,7 @@ async fn cancelling_a_replayed_body_cancels_its_open_request_body_transmission(
     .await
     .map_err(|_| anyhow::anyhow!("the original invocation returned no result after the crash"))??
     .into_typed()?;
-    open.checkpoint_server.abort();
+    drop(open.checkpoints);
     assert_eq!(result, "open-call-held:Err(ToolRpcError::Cancelled):None");
 
     let oplog = open

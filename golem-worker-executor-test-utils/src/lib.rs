@@ -20,6 +20,7 @@
 pub mod agent_deployments_service;
 pub mod blob_storage_decorator;
 pub mod callers;
+pub mod checkpoint_server;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
@@ -34,6 +35,9 @@ pub mod standalone_tool;
 
 pub use blob_storage_decorator::{
     BlobStorageDecorator, BlobStorageInner, DecoratedBlobStorage, WrappedBlobStorage,
+};
+pub use checkpoint_server::{
+    CrashCheckpoint, CrashCheckpointServer, PromiseCheckpoint, PromiseCheckpointServer,
 };
 pub use emulated_registry_service::EmulatedRegistryService;
 pub use emulated_worker_service::{

@@ -35,26 +35,22 @@ inherit_test_dep!(
 
 struct MiddlewareServers {
     effect_port: u16,
-    promise_port: u16,
     effects: tokio::sync::mpsc::UnboundedReceiver<String>,
-    promises: tokio::sync::mpsc::UnboundedReceiver<PromiseCheckpointArrival>,
+    promises: PromiseCheckpointServer,
     effect_server: tokio::task::JoinHandle<()>,
-    promise_server: tokio::task::JoinHandle<()>,
 }
 
 impl MiddlewareServers {
-    async fn start() -> Self {
+    async fn start() -> anyhow::Result<Self> {
         let (effect_port, effects, effect_server) =
             middleware_acceptance::start_probe_effect_server().await;
-        let (promise_port, promise_server, promises) = start_promise_checkpoint_server().await;
-        Self {
+        let promises = PromiseCheckpointServer::start().await?;
+        Ok(Self {
             effect_port,
-            promise_port,
             effects,
             promises,
             effect_server,
-            promise_server,
-        }
+        })
     }
 }
 
@@ -71,12 +67,18 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
     let environment = Arc::new(TestEnvironmentStateService::default());
     let MiddlewareServers {
         effect_port,
-        promise_port,
         mut effects,
         mut promises,
         effect_server,
-        promise_server: _promises,
-    } = MiddlewareServers::start().await;
+    } = MiddlewareServers::start().await?;
+    let extra_env: BTreeMap<String, String> = promises
+        .agent_env("MIDDLEWARE")
+        .into_iter()
+        .chain([(
+            "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
+            effect_port.to_string(),
+        )])
+        .collect();
     let overrides = TestExecutorOverrides {
         environment_state_service: Some(environment.clone()),
         wrap_component_service: Some(Arc::new(move |inner| {
@@ -84,16 +86,7 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
                 inner,
                 owner_loads: Default::default(),
                 http_port: 0,
-                extra_env: BTreeMap::from([
-                    (
-                        "MIDDLEWARE_PROBE_EFFECT_PORT".into(),
-                        effect_port.to_string(),
-                    ),
-                    (
-                        "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".into(),
-                        promise_port.to_string(),
-                    ),
-                ]),
+                extra_env: extra_env.clone(),
             })
         })),
         ..Default::default()
@@ -385,10 +378,10 @@ fn redeploy_parameterized_middleware(
 async fn wait_for_accepted_middleware_to_suspend(
     executor: &TestWorkerExecutor,
     owner: &OwnedAgentId,
-    promises: &mut tokio::sync::mpsc::UnboundedReceiver<PromiseCheckpointArrival>,
+    promises: &mut PromiseCheckpointServer,
     checkpoint_name: &str,
 ) -> anyhow::Result<PromiseId> {
-    let checkpoint = next_promise_checkpoint(promises, checkpoint_name).await?;
+    let checkpoint = promises.reach(checkpoint_name).await?;
     executor
         .wait_for_status(owner, AgentStatus::Suspended, CHECKPOINT_TIMEOUT)
         .await?;
@@ -405,7 +398,7 @@ async fn wait_for_accepted_middleware_to_suspend(
     Ok(PromiseId {
         agent_id: owner.agent_id,
         fingerprint,
-        oplog_idx: checkpoint.oplog_idx,
+        oplog_idx: checkpoint.oplog_index,
     })
 }
 

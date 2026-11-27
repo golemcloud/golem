@@ -172,41 +172,18 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
     }
 
-    let (
-        provider_checkpoint_port,
-        provider_checkpoint_gate_port,
-        provider_checkpoint_server,
-        mut provider_checkpoint_arrivals,
-    ) = start_crash_checkpoint_server().await;
-    let (
-        caller_checkpoint_port,
-        caller_checkpoint_gate_port,
-        caller_checkpoint_server,
-        mut caller_checkpoint_arrivals,
-    ) = start_crash_checkpoint_server().await;
+    let mut provider_checkpoints = CrashCheckpointServer::start().await?;
+    let mut caller_checkpoints = CrashCheckpointServer::start().await?;
     let exception_agent_id = agent_key!("ToolStreamingCaller", "gol40-rust-sdk-exception");
     let exception_worker_id = executor
         .start_agent_with(
             &caller_component.id,
             exception_agent_id.clone(),
-            HashMap::from([
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_checkpoint_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_checkpoint_gate_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
-                    caller_checkpoint_port.to_string(),
-                ),
-                (
-                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    caller_checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            provider_checkpoints
+                .agent_env("PROVIDER")
+                .into_iter()
+                .chain(caller_checkpoints.agent_env("CALLER"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -219,7 +196,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
     let exception_gate = async {
         let provider_arrival = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            provider_checkpoint_arrivals.recv(),
+            provider_checkpoints.recv(),
         )
         .await
         .expect("provider clean-output checkpoint timed out")
@@ -227,7 +204,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         assert_eq!(provider_arrival.name, "provider-clean-stdout-before-trap");
         let caller_arrival = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            caller_checkpoint_arrivals.recv(),
+            caller_checkpoints.recv(),
         )
         .await
         .expect("exception byte observation timed out")
@@ -237,12 +214,10 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
             "gol40-rust-sdk-exception-bytes-observed"
         );
         caller_arrival
-            .release
-            .send(())
+            .release()
             .expect("release exception byte observation");
         provider_arrival
-            .release
-            .send(())
+            .release()
             .expect("release provider exception");
     };
     let (exception, ()) = tokio::join!(exception_call, exception_gate);
@@ -254,7 +229,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
 
     executor.delete_worker(&worker_id).await?;
     executor.delete_worker(&exception_worker_id).await?;
-    provider_checkpoint_server.abort();
-    caller_checkpoint_server.abort();
+    drop(provider_checkpoints);
+    drop(caller_checkpoints);
     Ok(())
 }

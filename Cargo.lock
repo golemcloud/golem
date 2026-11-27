@@ -4956,6 +4956,7 @@ dependencies = [
  "applying",
  "async-lock",
  "async-trait",
+ "axum",
  "blake3",
  "bytes",
  "desert_rust",

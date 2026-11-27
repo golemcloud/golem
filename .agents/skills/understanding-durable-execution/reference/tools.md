@@ -774,6 +774,6 @@ active_stream_crash_replays_pinned_activation_with_fresh_attachments,
 deterministic_stream_crash_checkpoint_matrix,
 capable_terminal_lane_return_and_delayed_publication_survive_crash}` and
 `tests/tool_discovery.rs`. These use an in-process tokio crash-checkpoint server
-(`start_crash_checkpoint_server`), so they stay within the no-external-process rule.
+(`CrashCheckpointServer` from `golem-worker-executor-test-utils`), so they stay within the no-external-process rule.
 Middleware tests in `tests/tool_streaming.rs` additionally cover pinned multilayer traversal,
 overlapping calls, detached observers, typed input/output projections and restart between items.

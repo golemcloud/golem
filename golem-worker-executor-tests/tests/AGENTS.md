@@ -80,7 +80,8 @@ cases.
 - **Streams and tool bodies: crash at checkpoints, assert by offset and by `Start`.** Crash the
   producer after a committed `StreamItems` and the consumer after a journaled item; assert each
   item is observed once and one terminal is recorded. Drive tool bodies to named checkpoints with
-  the in-process crash-checkpoint server in `tool_streaming.rs` (never an external process) and
+  the in-process `CrashCheckpointServer` and `PromiseCheckpointServer` from
+  `golem-worker-executor-test-utils` (never an external process) and
   assert one entity terminal per `Start` and no repeated external effect on completed replay
   (the body's guest export does run again; count what it calls, not whether it ran).
 - **Replay errors are findings.** `unexpected_oplog_entry`, "no matching Start", extra entries or

@@ -56,9 +56,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
     .await?;
     let silent_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let silent_port = silent_listener.local_addr()?.port();
-    let (checkpoint_port, gate_port, checkpoint_server, mut arrivals) =
-        start_crash_checkpoint_server().await;
-    let _checkpoint_server = checkpoint_server;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -130,20 +128,14 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
+            checkpoints
+                .agent_env("")
+                .into_iter()
+                .chain([(
                     "PRIMARY_SILENT_TCP_PORT".to_string(),
                     silent_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    gate_port.to_string(),
-                ),
-            ]),
+                )])
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -164,7 +156,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
     };
     let child_gate = tokio::select! {
         result = invocation.as_mut() => anyhow::bail!("invocation ended before the nested child gate: {result:?}"),
-        arrival = next_crash_checkpoint(&mut arrivals, "middleware-early-child") => arrival?,
+        arrival = checkpoints.reach("middleware-early-child") => arrival?,
     };
     let ready = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
@@ -224,8 +216,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
     }).await.map_err(|_| anyhow::anyhow!("primary silent receive / parent End / child Start schedule was not reached"))??;
     let (parent, child, primary_waits) = ready;
     child_gate
-        .release
-        .send(())
+        .release()
         .expect("release independently trapping child");
     let settled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {

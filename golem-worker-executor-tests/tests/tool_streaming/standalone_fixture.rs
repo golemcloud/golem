@@ -17,7 +17,6 @@ use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::schema::{IntoSchema, IntoTypedSchemaValue};
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor_test_utils::standalone_tool::StandaloneToolCall;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 
 pub(super) const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -137,16 +136,14 @@ pub(super) struct StandaloneFixture {
     pub environment: Arc<TestEnvironmentStateService>,
     pub effect_gate: Arc<NativeOrderEffectGate>,
     pub effects: Arc<AtomicUsize>,
-    pub checkpoints: UnboundedReceiver<CrashCheckpointArrival>,
-    pub promises: UnboundedReceiver<PromiseCheckpointArrival>,
+    pub checkpoints: CrashCheckpointServer,
+    pub promises: PromiseCheckpointServer,
     pub release_wakes: CancellationToken,
     pub storage: Arc<std::sync::Mutex<Option<Arc<dyn SchedulerStorage + Send + Sync>>>>,
     pub retention_insert: Arc<retention_storage::RetentionInsertGate>,
     pub overrides: TestExecutorOverrides,
     pub tools: BaselineToolDeployment,
     _http: tokio::task::JoinHandle<()>,
-    _checkpoints: tokio_util::task::AbortOnDropHandle<()>,
-    _promises: tokio::task::JoinHandle<()>,
 }
 
 pub(super) struct StandaloneSetup {
@@ -169,9 +166,13 @@ impl StandaloneFixture {
             server: http,
             effects,
         } = start_native_order_http_server(Some(effect_gate.clone())).await;
-        let (checkpoint_port, gate_port, checkpoint_server, checkpoints) =
-            start_crash_checkpoint_server().await;
-        let (promise_port, promise_server, promises) = start_promise_checkpoint_server().await;
+        let checkpoints = CrashCheckpointServer::start().await?;
+        let promises = PromiseCheckpointServer::start().await?;
+        let checkpoint_env: BTreeMap<String, String> = checkpoints
+            .agent_env("")
+            .into_iter()
+            .chain(promises.agent_env("PROVIDER"))
+            .collect();
         let release_wakes = CancellationToken::new();
         let storage = Arc::new(std::sync::Mutex::new(None));
         let retention_insert = Arc::new(retention_storage::RetentionInsertGate::default());
@@ -199,14 +200,7 @@ impl StandaloneFixture {
                     inner,
                     owner_loads: Default::default(),
                     http_port,
-                    extra_env: BTreeMap::from([
-                        ("CRASH_CHECKPOINT_PORT".into(), checkpoint_port.to_string()),
-                        ("CRASH_CHECKPOINT_GATE_PORT".into(), gate_port.to_string()),
-                        (
-                            "PROVIDER_PROMISE_CHECKPOINT_PORT".into(),
-                            promise_port.to_string(),
-                        ),
-                    ]),
+                    extra_env: checkpoint_env.clone(),
                 })
             })),
             ..Default::default()
@@ -245,8 +239,6 @@ impl StandaloneFixture {
             overrides,
             tools,
             _http: http,
-            _checkpoints: checkpoint_server,
-            _promises: promise_server,
         };
         Ok(StandaloneSetup { fixture, executor })
     }
