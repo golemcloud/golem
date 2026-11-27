@@ -2559,7 +2559,7 @@ input to the ID; the raw key is not stored.
 A request carries an `InvocationRequestKey`, and admission finalizes it with
 `finalize(agent_id, fingerprint, operation)` once the target's fingerprint is known
 (`grpc/invocation_session/admission.rs`, `services/rpc/direct.rs`, `durable_host/rpc/target.rs`,
-`durable_host/rpc/schedule.rs`):
+`durable_host/rpc/schedule/mod.rs`):
 
 | Variant | Source | Unique part |
 |---|---|---|
@@ -3055,7 +3055,7 @@ repairs, retain admission without re-authorizing.
 `trigger` and `schedule` (`golem::rpc::wasm-rpc`) return an `invocation` handle only after the
 target durably accepts the invocation; their `End` records the accepted invocation ID
 (`GolemRpcInvocationAccepted`), and completed replay rebuilds the handle from that ID without
-contacting the target. The handle's own operations live in `durable_host/rpc/invocation.rs`.
+contacting the target. The handle's own operations live in `durable_host/rpc/invocation/mod.rs`.
 `get`, `id` and dropping a handle are local and record nothing; dropping a handle, or
 abandoning its `await`, releases only the observation and never cancels the invocation.
 `status` and `await` are `ReadRemote` calls (`golem::rpc::invocation`), so replay returns the
