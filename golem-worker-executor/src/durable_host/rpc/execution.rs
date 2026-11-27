@@ -53,6 +53,7 @@ use golem_common::model::durable_stream::StreamRegistrationInvocation;
 use golem_common::model::durable_stream::StreamSessionKey;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::SpanId;
+use golem_common::model::oplog::HostPayloadPair;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvokeAndAwaitResult;
 use golem_common::related_span;
 use golem_common::schema::schema_value::SchemaValue;
@@ -76,6 +77,21 @@ pub(super) fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
         | InternalRpcError::Cancelled { .. }
         | InternalRpcError::CannotCancelRunning { .. } => HostFailureKind::Permanent,
         InternalRpcError::RemoteInternalError { .. } => HostFailureKind::Transient,
+    }
+}
+
+/// Splits the result of a remote step that does not retry in the call: a permanent refusal is
+/// the call's result, and a transient failure traps the call, which a repair retries.
+pub(super) fn permanent_refusal<Pair: HostPayloadPair, T>(
+    handle: &mut DurableCallSession<Pair, Cancellable>,
+    result: Result<T, InternalRpcError>,
+) -> anyhow::Result<Result<T, InternalRpcError>> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) => match classify_rpc_error(&error) {
+            HostFailureKind::Permanent => Ok(Err(error)),
+            HostFailureKind::Transient => Err(handle.trap(anyhow::Error::from(error))),
+        },
     }
 }
 

@@ -17,24 +17,20 @@
 //! cancel it until it starts. The call's `End` records the invocation's final ID or the target's
 //! permanent refusal, so replay rebuilds the outcome without contacting the target.
 
-use super::execution::{classify_rpc_error, known_fresh_dispatch_allowed};
 use super::{
-    InvocationEntry, PreparedRpcInvocation, RemoteCall, RpcCallKind, RpcCallTarget, WasmRpcEntry,
-    activate_known_target, dispatch_target, interruptible, prepare_rpc_invocation,
+    CallResolution, InvocationEntry, PreparedRpcInvocation, RemoteCall, RpcCallKind, RpcCallTarget,
+    WasmRpcEntry, activate_known_target, create_scheduled_ephemeral_target, interruptible,
+    permanent_refusal, prepare_rpc_invocation, replay_call,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, AccessPermissionCheck, CallReplayOutcome, Cancellable, DurableCallSession,
+    AccessClaimOptions, AccessPermissionCheck, Cancellable, DurableCallSession,
     reserve_invocation_id_before_await,
 };
-use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
-use crate::services::HasWorker;
-use crate::services::oplog::CommitLevel;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::invocation_context::{InvocationContextSpan, InvocationContextStack};
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcSchedule;
@@ -45,7 +41,8 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcInvocationAccepted,
 };
 use golem_common::model::{
-    AgentInvocation, IdempotencyKey, InvocationRequestKey, OwnedAgentId, OwnedInvocationId,
+    AgentFingerprint, AgentInvocation, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
+    OwnedInvocationId,
 };
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::wire as core_wire;
@@ -80,12 +77,29 @@ pub(super) async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
         Err(error) => return Ok(Err(error)),
     };
 
+    let (handle, denial) = start(accessor, &prepared, target, &call_target, datetime).await?;
+    let response = match denial {
+        Some(denial) => complete_denied(accessor, handle, &denial).await?,
+        None => resolve(accessor, handle, &this, prepared, &call_target).await?,
+    };
+    accepted(accessor, response)
+}
+
+/// Starts the schedule's durable call under the target's authorization, or claims its recorded
+/// `Start`. Returns the live denial, if the target refused the call.
+async fn start<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    prepared: &PreparedSchedule,
+    target: PermissionTarget,
+    call_target: &RpcCallTarget,
+    datetime: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
+) -> anyhow::Result<(ScheduleCall, Option<String>)> {
     let (permission_check, decision) = AccessPermissionCheck::new(Ok(vec![target]));
     let request_target = call_target.clone();
     let request_method_name = prepared.rpc.method_name.clone();
     let request_input = prepared.rpc.input_value.clone();
     let request_datetime: SerializableDateTime = datetime.into();
-    let mut handle = ScheduleCall::start_access_with_agent_authority_and_indexed_request(
+    let handle = ScheduleCall::start_access_with_agent_authority_and_indexed_request(
         accessor,
         accessor.getter(),
         DurableFunctionType::WriteRemote,
@@ -116,53 +130,68 @@ pub(super) async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
         },
     )
     .await?;
-    // The live decision holds its authorization permit until the call completes.
-    let decision = decision.await.ok().flatten();
-    let started_live = handle.is_live();
+    let denial = match decision.await.ok().flatten() {
+        Some(Err(denial)) if handle.is_live() => Some(denial),
+        _ => None,
+    };
+    Ok((handle, denial))
+}
 
-    if started_live && let Some(Err(denial)) = &decision {
-        let response = handle
-            .complete_access(
-                accessor,
-                accessor.getter(),
-                denied::rpc::invocation_accepted(&(), denial),
-            )
-            .await?;
-        return accepted(accessor, response);
-    }
-
-    if !started_live {
-        match handle.replay_access(accessor, accessor.getter()).await? {
-            CallReplayOutcome::Replayed(response) => return accepted(accessor, response),
-            CallReplayOutcome::Incomplete(live) => handle = live,
-        }
-    }
-
-    // The request's idempotency key derives from the call's own `Start` index, so a repair of an
-    // incomplete `Start` schedules the same invocation again and the target deduplicates it.
-    let (idempotency_key, remote_agent_id) = call_target
-        .at(handle.start_index())
-        .map_err(|error| handle.trap(error))?;
-    let result = schedule_live(
-        accessor,
-        &mut handle,
-        &this,
-        prepared,
-        &remote_agent_id,
-        idempotency_key,
-        started_live,
-    )
-    .await?;
-    let response = handle
+/// Records the live denial as the call's result.
+async fn complete_denied<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: ScheduleCall,
+    denial: &str,
+) -> anyhow::Result<HostResponseGolemRpcInvocationAccepted> {
+    Ok(handle
         .complete_access(
             accessor,
             accessor.getter(),
-            HostResponseGolemRpcInvocationAccepted {
-                result: result.map_err(Into::into),
-            },
+            denied::rpc::invocation_accepted(&(), denial),
         )
-        .await?;
-    accepted(accessor, response)
+        .await?)
+}
+
+/// Replays the recorded outcome of a completed schedule, or schedules the invocation now and
+/// records the target's acceptance.
+async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: ScheduleCall,
+    this: &Resource<WasmRpcEntry>,
+    prepared: PreparedSchedule,
+    call_target: &RpcCallTarget,
+) -> anyhow::Result<HostResponseGolemRpcInvocationAccepted> {
+    let first_live_dispatch = handle.is_live();
+    match replay_call(accessor, handle).await? {
+        CallResolution::Recorded(response) => Ok(response),
+        CallResolution::Live(mut handle) => {
+            // The request's idempotency key derives from the call's own `Start` index, so a
+            // repair of an incomplete `Start` schedules the same invocation again and the target
+            // deduplicates it.
+            let (idempotency_key, remote_agent_id) = call_target
+                .at(handle.start_index())
+                .map_err(|error| handle.trap(error))?;
+            let result = schedule_live(
+                accessor,
+                &mut handle,
+                this,
+                prepared,
+                &remote_agent_id,
+                idempotency_key,
+                first_live_dispatch,
+            )
+            .await?;
+            Ok(handle
+                .complete_access(
+                    accessor,
+                    accessor.getter(),
+                    HostResponseGolemRpcInvocationAccepted {
+                        result: result.map_err(Into::into),
+                    },
+                )
+                .await?)
+        }
+    }
 }
 
 /// Validates the request as `trigger` does, and captures what the schedule needs after its first
@@ -228,65 +257,63 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
     idempotency_key: IdempotencyKey,
     first_live_dispatch: bool,
 ) -> anyhow::Result<Result<OwnedInvocationId, InternalRpcError>> {
-    let auth_ctx = handle.agent_auth_ctx().clone();
-    let remote = &prepared.remote;
-
     let target_fingerprint = if prepared.rpc.is_ephemeral() {
-        // The ephemeral target is created now, so the schedule commits in its oplog and the
-        // wake pins this incarnation. The target runs nothing before the deadline. Only the
-        // first live dispatch may create a fresh target; a repair may find it.
-        let freshness = if known_fresh_dispatch_allowed(first_live_dispatch, true) {
-            with_import_access(accessor, |mut access| access.get().public_state.worker())
-                .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                .await
-                .map_err(|error| handle.trap(error))?;
-            InvocationFreshnessDisposition::KnownFresh
-        } else {
-            InvocationFreshnessDisposition::MayExist
-        };
-        let invocation = crate::worker::invocation::native_invocation_start(
-            &prepared.rpc.method_name,
-            &prepared.rpc.input_value,
-            false,
+        create_scheduled_ephemeral_target(
+            accessor,
+            handle,
+            &prepared.rpc,
+            &prepared.remote,
+            remote_agent_id,
+            &idempotency_key,
+            first_live_dispatch,
         )
-        .map_err(|error| handle.trap(anyhow::Error::from(error)))?;
-        let demand = remote.rpc.create_demand(
-            dispatch_target(remote_agent_id, prepared.rpc.ephemeral.as_ref()),
-            &prepared.rpc.method_name,
-            Some(invocation),
-            remote.created_by,
-            &remote.agent_id,
-            &prepared.rpc.env,
-            remote.stack.clone(),
-            &remote.caller,
-            prepared.rpc.config.clone(),
-            &auth_ctx,
-            Some(idempotency_key.clone()),
-            freshness,
-        );
-        match interruptible(accessor, handle, demand).await? {
-            Ok(demand) => demand.fingerprint(),
-            Err(error) => return refusal(handle, error),
-        }
+        .await?
     } else {
-        activate_known_target(accessor, this).map_err(|error| handle.trap(error))?
+        Ok(activate_known_target(accessor, this).map_err(|error| handle.trap(error))?)
     };
+    match target_fingerprint {
+        Ok(target_fingerprint) => {
+            schedule_at_target(
+                accessor,
+                handle,
+                prepared,
+                remote_agent_id,
+                idempotency_key,
+                target_fingerprint,
+            )
+            .await
+        }
+        Err(error) => Ok(Err(error)),
+    }
+}
 
+/// Schedules the invocation at the target whose fingerprint is known.
+async fn schedule_at_target<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: &mut ScheduleCall,
+    prepared: PreparedSchedule,
+    remote_agent_id: &OwnedAgentId,
+    idempotency_key: IdempotencyKey,
+    target_fingerprint: AgentFingerprint,
+) -> anyhow::Result<Result<OwnedInvocationId, InternalRpcError>> {
+    let auth_ctx = handle.agent_auth_ctx().clone();
     let request_key = InvocationRequestKey::Internal(idempotency_key);
     let invocation_id = request_key.finalize(
         remote_agent_id.agent_id(),
         target_fingerprint,
         &prepared.rpc.method_name,
     );
+    let input = prepared
+        .rpc
+        .input_value
+        .try_into()
+        .map_err(|error: String| handle.trap(anyhow::anyhow!(error)))?;
+    let remote = prepared.remote;
     let invocation = AgentInvocation::AgentMethod {
         idempotency_key: invocation_id.id(),
         method_name: prepared.rpc.method_name,
         allow_streams: false,
-        input: prepared
-            .rpc
-            .input_value
-            .try_into()
-            .map_err(|error: String| handle.trap(anyhow::anyhow!(error)))?,
+        input,
         invocation_context: prepared.stack,
         caller: remote.caller.clone(),
         scope_card: None,
@@ -302,22 +329,8 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
     );
     // The schedule's wake is not recorded: the handle cancels the invocation by its ID, and a
     // wake that finds no pending invocation has no effect.
-    match interruptible(accessor, handle, scheduled).await? {
-        Ok(_) => Ok(Ok(invocation_id)),
-        Err(error) => refusal(handle, error),
-    }
-}
-
-/// Records a permanent refusal of the target as the call's result, and traps on a transient
-/// failure, which a repair of the call retries.
-fn refusal(
-    handle: &mut ScheduleCall,
-    error: InternalRpcError,
-) -> anyhow::Result<Result<OwnedInvocationId, InternalRpcError>> {
-    match classify_rpc_error(&error) {
-        HostFailureKind::Permanent => Ok(Err(error)),
-        HostFailureKind::Transient => Err(handle.trap(anyhow::Error::from(error))),
-    }
+    let result = interruptible(accessor, handle, scheduled).await?;
+    Ok(permanent_refusal(handle, result)?.map(|_| invocation_id))
 }
 
 fn accepted<U: Send + 'static, Ctx: WorkerCtx>(

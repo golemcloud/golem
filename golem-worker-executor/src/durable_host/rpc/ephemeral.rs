@@ -15,10 +15,16 @@
 //! Creation of the one-shot instance that runs one invocation of an ephemeral agent type.
 
 use super::execution::classify_rpc_error;
-use super::{PreparedRpcInvocation, RemoteCall, dispatch_target, interruptible};
+use super::{
+    PreparedRpcInvocation, RemoteCall, dispatch_target, interruptible,
+    known_fresh_dispatch_allowed, permanent_refusal,
+};
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{Cancellable, DurableCallSession, HostInternalCallOwner};
 use crate::durable_host::durability::InternalRetryResult;
+use crate::durable_host::with_import_access;
+use crate::services::HasWorker;
+use crate::services::oplog::CommitLevel;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::InvocationFreshnessDisposition;
@@ -111,9 +117,9 @@ pub(super) async fn prepare_ephemeral_identity<
                 prepared.is_streaming(),
             )
             .map_err(anyhow::Error::from)?;
-            let remote = RemoteCall::capture(accessor, span_id);
             let mut freshness = freshness;
             let result = loop {
+                let remote = RemoteCall::capture(accessor, span_id);
                 let demand = remote.rpc.create_demand(
                     dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
                     &prepared.method_name,
@@ -154,4 +160,60 @@ pub(super) async fn prepare_ephemeral_identity<
     .await
     .map_err(|error| handle.trap(error))?;
     Ok(response.result.map_err(Into::into))
+}
+
+/// Creates the instance of an ephemeral target for a scheduled invocation, inside the schedule's
+/// own call. Unlike [`prepare_ephemeral_identity`], it records no preparation child: the
+/// schedule's key derives from its `Start` index, and the target deduplicates the creation by
+/// that key, so a repair finds the same instance again. A transient failure traps, and the repair
+/// creates the instance again. A permanent refusal is the schedule's result.
+pub(super) async fn create_scheduled_ephemeral_target<U, Ctx, Pair>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: &mut DurableCallSession<Pair, Cancellable>,
+    prepared: &PreparedRpcInvocation,
+    remote: &RemoteCall,
+    remote_agent_id: &OwnedAgentId,
+    idempotency_key: &IdempotencyKey,
+    first_live_dispatch: bool,
+) -> anyhow::Result<Result<AgentFingerprint, InternalRpcError>>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+    Pair: HostPayloadPair,
+{
+    // The schedule then commits in the target's oplog, and the wake pins this incarnation. The
+    // target runs nothing before the deadline. Only the first live dispatch may create a fresh
+    // target; a repair may find it.
+    let freshness = if known_fresh_dispatch_allowed(first_live_dispatch, true) {
+        with_import_access(accessor, |mut access| access.get().public_state.worker())
+            .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+            .await
+            .map_err(|error| handle.trap(error))?;
+        InvocationFreshnessDisposition::KnownFresh
+    } else {
+        InvocationFreshnessDisposition::MayExist
+    };
+    let invocation = crate::worker::invocation::native_invocation_start(
+        &prepared.method_name,
+        &prepared.input_value,
+        false,
+    )
+    .map_err(|error| handle.trap(anyhow::Error::from(error)))?;
+    let auth_ctx = handle.agent_auth_ctx().clone();
+    let demand = remote.rpc.create_demand(
+        dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
+        &prepared.method_name,
+        Some(invocation),
+        remote.created_by,
+        &remote.agent_id,
+        &prepared.env,
+        remote.stack.clone(),
+        &remote.caller,
+        prepared.config.clone(),
+        &auth_ctx,
+        Some(idempotency_key.clone()),
+        freshness,
+    );
+    let result = interruptible(accessor, handle, demand).await?;
+    Ok(permanent_refusal(handle, result)?.map(|demand| demand.fingerprint()))
 }

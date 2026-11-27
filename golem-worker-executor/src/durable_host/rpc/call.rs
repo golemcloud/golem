@@ -18,24 +18,33 @@
 
 use super::denial::denied_rpc_request;
 use super::{
-    PreparedRpcInvocation, RpcCallTarget, WasmRpcEntry, current_streaming_origin,
-    discard_owned_rpc_input, embedded_invocation_span_builder, prepare_rpc_invocation,
-    recorded_target_fingerprint, restore_embedded_span,
+    PreparedRpcInvocation, RpcCallTarget, WasmRpcEntry, claim_completed_preparation,
+    current_streaming_origin, discard_owned_rpc_input, embedded_invocation_span_builder,
+    known_fresh_dispatch_allowed, preparation_request, prepare_ephemeral_identity,
+    prepare_rpc_invocation, recorded_target_fingerprint, restore_embedded_span,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, AccessPermissionCheck, Cancellable, DurableCallSession,
+    AccessClaimOptions, AccessPermissionCheck, CallReplayOutcome, Cancellable, CompletionDelivery,
+    DeferredCallReplayOutcome, DurableCallSession, HostInternalCallOwner,
     reserve_invocation_id_before_await,
 };
 use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
+use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair, HostRequestGolemRpcInvoke};
-use golem_common::model::{AgentFingerprint, IdempotencyKey, OwnedAgentId};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostPayloadPair, HostRequestGolemRpcInvoke,
+    HostRequestGolemRpcPrepareInvocation, OplogIndex,
+};
+use golem_common::model::{
+    AgentFingerprint, IdempotencyKey, InvocationRequestKey, OwnedAgentId, OwnedInvocationId,
+};
 use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -61,6 +70,7 @@ impl RpcCallKind {
             Self::Scheduled => "schedule",
         }
     }
+
     pub(super) fn host_function_name(self) -> &'static str {
         match self {
             Self::Awaited => "golem::rpc::wasm-rpc::invoke-and-await",
@@ -89,11 +99,19 @@ pub(super) enum RpcCallOpening<Pair: HostPayloadPair> {
     Open(OpenRpcCall<Pair>),
 }
 
-/// An RPC call whose `Start` is appended or claimed.
+/// An RPC call whose `Start` is appended or claimed: its durable call session and what the call
+/// resolved when it opened.
 pub(super) struct OpenRpcCall<Pair: HostPayloadPair> {
     pub handle: DurableCallSession<Pair, Cancellable>,
+    pub call: RpcCall,
+}
+
+/// What an open RPC call resolved: the validated request, its span, and the target that its
+/// `Start` index derives.
+pub(super) struct RpcCall {
     pub prepared: PreparedRpcInvocation,
     pub span_id: SpanId,
+    pub start_index: OplogIndex,
     pub idempotency_key: IdempotencyKey,
     /// The agent that the call dispatches to.
     pub remote_agent_id: OwnedAgentId,
@@ -185,7 +203,6 @@ where
             },
         )
         .await?;
-    // The live decision holds its authorization permit until the call completes.
     let decision = decision.await.ok().flatten();
     let started_live = handle.is_live();
     let span_id = restore_recorded_span(accessor, &mut handle, kind).await?;
@@ -202,15 +219,19 @@ where
                 .map_err(|error| handle.trap(error))?;
             let known_fingerprint =
                 recorded_target_fingerprint(accessor, this).map_err(|error| handle.trap(error))?;
+            let start_index = handle.start_index();
             RpcCallOpening::Open(OpenRpcCall {
                 handle,
-                prepared,
-                span_id,
-                idempotency_key,
-                remote_agent_id,
-                started_live,
-                known_fingerprint,
-                scope_card,
+                call: RpcCall {
+                    prepared,
+                    span_id,
+                    start_index,
+                    idempotency_key,
+                    remote_agent_id,
+                    started_live,
+                    known_fingerprint,
+                    scope_card,
+                },
             })
         }
     })
@@ -318,4 +339,220 @@ where
     let span_id = span.span_id().clone();
     handle.close_span_on_cancellation(span_id.clone());
     Ok(span_id)
+}
+
+/// How a durable call resolved once its `Start` is appended or claimed.
+///
+/// Transient: callers match on it at once, as on [`CallReplayOutcome`].
+#[allow(clippy::large_enum_variant)]
+pub(super) enum CallResolution<Pair: HostPayloadPair, Recorded> {
+    /// The call completed in the recorded run: its recorded result.
+    Recorded(Recorded),
+    /// The call runs now: a first execution, or the repair of an incomplete `Start`.
+    Live(DurableCallSession<Pair, Cancellable>),
+}
+
+/// Replays the recorded result of a completed call. A call that started now, or whose `Start`
+/// has no `End`, continues live.
+pub(super) async fn replay_call<U, Ctx, Pair>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: DurableCallSession<Pair, Cancellable>,
+) -> anyhow::Result<CallResolution<Pair, Pair::Resp>>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+    Pair: HostPayloadPair,
+{
+    if handle.is_live() {
+        return Ok(CallResolution::Live(handle));
+    }
+    Ok(
+        match handle.replay_access(accessor, accessor.getter()).await? {
+            CallReplayOutcome::Replayed(response) => CallResolution::Recorded(response),
+            CallReplayOutcome::Incomplete(live) => CallResolution::Live(live),
+        },
+    )
+}
+
+/// [`replay_call`] for a call whose result reaches the guest at a recorded delivery boundary.
+pub(super) async fn replay_call_deferred<U, Ctx, Pair>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: DurableCallSession<Pair, Cancellable>,
+) -> anyhow::Result<CallResolution<Pair, (Pair::Resp, CompletionDelivery)>>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+    Pair: HostPayloadPair,
+{
+    if handle.is_live() {
+        return Ok(CallResolution::Live(handle));
+    }
+    Ok(
+        match handle
+            .replay_access_deferred(accessor, accessor.getter())
+            .await?
+        {
+            DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                CallResolution::Recorded((response, delivery))
+            }
+            DeferredCallReplayOutcome::Incomplete(live) => CallResolution::Live(live),
+        },
+    )
+}
+
+/// What the replay of a completed call claims after the call's `End`: the recorded preparation
+/// of an ephemeral target. A call refused at its `Start` prepared nothing.
+pub(super) struct CompletedReplay {
+    pub denied: bool,
+    preparation: Option<(HostInternalCallOwner, HostRequestGolemRpcPrepareInvocation)>,
+    known_fingerprint: Option<AgentFingerprint>,
+}
+
+impl CompletedReplay {
+    /// Claims the recorded preparation and returns the fingerprint of the target that the call
+    /// reached, if it reached one. A completed call repeats no preparation.
+    pub(super) async fn claim_preparation<U: Send + 'static, Ctx: WorkerCtx>(
+        self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> anyhow::Result<Option<AgentFingerprint>> {
+        Ok(match self.preparation {
+            Some((owner, request)) => claim_completed_preparation(accessor, owner, request)
+                .await?
+                .result
+                .ok(),
+            None => self.known_fingerprint,
+        })
+    }
+}
+
+impl RpcCall {
+    /// The ID of the target's invocation, once the target's fingerprint is known.
+    pub(super) fn final_id(&self, fingerprint: AgentFingerprint) -> OwnedInvocationId {
+        InvocationRequestKey::Internal(self.idempotency_key.clone()).finalize(
+            self.remote_agent_id.agent_id(),
+            fingerprint,
+            &self.prepared.method_name,
+        )
+    }
+
+    /// Replays a completed call and returns its recorded response, with what its replay claims
+    /// after the response. A call that started now, or whose `Start` has no `End`, continues
+    /// live.
+    pub(super) async fn replay<U, Ctx, Pair>(
+        &self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+        handle: DurableCallSession<Pair, Cancellable>,
+    ) -> anyhow::Result<CallResolution<Pair, (Pair::Resp, CompletedReplay)>>
+    where
+        U: Send + 'static,
+        Ctx: WorkerCtx,
+        Pair: HostPayloadPair,
+    {
+        if self.started_live {
+            return Ok(CallResolution::Live(handle));
+        }
+        let (completed, handle) = self.completed_replay(accessor, handle).await?;
+        Ok(match replay_call(accessor, handle).await? {
+            CallResolution::Recorded(response) => CallResolution::Recorded((response, completed)),
+            CallResolution::Live(handle) => CallResolution::Live(handle),
+        })
+    }
+
+    /// [`Self::replay`] for a call whose result reaches the guest at a recorded delivery
+    /// boundary.
+    pub(super) async fn replay_deferred<U, Ctx, Pair>(
+        &self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+        handle: DurableCallSession<Pair, Cancellable>,
+    ) -> anyhow::Result<CallResolution<Pair, (Pair::Resp, CompletionDelivery, CompletedReplay)>>
+    where
+        U: Send + 'static,
+        Ctx: WorkerCtx,
+        Pair: HostPayloadPair,
+    {
+        if self.started_live {
+            return Ok(CallResolution::Live(handle));
+        }
+        let (completed, handle) = self.completed_replay(accessor, handle).await?;
+        Ok(match replay_call_deferred(accessor, handle).await? {
+            CallResolution::Recorded((response, delivery)) => {
+                CallResolution::Recorded((response, delivery, completed))
+            }
+            CallResolution::Live(handle) => CallResolution::Live(handle),
+        })
+    }
+
+    /// Reads what the replay of this call claims once it replays the call's `End`.
+    async fn completed_replay<U, Ctx, Pair>(
+        &self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+        mut handle: DurableCallSession<Pair, Cancellable>,
+    ) -> anyhow::Result<(CompletedReplay, DurableCallSession<Pair, Cancellable>)>
+    where
+        U: Send + 'static,
+        Ctx: WorkerCtx,
+        Pair: HostPayloadPair,
+    {
+        let denied = handle
+            .recorded_denial_access(accessor, accessor.getter())
+            .await
+            .map_err(|error| handle.trap(error))?;
+        let preparation = (self.prepared.is_ephemeral() && !denied).then(|| {
+            (
+                handle.host_internal_owner(),
+                preparation_request(
+                    self.start_index,
+                    &self.prepared,
+                    &self.remote_agent_id,
+                    &self.idempotency_key,
+                ),
+            )
+        });
+        let completed = CompletedReplay {
+            denied,
+            preparation,
+            known_fingerprint: self.known_fingerprint,
+        };
+        Ok((completed, handle))
+    }
+
+    /// The fingerprint of the target that a live call dispatches to: the known one, or the one
+    /// of the ephemeral instance that the call prepares now. Only the first live dispatch to an
+    /// ephemeral target may create it fresh.
+    pub(super) async fn target_fingerprint<U, Ctx, Pair>(
+        &self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+        handle: &mut DurableCallSession<Pair, Cancellable>,
+        kind: RpcCallKind,
+    ) -> anyhow::Result<Result<AgentFingerprint, InternalRpcError>>
+    where
+        U: Send + 'static,
+        Ctx: WorkerCtx,
+        Pair: HostPayloadPair,
+    {
+        match self.known_fingerprint {
+            Some(fingerprint) => Ok(Ok(fingerprint)),
+            None => {
+                let freshness = if known_fresh_dispatch_allowed(
+                    self.started_live,
+                    self.prepared.is_ephemeral(),
+                ) {
+                    InvocationFreshnessDisposition::KnownFresh
+                } else {
+                    InvocationFreshnessDisposition::MayExist
+                };
+                prepare_ephemeral_identity(
+                    accessor,
+                    handle,
+                    &self.prepared,
+                    &self.remote_agent_id,
+                    &self.idempotency_key,
+                    &self.span_id,
+                    freshness,
+                    kind.verb(),
+                )
+                .await
+            }
+        }
+    }
 }

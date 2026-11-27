@@ -3,7 +3,7 @@
 // when it is transient. These tests drive the remote schedule path through a worker-service
 // session.
 
-use super::classify_rpc_error;
+use super::super::execution::classify_rpc_error;
 use crate::durable_host::durability::HostFailureKind;
 use crate::services::rpc::{RemoteInvocationRpc, Rpc};
 use crate::services::shard::ShardServiceDefault;
