@@ -87,6 +87,8 @@ pub(super) struct Metadata {
     pub(super) lineage_discovered_through: OplogIndex,
     pub(super) stream_fork_lineage: StreamForkLineage,
     pub(super) export_fork_initialized_sessions: HashSet<InvocationId>,
+    /// Sessions awaiting an invocation terminal, independent of the bounded recent status index.
+    pub(super) session_invocations: HashSet<InvocationId>,
 }
 
 /// Producer identity read from the same projection as stream metadata. `covered_through` is at
@@ -1054,8 +1056,20 @@ impl StreamSessionIndexService {
                         }
                         continue;
                     }
+                    if let OplogEntry::AgentInvocationFailed { invocation_id, .. } = entry {
+                        metadata.session_invocations.remove(invocation_id);
+                        continue;
+                    }
                     if let OplogEntry::AgentInvocationReturned { invocation_id, .. }
                     | OplogEntry::AgentInvocationFinished { invocation_id, .. } = entry {
+                        let has_session = if matches!(entry, OplogEntry::AgentInvocationFinished { .. }) {
+                            metadata.session_invocations.remove(invocation_id)
+                        } else {
+                            metadata.session_invocations.contains(invocation_id)
+                        };
+                        if !has_session {
+                            continue;
+                        }
                         let fingerprint = metadata.producer_fingerprint.ok_or("invocation result requires producer fingerprint metadata")?;
                         let key = StreamRegistrationInvocation::Local(*invocation_id).qualify(id.environment_id, &id.agent_id, fingerprint);
                         if !updates.contains_key(invocation_id) {
@@ -1066,9 +1080,6 @@ impl StreamSessionIndexService {
                         }
                         if let Some(status) = updates.get_mut(invocation_id) {
                             status.apply_invocation_result(*idx, *invocation_id);
-                        }
-                        if !updates.contains_key(invocation_id) && !matches!(entry, OplogEntry::AgentInvocationReturned { .. }) {
-                            continue;
                         }
                         if !controls.contains_key(&key) {
                             let old: Option<SessionControlMetadata> = self.kv
@@ -1316,6 +1327,9 @@ impl StreamSessionIndexService {
                         entry.insert(old.transpose()?.unwrap_or_default());
                     }
                     let status = updates.get_mut(&key).unwrap();
+                    let had_lifecycle = status.first_prepared.is_some()
+                        || status.initial_attachment_epoch.is_some()
+                        || status.export_fork_initialized;
                     if let StreamSessionRecord::Attached(attached) = record
                         && status.lifecycle_error.is_none()
                         && status.validated_initial_pending_invocation.is_none()
@@ -1365,6 +1379,14 @@ impl StreamSessionIndexService {
                         )
                     {
                         status.apply_record(*idx, record);
+                    }
+                    if !had_lifecycle
+                        && status.lifecycle_error.is_none()
+                        && (status.first_prepared.is_some()
+                            || status.initial_attachment_epoch.is_some()
+                            || status.export_fork_initialized)
+                    {
+                        metadata.session_invocations.insert(key);
                     }
                 }
                 let recovery_pages = self

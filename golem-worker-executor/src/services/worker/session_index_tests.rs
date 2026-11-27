@@ -1857,6 +1857,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     let id = owned_agent("control-projection");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = session_key(&id, &test_invocation_id("result".into()));
+    append_session(oplog.as_ref(), prepared_record(&id, &key.idempotency_key)).await;
     for _ in 0..2050 {
         append_memory_hint(oplog.as_ref()).await;
     }
@@ -3969,6 +3970,318 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
     assert_eq!(actual.invocation_result, Some(old_result));
     assert_eq!(actual.finished, Some(old_finished));
     assert_eq!(actual.session_key, Some(old));
+}
+
+#[test]
+async fn stream_free_results_skip_session_reads_and_control_rows_across_chunks() {
+    let (_, kv, oplog_service) = service_with_oplog().await;
+    let id = owned_agent("stream-free-result-index");
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let session = InvocationId::new();
+    append_session(oplog.as_ref(), prepared_record(&id, &session)).await;
+    let scalar_session = InvocationId::new();
+    append_session(oplog.as_ref(), prepared_record(&id, &scalar_session)).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let faults = KeyValueStorageFaults::default();
+    let storage = Arc::new(FaultInjectingKeyValueStorage::new(
+        kv.clone(),
+        faults.clone(),
+    ));
+    let index = independent_stream_index(storage.clone(), &oplog_service);
+    index
+        .catch_up(
+            &id,
+            AgentMode::Durable,
+            test_fingerprint(),
+            oplog.current_oplog_index().await,
+        )
+        .await
+        .unwrap();
+    let reads = faults.calls("read");
+    let control_reads = faults.calls("read_control");
+    for _ in 0..2050 {
+        oplog
+            .add(OplogEntry::agent_invocation_finished(
+                InvocationId::new(),
+                golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+                    Box::new(golem_common::model::AgentInvocationResult::AgentInitialization),
+                )),
+                None,
+                0,
+                ComponentRevision::INITIAL,
+                true,
+            ))
+            .await
+            .unwrap();
+    }
+    let without_session = InvocationId::new();
+    oplog
+        .add(returned_entry(without_session, vec![19]))
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    // A fresh reader must use persisted exact membership, not the current chunk or bounded status.
+    let index = independent_stream_index(storage, &oplog_service);
+    index
+        .catch_up(
+            &id,
+            AgentMode::Durable,
+            test_fingerprint(),
+            oplog.current_oplog_index().await,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        faults.calls("read") - reads,
+        4,
+        "only three chunk metadata reads and the final coverage read"
+    );
+    assert_eq!(faults.calls("read_control"), control_reads);
+    let key = StreamRegistrationInvocation::Local(without_session).qualify(
+        id.environment_id,
+        &id.agent_id,
+        test_fingerprint(),
+    );
+    assert!(
+        kv.with_entity("test", "test", "control")
+            .get_raw(
+                StreamSessionIndexService::namespace(&id, test_fingerprint()),
+                &format!("control:{}", hex::encode(serialize(&key).unwrap())),
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "an early return without a session creates no control row"
+    );
+
+    let result = oplog.add(returned_entry(session, vec![23])).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let status = index
+        .lookup_latest(&id, AgentMode::Durable, test_fingerprint(), &session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        status.invocation_result,
+        Some(result),
+        "membership survives intervening chunks"
+    );
+    let finished = oplog
+        .add(OplogEntry::agent_invocation_finished(
+            scalar_session,
+            golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(Box::new(
+                golem_common::model::AgentInvocationResult::AgentInitialization,
+            ))),
+            None,
+            0,
+            ComponentRevision::INITIAL,
+            true,
+        ))
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let status = index
+        .lookup_latest(&id, AgentMode::Durable, test_fingerprint(), &scalar_session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.invocation_result, Some(finished));
+
+    let namespace = StreamSessionIndexService::namespace(&id, test_fingerprint());
+    let metadata: Metadata = kv
+        .with_entity("test", "read", "metadata")
+        .get(namespace.clone(), METADATA_FIELD)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(metadata.session_invocations, HashSet::from([session]));
+
+    oplog
+        .add(OplogEntry::agent_invocation_failed(
+            None,
+            session,
+            golem_common::model::oplog::AgentError::InternalError("failed after return".into()),
+            result,
+            false,
+        ))
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let status = index
+        .lookup_latest(&id, AgentMode::Durable, test_fingerprint(), &session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.invocation_result, Some(result));
+    let metadata: Metadata = kv
+        .with_entity("test", "read", "metadata")
+        .get(namespace.clone(), METADATA_FIELD)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(metadata.session_invocations.is_empty());
+
+    // Input cleanup and attachment renewal after an invocation terminal must not restore membership.
+    for key in [session, scalar_session] {
+        append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                format_version: 1,
+                session_key: StreamRegistrationInvocation::Local(key),
+                result: Ok(()),
+            }),
+        )
+        .await;
+    }
+    let failed_before_return = InvocationId::new();
+    for n in 0..1100 {
+        let key = if n == 0 {
+            failed_before_return
+        } else {
+            InvocationId::new()
+        };
+        append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+        oplog
+            .add(if n == 0 {
+                OplogEntry::agent_invocation_failed(
+                    None,
+                    key,
+                    golem_common::model::oplog::AgentError::InternalError(
+                        "failed before return".into(),
+                    ),
+                    OplogIndex::INITIAL,
+                    false,
+                )
+            } else {
+                OplogEntry::agent_invocation_finished(
+                    key,
+                    golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+                        Box::new(golem_common::model::AgentInvocationResult::AgentInitialization),
+                    )),
+                    None,
+                    0,
+                    ComponentRevision::INITIAL,
+                    true,
+                )
+            })
+            .await
+            .unwrap();
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                format_version: 1,
+                session_key: StreamRegistrationInvocation::Local(key),
+                result: Ok(()),
+            }),
+        )
+        .await;
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    index
+        .catch_up(
+            &id,
+            AgentMode::Durable,
+            test_fingerprint(),
+            oplog.current_oplog_index().await,
+        )
+        .await
+        .unwrap();
+    let metadata: Metadata = kv
+        .with_entity("test", "read", "metadata")
+        .get(namespace, METADATA_FIELD)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(metadata.session_invocations.is_empty());
+    assert_eq!(
+        index
+            .lookup_latest(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &failed_before_return
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .invocation_result,
+        None,
+        "failure removes membership without indexing a result"
+    );
+    for (key, expected) in [(session, result), (scalar_session, finished)] {
+        assert_eq!(
+            index
+                .lookup_latest(&id, AgentMode::Durable, test_fingerprint(), &key)
+                .await
+                .unwrap()
+                .unwrap()
+                .invocation_result,
+            Some(expected)
+        );
+    }
+
+    let region = golem_common::model::regions::OplogRegion {
+        start: finished,
+        end: oplog.current_oplog_index().await,
+    };
+    let marker = DurableStreamOplogRecord::Session(
+        None,
+        Box::new(StreamSessionRecord::ForkCut(StreamForkCutRecord {
+            format_version: 1,
+            request_hash: vec![0; 32],
+            creation_fingerprint: test_fingerprint(),
+            export: None,
+            cut_index: OplogIndex::from_u64(finished.as_u64() - 1),
+            revert: Some(region.clone()),
+            epoch_floor: 2,
+            selected_stream_id: None,
+            retained_through: None,
+        })),
+    )
+    .into_inline_entry();
+    oplog
+        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    index
+        .catch_up(
+            &id,
+            AgentMode::Durable,
+            test_fingerprint(),
+            oplog.current_oplog_index().await,
+        )
+        .await
+        .unwrap();
+    let metadata: Metadata = kv
+        .with_entity("test", "read", "metadata")
+        .get(
+            StreamSessionIndexService::namespace(&id, test_fingerprint()),
+            METADATA_FIELD,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        metadata.session_invocations,
+        HashSet::from([session, scalar_session]),
+        "a revert dropping both terminals reconstructs membership from retained session records"
+    );
+    let replacement = oplog
+        .add(returned_entry(scalar_session, vec![31]))
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(
+        index
+            .lookup_latest(&id, AgentMode::Durable, test_fingerprint(), &scalar_session)
+            .await
+            .unwrap()
+            .unwrap()
+            .invocation_result,
+        Some(replacement)
+    );
 }
 
 #[test]
