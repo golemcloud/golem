@@ -281,33 +281,6 @@ impl OplogRange {
         });
         usize::try_from(limit.min(in_range)).unwrap_or(usize::MAX)
     }
-
-    /// The part of the range that a page of at most `count` entries reads, in an oplog whose first
-    /// entry is at `oplog_first`. The page starts at the first index of the range. It ends at the
-    /// last entry of the page, as [`Self::page_count`] counts it. A page reads at least one entry,
-    /// so a `count` of 0 gives the first index only. A range without an end can have a page that
-    /// reaches index `u64::MAX`, or a page whose end overflows. Such a page has no end either, so
-    /// a page to the end of such a range has one value. When the first index is after the end of
-    /// the range, the range has no page in the oplog, and the result is `None`.
-    pub fn page_in(&self, oplog_first: OplogIndex, count: u64) -> Option<Self> {
-        let start = self.first_index_in(oplog_first);
-        if self.end.is_some_and(|end| end < start) {
-            return None;
-        }
-        let entries = u64::try_from(self.page_count(start, count))
-            .unwrap_or(u64::MAX)
-            .max(1);
-        let end = start
-            .as_u64()
-            .checked_add(entries - 1)
-            .filter(|page_end| self.end.is_some() || *page_end < u64::MAX)
-            .map(OplogIndex::from_u64)
-            .or(self.end);
-        Some(Self {
-            start: Some(start),
-            end,
-        })
-    }
 }
 
 #[cfg(test)]
@@ -697,105 +670,6 @@ mod tests {
                 range.is_empty_in(index(oplog_last)),
                 expected,
                 "{range:?} in an oplog that ends at {oplog_last}"
-            )
-        });
-    }
-
-    #[test]
-    fn a_range_without_a_start_never_starts_at_0() {
-        [
-            (range(None, None), 0, 3),
-            (range(None, Some(9)), 0, 3),
-            (range(None, None), 0, 0),
-        ]
-        .into_iter()
-        .for_each(|(range, oplog_first, count)| {
-            assert_eq!(
-                range.first_index_in(index(oplog_first)),
-                index(1),
-                "{range:?}"
-            );
-            let page = range
-                .page_in(index(oplog_first), count)
-                .expect("the range has a page");
-            assert_eq!(
-                page.first_index_in(index(oplog_first)),
-                index(1),
-                "{page:?}"
-            );
-            let (start, end) = page.to_indices();
-            assert_eq!(
-                OplogRange::from_indices(start, end).unwrap(),
-                page,
-                "{page:?} keeps its value through its indices"
-            );
-        });
-    }
-
-    #[test]
-    fn a_page_of_a_range_ends_at_its_count_or_at_the_end_of_the_range() {
-        [
-            ((range(None, None), 1, 50), Some(range(Some(1), Some(50)))),
-            ((range(None, None), 4, 50), Some(range(Some(4), Some(53)))),
-            ((range(None, Some(9)), 4, 50), Some(range(Some(4), Some(9)))),
-            ((range(Some(5), None), 1, 3), Some(range(Some(5), Some(7)))),
-            ((range(Some(5), None), 1, 1), Some(range(Some(5), Some(5)))),
-            ((range(Some(5), None), 1, 0), Some(range(Some(5), Some(5)))),
-            (
-                (range(Some(5), Some(6)), 1, 3),
-                Some(range(Some(5), Some(6))),
-            ),
-            (
-                (range(Some(5), Some(7)), 1, 3),
-                Some(range(Some(5), Some(7))),
-            ),
-            (
-                (range(Some(5), Some(9)), 1, 3),
-                Some(range(Some(5), Some(7))),
-            ),
-            (
-                (range(Some(u64::MAX), None), 1, 3),
-                Some(range(Some(u64::MAX), None)),
-            ),
-            (
-                (range(Some(u64::MAX - 1), Some(u64::MAX)), 1, 3),
-                Some(range(Some(u64::MAX - 1), Some(u64::MAX))),
-            ),
-            (
-                (range(Some(2), None), 1, u64::MAX),
-                Some(range(Some(2), None)),
-            ),
-            (
-                (range(Some(1), None), 1, u64::MAX),
-                Some(range(Some(1), None)),
-            ),
-            (
-                (range(Some(1), Some(u64::MAX)), 1, u64::MAX),
-                Some(range(Some(1), Some(u64::MAX))),
-            ),
-            (
-                (range(None, None), u64::MAX - 1, 2),
-                Some(range(Some(u64::MAX - 1), None)),
-            ),
-            (
-                (range(None, None), u64::MAX - 2, 2),
-                Some(range(Some(u64::MAX - 2), Some(u64::MAX - 1))),
-            ),
-            // The oplog starts at the end of the range, so the page holds that one index.
-            ((range(None, Some(9)), 9, 50), Some(range(Some(9), Some(9)))),
-            (
-                (range(Some(5), Some(5)), 1, 3),
-                Some(range(Some(5), Some(5))),
-            ),
-            // The oplog starts after the end of the range, so the range has no page in it.
-            ((range(None, Some(9)), 10, 50), None),
-        ]
-        .into_iter()
-        .for_each(|((range, oplog_first, count), expected)| {
-            assert_eq!(
-                range.page_in(index(oplog_first), count),
-                expected,
-                "{range:?} in an oplog that starts at {oplog_first}, page of {count}"
             )
         });
     }
