@@ -1416,11 +1416,11 @@ with no invocation boundary and no error while the agent is failed or retrying, 
 the expired error. The revert walk gives no cut when the last index is below the start. The stream readers keep
 the expired error typed: the consumer probe and the consumer journal check the record that
 introduced each reader, the rebuild of the session control metadata checks the reader of each
-consumer record, the producer index gives the expired error for a record that references a
-registration below the start (every index holds the producer and the retention, and the pure
-`unknown_local_stream` picks the expired or the corrupt error), a handle of a stream that the index does not know is expired when
-the start is above 1, a cursor below the start is expired, and a producer request keeps the
-expired error (`DurableStreamRemoteError::from_producer`). The expired error becomes
+consumer record, and the producer index uses `unknown_local_stream` to distinguish an expired
+local stream reference from corrupt history. A nested registration whose parent is below the
+start gives `CorruptHistory`. A handle of a stream that the index does not know is expired when
+the start is above 1, and a cursor below the start is expired. A producer request keeps only the
+expired read error typed (`DurableStreamRemoteError::from_producer`). The expired error becomes
 `WorkerExecutorError::OplogFailed` with the cause `OplogFailure::Expired`. It crosses gRPC as
 `OplogExpired` and REST as HTTP 400 `OPLOG_EXPIRED`, and the guest oplog API gives it as
 `internal-error` whose text names the expired cause and the retained start
