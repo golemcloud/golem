@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{PreparedRpcInvocation, WasmRpcEntry, WasmRpcEntryPayload};
+use super::{PreparedRpcInvocation, WasmRpcEntry};
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durable_session::strip_streams;
 use crate::preview2::golem::agent::host::RpcError;
@@ -163,8 +163,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         env,
         config,
     ) = {
-        let entry = ctx.table().get(resource)?;
-        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+        let payload = &ctx.table().get(resource)?.payload;
         let (env, config) = payload.target_activation.target_creation_data();
         (
             payload.remote_agent_id.clone(),

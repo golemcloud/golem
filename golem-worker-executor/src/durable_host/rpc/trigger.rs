@@ -20,9 +20,10 @@
 use super::denial::denied_rpc_request;
 use super::execution::classify_rpc_error;
 use super::{
-    InvocationEntry, PreparedRpcInvocation, RpcCallTarget, WasmRpcEntry, WasmRpcEntryPayload,
-    WasmRpcTargetActivation, dispatch_target, embedded_invocation_span_builder,
-    known_fresh_dispatch_allowed, prepare_rpc_invocation, restore_embedded_span, rpc_span_finished,
+    InvocationEntry, PreparedRpcInvocation, RpcCallTarget, WasmRpcEntry, activate_known_target,
+    claim_completed_preparation, dispatch_target, embedded_invocation_span_builder,
+    known_fresh_dispatch_allowed, preparation_request, prepare_ephemeral_identity,
+    prepare_rpc_invocation, recorded_target_fingerprint, restore_embedded_span, rpc_span_finished,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
@@ -31,18 +32,12 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{DurabilityHost, InternalRetryResult};
 use crate::preview2::golem::agent::host::RpcError;
-use crate::services::rpc::{ReplayedDemand, RpcError as InternalRpcError};
+use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::oplog::HostPayloadPair;
-use golem_common::model::oplog::host_functions::{
-    GolemRpcWasmRpcPrepareInvocation, GolemRpcWasmRpcTrigger,
-};
+use golem_common::model::oplog::host_functions::GolemRpcWasmRpcTrigger;
 use golem_common::model::oplog::payload::denied;
-use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemRpcPrepareInvocation,
-    HostResponseGolemRpcInvocationAccepted, HostResponseGolemRpcPrepareInvocation, OplogEntry,
-};
+use golem_common::model::oplog::{DurableFunctionType, HostResponseGolemRpcInvocationAccepted};
 use golem_common::model::{
     AgentFingerprint, IdempotencyKey, InvocationRequestKey, OwnedAgentId, OwnedInvocationId,
 };
@@ -171,7 +166,8 @@ pub(super) async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
 
     if !started_live {
         // A completed trigger repeats no preparation; its replay claims the recorded one.
-        let denied = start_records_denial(accessor, &handle)
+        let denied = handle
+            .recorded_denial_access(accessor, accessor.getter())
             .await
             .map_err(|error| handle.trap(error))?;
         let recorded_preparation = if prepared.is_ephemeral() && !denied {
@@ -273,183 +269,6 @@ fn accepted<U: Send + 'static, Ctx: WorkerCtx>(
     })
 }
 
-/// Whether the call's `Start` records a denial: the call was refused before it prepared or
-/// dispatched anything.
-pub(super) async fn start_records_denial<
-    U: Send + 'static,
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair,
->(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    handle: &DurableCallSession<Pair, Cancellable>,
-) -> Result<bool, WorkerExecutorError> {
-    let oplog = accessor.with(|mut access| access.get().state.oplog.clone());
-    match oplog.read(handle.start_index()).await? {
-        OplogEntry::Start { denial, .. } => Ok(denial.is_some()),
-        entry => Err(WorkerExecutorError::unexpected_oplog_entry(
-            handle.start_index(),
-            format!("{entry:?}"),
-            format!("Start at {}", handle.start_index()),
-        )),
-    }
-}
-
-/// The fingerprint of the target's incarnation that the client already knows: every target but
-/// an ephemeral one, whose instance each invocation creates.
-pub(super) fn recorded_target_fingerprint<U: Send + 'static, Ctx: WorkerCtx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    this: &Resource<WasmRpcEntry>,
-) -> anyhow::Result<Option<AgentFingerprint>> {
-    accessor.with(|mut access| {
-        let payload = access
-            .get()
-            .table()
-            .get(this)?
-            .payload
-            .downcast_ref::<WasmRpcEntryPayload>()
-            .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
-        Ok(payload.target_activation.target_fingerprint())
-    })
-}
-
-type PrepareCall = DurableCallSession<GolemRpcWasmRpcPrepareInvocation, Cancellable>;
-
-/// The recorded request of the host-internal call that creates the instance of an ephemeral
-/// target for one invocation.
-pub(super) fn preparation_request(
-    start_index: golem_common::model::oplog::OplogIndex,
-    prepared: &PreparedRpcInvocation,
-    remote_agent_id: &OwnedAgentId,
-    idempotency_key: &IdempotencyKey,
-) -> HostRequestGolemRpcPrepareInvocation {
-    HostRequestGolemRpcPrepareInvocation {
-        invocation_start_index: start_index,
-        remote_agent_id: remote_agent_id.agent_id(),
-        method_name: prepared.method_name.clone(),
-        request_key: InvocationRequestKey::Internal(idempotency_key.clone()),
-    }
-}
-
-/// Replays the recorded preparation of a completed call to an ephemeral target. The completed
-/// call repeats no preparation, so there is no live action.
-pub(super) async fn claim_completed_preparation<U: Send + 'static, Ctx: WorkerCtx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    owner: crate::durable_host::concurrent::HostInternalCallOwner,
-    request: HostRequestGolemRpcPrepareInvocation,
-) -> anyhow::Result<HostResponseGolemRpcPrepareInvocation> {
-    PrepareCall::invoke_host_internal_access(
-        accessor,
-        accessor.getter(),
-        owner,
-        true,
-        request,
-        DurableFunctionType::WriteRemote,
-        async || {
-            Err::<HostResponseGolemRpcPrepareInvocation, _>(anyhow::anyhow!(
-                "a completed RPC call has no live preparation"
-            ))
-        },
-    )
-    .await
-}
-
-/// Creates the ephemeral instance that runs the invocation and records its fingerprint as a
-/// host-internal call of the calling host function, so repair and replay keep the instance.
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn prepare_ephemeral_identity<
-    U: Send + 'static,
-    Ctx: WorkerCtx,
-    Pair: HostPayloadPair,
->(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    handle: &mut DurableCallSession<Pair, Cancellable>,
-    prepared: &PreparedRpcInvocation,
-    remote_agent_id: &OwnedAgentId,
-    idempotency_key: &IdempotencyKey,
-    span_id: &golem_common::model::invocation_context::SpanId,
-    freshness: InvocationFreshnessDisposition,
-    verb: &str,
-) -> anyhow::Result<Result<AgentFingerprint, InternalRpcError>> {
-    let owner = handle.host_internal_owner();
-    let request = preparation_request(
-        handle.start_index(),
-        prepared,
-        remote_agent_id,
-        idempotency_key,
-    );
-    let auth_ctx = handle.agent_auth_ctx().clone();
-    let response = PrepareCall::invoke_host_internal_access(
-        accessor,
-        accessor.getter(),
-        owner,
-        false,
-        request,
-        DurableFunctionType::WriteRemote,
-        async || {
-            let invocation = crate::worker::invocation::native_invocation_start(
-                &prepared.method_name,
-                &prepared.input_value,
-                prepared.is_streaming(),
-            )
-            .map_err(anyhow::Error::from)?;
-            let mut freshness = freshness;
-            let result = loop {
-                let (rpc, created_by, agent_id, stack, caller, interrupt) =
-                    accessor.with(|mut access| {
-                        let ctx = access.get();
-                        (
-                            ctx.rpc(),
-                            ctx.created_by(),
-                            *ctx.agent_id(),
-                            ctx.clone_as_inherited_stack(span_id),
-                            ctx.outgoing_caller(),
-                            ctx.create_interrupt_signal(),
-                        )
-                    });
-                let demand = rpc.create_demand(
-                    dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
-                    &prepared.method_name,
-                    Some(invocation.clone()),
-                    created_by,
-                    &agent_id,
-                    &prepared.env,
-                    stack,
-                    &caller,
-                    prepared.config.clone(),
-                    &auth_ctx,
-                    Some(idempotency_key.clone()),
-                    freshness,
-                );
-                let result = tokio::select! {
-                    biased;
-                    kind = interrupt => return Err(handle.trap(kind)),
-                    result = demand => result.map(|demand| demand.fingerprint()),
-                };
-                freshness = InvocationFreshnessDisposition::MayExist;
-                match handle
-                    .try_trigger_retry_or_loop_context(
-                        accessor,
-                        accessor.getter(),
-                        &result,
-                        classify_rpc_error,
-                        prepared.retry_properties(verb, remote_agent_id),
-                    )
-                    .await?
-                {
-                    InternalRetryResult::Persist => break result,
-                    InternalRetryResult::RetryInternally => continue,
-                }
-            };
-            Ok::<_, anyhow::Error>(HostResponseGolemRpcPrepareInvocation {
-                result: result.map_err(Into::into),
-            })
-        },
-    )
-    .await
-    .map_err(|error| handle.trap(error))?;
-    Ok(response.result.map_err(Into::into))
-}
-
 /// Delivers the invocation to the target with the call's idempotency key and returns its final
 /// ID once the target accepted it. A durable target is pinned to the incarnation the client
 /// knows.
@@ -525,43 +344,4 @@ async fn dispatch<U: Send + 'static, Ctx: WorkerCtx>(
             &prepared.method_name,
         )
     }))
-}
-
-/// Marks a durable target as activated at the incarnation the client recorded, without a remote
-/// call, and returns that incarnation's fingerprint.
-pub(super) fn activate_known_target<U: Send + 'static, Ctx: WorkerCtx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    this: &Resource<WasmRpcEntry>,
-) -> anyhow::Result<AgentFingerprint> {
-    accessor.with(|mut access| {
-        let payload = access
-            .get()
-            .table()
-            .get_mut(this)?
-            .payload
-            .downcast_mut::<WasmRpcEntryPayload>()
-            .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
-        match &payload.target_activation {
-            WasmRpcTargetActivation::Activated {
-                target_fingerprint, ..
-            } => Ok(*target_fingerprint),
-            WasmRpcTargetActivation::DeferredEphemeral { .. } => Err(anyhow::anyhow!(
-                "An ephemeral RPC target does not support pre-activation"
-            )),
-            WasmRpcTargetActivation::ReplayPending {
-                target_fingerprint,
-                env,
-                config,
-            } => {
-                let target_fingerprint = *target_fingerprint;
-                payload.target_activation = WasmRpcTargetActivation::Activated {
-                    demand: Box::new(ReplayedDemand::new(target_fingerprint)),
-                    target_fingerprint,
-                    env: env.clone(),
-                    config: config.clone(),
-                };
-                Ok(target_fingerprint)
-            }
-        }
-    })
 }

@@ -14,9 +14,9 @@
 
 use super::EphemeralRpcTarget;
 use super::{
-    WasmRpcEntry, WasmRpcEntryPayload, construct_ephemeral_wasm_rpc_resource,
-    construct_wasm_rpc_resource, discard_owned_rpc_input, reconstruct_wasm_rpc_resource,
-    start_rpc_binding_call, start_rpc_connection_call,
+    WasmRpcEntry, construct_ephemeral_wasm_rpc_resource, construct_wasm_rpc_resource,
+    discard_owned_rpc_input, reconstruct_wasm_rpc_resource, start_rpc_binding_call,
+    start_rpc_connection_call,
 };
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
@@ -688,11 +688,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     }
 
     async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
-        let entry = self.table().delete(rep)?;
-        if let Ok(payload) = entry.payload.downcast::<WasmRpcEntryPayload>() {
-            record_released_resource_span(self, payload.creation_index, &payload.span_id).await?;
-            finish_span_in_memory(self, &payload.span_id)?;
-        }
+        let payload = self.table().delete(rep)?.payload;
+        record_released_resource_span(self, payload.creation_index, &payload.span_id).await?;
+        finish_span_in_memory(self, &payload.span_id)?;
         Ok(())
     }
 }

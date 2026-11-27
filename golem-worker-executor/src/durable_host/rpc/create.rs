@@ -318,12 +318,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
     ) -> anyhow::Result<Result<core_wire::AgentId, RpcError>> {
         accessor.with(|mut access| {
             let ctx = access.get();
-            let payload = ctx
-                .table()
-                .get(&self_)?
-                .payload
-                .downcast_ref::<WasmRpcEntryPayload>()
-                .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
+            let payload = &ctx.table().get(&self_)?.payload;
             Ok(if payload.ephemeral.is_some() {
                 Err(RpcError::RemoteAgentError(WitAgentError::InvalidType(
                     format!(

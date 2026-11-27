@@ -18,9 +18,8 @@
 //! permanent refusal, so replay rebuilds the outcome without contacting the target.
 
 use super::execution::{classify_rpc_error, known_fresh_dispatch_allowed};
-use super::trigger::activate_known_target;
 use super::{
-    InvocationEntry, RpcCallTarget, WasmRpcEntry, WasmRpcEntryPayload, dispatch_target,
+    InvocationEntry, RpcCallTarget, WasmRpcEntry, activate_known_target, dispatch_target,
     find_agent_method, remote_method_uses_streams,
 };
 use crate::durable_host::DurableWorkerCtx;
@@ -92,12 +91,7 @@ pub(super) async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
             env,
             config,
         ) = {
-            let payload = ctx
-                .table()
-                .get(&this)?
-                .payload
-                .downcast_ref::<WasmRpcEntryPayload>()
-                .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
+            let payload = &ctx.table().get(&this)?.payload;
             let (env, config) = payload.target_activation.target_creation_data();
             (
                 payload.remote_agent_id.clone(),

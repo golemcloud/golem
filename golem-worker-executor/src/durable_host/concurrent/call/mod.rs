@@ -735,6 +735,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    /// Whether the claimed `Start` records a denial: the call was refused before it did
+    /// anything.
+    pub(crate) async fn recorded_denial_access<T, D, Ctx>(
+        &self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<bool, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+        match oplog.read(self.start_idx).await? {
+            OplogEntry::Start { denial, .. } => Ok(denial.is_some()),
+            entry => Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
+                format!("{entry:?}"),
+                format!("Start at {}", self.start_idx),
+            )),
+        }
+    }
+
     pub(crate) fn require_incomplete_repair_readiness(
         &mut self,
         readiness: impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,

@@ -20,17 +20,14 @@
 //! to withdraw the invocation if it has not started yet. A running invocation keeps running.
 
 use super::denial::denied_rpc_request;
-use super::trigger::{
-    claim_completed_preparation, preparation_request, prepare_ephemeral_identity,
-    recorded_target_fingerprint, start_records_denial,
-};
 use super::{
-    CallerStreamsContext, DurableStreamingTaskParams, FutureInvokeTaskResult,
-    PreparedRpcInvocation, RpcCallTarget, RpcTask, WasmRpcEntry, WasmRpcEntryPayload,
-    admit_rpc_result_secret_holds, caller_durable_rpc_streams, current_streaming_origin,
+    CallerStreamsContext, DurableStreamingTaskParams, PreparedRpcInvocation, RpcCallTarget,
+    RpcTask, RpcTaskResult, WasmRpcEntry, admit_rpc_result_secret_holds,
+    caller_durable_rpc_streams, claim_completed_preparation, current_streaming_origin,
     discard_owned_rpc_input, dispatch_target, embedded_invocation_span_builder,
     invocation_metadata, invoke_and_await_response_to_wire, known_fresh_dispatch_allowed,
-    prepare_rpc_invocation, restore_embedded_span, retry_after_backoff, rpc_input_root,
+    preparation_request, prepare_ephemeral_identity, prepare_rpc_invocation,
+    recorded_target_fingerprint, restore_embedded_span, retry_after_backoff, rpc_input_root,
     rpc_output_root, rpc_span_finished, spawn_invoke_and_await_task,
     spawn_streaming_invoke_and_await_task,
 };
@@ -248,7 +245,8 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
     let start_index = handle.start_index();
     if !started_live {
         // A completed call repeats no preparation; its replay claims the recorded one.
-        let denied = start_records_denial(accessor, &handle)
+        let denied = handle
+            .recorded_denial_access(accessor, accessor.getter())
             .await
             .map_err(|error| handle.trap(error))?;
         let recorded_preparation = if prepared.is_ephemeral() && !denied {
@@ -370,14 +368,7 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
     // dispatch task, as before the restart, and creates nothing.
     let (deferred_activation, expected_callee_fingerprint) = accessor
         .with(|mut access| {
-            let activation = &access
-                .get()
-                .table()
-                .get(&this)?
-                .payload
-                .downcast_ref::<WasmRpcEntryPayload>()
-                .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?
-                .target_activation;
+            let activation = &access.get().table().get(&this)?.payload.target_activation;
             anyhow::Ok((
                 activation.deferred_activation(),
                 activation.target_fingerprint(),
@@ -543,7 +534,7 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
 async fn wait_for_task<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     task: &mut RpcTask,
-) -> Result<FutureInvokeTaskResult, InterruptKind> {
+) -> Result<RpcTaskResult, InterruptKind> {
     let (rpc_wait, interrupt_signal) = with_import_access(accessor, |mut access| {
         let ctx = access.get();
         let wait = accessor.runtime_activity().and_then(|activity| {

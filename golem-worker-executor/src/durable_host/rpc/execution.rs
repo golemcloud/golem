@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    DurableStreamingTaskParams, FutureInvokeTaskResult, RpcTargetActivation, RpcTask, RpcTaskError,
+    DurableStreamingTaskParams, RpcTargetActivation, RpcTask, RpcTaskError, RpcTaskResult,
     TaskRetryParams, activate_rpc_target,
 };
 use crate::durable_host::DurableWorkerCtx;
@@ -234,9 +234,8 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         initial_freshness_disposition == InvocationFreshnessDisposition::KnownFresh,
     ));
 
-    // The returned handle is owned by a guest resource, so this task can outlive
-    // the invocation. It links back rather than running inside its span. See
-    // `TraceOrigin`.
+    // The task runs in its own trace and links back to the calling span rather
+    // than running inside it. See `TraceOrigin`.
     let origin = TraceOrigin::capture_current();
     let caller_agent_id = agent_id;
 
@@ -689,7 +688,7 @@ impl Drop for RpcTask {
 }
 
 impl std::future::Future for RpcTask {
-    type Output = FutureInvokeTaskResult;
+    type Output = RpcTaskResult;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,

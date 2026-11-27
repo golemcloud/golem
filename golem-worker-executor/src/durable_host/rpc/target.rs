@@ -67,7 +67,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, HasSelf, Resource};
 
 pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
@@ -560,12 +560,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         method_name: &str,
     ) -> anyhow::Result<golem_common::model::card::PermissionTarget> {
         let (remote_owner, remote_agent_type) = {
-            let payload = self
-                .table()
-                .get(rpc_resource)?
-                .payload
-                .downcast_ref::<WasmRpcEntryPayload>()
-                .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
+            let payload = &self.table().get(rpc_resource)?.payload;
             (
                 payload.remote_owner.clone(),
                 payload.remote_agent_type.type_name.clone(),
@@ -591,4 +586,54 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         agent_method_target(owner, AgentVerb::Invoke, method_name)
             .map_err(|err| anyhow::anyhow!(err))
     }
+}
+
+/// The fingerprint of the target's incarnation that the client already knows: every target but
+/// an ephemeral one, whose instance each invocation creates.
+pub(super) fn recorded_target_fingerprint<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    this: &Resource<WasmRpcEntry>,
+) -> anyhow::Result<Option<AgentFingerprint>> {
+    accessor.with(|mut access| {
+        Ok(access
+            .get()
+            .table()
+            .get(this)?
+            .payload
+            .target_activation
+            .target_fingerprint())
+    })
+}
+
+/// Marks a durable target as activated at the incarnation the client recorded, without a remote
+/// call, and returns that incarnation's fingerprint.
+pub(super) fn activate_known_target<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    this: &Resource<WasmRpcEntry>,
+) -> anyhow::Result<AgentFingerprint> {
+    accessor.with(|mut access| {
+        let payload = &mut access.get().table().get_mut(this)?.payload;
+        match &payload.target_activation {
+            WasmRpcTargetActivation::Activated {
+                target_fingerprint, ..
+            } => Ok(*target_fingerprint),
+            WasmRpcTargetActivation::DeferredEphemeral { .. } => Err(anyhow::anyhow!(
+                "An ephemeral RPC target does not support pre-activation"
+            )),
+            WasmRpcTargetActivation::ReplayPending {
+                target_fingerprint,
+                env,
+                config,
+            } => {
+                let target_fingerprint = *target_fingerprint;
+                payload.target_activation = WasmRpcTargetActivation::Activated {
+                    demand: Box::new(ReplayedDemand::new(target_fingerprint)),
+                    target_fingerprint,
+                    env: env.clone(),
+                    config: config.clone(),
+                };
+                Ok(target_fingerprint)
+            }
+        }
+    })
 }

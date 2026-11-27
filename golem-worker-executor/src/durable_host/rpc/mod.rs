@@ -44,7 +44,7 @@ use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
 /// Host-side resource table entry backing the `golem:agent/host.wasm-rpc` resource.
 pub struct WasmRpcEntry {
-    pub payload: Box<dyn std::any::Any + Send + Sync>,
+    pub payload: Box<WasmRpcEntryPayload>,
 }
 
 /// Host-side resource table entry backing the `golem:agent/host.invocation` resource: the
@@ -77,10 +77,10 @@ struct PreparedRpcInvocation {
     remote_component_id: ComponentId,
 }
 
-type FutureInvokeTaskResult = Result<Result<SchemaValue, InternalRpcError>, Error>;
+type RpcTaskResult = Result<Result<SchemaValue, InternalRpcError>, Error>;
 
 struct RpcTask {
-    task: AbortOnDropJoinHandle<FutureInvokeTaskResult>,
+    task: AbortOnDropJoinHandle<RpcTaskResult>,
     revoker: Option<crate::worker::suspension::RpcActivityRevoker>,
 }
 
@@ -175,6 +175,7 @@ impl Debug for WasmRpcEntryPayload {
 
 mod create;
 mod denial;
+mod ephemeral;
 mod execution;
 mod host;
 mod invocation;
@@ -185,6 +186,7 @@ mod target;
 mod trigger;
 mod values;
 
+use ephemeral::*;
 use execution::*;
 use spans::*;
 use target::*;
