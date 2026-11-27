@@ -44,13 +44,13 @@ use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
 /// Host-side resource table entry backing the `golem:agent/host.wasm-rpc` resource.
 pub struct WasmRpcEntry {
-    pub payload: Box<WasmRpcEntryPayload>,
+    payload: Box<WasmRpcEntryPayload>,
 }
 
 /// Host-side resource table entry backing the `golem:agent/host.invocation` resource: the
 /// handle of an accepted invocation, addressed by its ID only.
 pub struct InvocationEntry {
-    pub id: OwnedInvocationId,
+    id: OwnedInvocationId,
 }
 
 /// The agent type that a client of an ephemeral agent type invokes. Each invocation runs on a

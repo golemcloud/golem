@@ -16,8 +16,8 @@
 
 use super::execution::classify_rpc_error;
 use super::{
-    PreparedRpcInvocation, RemoteCall, dispatch_target, interruptible,
-    known_fresh_dispatch_allowed, permanent_refusal,
+    PreparedRpcInvocation, RemoteCall, interruptible, known_fresh_dispatch_allowed,
+    permanent_refusal,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{Cancellable, DurableCallSession, HostInternalCallOwner};
@@ -120,19 +120,13 @@ pub(super) async fn prepare_ephemeral_identity<
             let mut freshness = freshness;
             let result = loop {
                 let remote = RemoteCall::capture(accessor, span_id);
-                let demand = remote.rpc.create_demand(
-                    dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
-                    &prepared.method_name,
-                    Some(invocation.clone()),
-                    remote.created_by,
-                    &remote.agent_id,
-                    &prepared.env,
-                    remote.stack.clone(),
-                    &remote.caller,
-                    prepared.config.clone(),
-                    &auth_ctx,
-                    Some(idempotency_key.clone()),
+                let demand = remote.create_demand(
+                    prepared,
+                    remote_agent_id,
+                    invocation.clone(),
+                    idempotency_key,
                     freshness,
+                    &auth_ctx,
                 );
                 let result = interruptible(accessor, handle, demand)
                     .await?
@@ -200,19 +194,13 @@ where
     )
     .map_err(|error| handle.trap(anyhow::Error::from(error)))?;
     let auth_ctx = handle.agent_auth_ctx().clone();
-    let demand = remote.rpc.create_demand(
-        dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
-        &prepared.method_name,
-        Some(invocation),
-        remote.created_by,
-        &remote.agent_id,
-        &prepared.env,
-        remote.stack.clone(),
-        &remote.caller,
-        prepared.config.clone(),
-        &auth_ctx,
-        Some(idempotency_key.clone()),
+    let demand = remote.create_demand(
+        prepared,
+        remote_agent_id,
+        invocation,
+        idempotency_key,
         freshness,
+        &auth_ctx,
     );
     let result = interruptible(accessor, handle, demand).await?;
     Ok(permanent_refusal(handle, result)?.map(|demand| demand.fingerprint()))

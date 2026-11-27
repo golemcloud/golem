@@ -15,30 +15,37 @@
 //! The parts that every live remote step of an RPC call shares: what it sends on behalf of the
 //! calling agent, and how it waits for the remote answer.
 
+use super::{PreparedRpcInvocation, RpcCall, dispatch_target};
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{Cancellable, DurableCallSession};
 use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::with_import_access;
-use crate::services::rpc::Rpc;
+use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
-use golem_common::model::AgentId;
+use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentMethodInput, InvocationFreshnessDisposition};
 use golem_common::model::caller::Caller;
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::HostPayloadPair;
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
+    OwnedInvocationId,
+};
 use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::model::auth::AuthCtx;
 use std::future::Future;
 use std::sync::Arc;
 use wasmtime::component::{Accessor, HasSelf};
 
 /// What a live remote step sends on behalf of the calling agent.
 pub(super) struct RemoteCall {
-    pub rpc: Arc<dyn Rpc>,
-    pub created_by: AccountId,
-    pub agent_id: AgentId,
+    rpc: Arc<dyn Rpc>,
+    created_by: AccountId,
+    agent_id: AgentId,
     /// The invocation context of the remote step: a child of `span_id`.
-    pub stack: InvocationContextStack,
-    pub caller: Caller,
+    stack: InvocationContextStack,
+    caller: Caller,
 }
 
 impl RemoteCall {
@@ -57,6 +64,102 @@ impl RemoteCall {
         span_id: &SpanId,
     ) -> Self {
         with_import_access(accessor, |mut access| Self::of(access.get(), span_id))
+    }
+
+    /// Creates or finds the instance of the target and returns its demand. The `invocation`
+    /// is the first invocation that the target receives, so an ephemeral instance starts with
+    /// it.
+    pub(super) async fn create_demand(
+        &self,
+        prepared: &PreparedRpcInvocation,
+        remote_agent_id: &OwnedAgentId,
+        invocation: InvocationStart,
+        idempotency_key: &IdempotencyKey,
+        freshness: InvocationFreshnessDisposition,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Box<dyn RpcDemand>, InternalRpcError> {
+        self.rpc
+            .create_demand(
+                dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
+                &prepared.method_name,
+                Some(invocation),
+                self.created_by,
+                &self.agent_id,
+                &prepared.env,
+                self.stack.clone(),
+                &self.caller,
+                prepared.config.clone(),
+                auth_ctx,
+                Some(idempotency_key.clone()),
+                freshness,
+            )
+            .await
+    }
+
+    /// Delivers the call's invocation to its target with the call's idempotency key, and
+    /// returns once the target accepted it. The target already exists: a durable target always
+    /// does, and preparation created an ephemeral one.
+    pub(super) async fn invoke(
+        &self,
+        call: &RpcCall,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), InternalRpcError> {
+        let prepared = call.prepared();
+        self.rpc
+            .invoke(
+                call.dispatch_target(),
+                Some(call.idempotency_key().clone()),
+                InvocationFreshnessDisposition::MayExist,
+                expected_callee_fingerprint,
+                prepared.method_name.clone(),
+                prepared.input_value.clone(),
+                self.created_by,
+                &self.agent_id,
+                &prepared.env,
+                self.stack.clone(),
+                &self.caller,
+                prepared.config.clone(),
+                auth_ctx,
+            )
+            .await
+    }
+
+    /// Schedules the invocation `invocation_id` of `method_name` at the target's incarnation
+    /// `target_fingerprint`, to run at `scheduled_at` in `invocation_context`, on behalf of the
+    /// calling agent.
+    pub(super) async fn schedule(
+        &self,
+        remote_agent_id: &OwnedAgentId,
+        target_fingerprint: AgentFingerprint,
+        request_key: InvocationRequestKey,
+        invocation_id: &OwnedInvocationId,
+        method_name: String,
+        input: AgentMethodInput,
+        invocation_context: InvocationContextStack,
+        scheduled_at: jiff::Timestamp,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), InternalRpcError> {
+        let invocation = AgentInvocation::AgentMethod {
+            idempotency_key: invocation_id.id(),
+            method_name,
+            allow_streams: false,
+            input,
+            invocation_context,
+            caller: self.caller.clone(),
+            scope_card: None,
+        };
+        self.rpc
+            .schedule_invocation(
+                remote_agent_id,
+                target_fingerprint,
+                request_key,
+                invocation,
+                scheduled_at,
+                &self.agent_id,
+                auth_ctx,
+            )
+            .await
     }
 }
 

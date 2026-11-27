@@ -19,9 +19,8 @@
 
 use super::execution::classify_rpc_error;
 use super::{
-    CallResolution, InvocationEntry, OpenRpcCall, RemoteCall, RpcCall, RpcCallKind, RpcCallOpening,
-    WasmRpcEntry, activate_known_target, dispatch_target, interruptible, open_rpc_call,
-    rpc_span_finished,
+    CallResolution, InvocationEntry, RemoteCall, RpcCall, RpcCallKind, RpcCallOpening,
+    WasmRpcEntry, activate_known_target, interruptible, open_rpc_call, rpc_span_finished,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{Cancellable, DurableCallSession, finish_span_in_memory};
@@ -30,7 +29,6 @@ use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::HostResponseGolemRpcInvocationAccepted;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcTrigger;
@@ -66,9 +64,9 @@ pub(super) async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
             let response = complete_denied(accessor, handle, &span_id, denial).await?;
             accepted(accessor, response, &span_id)
         }
-        RpcCallOpening::Open(OpenRpcCall { handle, call }) => {
+        RpcCallOpening::Open { handle, call } => {
             let response = resolve(accessor, handle, &call, &this).await?;
-            accepted(accessor, response, &call.span_id)
+            accepted(accessor, response, call.span_id())
         }
     }
 }
@@ -109,7 +107,7 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
                 Ok(fingerprint) => dispatch(accessor, &mut handle, call, this, fingerprint).await?,
                 Err(error) => Err(error),
             };
-            let finished = rpc_span_finished(&call.span_id, &result);
+            let finished = rpc_span_finished(call.span_id(), &result);
             Ok(handle
                 .complete_access_with_span(
                     accessor,
@@ -151,32 +149,16 @@ async fn dispatch<U: Send + 'static, Ctx: WorkerCtx>(
     this: &Resource<WasmRpcEntry>,
     fingerprint: AgentFingerprint,
 ) -> anyhow::Result<Result<OwnedInvocationId, InternalRpcError>> {
-    let prepared = &call.prepared;
-    let expected_callee_fingerprint = if prepared.is_ephemeral() {
+    let expected_callee_fingerprint = if call.prepared().is_ephemeral() {
         None
     } else {
         Some(activate_known_target(accessor, this).map_err(|error| handle.trap(error))?)
     };
     let auth_ctx = handle.agent_auth_ctx().clone();
-    let retry_properties = prepared.retry_properties("trigger", &call.remote_agent_id);
+    let retry_properties = call.retry_properties(RpcCallKind::Triggered);
     let result = loop {
-        let remote = RemoteCall::capture(accessor, &call.span_id);
-        // A durable target exists, and preparation already created an ephemeral one.
-        let invocation = remote.rpc.invoke(
-            dispatch_target(&call.remote_agent_id, prepared.ephemeral.as_ref()),
-            Some(call.idempotency_key.clone()),
-            InvocationFreshnessDisposition::MayExist,
-            expected_callee_fingerprint,
-            prepared.method_name.clone(),
-            prepared.input_value.clone(),
-            remote.created_by,
-            &remote.agent_id,
-            &prepared.env,
-            remote.stack.clone(),
-            &remote.caller,
-            prepared.config.clone(),
-            &auth_ctx,
-        );
+        let remote = RemoteCall::capture(accessor, call.span_id());
+        let invocation = remote.invoke(call, expected_callee_fingerprint, &auth_ctx);
         let result = interruptible(accessor, handle, invocation).await?;
         match handle
             .try_trigger_retry_or_loop_context(

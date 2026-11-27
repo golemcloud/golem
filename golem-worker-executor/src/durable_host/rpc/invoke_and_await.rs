@@ -20,9 +20,9 @@
 //! to withdraw the invocation if it has not started yet. A running invocation keeps running.
 
 use super::{
-    CallResolution, CallerStreamsContext, CompletedReplay, DurableStreamingTaskParams, OpenRpcCall,
+    CallResolution, CallerStreamsContext, CompletedReplay, DurableStreamingTaskParams,
     PreparedRpcInvocation, RpcCall, RpcCallKind, RpcCallOpening, RpcTask, WasmRpcEntry,
-    admit_rpc_result_secret_holds, caller_durable_rpc_streams, deliver_rpc_result, dispatch_target,
+    admit_rpc_result_secret_holds, caller_durable_rpc_streams, deliver_rpc_result,
     invocation_metadata, invoke_and_await_response_to_wire, open_rpc_call, retry_after_backoff,
     rpc_input_root, rpc_output_root, rpc_span_finished, spawn_invoke_and_await_task,
     spawn_streaming_invoke_and_await_task, suspendable,
@@ -44,14 +44,12 @@ use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::HostResponseGolemRpcInvokeAndAwait;
-use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvokeAndAwaitResult;
 use golem_common::model::oplog::payload::denied;
 use golem_common::model::{AgentFingerprint, OwnedAgentId, OwnedInvocationId};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::wire as core_wire;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use wasmtime::component::{Accessor, HasSelf, Resource};
@@ -84,7 +82,7 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
             let outcome = complete_denied(accessor, handle, span_id, denial).await?;
             deliver(accessor, outcome).await
         }
-        RpcCallOpening::Open(OpenRpcCall { handle, call }) => {
+        RpcCallOpening::Open { handle, call } => {
             let outcome = resolve(accessor, handle, call, &this).await?;
             deliver(accessor, outcome).await
         }
@@ -128,7 +126,7 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
     call: RpcCall,
     this: &Resource<WasmRpcEntry>,
 ) -> anyhow::Result<CallOutcome> {
-    let (scope_card, streaming_origin) = call_lending(accessor, &mut handle, &call).await?;
+    let (scope_card, streaming_origin) = call.lending(accessor, &mut handle).await?;
     match call.replay_deferred(accessor, handle).await? {
         CallResolution::Recorded((response, delivery, completed)) => {
             replay_completed(
@@ -147,28 +145,6 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
     }
 }
 
-/// The scope card that the call lends and the logical origin of a streaming call. A live call
-/// lends the card it was given; a replay or repair reuses what its `Start` recorded.
-async fn call_lending<U: Send + 'static, Ctx: WorkerCtx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    handle: &mut InvokeAndAwaitCall,
-    call: &RpcCall,
-) -> anyhow::Result<(Option<ScopeCard>, Option<StreamInvocationId>)> {
-    if call.started_live && !call.prepared.is_streaming() {
-        return Ok((call.scope_card.clone(), None));
-    }
-    let recorded = handle
-        .recorded_request_access(accessor, accessor.getter())
-        .await
-        .map_err(|error| handle.trap(error))?;
-    let scope_card = if call.started_live {
-        call.scope_card.clone()
-    } else {
-        recorded.scope_card
-    };
-    Ok((scope_card, recorded.logical_streaming_origin))
-}
-
 /// The outcome of a completed call. Live, every call that was not denied bound and pumped its
 /// input streams before its result was recorded, whether that result is a value or an error, so
 /// the replay binds them again.
@@ -180,25 +156,25 @@ async fn replay_completed<U: Send + 'static, Ctx: WorkerCtx>(
     mut response: HostResponseGolemRpcInvokeAndAwait,
     delivery: CompletionDelivery,
 ) -> anyhow::Result<CallOutcome> {
-    let denied = completed.denied;
+    let denied = completed.is_denied();
     let fingerprint = completed.claim_preparation(accessor).await?;
     let final_id = fingerprint.map(|fingerprint| call.final_id(fingerprint));
-    if call.prepared.is_streaming()
+    if call.prepared().is_streaming()
         && !denied
         && let (Some(final_id), Some(fingerprint)) = (&final_id, fingerprint)
     {
         let auth_ctx = with_import_access(accessor, |mut access| access.get().agent_auth_ctx());
-        let origin = streaming_origin.ok_or_else(|| missing_streaming_origin(call.start_index))?;
+        let origin = streaming_origin.ok_or_else(|| call.missing_streaming_origin())?;
         let streams = open_streams_at(
             accessor,
-            &call.remote_agent_id,
+            call.remote_agent_id(),
             final_id,
             fingerprint,
             origin,
             auth_ctx,
         )
         .await?;
-        materialize_input(accessor, &streams, &call.prepared).await?;
+        materialize_input(accessor, &streams, call.prepared()).await?;
         if response.result.is_ok()
             && let Some(value) = streams
                 .replay_remote_result()
@@ -212,7 +188,7 @@ async fn replay_completed<U: Send + 'static, Ctx: WorkerCtx>(
         response,
         delivery,
         final_id,
-        span_id: call.span_id,
+        span_id: call.span_id().clone(),
     })
 }
 
@@ -247,7 +223,7 @@ async fn invoke_live<U: Send + 'static, Ctx: WorkerCtx>(
         }
         Err(error) => (Err(error), None, None),
     };
-    let finished = rpc_span_finished(&call.span_id, &result);
+    let finished = rpc_span_finished(call.span_id(), &result);
     let (mut response, delivery) = handle
         .complete_access_deferred_with_span(
             accessor,
@@ -271,7 +247,7 @@ async fn invoke_live<U: Send + 'static, Ctx: WorkerCtx>(
         response,
         delivery,
         final_id,
-        span_id: call.span_id,
+        span_id: call.span_id().clone(),
     })
 }
 
@@ -311,9 +287,9 @@ async fn dispatch<U: Send + 'static, Ctx: WorkerCtx>(
     )
     .await?;
 
-    let prepared = &call.prepared;
-    let remote_target = dispatch_target(&call.remote_agent_id, prepared.ephemeral.as_ref());
-    let retry_properties = prepared.retry_properties("invoke-and-await", &call.remote_agent_id);
+    let prepared = call.prepared();
+    let remote_target = call.dispatch_target();
+    let retry_properties = call.retry_properties(RpcCallKind::Awaited);
     let spawn = |handle: &InvokeAndAwaitCall| {
         with_import_access(accessor, |mut access| {
             let ctx = access.get();
@@ -321,20 +297,20 @@ async fn dispatch<U: Send + 'static, Ctx: WorkerCtx>(
                 Some(params) => spawn_streaming_invoke_and_await_task(
                     ctx,
                     remote_target.clone(),
-                    call.idempotency_key.clone(),
+                    call.idempotency_key().clone(),
                     prepared.method_name.clone(),
                     params.clone(),
                     prepared.env.clone(),
                     prepared.config.clone(),
                     deferred_activation.clone(),
-                    &call.span_id,
+                    call.span_id(),
                     scope_card.clone(),
                     auth_ctx.clone(),
                 ),
                 None => spawn_invoke_and_await_task(
                     ctx,
                     &remote_target,
-                    call.idempotency_key.clone(),
+                    call.idempotency_key().clone(),
                     prepared.method_name.clone(),
                     prepared.input_value.clone(),
                     prepared.env.clone(),
@@ -342,7 +318,7 @@ async fn dispatch<U: Send + 'static, Ctx: WorkerCtx>(
                     deferred_activation.clone(),
                     expected_callee_fingerprint,
                     retry_properties.clone(),
-                    &call.span_id,
+                    call.span_id(),
                     handle.trap_context().retry_from,
                     handle.start_index(),
                     InvocationFreshnessDisposition::MayExist,
@@ -389,14 +365,14 @@ async fn streaming_task_params<U: Send + 'static, Ctx: WorkerCtx>(
 ) -> anyhow::Result<Option<DurableStreamingTaskParams>> {
     let origin = match streaming_origin {
         Some(origin) => origin,
-        None if call.prepared.is_streaming() => {
-            return Err(handle.trap(missing_streaming_origin(call.start_index)));
+        None if call.prepared().is_streaming() => {
+            return Err(handle.trap(call.missing_streaming_origin()));
         }
         None => return Ok(None),
     };
     let streams = open_streams_at(
         accessor,
-        &call.remote_agent_id,
+        call.remote_agent_id(),
         final_id,
         fingerprint,
         origin.clone(),
@@ -404,7 +380,7 @@ async fn streaming_task_params<U: Send + 'static, Ctx: WorkerCtx>(
     )
     .await
     .map_err(|error| handle.trap(error))?;
-    let input = materialize_input(accessor, &streams, &call.prepared)
+    let input = materialize_input(accessor, &streams, call.prepared())
         .await
         .map_err(|error| handle.trap(error))?;
     let attempt_id = streams
@@ -418,8 +394,8 @@ async fn streaming_task_params<U: Send + 'static, Ctx: WorkerCtx>(
         expected_callee_fingerprint: fingerprint,
         attempt_id: attempt_id.0,
         origin_invocation: origin_invocation_identity(origin),
-        output_graph: Arc::new(call.prepared.remote_agent_type.schema.clone()),
-        output_root: rpc_output_root(&call.prepared),
+        output_graph: Arc::new(call.prepared().remote_agent_type.schema.clone()),
+        output_root: rpc_output_root(call.prepared()),
     }))
 }
 
@@ -452,14 +428,6 @@ async fn await_task<U: Send + 'static, Ctx: WorkerCtx>(
             return Ok(result);
         }
     }
-}
-
-fn missing_streaming_origin(start_index: OplogIndex) -> WorkerExecutorError {
-    WorkerExecutorError::unexpected_oplog_entry(
-        start_index,
-        "streaming RPC Start with logical origin",
-        format!("streaming RPC Start at {start_index} without logical origin"),
-    )
 }
 
 /// Finishes the call's span and returns the recorded result to the guest.

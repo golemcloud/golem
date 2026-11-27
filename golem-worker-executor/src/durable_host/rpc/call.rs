@@ -19,9 +19,10 @@
 use super::denial::denied_rpc_request;
 use super::{
     PreparedRpcInvocation, RpcCallTarget, WasmRpcEntry, claim_completed_preparation,
-    current_streaming_origin, discard_owned_rpc_input, embedded_invocation_span_builder,
-    known_fresh_dispatch_allowed, preparation_request, prepare_ephemeral_identity,
-    prepare_rpc_invocation, recorded_target_fingerprint, restore_embedded_span,
+    current_streaming_origin, discard_owned_rpc_input, dispatch_target,
+    embedded_invocation_span_builder, known_fresh_dispatch_allowed, preparation_request,
+    prepare_ephemeral_identity, prepare_rpc_invocation, recorded_target_fingerprint,
+    restore_embedded_span,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
@@ -33,7 +34,9 @@ use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::rpc::RpcError as InternalRpcError;
+use crate::worker::target::ResolvedTarget;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::RetryProperties;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
@@ -95,32 +98,29 @@ pub(super) enum RpcCallOpening<Pair: HostPayloadPair> {
         span_id: SpanId,
         denial: String,
     },
-    /// The call is open, live or replaying.
-    Open(OpenRpcCall<Pair>),
-}
-
-/// An RPC call whose `Start` is appended or claimed: its durable call session and what the call
-/// resolved when it opened.
-pub(super) struct OpenRpcCall<Pair: HostPayloadPair> {
-    pub handle: DurableCallSession<Pair, Cancellable>,
-    pub call: RpcCall,
+    /// The call's `Start` is appended or claimed: its durable call session and what the call
+    /// resolved when it opened. The call is live or replaying.
+    Open {
+        handle: DurableCallSession<Pair, Cancellable>,
+        call: RpcCall,
+    },
 }
 
 /// What an open RPC call resolved: the validated request, its span, and the target that its
 /// `Start` index derives.
 pub(super) struct RpcCall {
-    pub prepared: PreparedRpcInvocation,
-    pub span_id: SpanId,
-    pub start_index: OplogIndex,
-    pub idempotency_key: IdempotencyKey,
+    prepared: PreparedRpcInvocation,
+    span_id: SpanId,
+    start_index: OplogIndex,
+    idempotency_key: IdempotencyKey,
     /// The agent that the call dispatches to.
-    pub remote_agent_id: OwnedAgentId,
+    remote_agent_id: OwnedAgentId,
     /// Whether the call appended its `Start` now, rather than claiming a recorded one.
-    pub started_live: bool,
+    started_live: bool,
     /// The fingerprint of the target that the client knows: none for an ephemeral target.
-    pub known_fingerprint: Option<AgentFingerprint>,
+    known_fingerprint: Option<AgentFingerprint>,
     /// The scope card that a live call lends. A replay or repair reads the recorded one.
-    pub scope_card: Option<ScopeCard>,
+    scope_card: Option<ScopeCard>,
 }
 
 /// What the call's synchronous step validated and captured, before its first await.
@@ -220,7 +220,7 @@ where
             let known_fingerprint =
                 recorded_target_fingerprint(accessor, this).map_err(|error| handle.trap(error))?;
             let start_index = handle.start_index();
-            RpcCallOpening::Open(OpenRpcCall {
+            RpcCallOpening::Open {
                 handle,
                 call: RpcCall {
                     prepared,
@@ -232,7 +232,7 @@ where
                     known_fingerprint,
                     scope_card,
                 },
-            })
+            }
         }
     })
 }
@@ -403,12 +403,17 @@ where
 /// What the replay of a completed call claims after the call's `End`: the recorded preparation
 /// of an ephemeral target. A call refused at its `Start` prepared nothing.
 pub(super) struct CompletedReplay {
-    pub denied: bool,
+    denied: bool,
     preparation: Option<(HostInternalCallOwner, HostRequestGolemRpcPrepareInvocation)>,
     known_fingerprint: Option<AgentFingerprint>,
 }
 
 impl CompletedReplay {
+    /// Whether the live permission check refused the call at its `Start`.
+    pub(super) fn is_denied(&self) -> bool {
+        self.denied
+    }
+
     /// Claims the recorded preparation and returns the fingerprint of the target that the call
     /// reached, if it reached one. A completed call repeats no preparation.
     pub(super) async fn claim_preparation<U: Send + 'static, Ctx: WorkerCtx>(
@@ -426,6 +431,71 @@ impl CompletedReplay {
 }
 
 impl RpcCall {
+    pub(super) fn prepared(&self) -> &PreparedRpcInvocation {
+        &self.prepared
+    }
+
+    pub(super) fn span_id(&self) -> &SpanId {
+        &self.span_id
+    }
+
+    pub(super) fn idempotency_key(&self) -> &IdempotencyKey {
+        &self.idempotency_key
+    }
+
+    /// The agent that the call dispatches to.
+    pub(super) fn remote_agent_id(&self) -> &OwnedAgentId {
+        &self.remote_agent_id
+    }
+
+    /// The target that the executor dispatches the call to.
+    pub(super) fn dispatch_target(&self) -> ResolvedTarget {
+        dispatch_target(&self.remote_agent_id, self.prepared.ephemeral.as_ref())
+    }
+
+    /// How the call retries a transient failure of its dispatch.
+    pub(super) fn retry_properties(&self, kind: RpcCallKind) -> RetryProperties {
+        self.prepared
+            .retry_properties(kind.verb(), &self.remote_agent_id)
+    }
+
+    /// The scope card that the call lends and the logical origin of a streaming call. A live
+    /// call lends the card it was given; a replay or repair reuses what its `Start` recorded.
+    pub(super) async fn lending<U, Ctx, Pair>(
+        &self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+        handle: &mut DurableCallSession<Pair, Cancellable>,
+    ) -> anyhow::Result<(Option<ScopeCard>, Option<StreamInvocationId>)>
+    where
+        U: Send + 'static,
+        Ctx: WorkerCtx,
+        Pair: HostPayloadPair<Req = HostRequestGolemRpcInvoke>,
+    {
+        if self.started_live && !self.prepared.is_streaming() {
+            return Ok((self.scope_card.clone(), None));
+        }
+        let recorded = handle
+            .recorded_request_access(accessor, accessor.getter())
+            .await
+            .map_err(|error| handle.trap(error))?;
+        let scope_card = if self.started_live {
+            self.scope_card.clone()
+        } else {
+            recorded.scope_card
+        };
+        Ok((scope_card, recorded.logical_streaming_origin))
+    }
+
+    /// The error for a streaming call whose `Start` recorded no logical origin.
+    pub(super) fn missing_streaming_origin(&self) -> WorkerExecutorError {
+        let start_index = self.start_index;
+        WorkerExecutorError::unexpected_oplog_entry(
+            start_index,
+            "streaming RPC Start with logical origin",
+            format!("streaming RPC Start at {start_index} without logical origin"),
+        )
+    }
+
     /// The ID of the target's invocation, once the target's fingerprint is known.
     pub(super) fn final_id(&self, fingerprint: AgentFingerprint) -> OwnedInvocationId {
         InvocationRequestKey::Internal(self.idempotency_key.clone()).finalize(

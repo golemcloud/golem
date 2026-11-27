@@ -41,8 +41,7 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcInvocationAccepted,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentInvocation, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
-    OwnedInvocationId,
+    AgentFingerprint, IdempotencyKey, InvocationRequestKey, OwnedAgentId, OwnedInvocationId,
 };
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::wire as core_wire;
@@ -308,23 +307,15 @@ async fn schedule_at_target<U: Send + 'static, Ctx: WorkerCtx>(
         .input_value
         .try_into()
         .map_err(|error: String| handle.trap(anyhow::anyhow!(error)))?;
-    let remote = prepared.remote;
-    let invocation = AgentInvocation::AgentMethod {
-        idempotency_key: invocation_id.id(),
-        method_name: prepared.rpc.method_name,
-        allow_streams: false,
-        input,
-        invocation_context: prepared.stack,
-        caller: remote.caller.clone(),
-        scope_card: None,
-    };
-    let scheduled = remote.rpc.schedule_invocation(
+    let scheduled = prepared.remote.schedule(
         remote_agent_id,
         target_fingerprint,
         request_key,
-        invocation,
+        &invocation_id,
+        prepared.rpc.method_name,
+        input,
+        prepared.stack,
         prepared.scheduled_at,
-        &remote.agent_id,
         &auth_ctx,
     );
     // The schedule's wake is not recorded: the handle cancels the invocation by its ID, and a
