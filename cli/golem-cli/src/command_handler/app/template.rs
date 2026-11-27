@@ -124,10 +124,23 @@ impl TemplateHandler {
         template_names: Vec<AppTemplateName>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
+        let (application_dir, existing_app_mode) =
+            self.resolve_new_command_target(application_path)?;
+        let _operation = if existing_app_mode {
+            let operation = self.ctx.start_application_operation().await?;
+            self.resolve_new_command_target(Some(application_dir.clone()))?;
+            self.ctx.reload_application(true).await?;
+            operation
+        } else {
+            None
+        };
 
         let context = self
-            .resolve_new_command_context(application_path, application_name)
+            .resolve_new_command_context(application_dir, application_name, existing_app_mode)
             .await?;
+        if existing_app_mode {
+            self.ctx.apply_application_load_plan().await?;
+        }
 
         let selections = self.resolve_new_command_selections(
             context.application_name_candidate,
@@ -229,15 +242,16 @@ impl TemplateHandler {
         Ok(())
     }
 
-    async fn resolve_new_command_context(
+    fn resolve_new_command_target(
         &self,
         application_path: Option<PathBuf>,
-        application_name: Option<ApplicationName>,
-    ) -> anyhow::Result<NewCommandContext> {
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.opt()?;
-
-        let application_path = match (application_path, app_ctx.as_ref()) {
+    ) -> anyhow::Result<(PathBuf, bool)> {
+        let root_manifest = self.ctx.application_root_manifest();
+        let loaded_root = root_manifest.and_then(Path::parent);
+        let application_path = match (
+            application_path,
+            loaded_root.filter(|_| self.ctx.has_application_context()),
+        ) {
             (Some(application_path), _) => application_path,
             (None, Some(_)) => PathBuf::from("."),
             (None, None) => match self.ctx.interactive_handler().select_new_app_path()? {
@@ -256,71 +270,39 @@ impl TemplateHandler {
         } else {
             fs::normalize_path_lexically(&std::env::current_dir()?.join(&application_path))
         };
-
-        if let Some(target_main_source) = find_main_source_from(&application_dir) {
-            let target_app_root = target_main_source
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| target_main_source.clone());
-
+        let target_app_root = loaded_root
+            .filter(|root| {
+                fs::path_starts_with_normalized(&application_dir, root)
+                    && !fs::path_eq_normalized(&application_dir, root)
+            })
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                find_main_source_from(&application_dir)
+                    .map(|source| source.parent().map(Path::to_path_buf).unwrap_or(source))
+            })
+            .or_else(|| {
+                loaded_root
+                    .filter(|root| fs::path_eq_normalized(&application_dir, root))
+                    .map(Path::to_path_buf)
+            });
+        if let Some(target_app_root) = target_app_root {
             if fs::path_eq_normalized(&application_dir, &target_app_root) {
-                if let Some(app_ctx) = app_ctx
-                    && fs::path_eq_normalized(
-                        app_ctx.application().app_root_dir(),
-                        &target_app_root,
-                    )
+                if loaded_root.is_some_and(|root| fs::path_eq_normalized(&application_dir, root))
+                    && self.ctx.has_application_context()
                 {
-                    if application_name.is_some() {
+                    if let Some(root_manifest) = root_manifest
+                        && root_manifest.file_name() != Some(std::ffi::OsStr::new("golem.yaml"))
+                    {
                         logln("");
-                        log_error(
-                            "Specifying the application name is not allowed in an existing application directory",
-                        );
+                        log_error(format!(
+                            "Adding templates requires the application root manifest to be named golem.yaml: {}",
+                            root_manifest.log_color_error_highlight()
+                        ));
                         logln("");
-                        logln(
-                            "Use `golem new .` for adding new templates to the current application,",
-                        );
-                        logln("or switch to a different directory!");
+                        logln("Rename the root manifest to golem.yaml to add templates.");
+                        bail!(NonSuccessfulExit);
                     }
-
-                    let existing_components = app_ctx
-                        .component_names()
-                        .into_iter()
-                        .map(|component_name| {
-                            let component = app_ctx.application().component(&component_name);
-                            let existing_component = ExistingComponent {
-                                language: component.guest_language().ok_or_else(|| {
-                                    anyhow!(
-                                        "Failed to determine language for component {}: none of its component templates declare a guestLanguage",
-                                        component_name
-                                    )
-                                })?,
-                                dir: match fs::strip_prefix_or_err(
-                                    component.component_dir(),
-                                    app_ctx.application().app_root_dir(),
-                                )? {
-                                    dir if dir.as_os_str().is_empty() => PathBuf::from("."),
-                                    dir => dir.to_path_buf(),
-                                },
-                                component_dir: component.component_dir().to_path_buf(),
-                                manifest_source: fs::normalize_path_lexically(component.source()),
-                                manifest_source_dir: fs::parent_or_err(component.source())?
-                                    .to_path_buf(),
-                            };
-
-                            Ok::<_, anyhow::Error>((component_name, existing_component))
-                        })
-                        .collect::<Result<BTreeMap<_, _>, _>>()?;
-
-                    return Ok(NewCommandContext {
-                        application_name_candidate: app_ctx
-                            .application()
-                            .application_name()
-                            .0
-                            .clone(),
-                        application_path: app_ctx.application().app_root_dir().to_path_buf(),
-                        existing_components,
-                        existing_app_mode: true,
-                    });
+                    return Ok((application_dir, true));
                 }
 
                 logln("");
@@ -341,6 +323,78 @@ impl TemplateHandler {
             logln("");
             logln("Please choose a target directory that is not nested under another application.");
             bail!(NonSuccessfulExit);
+        }
+
+        Ok((application_dir, false))
+    }
+
+    async fn resolve_new_command_context(
+        &self,
+        application_dir: PathBuf,
+        application_name: Option<ApplicationName>,
+        existing_app_mode: bool,
+    ) -> anyhow::Result<NewCommandContext> {
+        if existing_app_mode {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            if !fs::path_eq_normalized(app_ctx.application().app_root_dir(), &application_dir) {
+                logln("");
+                log_error(format!(
+                    "Application root changed during template preparation: expected {}, found {}",
+                    application_dir.log_color_error_highlight(),
+                    app_ctx
+                        .application()
+                        .app_root_dir()
+                        .log_color_error_highlight()
+                ));
+                logln("");
+                logln("Run `golem new .` from the intended application directory.");
+                bail!(NonSuccessfulExit);
+            }
+            if application_name.is_some() {
+                logln("");
+                log_error(
+                    "Specifying the application name is not allowed in an existing application directory",
+                );
+                logln("");
+                logln("Use `golem new .` for adding new templates to the current application,");
+                logln("or switch to a different directory!");
+            }
+
+            let existing_components = app_ctx
+                .component_names()
+                .into_iter()
+                .map(|component_name| {
+                    let component = app_ctx.application().component(&component_name);
+                    let existing_component = ExistingComponent {
+                        language: component.guest_language().ok_or_else(|| {
+                            anyhow!(
+                                "Failed to determine language for component {}: none of its component templates declare a guestLanguage",
+                                component_name
+                            )
+                        })?,
+                        dir: match fs::strip_prefix_or_err(
+                            component.component_dir(),
+                            app_ctx.application().app_root_dir(),
+                        )? {
+                            dir if dir.as_os_str().is_empty() => PathBuf::from("."),
+                            dir => dir.to_path_buf(),
+                        },
+                        component_dir: component.component_dir().to_path_buf(),
+                        manifest_source: fs::normalize_path_lexically(component.source()),
+                        manifest_source_dir: fs::parent_or_err(component.source())?.to_path_buf(),
+                    };
+
+                    Ok::<_, anyhow::Error>((component_name, existing_component))
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+            return Ok(NewCommandContext {
+                application_name_candidate: app_ctx.application().application_name().0.clone(),
+                application_path: app_ctx.application().app_root_dir().to_path_buf(),
+                existing_components,
+                existing_app_mode: true,
+            });
         }
 
         if is_non_empty_dir(&application_dir)?

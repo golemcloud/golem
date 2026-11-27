@@ -17,6 +17,28 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use test_r::test;
 
+struct WorkingDirectoryGuard {
+    original: PathBuf,
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl WorkingDirectoryGuard {
+    async fn acquire() -> Self {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let lock = LOCK.lock().await;
+        Self {
+            original: std::env::current_dir().unwrap(),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for WorkingDirectoryGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.original).unwrap();
+    }
+}
+
 fn cli_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_golem-cli"))
 }
@@ -675,6 +697,644 @@ async fn host_build_preserves_component_exports_and_start_result() {
             .unwrap();
         assert_eq!(run.call_async(&mut store, ()).await.unwrap(), (42,));
     }
+}
+
+#[test]
+#[test_r::timeout("45s")]
+async fn application_sections_release_after_migration_build_failure_and_success() {
+    use clap::Parser;
+    use golem_cli::command::GolemCliCommand;
+    use golem_cli::command_handler::Handlers;
+    use golem_cli::context::Context;
+    use golem_cli::model::app::{AppBuildStep, ApplicationComponentSelectMode, BuildConfig};
+    use std::sync::Arc;
+
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let _working_directory = WorkingDirectoryGuard::acquire().await;
+    let root = project.path();
+    let manifest = root.join("golem.yaml");
+    std::fs::write(&manifest,
+        "manifestVersion: 1.5.0\napp: scoped-lock\nenvironments:\n  local: {server: local}\ncomponents:\n  app:main:\n    componentWasm: component.wasm\n    build:\n      - command: node build.cjs\n"
+    ).unwrap();
+    let seed = wat::parse_str("(component)").unwrap();
+    std::fs::write(root.join("seed.wasm"), &seed).unwrap();
+    std::fs::write(
+        root.join("build.cjs"),
+        "throw new Error('intentional failure');",
+    )
+    .unwrap();
+    let flags = GolemCliCommand::try_parse_from([
+        "golem-cli",
+        "--config-dir",
+        config.path().to_str().unwrap(),
+        "--app-manifest-path",
+        manifest.to_str().unwrap(),
+        "--yes",
+        "build",
+    ])
+    .unwrap()
+    .global_flags;
+    let ctx = Arc::new(Context::new(flags, None, true, true).await.unwrap());
+    let lock_path = root.join("golem-temp/operation.lock");
+    let assert_released = || {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        file.try_lock()
+            .expect("A retained Context must not keep an application section locked");
+    };
+    assert!(
+        std::fs::read_to_string(&manifest)
+            .unwrap()
+            .contains("manifestVersion: 2.0.0")
+    );
+    assert_released();
+
+    let handler = ctx.app_handler();
+    let build_config = BuildConfig::new().with_steps_filter([AppBuildStep::Build].into());
+    let error = handler
+        .build(&build_config, vec![], &ApplicationComponentSelectMode::All)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Command failed with exit code: 1"),
+        "{error:#}"
+    );
+    assert_released();
+
+    std::fs::write(
+        root.join("repaired.cjs"),
+        "require('node:fs').copyFileSync('seed.wasm', 'component.wasm');",
+    )
+    .unwrap();
+    std::fs::write(
+        &manifest,
+        std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("build.cjs", "repaired.cjs"),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        handler
+            .build(&build_config, vec![], &ApplicationComponentSelectMode::All)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(root.join("component.wasm")).unwrap(), seed);
+        assert_released();
+    }
+    handler
+        .clean(vec![], &ApplicationComponentSelectMode::All)
+        .await
+        .unwrap();
+    assert!(!root.join("component.wasm").exists());
+    assert_released();
+}
+
+#[test]
+#[test_r::timeout("15s")]
+async fn adding_templates_waits_for_ownership_and_refreshes_the_application() {
+    use clap::Parser;
+    use golem_cli::command::GolemCliCommand;
+    use golem_cli::command_handler::Handlers;
+    use golem_cli::context::Context;
+    use golem_common::model::component::ComponentName;
+    use std::sync::Arc;
+
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let _working_directory = WorkingDirectoryGuard::acquire().await;
+    let root = project.path();
+    let manifest = root.join("golem.yaml");
+    let original =
+        "manifestVersion: 2.0.0\napp: before-wait\nenvironments:\n  local:\n    server: local\n";
+    std::fs::write(
+        &manifest,
+        format!(
+            "{original}components:\n  invalid-component-name:\n    componentWasm: missing.wasm\n"
+        ),
+    )
+    .unwrap();
+    let flags = GolemCliCommand::try_parse_from([
+        "golem-cli",
+        "--config-dir",
+        config.path().to_str().unwrap(),
+        "--app-manifest-path",
+        manifest.to_str().unwrap(),
+        "--yes",
+        "new",
+        ".",
+    ])
+    .unwrap()
+    .global_flags;
+    let ctx = Arc::new(Context::new(flags, None, true, true).await.unwrap());
+    assert!(ctx.app_context_lock().await.opt().is_err());
+    std::fs::create_dir(root.join("golem-temp")).unwrap();
+    let lock_path = root.join("golem-temp/operation.lock");
+    let held = std::fs::File::create(&lock_path).unwrap();
+    held.try_lock().unwrap();
+    let before = snapshot(root);
+    let handler = ctx.app_handler();
+    let adding = handler.cmd_new(
+        Some(root.to_path_buf()),
+        None,
+        Some(ComponentName("probe:added".into())),
+        vec!["rust".parse().unwrap()],
+    );
+    tokio::pin!(adding);
+    tokio::select! {
+        result = &mut adding => panic!("Template application did not wait for ownership: {result:?}"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(150)) => {}
+    }
+    assert_eq!(snapshot(root), before);
+    std::fs::write(&manifest, original.replace("before-wait", "after-wait")).unwrap();
+    drop(held);
+    adding.await.unwrap();
+
+    let updated: serde_yaml::Value =
+        serde_yaml::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    assert_eq!(updated["app"].as_str(), Some("after-wait"));
+    assert_eq!(
+        updated["httpApi"]["deployments"]["local"][0]["subdomain"].as_str(),
+        Some("after-wait")
+    );
+    assert!(updated["components"]["probe:added"].is_mapping());
+    assert!(root.join("src/lib.rs").is_file());
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    held.try_lock().unwrap();
+    let before = snapshot(root);
+    let sibling = tempfile::tempdir().unwrap();
+    for (target, allowed) in [
+        (root.join("nested"), false),
+        (sibling.path().join("new-app"), true),
+    ] {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            handler.cmd_new(
+                Some(target.clone()),
+                None,
+                Some(ComponentName("probe:added".into())),
+                vec!["rust".parse().unwrap()],
+            ),
+        )
+        .await
+        .expect("Creating another app must not wait on the loaded app's lock");
+        assert_eq!(result.is_ok(), allowed, "{result:?}");
+        assert_eq!(target.join("golem.yaml").is_file(), allowed);
+        assert_eq!(snapshot(root), before);
+    }
+    drop(held);
+    handler
+        .cmd_new(
+            Some(root.to_path_buf()),
+            None,
+            Some(ComponentName("probe:second".into())),
+            vec!["rust".parse().unwrap()],
+        )
+        .await
+        .unwrap();
+    let updated: serde_yaml::Value =
+        serde_yaml::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    assert!(updated["components"]["probe:added"].is_mapping());
+    assert!(updated["components"]["probe:second"].is_mapping());
+}
+
+#[test]
+#[test_r::timeout("20s")]
+async fn template_target_ownership_preserves_dispatch_and_rejects_nesting() {
+    use golem_cli::app::build::task_result_marker::TaskResult;
+    use golem_cli::app::template::AppTemplateRepo;
+    use golem_cli::model::app::Application;
+    use golem_cli::model::language::GuestLanguage;
+    use golem_common::model::application::ApplicationName;
+
+    for (manifest_name, stale_common) in [
+        ("golem.yaml", false),
+        ("app.yaml", false),
+        ("golem.yaml", true),
+        ("app.yaml", true),
+    ] {
+        let project = tempfile::tempdir().unwrap();
+        let sibling = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let root = project.path();
+        let manifest = root.join(manifest_name);
+        std::fs::write(&manifest,
+            "manifestVersion: 2.0.0\napp: target-ownership\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:main:\n    templates: rust\n"
+        ).unwrap();
+        if stale_common {
+            let target = root.join(Application::on_demand_common_dir_for_language(
+                GuestLanguage::Rust,
+            ));
+            AppTemplateRepo::get(false)
+                .unwrap()
+                .common_on_demand_template(GuestLanguage::Rust)
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .generate(&ApplicationName("target-ownership".into()), root, &target)
+                .unwrap();
+            let marker_path = std::fs::read_dir(target.join(".golem-task-results"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let mut marker: TaskResult =
+                serde_json::from_slice(&std::fs::read(&marker_path).unwrap()).unwrap();
+            marker.cli_version = format!("{}-stale", marker.cli_version);
+            std::fs::write(&marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
+        }
+        std::fs::create_dir_all(root.join("golem-temp")).unwrap();
+        let held = std::fs::File::create(root.join("golem-temp/operation.lock")).unwrap();
+        held.try_lock().unwrap();
+        let before = snapshot(root);
+        let mut cases = vec![
+            (
+                Some(root.join("nested")),
+                false,
+                Some("Cannot create a new application inside"),
+            ),
+            (
+                Some(root.join("nested")),
+                true,
+                Some("Cannot create a new application inside"),
+            ),
+            (Some(sibling.path().join("new-app")), false, None),
+            (
+                Some(root.to_path_buf()),
+                true,
+                Some("Target directory is already an existing application"),
+            ),
+            (None, true, Some("APPLICATION_PATH must be specified")),
+        ];
+        if manifest_name == "app.yaml" {
+            cases.extend([
+                (
+                    Some(root.to_path_buf()),
+                    false,
+                    Some("Adding templates requires the application root manifest to be named golem.yaml"),
+                ),
+                (
+                    None,
+                    false,
+                    Some("Adding templates requires the application root manifest to be named golem.yaml"),
+                ),
+            ]);
+        }
+        for (target, qualified_environment, expected_error) in cases {
+            let mut command = cli_command();
+            command
+                .current_dir(root)
+                .arg("--config-dir")
+                .arg(config.path())
+                .arg("--app-manifest-path")
+                .arg(&manifest)
+                .arg("--yes");
+            if qualified_environment {
+                command.args(["-E", "otherapp/prod"]);
+            }
+            command.arg("new");
+            if let Some(target) = &target {
+                command.arg(target);
+            }
+            command.args(["--template", "rust", "--component-name", "probe:added"]);
+            let mut command = tokio::process::Command::from(command);
+            command.kill_on_drop(true);
+            let output = tokio::time::timeout(std::time::Duration::from_secs(3), command.output())
+                .await
+                .expect("An unrelated target or missing app context must not wait on the root lock")
+                .unwrap();
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.status.success(), expected_error.is_none(), "{text}");
+            if let Some(error) = expected_error {
+                assert!(text.contains(error), "{text}");
+            } else {
+                assert!(target.unwrap().join("golem.yaml").is_file());
+            }
+            assert_eq!(snapshot(root), before);
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("20s")]
+async fn explicitly_selected_nested_template_targets_are_rejected_without_writes() {
+    for manifest_name in ["golem.yaml", "app.yaml"] {
+        let project = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let root = project.path();
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let original = "manifestVersion: 2.0.0\napp: nested-target\nenvironments:\n  local:\n    server: local\n";
+        std::fs::write(root.join("golem.yaml"), original).unwrap();
+        let selected = nested.join(manifest_name);
+        std::fs::write(&selected, original).unwrap();
+        std::fs::create_dir(root.join("golem-temp")).unwrap();
+        let held = std::fs::File::create(root.join("golem-temp/operation.lock")).unwrap();
+        held.try_lock().unwrap();
+        let before = snapshot(root);
+        let mut command = cli_command();
+        command
+            .current_dir(&nested)
+            .arg("--config-dir")
+            .arg(config.path())
+            .arg("--app-manifest-path")
+            .arg(selected)
+            .args([
+                "--yes",
+                "new",
+                ".",
+                "--template",
+                "rust",
+                "--component-name",
+                "probe:added",
+            ]);
+        let mut command = tokio::process::Command::from(command);
+        command.kill_on_drop(true);
+        let output = tokio::time::timeout(std::time::Duration::from_secs(3), command.output())
+            .await
+            .expect("A nested target must be rejected without waiting on its enclosing root's lock")
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.status.success(), "{text}");
+        assert!(
+            text.contains("Cannot create a new application inside"),
+            "{text}"
+        );
+        assert_eq!(snapshot(root), before);
+    }
+}
+
+#[test]
+#[test_r::timeout("15s")]
+async fn adding_templates_rejects_a_new_enclosing_application_after_waiting() {
+    use clap::Parser;
+    use golem_cli::command::GolemCliCommand;
+    use golem_cli::command_handler::Handlers;
+    use golem_cli::context::Context;
+    use golem_common::model::component::ComponentName;
+    use std::sync::Arc;
+
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let _working_directory = WorkingDirectoryGuard::acquire().await;
+    let root = project.path();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let original =
+        "manifestVersion: 2.0.0\napp: original-inner\nenvironments:\n  local:\n    server: local\n";
+    std::fs::write(nested.join("golem.yaml"), original).unwrap();
+    std::env::set_current_dir(&nested).unwrap();
+    let flags = GolemCliCommand::try_parse_from([
+        "golem-cli",
+        "--config-dir",
+        config.path().to_str().unwrap(),
+        "--yes",
+        "new",
+        ".",
+    ])
+    .unwrap()
+    .global_flags;
+    let ctx = Arc::new(Context::new(flags, None, true, true).await.unwrap());
+    std::fs::create_dir(nested.join("golem-temp")).unwrap();
+    let lock_path = nested.join("golem-temp/operation.lock");
+    let held = std::fs::File::create(&lock_path).unwrap();
+    held.try_lock().unwrap();
+    let handler = ctx.app_handler();
+    let adding = handler.cmd_new(
+        Some(nested.clone()),
+        None,
+        Some(ComponentName("probe:added".into())),
+        vec!["rust".parse().unwrap()],
+    );
+    tokio::pin!(adding);
+    tokio::select! {
+        result = &mut adding => panic!("Template application did not wait for ownership: {result:?}"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(150)) => {}
+    }
+    std::fs::write(
+        root.join("golem.yaml"),
+        original.replace("original-inner", "late-outer"),
+    )
+    .unwrap();
+    let before = snapshot(root);
+    drop(held);
+    assert!(adding.await.is_err());
+    assert_eq!(snapshot(root), before);
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    held.try_lock().unwrap();
+}
+
+#[test]
+fn existing_template_target_is_rejected_without_loading_an_unrelated_application() {
+    let project = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("golem.yaml"),
+        "manifestVersion: 2.0.0\napp: invalid-context\nenvironments:\n  local: {server: local}\ncomponents:\n  invalid-component-name:\n    componentWasm: missing.wasm\n"
+    ).unwrap();
+    std::fs::write(
+        target.path().join("golem.yaml"),
+        "manifestVersion: 2.0.0\napp: existing-target\nenvironments:\n  local: {server: local}\n",
+    )
+    .unwrap();
+    let before = snapshot(target.path());
+    let source_before = snapshot(project.path());
+    let output = cli_command()
+        .current_dir(project.path())
+        .arg("--config-dir")
+        .arg(config.path())
+        .args(["--yes", "new"])
+        .arg(target.path())
+        .args(["--template", "rust", "--component-name", "probe:added"])
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("Target directory is already an existing application"),
+        "{text}"
+    );
+    assert!(!text.contains("Invalid component name"), "{text}");
+    assert_eq!(snapshot(target.path()), before);
+    assert_eq!(snapshot(project.path()), source_before);
+}
+
+#[test]
+fn component_directory_clean_preserves_siblings_and_common_outputs() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let root = project.path();
+    for dir in ["left", "right", "golem-temp"] {
+        std::fs::create_dir(root.join(dir)).unwrap();
+    }
+    std::fs::write(root.join("golem.yaml"),
+        "manifestVersion: 2.0.0\napp: scoped-clean\nenvironments:\n  local: {server: local}\nclean: [common.bin]\ncomponents:\n  app:left:\n    dir: left\n    componentWasm: component.wasm\n  app:right:\n    dir: right\n    componentWasm: component.wasm\n"
+    ).unwrap();
+    for path in [
+        "left/component.wasm",
+        "right/component.wasm",
+        "common.bin",
+        "golem-temp/keep.txt",
+    ] {
+        std::fs::write(root.join(path), "keep unless selected").unwrap();
+    }
+    for dir in [root.join("left"), root.to_path_buf()] {
+        let output = cli_command()
+            .current_dir(&dir)
+            .arg("--config-dir")
+            .arg(config.path())
+            .args(["--yes", "clean"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!root.join("left/component.wasm").exists());
+        for path in ["right/component.wasm", "common.bin", "golem-temp/keep.txt"] {
+            assert_eq!(root.join(path).exists(), dir != root, "{path}");
+        }
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join("golem-temp/operation.lock"))
+            .unwrap();
+        lock.try_lock().unwrap();
+    }
+}
+
+#[test]
+async fn loading_without_upgrade_authority_rejects_old_manifests_even_with_yes() {
+    use clap::Parser;
+    use golem_cli::command::GolemCliCommand;
+    use golem_cli::context::Context;
+
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let _working_directory = WorkingDirectoryGuard::acquire().await;
+    let manifest = project.path().join("golem.yaml");
+    std::fs::write(&manifest,
+        "manifestVersion: 1.5.0\napp: no-upgrade-authority\nenvironments:\n  local: {server: local, cli: {autoConfirm: true}}\n"
+    ).unwrap();
+    let before = snapshot(project.path());
+    let flags = GolemCliCommand::try_parse_from([
+        "golem-cli",
+        "--config-dir",
+        config.path().to_str().unwrap(),
+        "--app-manifest-path",
+        manifest.to_str().unwrap(),
+        "--yes",
+        "build",
+    ])
+    .unwrap()
+    .global_flags;
+    let error = Context::new(flags, None, false, false)
+        .await
+        .err()
+        .expect("Loading must not authorize migration");
+    assert!(
+        format!("{error:#}").contains("Invalid manifest versions"),
+        "{error:#}"
+    );
+    assert_eq!(snapshot(project.path()), before);
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn deploy_waits_for_local_ownership_before_contacting_the_server() {
+    use clap::Parser;
+    use golem_cli::command::GolemCliCommand;
+    use golem_cli::command::shared_args::PostDeployArgs;
+    use golem_cli::command_handler::Handlers;
+    use golem_cli::context::Context;
+    use golem_cli::model::deploy::DeployConfig;
+    use std::sync::Arc;
+
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let _working_directory = WorkingDirectoryGuard::acquire().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let manifest = project.path().join("golem.yaml");
+    std::fs::write(&manifest, format!(
+        "manifestVersion: 2.0.0\napp: deploy-lock\nenvironments:\n  local:\n    server:\n      url: http://{}\n      auth: {{staticToken: test}}\ncomponents:\n  app:main:\n    componentWasm: component.wasm\n", listener.local_addr().unwrap()
+    )).unwrap();
+    std::fs::write(
+        project.path().join("component.wasm"),
+        wat::parse_str("(component)").unwrap(),
+    )
+    .unwrap();
+    let flags = GolemCliCommand::try_parse_from([
+        "golem-cli",
+        "--config-dir",
+        config.path().to_str().unwrap(),
+        "--app-manifest-path",
+        manifest.to_str().unwrap(),
+        "--yes",
+        "deploy",
+    ])
+    .unwrap()
+    .global_flags;
+    let ctx = Arc::new(Context::new(flags, None, true, true).await.unwrap());
+    std::fs::create_dir(project.path().join("golem-temp")).unwrap();
+    let held = std::fs::File::create(project.path().join("golem-temp/operation.lock")).unwrap();
+    held.try_lock().unwrap();
+    let handler = ctx.app_handler();
+    let deploy = handler.deploy(DeployConfig {
+        plan: false,
+        stage: false,
+        approve_staging_steps: false,
+        full_diff: false,
+        force_build: None,
+        post_deploy_args: PostDeployArgs::none(),
+        repl_bridge_sdk_target: None,
+        skip_build: true,
+    });
+    tokio::pin!(deploy);
+    tokio::select! {
+        result = &mut deploy => panic!("Deployment did not wait for ownership: {:?}", result.err()),
+        _ = listener.accept() => panic!("Deployment contacted the server before taking local ownership"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(150)) => {}
+    }
+    ctx.cancellation().token().cancel();
+    let error = deploy
+        .await
+        .err()
+        .expect("The cancelled lock wait must stop deployment");
+    assert!(
+        format!("{error:#}").contains("Operation cancelled"),
+        "{error:#}"
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
 }
 
 #[test]

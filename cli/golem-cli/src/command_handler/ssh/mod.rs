@@ -305,7 +305,6 @@ impl SshCommandHandler {
             return Err(anyhow!(PipedExitCode(NOT_RUN_EXIT)));
         }
 
-        self.ctx.finish_application_operation();
         let status = match command {
             Some(script) => self.run_once(&session, &script).await,
             None => self.run_interactive(&mut session, self.terminal()).await,

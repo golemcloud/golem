@@ -113,9 +113,18 @@ Read-only build inspection does not create the application lock. Execution acqui
 it, reloads and checks requirements again before applying repairs. A confirmed
 startup migration acquires protection before writing and loading the converted
 manifests. Declining migration writes nothing. REPL preparation and reload hold
-local sections, not a session-long lock. Remote streams release local protection
-after their application-dependent preparation. Standalone custom commands protect
-dependency preparation; declared targets or directory writes keep the section
+local sections, not a session-long lock. Each operation owns a local guard; Context
+does not retain one. Startup common-file generation acquires only when its inspected
+load plan needs changes, then refreshes and applies the plan under the guard.
+It does not authorize manifest migration; MCP calls reject a newly outdated manifest.
+Reload preserves the original invocation directory and component selection.
+Deploy takes ownership and refreshes requirements before planning or applying grants.
+It holds that section through build or package preparation and staging's final
+local artifact reads, then releases it before activation and post-deploy actions.
+Manifest trace protects metadata extraction; REPL setup protects directory and
+history creation separately from build, deployment and the running session.
+Remote streams and idle tool servers do not hold local protection. Standalone
+custom commands protect dependency preparation; declared targets or directory writes keep the section
 through command completion. Custom build steps retain the enclosing build section.
 Same-application mutating CLI recursion inside a held section is unsupported and
 fails with a contention diagnostic. There is no lock inheritance or bypass flag.

@@ -467,21 +467,30 @@ impl AppCommandHandler {
         flags: &crate::command::GolemCliGlobalFlags,
         source: &str,
     ) -> anyhow::Result<()> {
-        self.ctx.acquire_application_operation().await?;
+        let _operation = self.ctx.start_application_operation().await?;
         let installed = crate::package::install(flags, source).await?;
         self.ctx.log_handler().log_output(installed)
     }
 
     pub async fn cmd_pack(&self, output: PathBuf) -> anyhow::Result<()> {
-        self.prepare_packages().await?;
-        let (report, bytes) = self.ctx.component_handler().pack_application().await?;
-        crate::package::write_package(&output, &bytes)?;
+        let report = {
+            let _operation = self.ctx.start_application_operation().await?;
+            self.ctx.reload_application(false).await?;
+            self.prepare_packages().await?;
+            let (report, bytes) = self.ctx.component_handler().pack_application().await?;
+            crate::package::write_package(&output, &bytes)?;
+            report
+        };
         self.ctx.log_handler().log_output(report)
     }
 
     pub async fn cmd_publish(&self) -> anyhow::Result<()> {
-        self.prepare_packages().await?;
-        let (report, _) = self.ctx.component_handler().pack_application().await?;
+        let (report, _) = {
+            let _operation = self.ctx.start_application_operation().await?;
+            self.ctx.reload_application(false).await?;
+            self.prepare_packages().await?;
+            self.ctx.component_handler().pack_application().await?
+        };
         self.ctx.log_handler().log_output(report)
     }
 
@@ -764,7 +773,6 @@ impl AppCommandHandler {
 
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
-        self.ctx.finish_application_operation();
         if let Err(error) = app_ctx.custom_command(&BuildConfig::new(), command).await {
             match error {
                 CustomCommandError::CommandNotFound => {
@@ -1138,6 +1146,32 @@ impl AppCommandHandler {
             build_config
         };
 
+        if !config.skip_build {
+            self.must_select_components(vec![], &ApplicationComponentSelectMode::All)
+                .await
+                .map_err(DeployError::BuildError)?;
+            self.inspect_build_requirements(&build_config)
+                .await
+                .map_err(DeployError::BuildError)?;
+        }
+        let operation = self
+            .ctx
+            .start_application_operation()
+            .await
+            .map_err(DeployError::BuildError)?;
+        self.ctx
+            .reload_application(!config.skip_build)
+            .await
+            .map_err(DeployError::BuildError)?;
+        if !config.skip_build {
+            self.must_select_components(vec![], &ApplicationComponentSelectMode::All)
+                .await
+                .map_err(DeployError::BuildError)?;
+            self.inspect_build_requirements(&build_config)
+                .await
+                .map_err(DeployError::BuildError)?;
+        }
+
         let environment = self
             .ctx
             .environment_handler()
@@ -1302,6 +1336,7 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::PrepareError)?
         else {
+            drop(operation);
             return {
                 if config.plan {
                     Ok(if has_tool_grant_changes {
@@ -1340,6 +1375,7 @@ impl AppCommandHandler {
             deploy_diff.has_environment_setup_entries_skipped_already_exists();
 
         if !deploy_diff.has_apply_work() {
+            drop(operation);
             return Ok(if has_environment_setup_skipped {
                 DeploySummary::DeploySkippedOnly(
                     self.apply_post_deploy_args(
@@ -1395,6 +1431,7 @@ impl AppCommandHandler {
         )
         .await
         .map_err(DeployError::StagingError)?;
+        drop(operation);
         if config.stage {
             return Ok(DeploySummary::StagingOk);
         }
@@ -3841,6 +3878,16 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
+        let execute = build_config.should_run_step(AppBuildStep::Build)
+            || build_config.should_run_step(AppBuildStep::GenBridge);
+        let _operation = if execute {
+            self.inspect_build_requirements(build_config).await?;
+            let operation = self.ctx.start_application_operation().await?;
+            self.ctx.reload_application(true).await?;
+            operation
+        } else {
+            None
+        };
         let Some(checked_plan) = self.prepare_build_project(build_config).await? else {
             return Ok(());
         };
@@ -3879,20 +3926,23 @@ impl AppCommandHandler {
             .await
     }
 
+    async fn inspect_build_requirements(&self, build_config: &BuildConfig) -> anyhow::Result<()> {
+        let execution = crate::app::build::BuildExecution::default();
+        let app_ctx = self.ctx.app_context_lock().await;
+        crate::app::build::inspect_build_requirements(&BuildContext::new(
+            app_ctx.some_or_err()?,
+            build_config,
+            &execution,
+        ))
+        .await
+    }
+
     async fn prepare_build_project(
         &self,
         build_config: &BuildConfig,
     ) -> anyhow::Result<Option<crate::app::build::plan::BuildPlan>> {
         let execution = crate::app::build::BuildExecution::default();
-        {
-            let app_ctx = self.ctx.app_context_lock().await;
-            crate::app::build::inspect_build_requirements(&BuildContext::new(
-                app_ctx.some_or_err()?,
-                build_config,
-                &execution,
-            ))
-            .await?;
-        }
+        self.inspect_build_requirements(build_config).await?;
         let execute = build_config.should_run_step(AppBuildStep::Build)
             || build_config.should_run_step(AppBuildStep::GenBridge);
         if !execute {
@@ -3933,16 +3983,6 @@ impl AppCommandHandler {
             .map(Some);
         }
 
-        if self.ctx.acquire_application_operation().await? {
-            self.ctx.reload_application(true).await?;
-            let app_ctx = self.ctx.app_context_lock().await;
-            crate::app::build::inspect_build_requirements(&BuildContext::new(
-                app_ctx.some_or_err()?,
-                build_config,
-                &execution,
-            ))
-            .await?;
-        }
         self.ctx.apply_application_load_plan().await?;
         self.ctx.reload_application(false).await?;
         if build_config.should_run_step(AppBuildStep::Check) {
@@ -4332,8 +4372,10 @@ impl AppCommandHandler {
         component_names: Vec<ComponentName>,
         default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
+        let _operation = self.ctx.start_application_operation().await?;
         self.ctx.initialize_for_clean().await;
         let result = async {
+            self.ctx.reload_application(false).await?;
             let any_component_requested = !component_names.is_empty();
 
             self.must_select_components(component_names, default_component_select_mode)

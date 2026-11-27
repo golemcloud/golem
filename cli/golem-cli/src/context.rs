@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{ApplicationContext, ApplicationLoadPlan};
+use crate::app::context::{ApplicationContext, ApplicationLoadPlan, ApplicationPreloadResult};
 use crate::app::template::AppTemplateRepo;
 use crate::client::{GolemClients, new_raw_reqwest_client, wait_for_server_startup};
 use crate::command::GolemCliGlobalFlags;
@@ -90,7 +90,7 @@ pub struct Context {
     /// How the global flags select the manifests: the root manifest, the search for it, or none.
     manifest_discovery: ApplicationSourceMode,
     /// The directory that the manifest search at start began in, when it found the manifests.
-    /// A tool call of `golem mcp serve` searches again from it.
+    /// Reloads and tool calls search again from it.
     manifest_search_dir: Option<PathBuf>,
     http_batch_size: u64,
     http_parallelism: usize,
@@ -110,8 +110,7 @@ pub struct Context {
     golem_clients: tokio::sync::OnceCell<GolemClients>,
     selected_context_logging: std::sync::OnceLock<()>,
     application_load_plan: tokio::sync::Mutex<Option<ApplicationLoadPlan>>,
-    application_operation: std::sync::Mutex<Option<std::fs::File>>,
-    application_operation_path: Option<PathBuf>,
+    application_root_manifest: Option<PathBuf>,
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
@@ -212,37 +211,29 @@ impl Context {
             ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags);
 
         let cancellation = Cancellation::default();
-        let application_operation_path = if log_output_for_help.is_none() {
-            application_operation_path(&app_source_mode, &crate::fs::current_dir_lexical()?)
+        let application_root_manifest = if log_output_for_help.is_none() {
+            application_root_manifest(&app_source_mode, &crate::fs::current_dir_lexical()?)
         } else {
             None
         };
-        let mut application_operation = if allow_manifest_upgrades && log_output_for_help.is_none()
-        {
+        if allow_manifest_upgrades && log_output_for_help.is_none() {
             ApplicationContext::plan_and_apply_manifest_upgrades_before_load(
                 app_source_mode.clone(),
                 global_flags.yes,
                 cancellation.token(),
             )
-            .await?
-        } else {
-            None
-        };
-
-        if application_operation.is_none()
-            && !defer_application_writes
-            && let Some(path) = &application_operation_path
-        {
-            application_operation = Some(crate::fs::lock_file(path, cancellation.token()).await?);
+            .await?;
         }
 
         let manifest_discovery = app_source_mode.clone();
-        let preloaded_app = ApplicationContext::preload_application(
+        let preloaded_app = Self::preload_application(
             app_source_mode,
             &crate::fs::current_dir_lexical()?,
             global_flags.dev_mode,
-            defer_application_writes && log_output_for_help.is_none(),
-        )?;
+            defer_application_writes || log_output_for_help.is_some(),
+            cancellation.token(),
+        )
+        .await?;
 
         if preloaded_app.loaded_with_warnings
             && log_output_for_help.is_none()
@@ -465,8 +456,7 @@ impl Context {
             file_download_client,
             selected_context_logging: std::sync::OnceLock::new(),
             application_load_plan: tokio::sync::Mutex::new(Some(preloaded_app.load_plan)),
-            application_operation: std::sync::Mutex::new(application_operation),
-            application_operation_path,
+            application_root_manifest,
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 SHOULD_COLORIZE.should_colorize(),
@@ -496,10 +486,6 @@ impl Context {
         environment: ResolvedEnvironmentIdentity,
         cancellation: Cancellation,
     ) -> anyhow::Result<Self> {
-        let application_operation = match &self.application_operation_path {
-            Some(path) => Some(crate::fs::lock_file(path, cancellation.token()).await?),
-            None => None,
-        };
         let mut profile = self.profile.clone();
         // The built-in profiles are always in the config; a custom one can be gone.
         let Some(stored) = Config::get_profile(&self.config_dir, &profile.name)? else {
@@ -510,12 +496,14 @@ impl Context {
         profile.profile.auth = stored.profile.auth;
         let app_source_mode = match &self.manifest_search_dir {
             Some(search_dir) => {
-                ApplicationContext::preload_application(
+                Self::preload_application(
                     self.manifest_discovery.clone(),
                     search_dir,
                     self.dev_mode,
                     false,
-                )?
+                    cancellation.token(),
+                )
+                .await?
                 .source_mode
             }
             None => ApplicationSourceMode::None,
@@ -553,8 +541,7 @@ impl Context {
             golem_clients: tokio::sync::OnceCell::new(),
             selected_context_logging: std::sync::OnceLock::new(),
             application_load_plan: tokio::sync::Mutex::new(None),
-            application_operation: std::sync::Mutex::new(application_operation),
-            application_operation_path: self.application_operation_path.clone(),
+            application_root_manifest: self.application_root_manifest.clone(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 self.yes,
                 self.should_colorize,
@@ -569,32 +556,57 @@ impl Context {
         &self.config_dir
     }
 
-    pub(crate) fn finish_application_operation(&self) {
-        self.application_operation.lock().unwrap().take();
+    pub(crate) fn application_root_manifest(&self) -> Option<&Path> {
+        self.application_root_manifest.as_deref()
     }
 
-    pub(crate) async fn acquire_application_operation(&self) -> anyhow::Result<bool> {
-        if self.application_operation.lock().unwrap().is_some() {
-            return Ok(false);
-        }
-        let Some(path) = &self.application_operation_path else {
-            return Ok(false);
-        };
-        let operation = crate::fs::lock_file(path, self.cancellation.token()).await?;
-        *self.application_operation.lock().unwrap() = Some(operation);
-        Ok(true)
+    pub(crate) fn has_application_context(&self) -> bool {
+        self.app_context_config.is_some()
     }
 
-    /// A new REPL preparation section reloads inputs after reacquiring the application lock.
     pub(crate) async fn start_application_operation(
         &self,
     ) -> anyhow::Result<Option<std::fs::File>> {
-        let Some(path) = &self.application_operation_path else {
+        let Some(root) = self.application_root_manifest().and_then(Path::parent) else {
             return Ok(None);
         };
-        let operation = crate::fs::lock_file(path, self.cancellation.token()).await?;
-        self.reload_application(false).await?;
-        Ok(Some(operation))
+        let path = crate::model::app::Application::operation_lock_path(root);
+        Ok(Some(
+            crate::fs::lock_file(&path, self.cancellation.token()).await?,
+        ))
+    }
+
+    async fn preload_application(
+        source_mode: ApplicationSourceMode,
+        search_dir: &Path,
+        dev_mode: bool,
+        defer_writes: bool,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<ApplicationPreloadResult> {
+        let preloaded = ApplicationContext::preload_application(
+            source_mode.clone(),
+            search_dir,
+            dev_mode,
+            true,
+        )?;
+        if defer_writes || preloaded.load_plan.is_empty() {
+            return Ok(preloaded);
+        }
+        preloaded.load_plan.validate_manifest_versions()?;
+        let manifest = application_root_manifest(&source_mode, search_dir)
+            .ok_or_else(|| anyhow!("Cannot lock application for manifest preparation"))?;
+        let root = crate::fs::parent_or_err(&manifest)?;
+        let path = crate::model::app::Application::operation_lock_path(root);
+        let _operation = crate::fs::lock_file(&path, cancellation).await?;
+        let preloaded = ApplicationContext::preload_application(
+            source_mode.clone(),
+            search_dir,
+            dev_mode,
+            true,
+        )?;
+        preloaded.load_plan.validate_manifest_versions()?;
+        preloaded.load_plan.apply(false)?;
+        ApplicationContext::preload_application(source_mode, search_dir, dev_mode, false)
     }
 
     pub async fn has_pending_application_changes(&self) -> bool {
@@ -619,13 +631,15 @@ impl Context {
             return Ok(());
         };
         let mut state = self.app_context_state.write().await;
-        let selected = state.some_or_err()?.selected_component_names().clone();
+        let selected = match &state.app_context {
+            Some(Ok(Some(app_ctx))) => app_ctx.selected_component_names().clone(),
+            _ => Default::default(),
+        };
         let preloaded = ApplicationContext::preload_application(
-            ApplicationContextConfig::app_source_mode_from_flags(
-                config.disable_app_manifest_discovery,
-                config.app_manifest_path.as_deref(),
-            ),
-            state.some_or_err()?.application().app_root_dir(),
+            self.manifest_discovery.clone(),
+            self.manifest_search_dir
+                .as_deref()
+                .expect("Missing manifest search directory"),
             config.dev_mode,
             defer_writes,
         )?;
@@ -644,11 +658,13 @@ impl Context {
         state.app_source_mode = Some(preloaded.source_mode);
         state.app_context = None;
         state.init(&Some(reloaded_config), &self.config_dir).await?;
-        state.some_or_err_mut()?.select_components(
-            &crate::model::app::ApplicationComponentSelectMode::Explicit(
-                selected.into_iter().collect(),
-            ),
-        )?;
+        if !selected.is_empty() {
+            state.some_or_err_mut()?.select_components(
+                &crate::model::app::ApplicationComponentSelectMode::Explicit(
+                    selected.into_iter().collect(),
+                ),
+            )?;
+        }
         Ok(())
     }
 
@@ -1136,8 +1152,6 @@ impl ResolvedServerConfig {
 
 #[derive(Clone)]
 struct ApplicationContextConfig {
-    app_manifest_path: Option<PathBuf>,
-    disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
     local_server: Option<WithSource<crate::model::app_raw::LocalServer>>,
@@ -1156,8 +1170,6 @@ impl ApplicationContextConfig {
         builtin_local_url: Url,
     ) -> Self {
         Self {
-            app_manifest_path: global_flags.app_manifest_path.clone(),
-            disable_app_manifest_discovery: global_flags.disable_app_manifest_discovery,
             application_name: application_preload.application_name,
             environments: application_preload.environments,
             local_server: application_preload.local_server,
@@ -1195,18 +1207,15 @@ impl ApplicationContextConfig {
     }
 }
 
-fn application_operation_path(source: &ApplicationSourceMode, cwd: &Path) -> Option<PathBuf> {
-    let manifest = match source {
-        ApplicationSourceMode::Automatic => crate::app::context::find_main_source_from(cwd)?,
+fn application_root_manifest(source: &ApplicationSourceMode, cwd: &Path) -> Option<PathBuf> {
+    match source {
+        ApplicationSourceMode::Automatic => crate::app::context::find_main_source_from(cwd),
         ApplicationSourceMode::ByRootManifest(path) => {
-            crate::fs::absolute_lexical_path_from_base_dir(path, cwd)
+            Some(crate::fs::absolute_lexical_path_from_base_dir(path, cwd))
         }
-        ApplicationSourceMode::Preloaded(loaded) => loaded.root_manifest.clone(),
-        ApplicationSourceMode::None => return None,
-    };
-    Some(crate::model::app::Application::operation_lock_path(
-        manifest.parent()?,
-    ))
+        ApplicationSourceMode::Preloaded(loaded) => Some(loaded.root_manifest.clone()),
+        ApplicationSourceMode::None => None,
+    }
 }
 
 #[derive()]

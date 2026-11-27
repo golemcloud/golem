@@ -353,6 +353,8 @@ impl ComponentCommandHandler {
                 )
                 .await?;
         }
+        let _operation = self.ctx.start_application_operation().await?;
+        self.ctx.reload_application(false).await?;
         self.ctx
             .app_handler()
             .must_select_components(

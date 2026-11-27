@@ -138,6 +138,7 @@ impl TypeScriptRepl {
 
     async fn generate_repl_package(&self, args: &BridgeReplArgs) -> anyhow::Result<()> {
         let _operation = self.ctx.start_application_operation().await?;
+        self.ctx.reload_application(false).await?;
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 

@@ -326,6 +326,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     template,
                 } => {
+                    ctx.defer_application_writes = true;
                     ctx.get_or_init()
                         .await?
                         .app_handler()

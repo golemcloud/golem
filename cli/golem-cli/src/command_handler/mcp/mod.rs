@@ -860,7 +860,6 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
     let ctx = lazy.get_or_init().await?;
     // The questions about the manifest are answered here, once, and every call keeps the answer.
     drop(ctx.app_context_lock_mut().await?);
-    ctx.finish_application_operation();
     let environment = ctx
         .environment_handler()
         .resolve_environment(EnvironmentResolveMode::Any)

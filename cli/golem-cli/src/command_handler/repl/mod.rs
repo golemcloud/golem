@@ -127,6 +127,8 @@ impl ReplHandler {
             .await?;
 
         let args = {
+            let _operation = self.ctx.start_application_operation().await?;
+            self.ctx.reload_application(false).await?;
             let app_main_dir = fs::current_dir_lexical()?;
 
             let app_ctx = self.ctx.app_context_lock().await;
@@ -227,7 +229,6 @@ impl ReplHandler {
             }
         }
 
-        self.ctx.finish_application_operation();
         match repl_language {
             ReplLanguage::TypeScript => TypeScriptRepl::new(self.ctx.clone()).run(args).await,
         }

@@ -356,6 +356,16 @@ impl ApplicationLoadPlan {
         self.upgrades.is_empty() && self.commons.is_empty()
     }
 
+    pub(crate) fn validate_manifest_versions(&self) -> anyhow::Result<()> {
+        validated_to_anyhow(
+            "Invalid manifest versions",
+            validate_manifest_versions(
+                &self.upgrades.iter().map(|step| step.path.clone()).collect(),
+            ),
+            None,
+        )
+    }
+
     pub fn apply(&self, yes: bool) -> anyhow::Result<()> {
         ApplicationContext::apply_manifest_upgrades(&self.upgrades, yes)?;
         for (template, name, app_dir, target_dir) in &self.commons {
@@ -433,7 +443,7 @@ impl ApplicationContext {
         source_mode: ApplicationSourceMode,
         yes: bool,
         cancellation: &tokio_util::sync::CancellationToken,
-    ) -> anyhow::Result<Option<std::fs::File>> {
+    ) -> anyhow::Result<()> {
         Self::plan_and_apply_manifest_upgrades_before_load_from(
             source_mode,
             yes,
@@ -448,7 +458,7 @@ impl ApplicationContext {
         yes: bool,
         calling_working_dir: &Path,
         cancellation: &tokio_util::sync::CancellationToken,
-    ) -> anyhow::Result<Option<std::fs::File>> {
+    ) -> anyhow::Result<()> {
         let collected_sources = {
             let _output = LogOutput::new(Output::None);
             match &source_mode {
@@ -461,7 +471,7 @@ impl ApplicationContext {
         };
 
         let Some(collected_sources) = collected_sources else {
-            return Ok(None);
+            return Ok(());
         };
         let collected_sources = validated_to_anyhow(
             "Failed to collect application manifests for automatic upgrade",
@@ -470,16 +480,16 @@ impl ApplicationContext {
         )?;
         let steps = plan_manifest_upgrade_steps(&collected_sources.sources)?;
         if steps.is_empty() {
-            return Ok(None);
+            return Ok(());
         }
         Self::confirm_manifest_upgrades(&steps, yes)?;
-        let operation = fs::lock_file(
+        let _operation = fs::lock_file(
             &Application::operation_lock_path(&collected_sources.app_root_dir),
             cancellation,
         )
         .await?;
         Self::apply_confirmed_manifest_upgrades(&steps)?;
-        Ok(Some(operation))
+        Ok(())
     }
 
     fn apply_manifest_upgrades(steps: &[ManifestUpgradeStep], yes: bool) -> anyhow::Result<()> {
