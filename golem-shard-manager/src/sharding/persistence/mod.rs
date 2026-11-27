@@ -21,7 +21,7 @@ pub use etcd::{EtcdRoutingTablePersistence, STATE_KEY};
 use super::error::ShardManagerError;
 use super::model::ShardLeaseState;
 use async_trait::async_trait;
-use golem_common::serialization::try_deserialize;
+use golem_common::serialization::decode;
 
 /// An opaque, backend-assigned version of the persisted [`ShardLeaseState`].
 ///
@@ -84,14 +84,11 @@ pub trait RoutingTablePersistence: Send + Sync {
 
 /// Decodes a persisted state blob and refuses to load one that violates the state invariants.
 fn decode_shard_state(bytes: &[u8]) -> Result<ShardLeaseState, ShardManagerError> {
-    let shard_state: ShardLeaseState = try_deserialize(bytes)
-        .map_err(ShardManagerError::SerializationError)?
-        .ok_or_else(|| {
-            ShardManagerError::SerializationError(
-                "persisted shard lease state is empty or has an unknown serialization version"
-                    .to_string(),
-            )
-        })?;
+    let shard_state: ShardLeaseState = decode(bytes).map_err(|error| {
+        ShardManagerError::SerializationError(format!(
+            "failed to decode persisted shard lease state: {error}"
+        ))
+    })?;
     shard_state.check_invariants().map_err(|violation| {
         ShardManagerError::SerializationError(format!(
             "persisted shard lease state violates invariants: {violation}"
@@ -206,7 +203,10 @@ mod tests {
     fn empty_blob_is_rejected() {
         match decode_shard_state(&[]) {
             Err(ShardManagerError::SerializationError(msg)) => {
-                assert!(msg.contains("empty"), "{msg}");
+                assert_eq!(
+                    msg,
+                    "failed to decode persisted shard lease state: missing serialization version"
+                );
             }
             other => panic!("expected SerializationError, got {other:?}"),
         }

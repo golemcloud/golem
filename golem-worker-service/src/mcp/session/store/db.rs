@@ -377,6 +377,64 @@ mod tests {
         });
     }
 
+    /// At the store boundary a missing record is `None` and a stored record that does not decode
+    /// is an internal error that names the decode problem, not `None`. A read does not remove the
+    /// record.
+    #[test]
+    async fn a_missing_and_an_undecodable_record_stay_distinct_at_the_store() {
+        use crate::mcp::session::store::McpSessionStoreError;
+
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let config = DbSqliteConfig {
+            database: db_file.path().to_string_lossy().to_string(),
+            max_connections: 1,
+            foreign_keys: false,
+        };
+        let pool = migrated_sqlite_pool(&config).await.unwrap();
+        let store = SqliteMcpSessionStore::new(pool, Duration::from_secs(3600));
+        let id = McpSessionId::generate().unwrap();
+        let record = McpSessionRecord {
+            domain: Domain("mcp.example.com".to_string()),
+            environment_id: EnvironmentId::new(),
+            deployment_revision: DeploymentRevision::INITIAL,
+        };
+        assert!(
+            store
+                .create(id, &record, Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .get(McpSessionId::generate().unwrap(), None)
+                .await
+                .unwrap(),
+            None
+        );
+
+        let mut writer = SqliteConnection::connect_with(&config.connect_options())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE mcp_session SET value = X'FF00'")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+
+        let first = store.get(id, None).await;
+        let second = store.get(id, None).await;
+        [first, second].into_iter().for_each(|read| {
+            assert!(
+                matches!(
+                    &read,
+                    Err(McpSessionStoreError::InternalError(error))
+                        if error.to_string()
+                            == "McpSessionRecord deserialization error: unknown serialization version: 255"
+                ),
+                "{read:?}"
+            )
+        });
+    }
+
     // A request reads a live session that needs a refresh while another writer holds the
     // database write lock, and the session expires before that writer commits: the writer moves
     // the expiry two minutes back. The refresh then runs under the lock, finds the row expired

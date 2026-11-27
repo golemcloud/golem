@@ -31,6 +31,7 @@ use super::{
     encode_recursive_stream_value_with_schema, invocation_request, invocation_response, mpsc,
     schema_fingerprint_v1,
 };
+use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
 use golem_common::model::caller::Caller;
 
 pub(crate) fn capture_session_acceptance(
@@ -581,21 +582,59 @@ pub(crate) fn build_durable_streaming_request(
     })
 }
 
+/// A committed Prepared record whose invocation input does not decode. The record is history of
+/// the callee, so the callee fails with it. The decoder text can hold stored values, so the error
+/// does not keep it.
+#[derive(Debug)]
+pub(crate) struct UndecodablePreparedInput {
+    callee: AgentId,
+}
+
+impl UndecodablePreparedInput {
+    /// The read error of the Prepared record at `index`.
+    pub(crate) fn at(self, index: golem_common::model::oplog::OplogIndex) -> UnreadableOplog {
+        self.read_error(format!(
+            "invalid prepared session input at oplog index {index}"
+        ))
+    }
+
+    fn read_error(&self, detail: String) -> UnreadableOplog {
+        UnreadableOplog::new(
+            &self.callee,
+            OplogReadError::corruption(OplogReadSource::Other("prepared session input"), detail),
+        )
+    }
+}
+
+/// Without the index of its record, the error names only the callee.
+impl From<UndecodablePreparedInput> for WorkerExecutorError {
+    fn from(value: UndecodablePreparedInput) -> Self {
+        value
+            .read_error("invalid prepared session input".to_string())
+            .into()
+    }
+}
+
 pub(crate) fn resumed_input_schema(
     prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
-) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), WorkerExecutorError> {
+) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), UndecodablePreparedInput> {
+    decode_prepared_input(prepared).map_err(|_| UndecodablePreparedInput {
+        callee: prepared.attempt.session_key.callee,
+    })
+}
+
+fn decode_prepared_input(
+    prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
+) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), String> {
     let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(
         prepared.attempt.invocation.invocation_value.as_slice(),
     )
-    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    .map_err(|error| error.to_string())?;
     let graph: SchemaGraph = typed
         .graph
-        .ok_or_else(|| WorkerExecutorError::runtime("session input has no graph"))?
-        .try_into()
-        .map_err(WorkerExecutorError::runtime)?;
-    let canonical_input = typed
-        .value
-        .ok_or_else(|| WorkerExecutorError::runtime("session input has no value"))?;
+        .ok_or("session input has no graph")?
+        .try_into()?;
+    let canonical_input = typed.value.ok_or("session input has no value")?;
     let input_root = graph.root.clone();
     let input_mappings = prepared
         .stream_mappings
@@ -622,12 +661,11 @@ pub(crate) fn resumed_input_schema(
             ));
             Ok(SchemaValueStream::from_host_endpoint(()))
         },
-    )
-    .map_err(WorkerExecutorError::runtime)?;
+    )?;
     if input_element_types.len() != input_mappings.len() {
-        return Err(WorkerExecutorError::runtime(
-            "persisted durable invocation input mappings do not match its schema value",
-        ));
+        return Err(
+            "persisted durable invocation input mappings do not match its schema value".to_string(),
+        );
     }
     Ok((graph, input_element_types))
 }

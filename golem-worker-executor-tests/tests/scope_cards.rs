@@ -9056,6 +9056,7 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
 mod dns_records;
 mod moonbit;
 mod socket_policy;
+mod unreadable_card_replay;
 
 const CARD_LIVENESS_FUNCTION: &str = "golem::permissions::types::card-liveness";
 

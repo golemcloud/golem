@@ -62,8 +62,6 @@ pub mod tool_release;
 pub mod volume;
 
 use std::fmt::{Display, Formatter};
-use std::ops::Add;
-use std::time::Duration;
 
 pub use agent::{
     AgentEvent, AgentInvocation, AgentInvocationKind, AgentInvocationOutput,
@@ -143,9 +141,18 @@ impl BinarySerializer for Timestamp {
 impl BinaryDeserializer for Timestamp {
     fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
         let timestamp: u64 = BinaryDeserializer::deserialize(context)?;
-        Ok(Timestamp(
-            iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp)),
-        ))
+        i64::try_from(timestamp)
+            .ok()
+            .and_then(|millis| {
+                iso8601_timestamp::Timestamp::UNIX_EPOCH
+                    .checked_add(iso8601_timestamp::Duration::milliseconds(millis))
+            })
+            .map(Timestamp)
+            .ok_or_else(|| {
+                desert_rust::Error::DeserializationFailure(
+                    "timestamp is outside the supported calendar range".to_string(),
+                )
+            })
     }
 }
 

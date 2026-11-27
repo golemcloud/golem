@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::transfer::decode_recorded_value;
 use super::{
     CallReplayOutcome, CardManagedByRuntimeDerived, CardResourcePattern, CardTransferData,
     CardVerb, CommitLevel, DurabilityHost, DurableCallSession, DurableFunctionType,
@@ -20,7 +21,7 @@ use super::{
     HostResponsePermissionCardTransferComplete, HostResponsePermissionWallet,
     HostResponsePermissionWalletVersion, NotCancellable, PermissionCardEntry,
     PermissionCardHandleRep, PermissionCardResolver, ResolvedCall, Resource, ScopeCard, StoredCard,
-    WorkerCtx, anyhow, decide_install, derive_error_to_permission_error, deserialize, durable_now,
+    WorkerCtx, anyhow, decide_install, derive_error_to_permission_error, durable_now,
     ensure_card_permission, execute_source_card_transfer, instantiate_polymorphic_card_for_agent,
     load_card_transfer_request, permissions_types, permissions_wallet, record_card_decision,
     require_agent_install_target, resolve_permission_card_handle, serialize,
@@ -77,21 +78,25 @@ pub(super) async fn observe_self_wallet<Ctx: WorkerCtx>(
 
 impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
     async fn self_wallet(&mut self) -> anyhow::Result<Vec<permissions_types::WalletCard>> {
-        let observed = DurableCallSession::<GolemPermissionsSelfWallet, NotCancellable>::invoke(
+        let call = DurableCallSession::<GolemPermissionsSelfWallet, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
-            async |ctx| observe_self_wallet(ctx).await,
         )
-        .await?;
+        .await
+        .map_err(|error| -> anyhow::Error { error.into() })?;
+        let start_index = call.start_index();
+        let agent_id = self.state.owned_agent_id.agent_id;
+        let observed = call
+            .run(self, async |ctx| observe_self_wallet(ctx).await)
+            .await?;
 
         let mut wallet_cards = observed
             .cards
             .iter()
             .map(|bytes| {
-                let card: StoredCard = deserialize(bytes).map_err(|err| {
-                    anyhow!("failed to deserialize an observed wallet card: {err}")
-                })?;
+                let card: StoredCard =
+                    decode_recorded_value(&agent_id, start_index, "wallet card", bytes)?;
                 let template = matches!(card, StoredCard::Polymorphic(_));
                 let handle = self.table().push(PermissionCardHandleRep::new(
                     PermissionCardEntry::from_card(card),
@@ -105,9 +110,8 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         if let Some(scope_card) = observed.scope_card {
-            let scope_card: ScopeCard = deserialize(&scope_card).map_err(|err| {
-                anyhow!("failed to deserialize an observed lent scope card: {err}")
-            })?;
+            let scope_card: ScopeCard =
+                decode_recorded_value(&agent_id, start_index, "lent scope card", &scope_card)?;
             let invocation_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("an admitted scope card requires an active invocation")
             })?;
@@ -260,6 +264,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Incomplete(live) => {
                         handle = live;
                         transfer = Some(CardTransferData::from_request(
+                            &self.state.owned_agent_id.agent_id,
                             start_index,
                             load_card_transfer_request(self, start_index).await?,
                         )?);

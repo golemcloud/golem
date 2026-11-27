@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::OplogPayloadDownloadError;
 use crate::services::oplog::multilayer::OplogArchiveError;
 use golem_common::model::AgentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::{decode, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -96,6 +97,19 @@ impl OplogReadError {
         }
     }
 
+    /// Identifies the payload entry and retains whether its storage can recover.
+    pub fn of_payload(
+        source: OplogReadSource,
+        index: OplogIndex,
+        error: OplogPayloadDownloadError,
+    ) -> Self {
+        let detail = format!("failed to load payload at oplog index {index}: {error:#}");
+        match error {
+            OplogPayloadDownloadError::Backend(_) => Self::source_unavailable(source, detail),
+            OplogPayloadDownloadError::Corrupt(_) => Self::corruption(source, detail),
+        }
+    }
+
     /// Whether a later read can pass: the storage did not answer. Corrupt data, a gap or an invalid
     /// range gives the same answer on every read.
     pub fn is_transient(&self) -> bool {
@@ -148,6 +162,20 @@ impl UnreadableOplog {
             error,
         }
     }
+
+    /// The payload of the entry at `index` in the oplog of `agent_id`, which `source` names,
+    /// did not download. The error keeps whether a later read can pass.
+    pub fn of_payload(
+        agent_id: &AgentId,
+        source: &'static str,
+        index: OplogIndex,
+        error: OplogPayloadDownloadError,
+    ) -> Self {
+        Self::new(
+            agent_id,
+            OplogReadError::of_payload(OplogReadSource::Other(source), index, error),
+        )
+    }
 }
 
 impl Display for UnreadableOplog {
@@ -169,12 +197,13 @@ impl UnreadableOplog {
     }
 }
 
-/// A transient failure is `RecoveryRequired`, which the start and the invocation retry with
-/// backoff. Any other failure is `OplogFailed`, which fails the agent for good.
+/// A transient failure is `RecoveryRequired` caused by the oplog read, which the start and the
+/// invocation retry with backoff. Any other failure is `OplogFailed`, which fails the agent for
+/// good.
 impl From<UnreadableOplog> for WorkerExecutorError {
     fn from(value: UnreadableOplog) -> Self {
         if value.is_transient() {
-            WorkerExecutorError::recovery_required(value.to_string())
+            WorkerExecutorError::oplog_read_unavailable(value.to_string())
         } else {
             WorkerExecutorError::oplog_failed(value.agent_id, value.error.to_string())
         }
@@ -262,7 +291,7 @@ pub fn verify_persisted_entries(
             format!("failed to encode transferred oplog entries: {error}"),
         )
     })?;
-    let expected_entries: Vec<OplogEntry> = deserialize(&encoded).map_err(|error| {
+    let expected_entries: Vec<OplogEntry> = decode(&encoded).map_err(|error| {
         OplogReadError::corruption(
             source,
             format!("failed to decode transferred oplog entries: {error}"),

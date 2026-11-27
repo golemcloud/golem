@@ -60,7 +60,9 @@ use super::{
 };
 use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
 use crate::services::linear_memory::LinearMemoryTracker;
-use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence, OplogRefusal};
+use crate::services::oplog::{
+    CommitLevel, Oplog, OplogError, OplogFence, OplogRefusal, UnreadableOplog,
+};
 use crate::services::{
     All, HasActiveAgents, HasConfig, HasSchedulerService, HasShardService, HasWorkerService,
 };
@@ -173,12 +175,13 @@ pub(crate) struct OwnerCommitController {
     owned_agent_id: OwnedAgentId,
 }
 
-/// Who hears that a commit landed, ahead of the fold behind it.
+/// The storage or ordered-handoff milestone, answered before the status fold.
 pub enum CommitReceipt {
-    /// Signalled on a commit and dropped on a refusal, which its waiter reads as "nothing was
-    /// committed".
+    /// Signalled when storage or handoff succeeds, also when report collection fails.
+    /// Dropped when storage refuses the commit.
     Plain(oneshot::Sender<()>),
-    /// Answered either way, so a refusal reaches the waiter as the refusal itself.
+    /// Answers storage or handoff success, or its typed refusal. A report or rebuild failure
+    /// is returned by the full transaction instead.
     Refusable(oneshot::Sender<Result<(), OplogRefusal>>),
 }
 
@@ -199,6 +202,36 @@ impl CommitReceipt {
             let _ = receipt.send(Err(refusal.clone()));
         }
     }
+}
+
+/// What the commit of an appended entry stored.
+pub(super) enum StoredAppend {
+    /// The commit stored the entry at this index, and the status after the commit was read.
+    Reported(OplogIndex),
+    /// The commit stored the entry, but the status after the commit did not read.
+    Unreported(UnreadableOplog),
+}
+
+impl StoredAppend {
+    /// The rule for the storage stage of an append at `index`. An `Unreadable` refusal comes
+    /// after a commit that stored the entry, so only its report failed. Every other refusal
+    /// stored nothing, and this returns it.
+    pub(super) fn of_commit<T>(
+        index: OplogIndex,
+        commit: Result<T, OplogRefusal>,
+    ) -> Result<Self, OplogRefusal> {
+        match commit {
+            Ok(_) => Ok(Self::Reported(index)),
+            Err(OplogRefusal::Unreadable(unreadable)) => Ok(Self::Unreported(unreadable)),
+            Err(refusal) => Err(refusal),
+        }
+    }
+}
+
+pub(super) enum InvocationAppendOutcome {
+    /// The status changed after the caller read it; the caller looks up its key again.
+    Retry,
+    Appended(StoredAppend),
 }
 
 /// A request processed by the status task, which exclusively owns the commit + status-fold
@@ -237,7 +270,7 @@ enum StatusJob {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-        done: oneshot::Sender<Result<bool, WorkerExecutorError>>,
+        done: oneshot::Sender<Result<InvocationAppendOutcome, WorkerExecutorError>>,
     },
     /// Folds the entries that the oplog committed by itself, on its commit threshold, into the
     /// published status. Commits nothing. The oplog queues it through its auto-commit listener.
@@ -548,7 +581,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     expected_result_generation,
                                     expected_revert_generation,
                                 ) {
-                                    return Ok(false);
+                                    return Ok(InvocationAppendOutcome::Retry);
                                 }
                                 // Acquiring the worker does not reserve admission: its constructor
                                 // may have failed since acquisition. Check health in this serialized
@@ -561,38 +594,32 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 )
                                 .await?;
                                 drop(status);
-                                // Returned rather than reported as a moved version: the caller
-                                // retries on `false`, and a fenced oplog refuses every retry.
                                 let appended = if let Some(mut attachment) = attachment {
                                     state.oplog.add_pair(*entry, Box::new(move |index| {
                                         attachment.pending_invocation_oplog_index = index;
                                         let record = golem_common::model::durable_stream::StreamSessionRecord::Attached(*attachment);
                                         let summary = DurableStreamEventSummary::session(&record);
                                         OplogEntry::stream_session(None, golem_common::model::oplog::OplogPayload::Inline(Box::new(record)), summary)
-                                    })).await.map(|_| ())
+                                    })).await.map(|(pending_index, _)| pending_index)
                                 } else {
-                                    state.oplog.add(*entry).await.map(|_| ())
+                                    state.oplog.add(*entry).await
                                 };
-                                if let Err(error) = appended {
-                                    if let OplogError::Fenced(fence) = &error {
+                                let index = appended.inspect_err(|error| {
+                                    if let OplogError::Fenced(fence) = error {
                                         state.retire_fenced_agent(fence.clone());
                                     }
-                                    return Err(error.into());
-                                }
-                                // The entry is only buffered until this commit, which is where a
-                                // takeover is found. The key has not reached the status, so nothing
-                                // that fails pending invocations can answer its caller: the enqueue
-                                // itself has to be refused.
-                                if let Err(refusal) = state
-                                    .commit_and_update_state(CommitLevel::Always, None)
-                                    .await
-                                {
-                                    return Err(refusal.into());
-                                }
+                                })?;
+                                // This commit establishes storage even if its report or fold fails.
+                                let stored = StoredAppend::of_commit(
+                                    index,
+                                    state
+                                        .commit_and_update_state(CommitLevel::Always, None)
+                                        .await,
+                                )?;
                                 if let WorkerInstance::Running(running) = instance_guard.state() {
                                     running.sender.send(WorkerCommand::WorkAvailable).unwrap();
                                 }
-                                Ok(true)
+                                Ok(InvocationAppendOutcome::Appended(stored))
                             },
                             done,
                         )
@@ -918,7 +945,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         }
     }
 
-    pub async fn append_invocation_if_version(
+    /// Reports a stored invocation with an unreadable status only if this job appended it.
+    /// A failed repair before the append remains an error.
+    pub(super) async fn append_invocation_if_version(
         &self,
         entry: OplogEntry,
         attachment: Option<golem_common::model::durable_stream::StreamSessionAttachedRecord>,
@@ -926,7 +955,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<InvocationAppendOutcome, WorkerExecutorError> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
@@ -1281,9 +1310,10 @@ pub(super) fn reconstructed_status(
     }
 }
 
-/// Settles a commit of the status task: answers the receipt, and gives the committed entries or
-/// the refusal. A refused commit committed nothing, and the oplog refuses every later write. Any
-/// other write error is fail-stop.
+/// Answers the storage or ordered-handoff receipt and returns the report or typed failure.
+/// An unreadable error is a report that failed after the successful storage milestone, which
+/// answers the receipt. Fenced and ArchiveWrite refuse the milestone and latch later writes.
+/// Other write errors are fail-stop.
 fn settle_commit(
     result: Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>,
     committed: Option<CommitReceipt>,
@@ -1298,7 +1328,10 @@ fn settle_commit(
         Err(error) => match error.into_refusal() {
             Ok(refusal) => {
                 if let Some(committed) = committed {
-                    committed.refused(&refusal);
+                    match &refusal {
+                        OplogRefusal::Unreadable(_) => committed.committed(),
+                        _ => committed.refused(&refusal),
+                    }
                 }
                 Err(refusal)
             }
@@ -1430,9 +1463,9 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// A commit the oplog refused, because the shard has a new owner or an archive layer did not
     /// store the entries, is returned as the refusal rather than folded into "unchanged": a caller
     /// whose entry was only buffered until this commit must not report it as written. A commit
-    /// whose status cannot be rebuilt because the oplog does not read is returned as
-    /// `OplogRefusal::Unreadable`: its entries were stored, but the agent cannot go on. The status
-    /// stays detached until a later fold or rebuild succeeds; the refusal itself is not latched.
+    /// whose report or status rebuild cannot read the oplog returns `OplogRefusal::Unreadable`.
+    /// Its storage or ordered-handoff milestone succeeded. The status stays detached until a
+    /// later fold or rebuild succeeds; the refusal itself is not latched.
     async fn commit_and_update_state(
         &self,
         commit_level: CommitLevel,
@@ -1453,10 +1486,20 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         // Reading the index is not a write, so a fenced oplog still answers it; the sample is
         // only consumed on the path where the commit below succeeded.
         let appended_through = self.oplog.current_oplog_index().await;
-        // Only a failed rebuild leaves the status detached between status jobs.
+        // Only a failed rebuild or a failed report leaves the status detached between status jobs.
         let repairing = self.detached.load(Ordering::Acquire);
-        let new_entries = settle_commit(self.oplog.commit(commit_level).await, committed)
-            .map_err(|refusal| self.refused(refusal))?;
+        let commit = self.oplog.commit(commit_level).await;
+        let new_entries = match settle_commit(commit, committed) {
+            Ok(entries) => entries,
+            Err(refusal) => {
+                // The report of a stored commit failed: the status misses its entries.
+                if matches!(&refusal, OplogRefusal::Unreadable(_)) {
+                    self.detached.store(true, Ordering::Release);
+                    self.status_flusher.invalidate_baseline().await;
+                }
+                return Err(self.refused(refusal));
+            }
+        };
 
         let mut authority_change_count = new_entries
             .values()
@@ -1683,6 +1726,9 @@ fn can_append_invocation(
 }
 
 #[cfg(test)]
+mod report_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         CommitReceipt, LifecycleJob, OwnerCommitController, StatusJob, WorkerStateActor,
@@ -1881,6 +1927,52 @@ mod tests {
                     crate::services::oplog::OplogError::ArchiveWrite(_)
                 ))
         );
+    }
+
+    /// Commits the oplog the way the status task does and returns what the receipt answered.
+    async fn receipt_of_a_commit(
+        oplog: &Arc<dyn Oplog>,
+    ) -> (
+        Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, OplogRefusal>,
+        Result<(), OplogRefusal>,
+    ) {
+        let (receipt, answer) = oneshot::channel();
+        let commit = oplog.commit(CommitLevel::Always).await;
+        let settled = settle_commit(commit, Some(CommitReceipt::Refusable(receipt)));
+        (settled, answer.await.unwrap())
+    }
+
+    /// Gate: a commit that stored its batch and failed only to read its report answers the
+    /// receipt as committed, and returns the unreadable report.
+    #[test]
+    #[timeout("30s")]
+    async fn a_commit_whose_report_alone_fails_answers_the_receipt() {
+        let storage = Arc::new(crate::services::oplog::tests::ReadCountingIndexedStorage::new());
+        let service = crate::services::oplog::test_oplog_service(storage.clone()).await;
+        let oplog = crate::services::oplog::create_test_oplog(
+            &service,
+            crate::test_agent_id("report-only-receipt"),
+        )
+        .await
+        .unwrap();
+        crate::services::oplog::add_grow_memory_entries(&oplog, 80..=80).await;
+        oplog
+            .wait_for_replicas(1, std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
+        crate::services::oplog::add_grow_memory_entries(&oplog, 81..=81).await;
+        storage.set_read_error(Some(crate::storage::indexed::IndexedStorageError::Other(
+            "report read failure".to_string(),
+        )));
+
+        let (settled, receipt) = receipt_of_a_commit(&oplog).await;
+        storage.set_read_error(None);
+
+        assert!(
+            matches!(settled, Err(OplogRefusal::Unreadable(_))),
+            "{settled:?}"
+        );
+        assert_eq!(receipt, Ok(()));
     }
 
     fn pending_invocation(key: InvocationId) -> PendingInvocationRef {

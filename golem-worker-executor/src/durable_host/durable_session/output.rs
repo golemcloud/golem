@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
 use golem_schema::schema::validation::{ValueError, validate_value};
 
 /// The terminal of an output item that does not satisfy its element schema. It names the
@@ -868,6 +869,16 @@ impl StreamSession {
     pub(super) async fn remote_result_record(
         &self,
     ) -> Result<Option<StreamSessionInvocationResultRecord>, SessionError> {
+        Ok(self
+            .indexed_result_record()
+            .await?
+            .map(|(_, record)| record))
+    }
+
+    /// The committed invocation result record and its oplog index.
+    async fn indexed_result_record(
+        &self,
+    ) -> Result<Option<(OplogIndex, StreamSessionInvocationResultRecord)>, SessionError> {
         let index = self.current_control_metadata().await?.result_position();
         let Some(index) = index else {
             return Ok(None);
@@ -876,7 +887,7 @@ impl StreamSession {
             StreamSessionRecord::InvocationResult(record)
                 if record.session_key == self.session_reference =>
             {
-                Ok(Some(record))
+                Ok(Some((index, record)))
             }
             _ => Err("durable result metadata points at a different record".into()),
         }
@@ -1726,7 +1737,15 @@ impl StreamSession {
             Err(error) => match self.has_committed_finished().await {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(error),
-                Err(_) if matches!(error, SessionError::Fenced(_)) => Err(error),
+                Err(_)
+                    if matches!(&error, SessionError::Fenced(_))
+                        || matches!(&error, SessionError::Unreadable(unreadable) if unreadable.is_transient()) =>
+                {
+                    Err(error)
+                }
+                Err(SessionError::Unreadable(unreadable)) if unreadable.is_transient() => {
+                    Err(SessionError::Unreadable(unreadable))
+                }
                 Err(lookup_error) => Err(SessionError::from(format!(
                     "{error}; committed finish lookup failed: {lookup_error}"
                 ))),
@@ -1814,9 +1833,9 @@ impl StreamSession {
 
     /// Reads the committed invocation result, independently of stream drain progress.
     pub async fn persisted_result(&self) -> Result<Option<SessionValue>, SessionError> {
-        if let Some(result) = self.remote_result_record().await? {
+        if let Some((index, result)) = self.indexed_result_record().await? {
             let bindings = result.stream_mappings.clone();
-            let value = SessionValue::from_persisted(&self.producer, result).await?;
+            let value = SessionValue::from_persisted(&self.producer, index, result).await?;
             for (binding, mapping) in bindings.into_iter().zip(&value.mappings) {
                 self.insert_binding_mapping(binding, mapping.clone())?;
             }
@@ -1877,12 +1896,25 @@ impl Drop for OutputDrainRegistration {
 }
 
 impl SessionValue {
+    /// Reads the invocation result record that `producer` committed at `index`. A value that does
+    /// not decode, or that names a handle the record does not map, is corrupt history of the
+    /// producer at `index`.
     pub(super) async fn from_persisted(
         producer: &DurableStreamStore,
+        index: OplogIndex,
         result: StreamSessionInvocationResultRecord,
     ) -> Result<Self, SessionError> {
+        let corrupt = |detail: String| {
+            SessionError::Unreadable(UnreadableOplog::new(
+                producer.agent_id(),
+                OplogReadError::corruption(
+                    OplogReadSource::Other("durable invocation result"),
+                    format!("invalid durable invocation result at oplog index {index}: {detail}"),
+                ),
+            ))
+        };
         let value = ProtoSchemaValue::decode(result.result.as_slice())
-            .map_err(|error| format!("invalid persisted durable invocation result: {error}"))?;
+            .map_err(|error| corrupt(error.to_string()))?;
         let value = remap_recursive_stream_references(value, |handle_index, _| {
             let index = usize::try_from(handle_index)
                 .map_err(|_| format!("durable result handle index {handle_index} is too large"))?;
@@ -1891,7 +1923,8 @@ impl SessionValue {
                 .get(index)
                 .map(|mapping| mapping.transport_stream_id)
                 .ok_or_else(|| format!("unknown durable result handle index {handle_index}"))
-        })?;
+        })
+        .map_err(corrupt)?;
         let mappings = producer
             .materialize_bindings(&result.stream_mappings)
             .await

@@ -158,7 +158,7 @@ impl Rpc for DispatchThenHangRpc {
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         let hang = self.record(&method, &key);
         let result = self
             .inner

@@ -249,7 +249,7 @@ async fn finished_commit_receipt_gates_success_and_same_key_result_survives_reco
         "the same-key caller received a result before commit"
     );
     assert!(
-        matches!(lookup_while_held, Err(_) | Ok(LookupResult::Pending)),
+        matches!(lookup_while_held, Err(_) | Ok(Ok(LookupResult::Pending))),
         "lookup must block or report Pending before commit, got {lookup_while_held:?}"
     );
     let held = executor.stored_oplog(&id).await;
@@ -270,7 +270,7 @@ async fn finished_commit_receipt_gates_success_and_same_key_result_survives_reco
         }
     );
     assert_eq!(follower?, original);
-    let lookup = worker.lookup_invocation_result(&key).await;
+    let lookup = worker.lookup_invocation_result(&key).await?;
     assert!(matches!(lookup, LookupResult::Complete(Ok(ref result)) if *result == original));
 
     // Phase 5: discard the resident Worker and executor after completion is delivered.

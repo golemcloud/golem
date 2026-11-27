@@ -13,10 +13,127 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use desert_rust::BinaryDeserializer;
 use golem_common::model::durable_stream::StreamForkCutRecord;
+use golem_common::serialization::{DecodeError, decode};
+
+#[derive(Debug)]
+pub(crate) enum ProjectionError {
+    CacheMiss,
+    Other(Box<SessionError>),
+}
+
+impl From<DecodeError> for ProjectionError {
+    fn from(_: DecodeError) -> Self {
+        Self::CacheMiss
+    }
+}
+
+impl From<SessionError> for ProjectionError {
+    fn from(error: SessionError) -> Self {
+        Self::Other(Box::new(error))
+    }
+}
+
+impl From<String> for ProjectionError {
+    fn from(error: String) -> Self {
+        SessionError::from(error).into()
+    }
+}
+
+impl From<&str> for ProjectionError {
+    fn from(error: &str) -> Self {
+        SessionError::from(error).into()
+    }
+}
+
+impl From<crate::services::oplog::UnreadableOplog> for ProjectionError {
+    fn from(error: crate::services::oplog::UnreadableOplog) -> Self {
+        SessionError::from(error).into()
+    }
+}
+
+/// A read of the stream session index storage that did not answer. The index of an agent is read
+/// in place of its oplog, so the read is a temporary read failure of that agent, not a session
+/// failure.
+pub(crate) fn unanswered_index_read(
+    namespace: &KeyValueStorageNamespace,
+    error: String,
+) -> SessionError {
+    match namespace {
+        KeyValueStorageNamespace::AgentDurableStreamSessionIndex { owned_agent_id, .. } => {
+            SessionError::Unreadable(UnreadableOplog::new(
+                &owned_agent_id.agent_id,
+                OplogReadError::source_unavailable(
+                    OplogReadSource::Other("stream session index"),
+                    error,
+                ),
+            ))
+        }
+        _ => SessionError::Failed(error),
+    }
+}
+
+pub(crate) async fn read_projection<T: BinaryDeserializer>(
+    storage: &(dyn KeyValueStorage + Send + Sync),
+    namespace: KeyValueStorageNamespace,
+    api_name: &'static str,
+    entity_name: &'static str,
+    field: &str,
+) -> Result<Option<T>, ProjectionError> {
+    storage
+        .with_entity("stream_session_index", api_name, entity_name)
+        .get_attempt_deserialize(namespace.clone(), field)
+        .await
+        .map_err(|error| unanswered_index_read(&namespace, error))?
+        .transpose()
+        .map_err(|_| ProjectionError::CacheMiss)
+}
+
+impl ProducerMetadataRow {
+    pub(crate) fn decode_for_key(
+        key: &ProducerMetadataKey,
+        bytes: &[u8],
+    ) -> Result<Self, ProjectionError> {
+        use ProducerMetadataKey as Key;
+        use ProducerMetadataRow as Row;
+
+        let row = decode(bytes)?;
+        let matches = match (key, &row) {
+            (_, Row::Retired)
+            | (Key::Lineage, Row::Lineage(_))
+            | (Key::Global, Row::Global { .. })
+            | (Key::Coordinate(_), Row::Coordinate(_))
+            | (Key::SessionPage(_), Row::SessionPage(_))
+            | (Key::Session(_), Row::Session(_))
+            | (Key::Batch(..), Row::Batch(_))
+            | (Key::ConsumerHead(..), Row::ConsumerHead(_))
+            | (Key::ActiveAttachmentCount(..), Row::ActiveAttachmentCount(_))
+            | (Key::Cascade(_), Row::Cascade(_))
+            | (Key::AttachmentPage(_), Row::AttachmentPage(_))
+            | (Key::AttachmentPosition(..), Row::AttachmentPosition(_))
+            | (Key::Position(..), Row::Position(..))
+            | (Key::ExternalProducerHead(..), Row::ExternalProducer(_))
+            | (Key::ExternalProducerSequence(..), Row::ExternalProducerOffset(_)) => true,
+            (Key::Stream(id), Row::Stream(value)) => *id == value.registration.handle.stream_id,
+            (
+                Key::Attachment(attachment, stream, environment, consumer),
+                Row::Attachment(value),
+            ) => {
+                value.key.attachment_id == *attachment
+                    && value.key.stream_id == *stream
+                    && value.key.consumer_environment_id == *environment
+                    && value.key.consumer == *consumer
+            }
+            _ => false,
+        };
+        matches.then_some(row).ok_or(ProjectionError::CacheMiss)
+    }
+}
 
 struct Projection<'a> {
     index: ProducerStreamIndex,
@@ -38,14 +155,28 @@ pub(crate) struct ProducerMetadataProjection {
 }
 
 impl Projection<'_> {
-    async fn load(&mut self, key: ProducerMetadataKey) -> Result<(), String> {
+    async fn read(
+        &self,
+        api_name: &'static str,
+        entity_name: &'static str,
+        key: &ProducerMetadataKey,
+    ) -> Result<Option<ProducerMetadataRow>, ProjectionError> {
+        self.storage
+            .with_entity("worker", api_name, entity_name)
+            .get_raw(self.namespace.clone(), &key.field()?)
+            .await
+            .map_err(|error| unanswered_index_read(&self.namespace, error))?
+            .as_deref()
+            .map(|bytes| ProducerMetadataRow::decode_for_key(key, bytes))
+            .transpose()
+    }
+
+    async fn load(&mut self, key: ProducerMetadataKey) -> Result<(), ProjectionError> {
         if self.loaded.insert(key.clone()) {
-            let row = self
-                .storage
-                .with_entity("worker", "producer_projection_read", "metadata")
-                .get(self.namespace.clone(), &key.field()?)
-                .await?;
-            if let Some(row) = row {
+            if let Some(row) = self
+                .read("producer_projection_read", "metadata", &key)
+                .await?
+            {
                 self.index.hydrate_metadata_row(key, row)?;
             } else if let ProducerMetadataKey::Session(session) = key {
                 self.new_sessions.insert(session);
@@ -59,7 +190,7 @@ impl Projection<'_> {
         cut: &StreamForkCutRecord,
         owner: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<ForkControlProjection, String> {
+    ) -> Result<ForkControlProjection, ProjectionError> {
         for page in 0..self.index.session_count.div_ceil(SESSION_PAGE_SIZE) {
             self.load(ProducerMetadataKey::SessionPage(page)).await?;
             let sessions = self
@@ -124,12 +255,10 @@ impl Projection<'_> {
                     .get(&stream)
                     .ok_or("fork selected stream is not registered")?;
                 let key = ProducerMetadataKey::Position(stream, offset.producer_oplog_index());
-                let row = self
-                    .storage
-                    .with_entity("worker", "producer_projection_read", "position")
-                    .get(self.namespace.clone(), &key.field()?)
-                    .await?;
-                let Some(ProducerMetadataRow::Position(first, count)) = row else {
+                let Some(ProducerMetadataRow::Position(first, count)) = self
+                    .read("producer_projection_read", "position", &key)
+                    .await?
+                else {
                     return Err("fork retained offset is not an item of the selected stream".into());
                 };
                 let sub = u64::from(offset.sub_index());
@@ -193,7 +322,7 @@ impl Projection<'_> {
         })
     }
 
-    async fn catalogue_new_sessions(&mut self) -> Result<(), String> {
+    async fn catalogue_new_sessions(&mut self) -> Result<(), ProjectionError> {
         for session in std::mem::take(&mut self.new_sessions) {
             if !self
                 .index
@@ -224,7 +353,7 @@ impl Projection<'_> {
         stream: StreamId,
         environment: EnvironmentId,
         consumer: AgentId,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProjectionError> {
         let key = (attachment, stream, environment, consumer);
         self.load(ProducerMetadataKey::AttachmentPosition(
             attachment,
@@ -297,7 +426,7 @@ impl Projection<'_> {
         Ok(())
     }
 
-    async fn stream(&mut self, stream: StreamId) -> Result<(), String> {
+    async fn stream(&mut self, stream: StreamId) -> Result<(), ProjectionError> {
         self.load(ProducerMetadataKey::Stream(stream)).await?;
         if let Some(session) = self.index.stream_sessions.get(&stream).cloned() {
             self.load(ProducerMetadataKey::Session(session)).await?;
@@ -311,7 +440,7 @@ impl Projection<'_> {
         author: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         record: &StreamRegisteredRecord,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProjectionError> {
         let registered = RegisteredStream::resolve(
             record.clone(),
             oplog_index,
@@ -354,7 +483,7 @@ impl Projection<'_> {
         record: &StreamSessionRecord,
         author: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProjectionError> {
         for key in ProducerMetadataKey::session_record(
             record,
             author.environment_id,
@@ -455,7 +584,10 @@ pub(crate) async fn project_producer_metadata(
     fingerprint: AgentFingerprint,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     lineage: &StreamForkLineage,
-) -> Result<ProducerMetadataProjection, String> {
+) -> Result<ProducerMetadataProjection, ProjectionError> {
+    let payload_error = |index, error| {
+        UnreadableOplog::of_payload(&owner.agent_id, "stream metadata payload", index, error)
+    };
     let mut projection = Projection {
         index: ProducerStreamIndex::default(),
         loaded: HashSet::new(),
@@ -482,7 +614,10 @@ pub(crate) async fn project_producer_metadata(
                 record,
                 ..
             } => {
-                let record = oplog.download_payload(owner, mode, record.clone()).await?;
+                let record = oplog
+                    .download_payload(owner, mode, record.clone())
+                    .await
+                    .map_err(|error| payload_error(*index, error))?;
                 projection
                     .registration(*index, owner, fingerprint, &record)
                     .await?;
@@ -515,7 +650,10 @@ pub(crate) async fn project_producer_metadata(
                 record,
                 ..
             } => {
-                let mut record = oplog.download_payload(owner, mode, record.clone()).await?;
+                let mut record = oplog
+                    .download_payload(owner, mode, record.clone())
+                    .await
+                    .map_err(|error| payload_error(*index, error))?;
                 lineage.project_item_batch(*index, &mut record)?;
                 let stream_id = qualify_local_stream(
                     record.stream_id,
@@ -565,7 +703,10 @@ pub(crate) async fn project_producer_metadata(
                 record,
                 ..
             } => {
-                let record = oplog.download_payload(owner, mode, record.clone()).await?;
+                let record = oplog
+                    .download_payload(owner, mode, record.clone())
+                    .await
+                    .map_err(|error| payload_error(*index, error))?;
                 let stream_id = qualify_local_stream(
                     record.stream_id,
                     owner.environment_id,
@@ -584,17 +725,17 @@ pub(crate) async fn project_producer_metadata(
                 record,
                 ..
             } => {
-                let record = oplog.download_payload(owner, mode, record.clone()).await?;
+                let record = oplog
+                    .download_payload(owner, mode, record.clone())
+                    .await
+                    .map_err(|error| payload_error(*index, error))?;
                 if let Some(original_index) = record.reobserves() {
                     if original_index >= *index {
                         return Err(
                             "consumer re-observation must reference an earlier record".into()
                         );
                     }
-                    let original = oplog
-                        .read_exact(owner, mode, original_index, 1)
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    let original = oplog.read_exact(owner, mode, original_index, 1).await?;
                     let Some(OplogEntry::StreamSession {
                         record: original, ..
                     }) = original.get(&original_index)
@@ -605,7 +746,8 @@ pub(crate) async fn project_producer_metadata(
                     };
                     let original = oplog
                         .download_payload(owner, mode, original.clone())
-                        .await?;
+                        .await
+                        .map_err(|error| payload_error(original_index, error))?;
                     if !record.has_supported_format() || !record.matches_reobserved(&original) {
                         return Err(
                             "consumer re-observation differs from its original input".into()

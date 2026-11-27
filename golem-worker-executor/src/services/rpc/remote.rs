@@ -218,7 +218,7 @@ impl Rpc for RemoteInvocationRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, RpcAwaitError> {
         let owned_agent_id = &target.owned_agent_id;
         let caller = caller.clone();
         let output = self
@@ -249,7 +249,8 @@ impl Rpc for RemoteInvocationRpc {
                 details:
                     "Expected a result from agent invoke_and_await but got a non-method result"
                         .to_string(),
-            }),
+            }
+            .into()),
         }
     }
 
@@ -272,7 +273,7 @@ impl Rpc for RemoteInvocationRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
-    ) -> Result<DurableRpcInvocationResult, RpcError> {
+    ) -> Result<DurableRpcInvocationResult, RpcAwaitError> {
         let owned_agent_id = &target.owned_agent_id;
         let proto_target = target.to_proto()?;
         let start = InvocationRequest {
@@ -414,7 +415,7 @@ impl Rpc for RemoteInvocationRpc {
                             retry_reason = Some("attachment state changed".to_string());
                             break;
                         }
-                        return Err(rpc_error_from_rejection(rejected));
+                        return Err(await_error_from_rejection(rejected));
                     }
                     Some(invocation_response::Response::Result(invocation_result)) => {
                         let value = match invocation_result.result {
@@ -424,13 +425,15 @@ impl Rpc for RemoteInvocationRpc {
                                     details:
                                         "durable streaming invocation returned no method result"
                                             .to_string(),
-                                });
+                                }
+                                .into());
                             }
                             Some(invocation_session_result::Result::ToolResult(_)) => {
                                 return Err(RpcError::ProtocolError {
                                     details: "agent RPC returned an external-tool result"
                                         .to_string(),
-                                });
+                                }
+                                .into());
                             }
                         };
                         let result = DurableRpcInvocationResult {
@@ -473,8 +476,9 @@ impl Rpc for RemoteInvocationRpc {
                                     details: "durable invocation completed without a result"
                                         .to_string(),
                                 }
+                                .into()
                             }
-                            _ => rpc_error_from_invocation_finished(finished),
+                            _ => await_error_from_invocation_finished(finished),
                         });
                     }
                     Some(invocation_response::Response::AttachmentRevoked(_)) => {
@@ -617,6 +621,41 @@ fn rpc_error_from_invocation_finished(
         None => RpcError::ProtocolError {
             details: "invocation completion has no outcome".to_string(),
         },
+    }
+}
+
+/// The worker error of a frame, when a failed oplog read of the target caused it.
+fn unread_history_in(
+    worker_error: Option<&golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError>,
+) -> Option<WorkerExecutorError> {
+    WorkerExecutorError::try_from(worker_error?.clone())
+        .ok()
+        .filter(super::is_failed_history_read)
+}
+
+/// A rejection of an awaited call whose worker error is a failed oplog read of the target is
+/// [`RpcAwaitError::FailedRead`]; any other rejection is the outcome of the call.
+pub(super) fn await_error_from_rejection(rejected: InvocationRejected) -> RpcAwaitError {
+    match unread_history_in(rejected.worker_error.as_ref()) {
+        Some(error) => RpcAwaitError::FailedRead(Box::new(error)),
+        None => rpc_error_from_rejection(rejected).into(),
+    }
+}
+
+/// A completion of an awaited call whose worker error is a failed oplog read of the target is
+/// [`RpcAwaitError::FailedRead`]; any other completion is the outcome of the call.
+pub(super) fn await_error_from_invocation_finished(
+    finished: golem_api_grpc::proto::golem::worker::InvocationSessionCompletion,
+) -> RpcAwaitError {
+    let unread = match &finished.outcome {
+        Some(invocation_session_completion::Outcome::Failure(failure)) => {
+            unread_history_in(failure.worker_error.as_ref())
+        }
+        _ => None,
+    };
+    match unread {
+        Some(error) => RpcAwaitError::FailedRead(Box::new(error)),
+        None => rpc_error_from_invocation_finished(finished).into(),
     }
 }
 

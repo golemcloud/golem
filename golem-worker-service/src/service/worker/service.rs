@@ -5291,6 +5291,7 @@ mod tests {
             Mutex<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>,
         invocation_reads: Mutex<Vec<(AgentId, golem_common::model::InvocationId)>>,
         revert_resolution_error: Mutex<Option<String>>,
+        invocation_lookup_error: Mutex<Option<WorkerExecutorError>>,
     }
 
     impl RecordingWorkerClient {
@@ -5331,6 +5332,7 @@ mod tests {
                 invocation_summary: Mutex::new(None),
                 invocation_reads: Mutex::new(Vec::new()),
                 revert_resolution_error: Mutex::new(None),
+                invocation_lookup_error: Mutex::new(None),
             }
         }
 
@@ -5976,6 +5978,11 @@ mod tests {
             agent_id: &AgentId,
             start: InvocationStart,
         ) -> WorkerResult<AgentInvocationOutput> {
+            if start.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
+                && let Some(error) = self.invocation_lookup_error.lock().unwrap().clone()
+            {
+                return Err(error.into());
+            }
             let key: golem_common::model::InvocationId = if start.mode()
                 == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
                 || (start
@@ -11304,6 +11311,104 @@ mod tests {
                 assert_eq!(got.summary.agent_id, response.agent_id);
             }
         }
+    }
+
+    /// A completed invocation whose result a failed oplog read refuses is an internal error, not
+    /// an invocation without a result, also when a failed resume wraps the read. Any other lookup
+    /// failure that is not a missing agent, a denied access or a routing refusal is an internal
+    /// error too. The internal error does not show the details of the lookup failure.
+    #[test]
+    async fn a_completed_invocation_with_an_unreadable_result_is_an_error() {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationKind as ProtoKind, InvocationLifecycleState as ProtoState,
+        };
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let invocation_id = golem_common::model::InvocationId(Uuid::new_v4());
+        let agent_id = harness.some_agent_id().agent_id;
+        let owned = golem_common::model::OwnedInvocationId::new(agent_id, invocation_id);
+        *harness.worker_client.invocation_summary.lock().unwrap() = Some(invocation_summary_proto(
+            invocation_id,
+            ProtoState::Completed,
+            ProtoKind::Unspecified,
+            Some("run".to_string()),
+        ));
+        let read_with = async |lookup_error: WorkerExecutorError| {
+            *harness
+                .worker_client
+                .invocation_lookup_error
+                .lock()
+                .unwrap() = Some(lookup_error);
+            harness
+                .worker_service
+                .get_invocation(harness.environment_id, &owned, AuthCtx::system())
+                .await
+                .expect_err("a refused lookup is not an invocation without a result")
+        };
+        let failed = WorkerExecutorError::oplog_failed(
+            agent_id,
+            "oplog entry 43 has unknown serialization version 255",
+        );
+        let unavailable = WorkerExecutorError::oplog_read_unavailable(
+            "primary storage did not answer for entry 43 with version 255",
+        );
+        let redacted = [
+            failed.clone(),
+            unavailable.clone(),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, failed),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, unavailable),
+            WorkerExecutorError::runtime("stored entry 43 with version 255 did not match"),
+            WorkerExecutorError::unknown("stored entry 43 with version 255"),
+        ];
+        futures::stream::iter(redacted)
+            .for_each(|read| async {
+                let described = format!("{read:?}");
+                let error = read_with(read).await;
+                assert!(
+                    matches!(error, WorkerServiceError::Internal(_)),
+                    "{described}: {error:?}"
+                );
+                let public = golem_common::SafeDisplay::to_safe_string(&error);
+                assert!(public.contains(&invocation_id.to_string()), "{public}");
+                assert!(!public.contains("entry 43"), "{public}");
+                assert!(!public.contains("version 255"), "{public}");
+            })
+            .await;
+
+        let error = read_with(WorkerExecutorError::AgentNotFound { agent_id }).await;
+        assert!(
+            matches!(
+                error,
+                WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { agent_id: missing })
+                    if missing == agent_id
+            ),
+            "{error:?}"
+        );
+        let error = read_with(WorkerExecutorError::permission_denied(
+            "no oplog read grant",
+        ))
+        .await;
+        assert!(
+            matches!(
+                error,
+                WorkerServiceError::GolemError(WorkerExecutorError::PermissionDenied { .. })
+            ),
+            "{error:?}"
+        );
+        let error = read_with(WorkerExecutorError::invalid_shard_id(
+            golem_common::model::ShardId::new(3),
+            std::collections::HashSet::new(),
+        ))
+        .await;
+        assert!(
+            matches!(
+                error,
+                WorkerServiceError::GolemError(WorkerExecutorError::InvalidShardId { .. })
+            ),
+            "{error:?}"
+        );
     }
 
     include!("tool_lookup_tests.rs");

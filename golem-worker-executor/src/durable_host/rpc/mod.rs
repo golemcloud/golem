@@ -18,6 +18,7 @@ use crate::durable_host::durable_session::StreamSession;
 use crate::preview2::golem::agent::host::InvocationMetadata;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::environment_state::EnvironmentStateService;
+use crate::services::rpc::RpcCallFailure;
 use crate::services::rpc::RpcDemand;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
@@ -107,10 +108,13 @@ struct PreparedRpcInvocation {
 }
 
 type FutureInvokeTaskResult = Result<Result<SchemaValue, InternalRpcError>, Error>;
+/// The result of a background RPC task. [`RpcCallFailure::UnreadableTarget`] keeps a target
+/// history that does not read for good apart, so `get` records it once and does not call again.
+type RpcTaskResult = Result<Result<SchemaValue, RpcCallFailure>, Error>;
 type FutureInvokeTaskHandle = Arc<tokio::sync::Mutex<RpcTask>>;
 
 struct RpcTask {
-    task: AbortOnDropJoinHandle<FutureInvokeTaskResult>,
+    task: AbortOnDropJoinHandle<RpcTaskResult>,
     revoker: Option<crate::worker::suspension::RpcActivityRevoker>,
 }
 
@@ -136,6 +140,9 @@ struct TaskRetryParams<Ctx: WorkerCtx> {
 
 enum RpcTaskError {
     Rpc(InternalRpcError),
+    /// The stored history of the target does not read for good: the failure of the call, which
+    /// is not retried.
+    UnreadableTarget(InternalRpcError),
     Host(Error),
 }
 

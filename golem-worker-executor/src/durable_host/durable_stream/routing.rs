@@ -100,7 +100,8 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
                 wait_for_events: false,
             })
             .await?;
-        golem_common::serialization::deserialize(&payload).map_err(StreamStoreError::CorruptHistory)
+        golem_common::serialization::decode(&payload)
+            .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))
     }
 
     async fn wait_for_attached_segment(
@@ -123,7 +124,8 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
                 wait_for_events: true,
             })
             .await?;
-        golem_common::serialization::deserialize(&payload).map_err(StreamStoreError::CorruptHistory)
+        golem_common::serialization::decode(&payload)
+            .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))
     }
 }
 

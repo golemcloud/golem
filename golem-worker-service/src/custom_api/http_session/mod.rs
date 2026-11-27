@@ -15,12 +15,12 @@
 //!
 //! Losing a transport only detaches an attachment; it does not cancel the invocation or either
 //! durable stream. Cancellation is explicit: owner cancellation sends stream terminals when
-//! possible and then invokes worker cleanup if no completion was confirmed. An ambiguous resume
+//! possible and then invokes worker cleanup if no completion was confirmed. A refusal because the
+//! executor cannot read the history for a time also prevents cleanup. An ambiguous resume
 //! loss replays the exact attempt. Only an authoritative attachment-state rejection changes
 //! Resume to Takeover (or vice versa); epoch rejection is terminal rather than guessed around.
 
 use golem_api_grpc::proto::golem::worker::{InvocationAccepted, InvocationStart, StreamEnd};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Semaphore, mpsc};
 use tokio::time::Instant;
@@ -35,7 +35,7 @@ mod transport;
 
 use driver::run_session;
 use driver::validate_prepared_start;
-use progress::{Command, InputCredits};
+use progress::{CleanupAuthority, Command, InputCredits};
 use transport::{CleanupOutcome, SessionTransport};
 
 const INPUT_STREAM_ID: u64 = 1;
@@ -309,8 +309,8 @@ impl HttpSession {
         let closed_bytes = input_bytes.clone();
         let closed_frames = input_frames.clone();
         let close_token = token.clone();
-        let completion = Arc::new(AtomicBool::new(false));
-        let completed = completion.clone();
+        let cleanup_authority = Arc::new(CleanupAuthority::default());
+        let session_cleanup_authority = cleanup_authority.clone();
         let cleanup_start = prepared_start.clone();
         let cleanup_transport = transport.clone();
         let cleanup_limits = limits.clone();
@@ -335,7 +335,7 @@ impl HttpSession {
                     command_rx,
                     control_rx,
                     event_tx,
-                    completed,
+                    session_cleanup_authority,
                     accepted_cleanup_identity,
                     close_token.clone(),
                 );
@@ -358,7 +358,7 @@ impl HttpSession {
             closed_bytes.close();
             closed_frames.close();
             // Publish the failure and close the event sender before potentially slow cleanup.
-            let record_cause = outcome.is_some() || !completion.load(Ordering::Acquire);
+            let record_cause = outcome.is_some() || !cleanup_authority.finished();
             if let Some(error) = outcome {
                 debug!(category = error.metric_label(), "HTTP session terminated");
                 let _ = cleanup_events.try_send(HttpSessionEvent::Error(error));
@@ -371,7 +371,7 @@ impl HttpSession {
                     crate::metrics::record_http_session_explicit_cancellation();
                 }
             }
-            if !completion.load(Ordering::Acquire)
+            if cleanup_authority.grants_cleanup()
                 && let Some((agent, key)) =
                     cleanup_identity.get().cloned().or(prepared_cleanup_identity)
             {

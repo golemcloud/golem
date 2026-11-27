@@ -19,7 +19,7 @@ use super::{
 use async_trait::async_trait;
 
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
-use golem_common::serialization::deserialize;
+use golem_common::serialization::decode;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -145,7 +145,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
                 entry.attempt_count += 1;
                 result.push(ClaimedScheduledAction {
                     schedule_id: ScheduleId { id },
-                    action: deserialize(&entry.action)?,
+                    action: decode(&entry.action).map_err(|error| error.to_string())?,
                     due_at: millis_to_datetime(entry.due_at_ms)?,
                     lease_owner,
                     attempt_count: entry.attempt_count,

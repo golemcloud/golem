@@ -223,3 +223,292 @@ fn a_remote_schedule_names_the_scheduling_agent_as_parent_also_for_a_tool() {
         );
     }
 }
+
+/// On the direct route, a read of the stored history of the target that failed for good is the
+/// failure of the awaited call, which the caller records without a retry: its error names the
+/// target, the entry and the version byte, also when a failed resume wraps it. Only a read that
+/// failed for a time leaves the call without an outcome, and the caller recovers. Both keep the
+/// read until the observer decides.
+#[test]
+fn direct_route_records_a_target_read_that_failed_for_good_as_the_call_failure() {
+    use super::{RpcAwaitError, RpcCallFailure, rpc_await_outcome};
+    use golem_common::model::AgentId;
+
+    let caller = AgentId::from_parts(7, 0xca11);
+    let target = AgentId::from_parts(7, 0x7a29);
+    let failed = WorkerExecutorError::oplog_failed(
+        target,
+        "oplog entry 43 has unknown serialization version 255",
+    );
+    let unavailable =
+        WorkerExecutorError::oplog_read_unavailable("primary storage of agent 7 did not answer");
+    let call_failure = Ok(Err(RpcCallFailure::UnreadableTarget(
+        RpcError::RemoteInternalError {
+            details: format!(
+                "The oplog of {target} failed: oplog entry 43 has unknown serialization version 255"
+            ),
+        },
+    )));
+    [
+        (failed.clone(), call_failure.clone()),
+        (
+            WorkerExecutorError::failed_to_resume_worker(target, failed.clone()),
+            call_failure.clone(),
+        ),
+        (unavailable.clone(), Err(unavailable.clone())),
+        (
+            WorkerExecutorError::failed_to_resume_worker(target, unavailable.clone()),
+            Err(unavailable),
+        ),
+    ]
+    .into_iter()
+    .for_each(|(error, expected)| {
+        assert_eq!(
+            RpcAwaitError::from(error.clone()),
+            RpcAwaitError::FailedRead(Box::new(error.clone())),
+            "{error:?}"
+        );
+        assert_eq!(
+            rpc_await_outcome::<()>(&caller, Err(error.clone().into())),
+            expected,
+            "{error:?}"
+        );
+    });
+
+    // A failure that the target recorded, and any other error, stays the outcome of the call.
+    assert_eq!(
+        rpc_await_outcome::<()>(
+            &caller,
+            Err(WorkerExecutorError::invalid_request("wrong argument shape").into())
+        ),
+        Ok(Err(RpcCallFailure::Outcome(RpcError::RemoteAgentError {
+            error: Box::new(ModelAgentError::InvalidInput(
+                "wrong argument shape".to_string()
+            )),
+        })))
+    );
+    assert_eq!(
+        rpc_await_outcome::<()>(
+            &caller,
+            Err(WorkerExecutorError::recovery_required("trapped body cleanup failed").into())
+        ),
+        Ok(Err(RpcCallFailure::Outcome(
+            RpcError::RemoteInternalError {
+                details: "Runtime reconstruction required: trapped body cleanup failed".to_string()
+            }
+        )))
+    );
+
+    // An archive layer of the target that did not store its oplog is also `OplogFailed`, but it is
+    // not a failed read: it stays the outcome of the call, which keeps its retry.
+    let archive_write: WorkerExecutorError = crate::services::oplog::ArchiveWriteFailure {
+        agent_id: target,
+        level: 1,
+        details: "archive storage refused the chunk".to_string(),
+    }
+    .into();
+    [
+        archive_write.clone(),
+        WorkerExecutorError::failed_to_resume_worker(target, archive_write.clone()),
+    ]
+    .into_iter()
+    .for_each(|error| {
+        assert_eq!(
+            rpc_await_outcome::<()>(&caller, Err(error.clone().into())),
+            Ok(Err(RpcCallFailure::Outcome(
+                RpcError::RemoteInternalError {
+                    details: error.to_string()
+                }
+            ))),
+            "{error:?}"
+        );
+    });
+}
+
+/// On the remote route, a rejection or a completion whose typed worker error is a read of the
+/// target history that failed for a time keeps the read for the observer. An oplog that failed for
+/// good crosses gRPC as a runtime error with no read kind, so it stays the outcome of the call, as
+/// a completion with a recorded failure and any other runtime error do.
+#[test]
+fn remote_route_keeps_a_failed_target_read_out_of_the_outcome() {
+    use super::RpcAwaitError;
+    use super::remote::{await_error_from_invocation_finished, await_error_from_rejection};
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationRejected, InvocationRejectionReason, InvocationSessionCompletion,
+        invocation_session_completion,
+    };
+    use golem_common::model::AgentId;
+
+    let target = AgentId::from_parts(7, 0x7a29);
+    let failed = WorkerExecutorError::oplog_failed(
+        target,
+        "oplog entry 43 has unknown serialization version 255",
+    );
+    let unavailable =
+        WorkerExecutorError::oplog_read_unavailable("primary storage of agent 7 did not answer");
+    let rejected = |error: &WorkerExecutorError| InvocationRejected {
+        reason: InvocationRejectionReason::Internal as i32,
+        error: error.to_string(),
+        worker_error: Some(error.clone().into()),
+        ..Default::default()
+    };
+    let finished = |error: &WorkerExecutorError| InvocationSessionCompletion {
+        outcome: Some(invocation_session_completion::Outcome::Failure(
+            InvocationFailure {
+                kind: InvocationFailureKind::Execution as i32,
+                code: "oplog-unreadable".to_string(),
+                message: error.to_string(),
+                worker_error: Some(error.clone().into()),
+            },
+        )),
+    };
+    assert_eq!(
+        await_error_from_rejection(rejected(&unavailable)),
+        RpcAwaitError::FailedRead(Box::new(unavailable.clone()))
+    );
+    assert_eq!(
+        await_error_from_invocation_finished(finished(&unavailable)),
+        RpcAwaitError::FailedRead(Box::new(unavailable.clone()))
+    );
+
+    let runtime = WorkerExecutorError::runtime("the guest stack overflowed");
+    [&failed, &runtime].into_iter().for_each(|error| {
+        assert_eq!(
+            await_error_from_rejection(rejected(error)),
+            RpcAwaitError::Outcome(RpcError::RemoteInternalError {
+                details: error.to_string()
+            }),
+            "{error:?}"
+        );
+    });
+    assert_eq!(
+        await_error_from_invocation_finished(finished(&failed)),
+        RpcAwaitError::Outcome(RpcError::RemoteInternalError {
+            details: format!("Runtime error: {failed}")
+        })
+    );
+    let recorded = InvocationSessionCompletion {
+        outcome: Some(invocation_session_completion::Outcome::Failure(
+            InvocationFailure {
+                kind: InvocationFailureKind::Execution as i32,
+                code: "persisted-invocation-failure".to_string(),
+                message: "the method returned an error".to_string(),
+                worker_error: None,
+            },
+        )),
+    };
+    assert_eq!(
+        await_error_from_invocation_finished(recorded),
+        RpcAwaitError::Outcome(RpcError::RemoteInternalError {
+            details: "the method returned an error".to_string()
+        })
+    );
+}
+
+/// A scalar awaited call has no result when the stored history of its target failed for a time,
+/// on the direct route, where the target gives the worker error itself, and on the remote route,
+/// where the proxy decodes it from the typed error of the worker API. On the direct route a
+/// history that failed for good is the failure of the call, which is not retried; on the remote
+/// route it crosses as a runtime error and stays the outcome of the call. A recorded failure of
+/// the target and a proxy error that is not a worker error stay the outcome of the call.
+#[test]
+fn scalar_call_records_a_target_read_that_failed_for_good() {
+    use super::{RpcAwaitError, RpcCallFailure, rpc_await_outcome};
+    use golem_api_grpc::proto::golem::worker::v1::{AgentError, agent_error};
+    use golem_common::model::AgentId;
+
+    let caller = AgentId::from_parts(7, 0xca11);
+    let target = AgentId::from_parts(7, 0x7a29);
+    let failed = WorkerExecutorError::oplog_failed(
+        target,
+        "oplog entry 43 has unknown serialization version 255",
+    );
+    let unavailable =
+        WorkerExecutorError::oplog_read_unavailable("primary storage of agent 7 did not answer");
+    let remote = |error: &WorkerExecutorError| {
+        WorkerProxyError::from(AgentError {
+            error: Some(agent_error::Error::InternalError(error.clone().into())),
+        })
+    };
+    [
+        RpcAwaitError::from(unavailable.clone()),
+        RpcAwaitError::from(remote(&unavailable)),
+    ]
+    .into_iter()
+    .for_each(|awaited| {
+        assert_eq!(
+            awaited,
+            RpcAwaitError::FailedRead(Box::new(unavailable.clone()))
+        );
+        assert_eq!(
+            rpc_await_outcome::<()>(&caller, Err(awaited)),
+            Err(unavailable.clone())
+        );
+    });
+    assert_eq!(
+        rpc_await_outcome::<()>(&caller, Err(RpcAwaitError::from(failed.clone()))),
+        Ok(Err(RpcCallFailure::UnreadableTarget(
+            RpcError::RemoteInternalError {
+                details: failed.to_string()
+            }
+        )))
+    );
+    assert_eq!(
+        rpc_await_outcome::<()>(&caller, Err(RpcAwaitError::from(remote(&failed)))),
+        Ok(Err(RpcCallFailure::Outcome(
+            RpcError::RemoteInternalError {
+                details: format!("Runtime error: {failed}")
+            }
+        )))
+    );
+
+    let recorded = WorkerExecutorError::invalid_request("wrong argument shape");
+    [
+        RpcAwaitError::from(recorded.clone()),
+        RpcAwaitError::from(remote(&recorded)),
+    ]
+    .into_iter()
+    .for_each(|awaited| {
+        assert_eq!(
+            rpc_await_outcome::<()>(&caller, Err(awaited)),
+            Ok(Err(RpcCallFailure::Outcome(RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(
+                    "wrong argument shape".to_string()
+                )),
+            })))
+        );
+    });
+    assert_eq!(
+        RpcAwaitError::from(WorkerProxyError::NotFound("agent-7 is gone".to_string())),
+        RpcAwaitError::Outcome(RpcError::NotFound {
+            details: "agent-7 is gone".to_string()
+        })
+    );
+}
+
+/// A read of the oplog of another agent that failed for good is the failure of the call, also in
+/// the reason of a failed resume. The same failed read of the oplog of the observer stops the call
+/// without an outcome, so it fails the observer.
+#[test]
+fn only_a_failed_read_of_another_agent_is_the_failure_of_the_call() {
+    use super::observed_read_failure;
+    use golem_common::model::AgentId;
+
+    let observer = AgentId::from_parts(7, 0xca11);
+    let target = AgentId::from_parts(7, 0x7a29);
+    let other = WorkerExecutorError::oplog_failed(target, "oplog entry 43 has version 255");
+    let own = WorkerExecutorError::oplog_failed(observer, "oplog entry 9 has version 254");
+
+    assert_eq!(
+        observed_read_failure(&observer, other.clone()),
+        Ok(other.clone())
+    );
+    assert_eq!(
+        observed_read_failure(
+            &observer,
+            WorkerExecutorError::failed_to_resume_worker(target, other.clone())
+        ),
+        Ok(other)
+    );
+    assert_eq!(observed_read_failure(&observer, own.clone()), Err(own));
+}

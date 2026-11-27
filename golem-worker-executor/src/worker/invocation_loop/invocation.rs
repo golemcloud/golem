@@ -135,13 +135,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         inner: HydratedInvocation,
         update_attempt_index: OplogIndex,
-    ) -> CommandOutcome {
+    ) -> Result<CommandOutcome, WorkerExecutorError> {
         // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
         // the store both leave room for the owner to start retiring in between.
         if self.parent.owner_retirement_requested.is_cancelled() {
-            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+            return Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None));
         }
-        match inner.invocation {
+        let outcome = match inner.invocation {
             AgentInvocation::ManualUpdate {
                 target_revision,
                 requester,
@@ -152,7 +152,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             _ => {
                 if let Some(idempotency_key) = inner.invocation.idempotency_key() {
                     let has_result = matches!(
-                        self.parent.lookup_invocation_result(idempotency_key).await,
+                        self.parent
+                            .lookup_invocation_result(idempotency_key)
+                            .await?,
                         LookupResult::Complete(_) | LookupResult::Interrupted
                     );
                     if !has_result {
@@ -190,7 +192,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     self.invoke_agent(inner).await
                 }
             }
-        }
+        };
+        Ok(outcome)
     }
 
     /// Invokes an agent function on the worker

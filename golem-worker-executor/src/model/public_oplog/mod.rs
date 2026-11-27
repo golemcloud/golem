@@ -21,6 +21,7 @@ mod reading;
 mod snapshots;
 
 use attribution::PublicOplogAttributionResolver;
+pub use conversion::PublicEntryError;
 #[cfg(test)]
 use conversion::host_response_to_public_value;
 pub(crate) use conversion::with_expected_request;
@@ -132,7 +133,8 @@ pub struct PublicOplogSearchResult<E = PublicOplogEntryWithIndex> {
 }
 
 /// The public form of the raw oplog entries. `claims` says whether the callers of the public
-/// entries hold the users' verified claims.
+/// entries hold the users' verified claims. A stored payload of the entry that does not read gives
+/// [`PublicEntryError::Unreadable`] at `oplog_index`.
 #[async_trait]
 pub trait PublicOplogEntryOps: Sized {
     async fn from_oplog_entry(
@@ -147,7 +149,7 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, PublicEntryError> {
         Self::from_enrichment_entry(
             oplog_index,
             value.into(),
@@ -176,7 +178,7 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
-    ) -> Result<Self, String>;
+    ) -> Result<Self, PublicEntryError>;
 }
 
 fn public_attributes(attributes: golem_common::model::oplog::AttributeMap) -> Vec<PublicAttribute> {

@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use crate::proto::golem::worker::input_stream_item::Payload;
+use crate::proto::golem::worker::v1::{
+    RuntimeError, WorkerExecutionError, oplog_read_failure, worker_execution_error,
+};
 use crate::proto::golem::worker::{
     AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamAck,
     InputStreamItem, InvocationAccepted, InvocationFailureKind, InvocationRejectionReason,
@@ -29,6 +32,25 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 type StreamBinding = (u64, (u64, u64));
 const MAX_PACKED_U8_STREAM_ITEM_SIZE: usize = 1024 * 1024;
+
+/// The failure code that the executor gives to a failure that a failed oplog read caused. The
+/// code is for presentation only. Decide on `oplog_read_failure` of the worker error.
+pub const OPLOG_UNREADABLE_FAILURE_CODE: &str = "oplog-unreadable";
+
+/// The kind of the failed oplog read that `error` carries. The read can be in a runtime error, or
+/// in the reason of a failed resume at any depth. A failed read is not an outcome of the
+/// invocation. A marker without a kind is not a failed read.
+pub fn oplog_read_failure(error: &WorkerExecutionError) -> Option<&oplog_read_failure::Kind> {
+    match error.error.as_ref()? {
+        worker_execution_error::Error::RuntimeError(RuntimeError { oplog_read, .. }) => {
+            oplog_read.as_ref()?.kind.as_ref()
+        }
+        worker_execution_error::Error::FailedToResumeAgent(failed) => {
+            oplog_read_failure(failed.reason.as_deref()?)
+        }
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionPhase {
@@ -4664,6 +4686,50 @@ mod tests {
         state
             .validate_response(&failure(InvocationFailureKind::Execution))
             .unwrap();
+    }
+
+    #[test]
+    fn oplog_read_failure_looks_inside_failed_resumes_only() {
+        use crate::proto::golem::worker::v1::{
+            FailedToResumeAgent, OplogReadFailure, OplogReadUnavailable, RuntimeError,
+            WorkerExecutionError, oplog_read_failure,
+        };
+        let unavailable = WorkerExecutionError {
+            error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+                details: "primary storage of agent 7 did not answer".to_string(),
+                oplog_read: Some(OplogReadFailure {
+                    kind: Some(oplog_read_failure::Kind::Unavailable(
+                        OplogReadUnavailable {},
+                    )),
+                }),
+            })),
+        };
+        let wrapped = WorkerExecutionError {
+            error: Some(worker_execution_error::Error::FailedToResumeAgent(
+                Box::new(FailedToResumeAgent {
+                    agent_id: None,
+                    reason: Some(Box::new(unavailable.clone())),
+                }),
+            )),
+        };
+        let empty_resume = WorkerExecutionError {
+            error: Some(worker_execution_error::Error::FailedToResumeAgent(
+                Box::new(FailedToResumeAgent {
+                    agent_id: None,
+                    reason: None,
+                }),
+            )),
+        };
+        assert!(matches!(
+            oplog_read_failure(&unavailable),
+            Some(oplog_read_failure::Kind::Unavailable(_))
+        ));
+        assert!(matches!(
+            oplog_read_failure(&wrapped),
+            Some(oplog_read_failure::Kind::Unavailable(_))
+        ));
+        assert_eq!(oplog_read_failure(&empty_resume), None);
+        assert_eq!(oplog_read_failure(&WorkerExecutionError::default()), None);
     }
 
     fn round_trip<M>(message: M)

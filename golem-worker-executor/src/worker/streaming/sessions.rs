@@ -12,15 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::TryStreamExt;
 use golem_common::model::InvocationId;
 use golem_common::model::caller::{Caller, Principal};
-use golem_common::model::durable_stream::StreamInvocationId;
+use golem_common::model::durable_stream::{StreamInvocationId, StreamSessionAcceptance};
+use golem_common::serialization::DecodeError;
+
+use crate::services::oplog::{OplogReadError, OplogReadSource};
 
 use crate::worker::*;
 
 /// The persisted execution configuration of a stream session: the encoded `InvocationStart`
 /// without its identity fields, the sorted environment, and the stdout and stderr flags.
-type SessionExecutionConfig = (Vec<u8>, Option<Vec<(String, String)>>, bool, bool);
+type StreamExecutionConfig = (Vec<u8>, Option<Vec<(String, String)>>, bool, bool);
+
+pub(crate) struct RetainedStreamSessionRecords {
+    pub records: Box<[(OplogIndex, StreamSessionRecord)]>,
+    pub acceptance_mappings: Box<[StreamBindingRecord]>,
+}
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn selected_method_preparation(
@@ -53,26 +62,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             callee_fingerprint: self.initial_worker_metadata.fingerprint,
             idempotency_key: *idempotency_key,
         };
-        let Some(attached) = self
-            .stream_session_records(&key, None)
-            .await?
-            .into_iter()
-            .find_map(|record| {
-                if let StreamSessionRecord::Attached(attached) = record {
-                    Some(attached)
-                } else {
-                    None
-                }
-            })
-        else {
+        let Some((index, attached)) = self.retained_stream_attachment(&key).await? else {
             return Ok(None);
         };
-        let (configuration, environment, _, _): SessionExecutionConfig =
-            golem_common::serialization::decode(&attached.acceptance.execution_config)
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-        let mut request =
-            golem_api_grpc::proto::golem::worker::InvocationStart::decode(configuration.as_slice())
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        let DecodedStreamExecution {
+            start: mut request,
+            environment,
+            ..
+        } = decode_stream_execution(&attached.acceptance.execution_config)
+            .map_err(|error| self.stream_execution_config_read_error(index, error))?;
         if let Some(environment) = environment {
             request.context.get_or_insert_default().env = environment.into_iter().collect();
         }
@@ -175,11 +173,81 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(Some((prepared, attached.acceptance.route_scope)))
     }
 
+    pub(crate) async fn retained_stream_attachment(
+        &self,
+        session_key: &StreamInvocationId,
+    ) -> Result<Option<(OplogIndex, StreamSessionAttachedRecord)>, WorkerExecutorError> {
+        Ok(self
+            .stream_session_records(session_key, None)
+            .await?
+            .records
+            .into_iter()
+            .find_map(|(index, record)| match record {
+                StreamSessionRecord::Attached(record) => Some((index, record)),
+                _ => None,
+            }))
+    }
+
+    pub(super) fn stream_execution_config_read_error(
+        &self,
+        index: OplogIndex,
+        error: DecodeError,
+    ) -> WorkerExecutorError {
+        self.invocation_payload_read_error(
+            "stream execution config",
+            index,
+            OplogPayloadDownloadError::Corrupt(error.into()),
+        )
+        .into()
+    }
+
+    fn stream_identity_read_error(
+        &self,
+        index: OplogIndex,
+        error: DecodeError,
+    ) -> WorkerExecutorError {
+        self.invocation_payload_read_error(
+            "stream effective identity",
+            index,
+            OplogPayloadDownloadError::Corrupt(error.into()),
+        )
+        .into()
+    }
+
+    /// The read error of the retained origin field at `index` that does not decode.
+    pub(crate) fn stream_origin_read_error(
+        &self,
+        index: OplogIndex,
+        error: UndecodableOrigin,
+    ) -> WorkerExecutorError {
+        match error {
+            UndecodableOrigin::Identity(error) => self.stream_identity_read_error(index, error),
+            UndecodableOrigin::ExecutionConfig(error) => {
+                self.stream_execution_config_read_error(index, error)
+            }
+        }
+    }
+
+    pub(super) fn validate_retained_stream_descriptor_config(
+        &self,
+        index: OplogIndex,
+        retained: &PersistedStreamInvocationDescriptor,
+        requested: &PersistedStreamInvocationDescriptor,
+    ) -> Result<(), WorkerExecutorError> {
+        if stream_descriptor_shape_matches(retained, requested)
+            && retained.execution_config != requested.execution_config
+        {
+            decode_stream_execution(&retained.execution_config)
+                .map_err(|error| self.stream_execution_config_read_error(index, error))?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn stream_session_records(
         &self,
         session_key: &golem_common::base_model::durable_stream::StreamSessionKey,
         attempt: Option<AttemptId>,
-    ) -> Result<Vec<StreamSessionRecord>, WorkerExecutorError> {
+    ) -> Result<RetainedStreamSessionRecords, WorkerExecutorError> {
         let service = self.worker_service();
         let mut metadata = service
             .lookup_durable_stream_control_metadata(
@@ -216,9 +284,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self
                         .oplog
-                        .download_payload(record)
+                        .download_payload_classified(record)
                         .await
-                        .map_err(WorkerExecutorError::runtime)?;
+                        .map_err(|error| {
+                            self.invocation_payload_read_error(
+                                "stream session payload",
+                                index,
+                                error,
+                            )
+                        })?;
                     if matches!(record, StreamSessionRecord::ForkCut(_)) {
                         metadata = service
                             .lookup_durable_stream_control_metadata(
@@ -294,21 +368,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "session index references another session",
                 ));
             }
-            records.push(record);
+            records.push((offset, record));
         }
-        for mapping in metadata
+        let acceptance_mappings = metadata
             .acceptance_mappings()
-            .map_err(WorkerExecutorError::runtime)?
-        {
-            records.push(StreamSessionRecord::Mapping(
-                golem_common::base_model::durable_stream::StreamSessionMappingUpdateRecord {
-                    format_version: 1,
-                    session_key: StreamRegistrationInvocation::Remote(session_key.clone()),
-                    mapping,
-                },
-            ));
-        }
-        Ok(records)
+            .map_err(WorkerExecutorError::runtime)?;
+        Ok(RetainedStreamSessionRecords {
+            records: records.into_boxed_slice(),
+            acceptance_mappings: acceptance_mappings.into_boxed_slice(),
+        })
     }
     pub(in crate::worker) async fn durable_stream_session_status(
         &self,
@@ -342,6 +410,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &InvocationId,
     ) -> Result<Option<StreamSessionPreparedRecord>, WorkerExecutorError> {
+        Ok(self
+            .indexed_prepared_stream_session(idempotency_key)
+            .await?
+            .map(|(_, record)| record))
+    }
+
+    pub(in crate::worker) async fn stream_output_consumer_is_observer(
+        &self,
+        idempotency_key: &InvocationId,
+        attachment: &StreamAttachmentKey,
+    ) -> Result<bool, WorkerExecutorError> {
+        let Some((index, prepared)) = self
+            .indexed_prepared_stream_session(idempotency_key)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let DecodedStreamExecution { start, .. } =
+            decode_stream_execution(&prepared.attempt.invocation.execution_config)
+                .map_err(|error| self.stream_execution_config_read_error(index, error))?;
+        output_consumer_is_observer(start, attachment)
+    }
+
+    async fn indexed_prepared_stream_session(
+        &self,
+        idempotency_key: &InvocationId,
+    ) -> Result<Option<(OplogIndex, StreamSessionPreparedRecord)>, WorkerExecutorError> {
         let Some(index) = self
             .durable_stream_session_status(idempotency_key)
             .await?
@@ -350,7 +445,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(None);
         };
         match self.read_stream_session_record(index).await? {
-            StreamSessionRecord::Prepared(record) => Ok(Some(record)),
+            StreamSessionRecord::Prepared(record) => Ok(Some((index, record))),
             _ => Err(WorkerExecutorError::runtime(
                 "stream session index does not refer to Prepared",
             )),
@@ -388,7 +483,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(idempotency_key) = invocation.idempotency_key().cloned() else {
             return Ok(None);
         };
-        let Some(prepared) = self.prepared_stream_session(&idempotency_key).await? else {
+        let Some((prepared_index, prepared)) = self
+            .indexed_prepared_stream_session(&idempotency_key)
+            .await?
+        else {
             return Ok(None);
         };
         if prepared.stream_mappings.is_empty() {
@@ -425,22 +523,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .recover_session_mappings()
             .await
             .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        // The input is part of the Prepared entry. A decoder error can hold stored values, so the
+        // read error names only the entry.
+        let unreadable_input = || -> WorkerExecutorError {
+            UnreadableOplog::new(
+                &self.agent_id(),
+                OplogReadError::corruption(
+                    OplogReadSource::Other("prepared session input"),
+                    format!("invalid prepared session input at oplog index {prepared_index}"),
+                ),
+            )
+            .into()
+        };
         let encoded = prepared.attempt.invocation.invocation_value.as_slice();
-        let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(encoded).map_err(
-            |error| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to decode persisted durable invocation input: {error}"
-                ))
-            },
-        )?;
+        let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(encoded)
+            .map_err(|_| unreadable_input())?;
         let graph = typed
             .graph
-            .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input graph"))?
+            .ok_or_else(unreadable_input)?
             .try_into()
-            .map_err(WorkerExecutorError::runtime)?;
-        let value = typed
-            .value
-            .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input value"))?;
+            .map_err(|_| unreadable_input())?;
+        let value = typed.value.ok_or_else(unreadable_input)?;
         let input = streams
             .decode_initial(value, &mappings, SessionStreamRole::Input)
             .await
@@ -459,7 +562,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         preparation: Option<suspension::ExternalActivity>,
         tasks: &crate::worker::tasks::NativeReconstructionSpawner,
     ) -> Result<golem_common::schema::SchemaValue, WorkerExecutorError> {
-        let Some(prepared) = self.prepared_stream_session(idempotency_key).await? else {
+        let Some((prepared_index, prepared)) = self
+            .indexed_prepared_stream_session(idempotency_key)
+            .await?
+        else {
             if contains_stream(&value) {
                 return Err(WorkerExecutorError::runtime(
                     "live stream at a materializing invocation boundary without a durable Stream Session",
@@ -470,6 +576,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // The original agent or tool consumer can reattach after revert, but never to a new fork.
         let requires_attachment =
             stream_effective_identity_is_internal(&prepared.attempt.effective_identity)
+                .map_err(|error| self.stream_identity_read_error(prepared_index, error))?
                 && prepared.attempt.session_key.callee_fingerprint
                     == self.initial_worker_metadata.fingerprint;
         let mut streams = StreamSession::open(
@@ -514,14 +621,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: &InvocationId,
         result: Result<(), String>,
     ) -> Result<(), WorkerExecutorError> {
+        if let Some(streams) = self.open_unfinished_stream_session(idempotency_key).await? {
+            write_stream_session_terminal(&streams, result)
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        }
+        Ok(())
+    }
+
+    async fn open_unfinished_stream_session(
+        &self,
+        idempotency_key: &InvocationId,
+    ) -> Result<Option<StreamSession>, WorkerExecutorError> {
         let Some(status) = self.durable_stream_session_status(idempotency_key).await? else {
-            return Ok(());
+            return Ok(None);
         };
         if status.finished.is_some() {
-            return Ok(());
+            return Ok(None);
         }
         let Some(index) = status.prepared else {
-            return Ok(());
+            return Ok(None);
         };
         let StreamSessionRecord::Prepared(prepared) =
             self.read_stream_session_record(index).await?
@@ -557,34 +676,65 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
-        match result {
-            Ok(()) => streams.complete_or_defer_for_forwarded_inputs().await,
-            Err(details) => streams.fail(details).await,
-        }
-        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
-        Ok(())
+        Ok(Some(streams))
     }
+
     pub(in crate::worker) async fn recover_finished_durable_streaming_sessions(
         &self,
     ) -> Result<(), WorkerExecutorError> {
         let status = self.state_actor.status().await;
-        for (idempotency_key, session) in status.durable_stream_sessions.iter() {
-            if session.prepared.is_none() || session.finished.is_some() {
-                continue;
-            }
-            match self.lookup_invocation_result(&idempotency_key).await {
-                LookupResult::Complete(Ok(_)) => {
-                    self.complete_durable_streaming_session(&idempotency_key)
-                        .await?;
+        let unfinished = status
+            .durable_stream_sessions
+            .iter()
+            .filter(|(_, session)| session.prepared.is_some() && session.finished.is_none())
+            .map(|(key, _)| Ok(key));
+        let retry = futures::stream::iter(unfinished)
+            .try_fold(None, |retry, key| async move {
+                let ready = async {
+                    let LookupResult::Complete(result) =
+                        self.lookup_invocation_result(&key).await?
+                    else {
+                        return Ok::<_, WorkerExecutorError>(None);
+                    };
+                    let result = result.map(drop).map_err(|error| error.to_string());
+                    let streams = self.open_unfinished_stream_session(&key).await?;
+                    Ok(streams.map(|streams| (streams, result)))
                 }
-                LookupResult::Complete(Err(error)) => {
-                    self.fail_durable_streaming_session(&idempotency_key, error.to_string())
-                        .await?;
+                .await;
+                let failure = match ready {
+                    Ok(Some((streams, result))) => {
+                        match write_stream_session_terminal(&streams, result).await {
+                            Err(SessionError::Unreadable(unreadable)) => unreadable.into(),
+                            result => {
+                                result.map_err(|error| {
+                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                                })?;
+                                return Ok(retry);
+                            }
+                        }
+                    }
+                    Ok(None) => return Ok(retry),
+                    Err(error) => error,
+                };
+                match InvocationObservationFailure::classify(&failure) {
+                    Some(InvocationObservationFailure::RetryableRead) => {
+                        Ok(retry.or(Some(failure)))
+                    }
+                    _ => Err(failure),
                 }
-                LookupResult::New | LookupResult::Pending | LookupResult::Interrupted => {}
-            }
-        }
-        Ok(())
+            })
+            .await?;
+        retry.map_or(Ok(()), Err)
+    }
+}
+
+async fn write_stream_session_terminal(
+    streams: &StreamSession,
+    result: Result<(), String>,
+) -> Result<(), SessionError> {
+    match result {
+        Ok(()) => streams.complete_or_defer_for_forwarded_inputs().await,
+        Err(details) => streams.fail(details).await,
     }
 }
 
@@ -657,24 +807,26 @@ pub(in crate::worker) fn persisted_stream_descriptor_matches(
     persisted: &PersistedStreamInvocationDescriptor,
     requested: &PersistedStreamInvocationDescriptor,
 ) -> bool {
+    stream_descriptor_shape_matches(persisted, requested)
+        && persisted.execution_config == requested.execution_config
+}
+
+fn stream_descriptor_shape_matches(
+    persisted: &PersistedStreamInvocationDescriptor,
+    requested: &PersistedStreamInvocationDescriptor,
+) -> bool {
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
         && persisted.target_component_revision == requested.target_component_revision
         && persisted.target == requested.target
         && persisted.invocation_value == requested.invocation_value
-        && persisted.execution_config == requested.execution_config
         && persisted.effective_identity == requested.effective_identity
 }
 
-pub(in crate::worker) fn stream_output_consumer_is_observer(
-    accepted: &StartAttemptDescriptor,
-    attachment: &golem_common::model::durable_stream::StreamAttachmentKey,
+fn output_consumer_is_observer(
+    start: golem_api_grpc::proto::golem::worker::InvocationStart,
+    attachment: &StreamAttachmentKey,
 ) -> Result<bool, WorkerExecutorError> {
-    let (bytes, _environment): (Vec<u8>, Option<Vec<(String, String)>>) =
-        golem_common::serialization::deserialize(&accepted.invocation.execution_config)
-            .map_err(WorkerExecutorError::runtime)?;
-    let start = golem_api_grpc::proto::golem::worker::InvocationStart::decode(bytes.as_slice())
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
     let Some(origin) = start.origin_invocation else {
         return Ok(false);
     };
@@ -693,17 +845,29 @@ pub(in crate::worker) fn stream_output_consumer_is_observer(
         || environment != attachment.consumer_environment_id.into())
 }
 
-/// True when an agent or a tool that an agent hosts started the stream.
-pub(in crate::worker) fn stream_effective_identity_is_internal(effective_identity: &[u8]) -> bool {
-    stream_internal_authority(effective_identity).is_some()
+/// True when an agent or a tool that an agent hosts started the stream. An identity that does not
+/// decode is an error, see [`stream_internal_authority`].
+pub(in crate::worker) fn stream_effective_identity_is_internal(
+    effective_identity: &[u8],
+) -> Result<bool, DecodeError> {
+    Ok(stream_internal_authority(effective_identity)?.is_some())
+}
+
+/// A stored stream identity whose framing or principal does not decode. The error has no stored
+/// bytes.
+fn malformed_stream_identity(part: &str) -> DecodeError {
+    DecodeError::InvalidData(format!("invalid stream effective identity {part}"))
 }
 
 /// The auth-context entry of the identity of a stream that an agent, or a tool that an agent
 /// hosts, started: the immediate caller is an agent or a tool. `None` for any other stream. The
 /// identity is the auth-context entry followed by the principal entry, when the request has a
 /// principal, so only a second entry is a principal: an auth context alone can also decode as an
-/// agent principal.
-pub(in crate::worker) fn stream_internal_authority(effective_identity: &[u8]) -> Option<&[u8]> {
+/// agent principal. A length prefix that does not fit the bytes, trailing bytes, or a principal
+/// that does not decode is an error, not another stream.
+pub(in crate::worker) fn stream_internal_authority(
+    effective_identity: &[u8],
+) -> Result<Option<&[u8]>, DecodeError> {
     let mut cursor = effective_identity;
     let mut last = None;
     let mut authority = None;
@@ -717,32 +881,40 @@ pub(in crate::worker) fn stream_internal_authority(effective_identity: &[u8]) ->
                 .try_into()
                 .expect("effective identity length prefix has fixed width"),
         );
-        let Ok(length) = usize::try_from(length) else {
-            return None;
-        };
-        if rest.len() < length {
-            return None;
-        }
+        let length = usize::try_from(length)
+            .ok()
+            .filter(|length| rest.len() >= *length)
+            .ok_or_else(|| malformed_stream_identity("framing"))?;
         let (value, rest) = rest.split_at(length);
         last = Some(value);
         cursor = rest;
     }
-    if !cursor.is_empty() || entries != 2 {
-        return None;
+    if !cursor.is_empty() {
+        return Err(malformed_stream_identity("framing"));
     }
-    last.and_then(|value| {
-        golem_api_grpc::proto::golem::component::Caller::decode(value)
-            .ok()
-            .and_then(|caller| Caller::try_from(caller).ok())
-    })
-    .is_some_and(|caller| matches!(caller.immediate, Principal::Agent(_) | Principal::Tool(_)))
-    .then_some(authority?)
+    let (Some(principal), Some(authority), 2) = (last, authority, entries) else {
+        return Ok(None);
+    };
+    let caller = golem_api_grpc::proto::golem::component::Caller::decode(principal)
+        .ok()
+        .and_then(|caller| Caller::try_from(caller).ok())
+        .ok_or_else(|| malformed_stream_identity("principal"))?;
+    Ok(matches!(caller.immediate, Principal::Agent(_) | Principal::Tool(_)).then_some(authority))
+}
+
+/// A retained field of the origin of a stream invocation that does not decode.
+#[derive(Debug, PartialEq)]
+pub(crate) enum UndecodableOrigin {
+    /// The effective identity, with its auth context and principal.
+    Identity(DecodeError),
+    /// The execution configuration.
+    ExecutionConfig(DecodeError),
 }
 
 pub(crate) fn same_origin_stream_invocation(
     persisted: &StartAttemptDescriptor,
     requested: &StartAttemptDescriptor,
-) -> bool {
+) -> Result<bool, UndecodableOrigin> {
     let original = &persisted.invocation;
     let retry = &requested.invocation;
     if persisted.format_version != requested.format_version
@@ -762,7 +934,7 @@ pub(crate) fn same_origin_stream_invocation(
         || persisted.effective_identity != original.effective_identity
         || requested.effective_identity != retry.effective_identity
     {
-        return false;
+        return Ok(false);
     }
     same_origin_stream_authority(
         &original.effective_identity,
@@ -777,9 +949,9 @@ pub(crate) fn same_origin_stream_invocation(
 pub(crate) fn same_origin_queued_request(
     original: &AgentInvocationPayload,
     retry: &AgentInvocationPayload,
-    accepted: &golem_common::model::durable_stream::StreamSessionAcceptance,
-    requested: &golem_common::model::durable_stream::StreamSessionAcceptance,
-) -> bool {
+    accepted: &StreamSessionAcceptance,
+    requested: &StreamSessionAcceptance,
+) -> Result<bool, UndecodableOrigin> {
     use golem_common::model::agent::AgentMethodInput;
     let (
         AgentInvocationPayload::AgentMethod {
@@ -796,7 +968,7 @@ pub(crate) fn same_origin_queued_request(
         },
     ) = (original, retry)
     else {
-        return false;
+        return Ok(false);
     };
     if a != b
         || sa != sb
@@ -804,13 +976,13 @@ pub(crate) fn same_origin_queued_request(
         || accepted.transport_stream_ids != requested.transport_stream_ids
         || accepted.live_join_buffer_events != requested.live_join_buffer_events
     {
-        return false;
+        return Ok(false);
     }
     let (Some(handles), Some(other_handles)) = (
         input.streams().iter().cloned().collect::<Option<Vec<_>>>(),
         other.streams().iter().cloned().collect::<Option<Vec<_>>>(),
     ) else {
-        return false;
+        return Ok(false);
     };
     same_origin_stream_authority(
         &accepted.effective_identity,
@@ -822,6 +994,34 @@ pub(crate) fn same_origin_queued_request(
     )
 }
 
+/// The fields of a decoded [`StreamExecutionConfig`], by name.
+#[derive(PartialEq)]
+pub(super) struct DecodedStreamExecution {
+    pub(super) start: golem_api_grpc::proto::golem::worker::InvocationStart,
+    pub(super) environment: Option<Vec<(String, String)>>,
+    pub(super) stdout: bool,
+    pub(super) stderr: bool,
+}
+
+pub(super) fn decode_stream_execution(bytes: &[u8]) -> Result<DecodedStreamExecution, DecodeError> {
+    let (configuration, environment, stdout, stderr): StreamExecutionConfig =
+        golem_common::serialization::decode(bytes)?;
+    let request =
+        golem_api_grpc::proto::golem::worker::InvocationStart::decode(configuration.as_slice())
+            .map_err(|_| {
+                DecodeError::InvalidData(format!(
+                    "invalid invocation configuration for serialization version {}",
+                    golem_common::serialization::SERIALIZATION_VERSION_V3
+                ))
+            })?;
+    Ok(DecodedStreamExecution {
+        start: request,
+        environment,
+        stdout,
+        stderr,
+    })
+}
+
 fn same_origin_stream_authority(
     original_identity: &[u8],
     retry_identity: &[u8],
@@ -829,45 +1029,38 @@ fn same_origin_stream_authority(
     retry_execution: &[u8],
     original_handles: &[golem_common::model::durable_stream::DurableStreamHandle],
     retry_handles: &[golem_common::model::durable_stream::DurableStreamHandle],
-) -> bool {
-    use golem_api_grpc::proto::golem::worker::InvocationStart;
+) -> Result<bool, UndecodableOrigin> {
     if original_handles.len() != retry_handles.len()
         || original_handles
             .iter()
             .zip(retry_handles)
             .any(|(a, b)| a.element_schema_fingerprint != b.element_schema_fingerprint)
     {
-        return false;
+        return Ok(false);
     }
+    // The original identity is stored, so it must decode. A retry identity that does not decode
+    // is a request that does not match.
     let (Some(original_authority), Some(retry_authority)) = (
-        stream_internal_authority(original_identity),
-        stream_internal_authority(retry_identity),
+        stream_internal_authority(original_identity).map_err(UndecodableOrigin::Identity)?,
+        stream_internal_authority(retry_identity).ok().flatten(),
     ) else {
-        return false;
+        return Ok(false);
     };
-    let decode = |bytes: &[u8]| {
-        let (bytes, environment, stdout, stderr): SessionExecutionConfig =
-            golem_common::serialization::deserialize(bytes).ok()?;
-        Some((
-            InvocationStart::decode(bytes.as_slice()).ok()?,
-            (environment, stdout, stderr),
-        ))
+    let mut original =
+        decode_stream_execution(original_execution).map_err(UndecodableOrigin::ExecutionConfig)?;
+    let Ok(mut retry) = decode_stream_execution(retry_execution) else {
+        return Ok(false);
     };
-    let (Some((mut original_config, original_env)), Some((mut retry_config, retry_env))) =
-        (decode(original_execution), decode(retry_execution))
-    else {
-        return false;
-    };
-    if original_config.origin_invocation.is_none()
-        || original_config.origin_invocation != retry_config.origin_invocation
+    if original.start.origin_invocation.is_none()
+        || original.start.origin_invocation != retry.start.origin_invocation
     {
-        return false;
+        return Ok(false);
     }
     for (a, b) in original_handles.iter().zip(retry_handles) {
         if a == b {
             continue;
         }
-        for (handle, config) in [(a, &original_config), (b, &retry_config)] {
+        for (handle, config) in [(a, &original.start), (b, &retry.start)] {
             let parent = config
                 .context
                 .as_ref()
@@ -879,31 +1072,37 @@ fn same_origin_stream_authority(
             if parent != Some(&handle.producer.into())
                 || environment != Some(handle.producer_environment_id.into())
             {
-                return false;
+                return Ok(false);
             }
         }
     }
     let (Some(original_auth), Some(retry_auth)) = (
-        normalize_stream_join_authority(original_authority, &mut original_config),
-        normalize_stream_join_authority(retry_authority, &mut retry_config),
+        normalize_stream_join_authority(original_authority, &mut original.start)
+            .map_err(UndecodableOrigin::Identity)?,
+        normalize_stream_join_authority(retry_authority, &mut retry.start)
+            .ok()
+            .flatten(),
     ) else {
-        return false;
+        return Ok(false);
     };
     if original_auth != retry_auth {
-        return false;
+        return Ok(false);
     }
-    for config in [&mut original_config, &mut retry_config] {
+    for config in [&mut original.start, &mut retry.start] {
         if let Some(context) = &mut config.context {
             context.parent = None;
         }
     }
-    original_config == retry_config && original_env == retry_env
+    Ok(original == retry)
 }
 
+/// The auth context of `authority` with self-scoped grants under the origin agent. An auth context
+/// or a scope card that does not decode is an error; a configuration without a parent or an
+/// origin gives `None`.
 pub(in crate::worker) fn normalize_stream_join_authority(
     authority: &[u8],
     config: &mut golem_api_grpc::proto::golem::worker::InvocationStart,
-) -> Option<AuthCtx> {
+) -> Result<Option<AuthCtx>, DecodeError> {
     use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
     use golem_common::model::card::{PermissionPattern, PermissionTarget, ScopeCard};
 
@@ -933,15 +1132,34 @@ pub(in crate::worker) fn normalize_stream_join_authority(
         }
     }
 
-    let length = usize::try_from(u64::from_be_bytes(authority.get(..8)?.try_into().ok()?)).ok()?;
-    let bytes = authority.get(8..)?;
-    if bytes.len() != length {
-        return None;
-    }
-    let mut auth =
-        AuthCtx::try_from(golem_api_grpc::proto::golem::auth::AuthCtx::decode(bytes).ok()?).ok()?;
-    let caller = &AgentId::try_from(config.context.as_ref()?.parent?).ok()?;
-    let origin = &AgentId::try_from(config.origin_invocation.as_ref()?.callee?).ok()?;
+    let bytes = authority
+        .get(..8)
+        .and_then(|prefix| prefix.try_into().ok())
+        .and_then(|prefix| usize::try_from(u64::from_be_bytes(prefix)).ok())
+        .zip(authority.get(8..))
+        .filter(|(length, bytes)| bytes.len() == *length)
+        .map(|(_, bytes)| bytes)
+        .ok_or_else(|| malformed_stream_identity("framing"))?;
+    let mut auth = golem_api_grpc::proto::golem::auth::AuthCtx::decode(bytes)
+        .ok()
+        .and_then(|auth| AuthCtx::try_from(auth).ok())
+        .ok_or_else(|| malformed_stream_identity("auth context"))?;
+    let Some((caller, origin)) = config
+        .context
+        .as_ref()
+        .and_then(|context| context.parent)
+        .and_then(|parent| AgentId::try_from(parent).ok())
+        .zip(
+            config
+                .origin_invocation
+                .as_ref()
+                .and_then(|origin| origin.callee)
+                .and_then(|callee| AgentId::try_from(callee).ok()),
+        )
+    else {
+        return Ok(None);
+    };
+    let (caller, origin) = (&caller, &origin);
     // Forks monomorphize the retained wallet under their own name. Compare self-scoped
     // grants under the common author, retaining card IDs, scopes, verbs and resources.
     if let AuthCtx::Agent(agent) = &mut auth {
@@ -977,7 +1195,8 @@ pub(in crate::worker) fn normalize_stream_join_authority(
         }
     }
     if let Some(encoded) = config.scope_card.take() {
-        let mut scope = ScopeCard::try_from(encoded).ok()?;
+        let mut scope =
+            ScopeCard::try_from(encoded).map_err(|_| malformed_stream_identity("scope card"))?;
         for grants in [
             &mut scope.lower_positive,
             &mut scope.lower_negative,
@@ -986,9 +1205,12 @@ pub(in crate::worker) fn normalize_stream_join_authority(
         ] {
             normalize_grants(grants, caller, origin);
         }
-        config.scope_card = Some((&scope).try_into().ok()?);
+        let Ok(encoded) = (&scope).try_into() else {
+            return Ok(None);
+        };
+        config.scope_card = Some(encoded);
     }
-    Some(auth)
+    Ok(Some(auth))
 }
 
 pub(crate) fn stream_session_record_key(
@@ -1214,16 +1436,16 @@ mod tests {
         let agent: golem_api_grpc::proto::golem::component::Caller =
             crate::test_callers::agent_caller(AgentId::from_parts(7, 1)).into();
 
-        assert!(!stream_effective_identity_is_internal(&identity(
-            std::slice::from_ref(&user)
-        )));
-        assert!(!stream_effective_identity_is_internal(&identity(&[
-            agent.encode_to_vec()
-        ])));
-        assert!(stream_effective_identity_is_internal(&identity(&[
-            user,
-            agent.encode_to_vec()
-        ])));
+        assert!(
+            !stream_effective_identity_is_internal(&identity(std::slice::from_ref(&user))).unwrap()
+        );
+        assert!(
+            !stream_effective_identity_is_internal(&identity(&[agent.encode_to_vec()])).unwrap()
+        );
+        assert!(
+            stream_effective_identity_is_internal(&identity(&[user, agent.encode_to_vec()]))
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1236,18 +1458,34 @@ mod tests {
         };
         let agent = crate::test_callers::agent_caller(AgentId::from_parts(7, 1));
         let identity_of_agent = caller_identity(&agent);
-        assert!(stream_internal_authority(&identity_of_agent).is_some());
-        assert!(stream_effective_identity_is_internal(&identity_of_agent));
+        assert!(
+            stream_internal_authority(&identity_of_agent)
+                .unwrap()
+                .is_some()
+        );
+        assert!(stream_effective_identity_is_internal(&identity_of_agent).unwrap());
 
         let user = Caller::entry(crate::test_callers::user_principal());
-        assert!(stream_internal_authority(&caller_identity(&user)).is_none());
+        assert!(
+            stream_internal_authority(&caller_identity(&user))
+                .unwrap()
+                .is_none()
+        );
 
         let mut agent_for_user = agent.clone();
         agent_for_user.original = user.original.clone();
-        assert!(stream_internal_authority(&caller_identity(&agent_for_user)).is_some());
+        assert!(
+            stream_internal_authority(&caller_identity(&agent_for_user))
+                .unwrap()
+                .is_some()
+        );
         let mut user_via_agent_root = user.clone();
         user_via_agent_root.original = agent.original;
-        assert!(stream_internal_authority(&caller_identity(&user_via_agent_root)).is_none());
+        assert!(
+            stream_internal_authority(&caller_identity(&user_via_agent_root))
+                .unwrap()
+                .is_none()
+        );
 
         // A tool that an agent hosts calls for the same user: its stream is as internal as the
         // agent's.
@@ -1264,15 +1502,42 @@ mod tests {
             ),
             tokens: Vec::new(),
         };
-        assert!(stream_internal_authority(&caller_identity(&tool_for_user)).is_some());
-        assert!(stream_effective_identity_is_internal(&caller_identity(
-            &tool_for_user
-        )));
-        assert!(stream_internal_authority(&caller_identity(&Caller::anonymous())).is_none());
+        assert!(
+            stream_internal_authority(&caller_identity(&tool_for_user))
+                .unwrap()
+                .is_some()
+        );
+        assert!(stream_effective_identity_is_internal(&caller_identity(&tool_for_user)).unwrap());
+        assert!(
+            stream_internal_authority(&caller_identity(&Caller::anonymous()))
+                .unwrap()
+                .is_none()
+        );
 
         let mut garbage = Vec::new();
         garbage.extend_from_slice(&3u64.to_be_bytes());
         garbage.extend_from_slice(&[0xff, 0xff, 0xff]);
-        assert!(stream_internal_authority(&garbage).is_none());
+        assert!(stream_internal_authority(&garbage).unwrap().is_none());
+    }
+
+    // A stored identity whose framing or principal does not decode is an error, not a stream
+    // that another caller started.
+    #[test]
+    fn a_malformed_identity_is_a_decode_error_and_not_an_external_stream() {
+        let mut truncated = 5u64.to_be_bytes().to_vec();
+        truncated.extend_from_slice(&[0x11, 0x22, 0x33]);
+        let mut trailing = identity(&[vec![0x44]]);
+        trailing.extend_from_slice(&[0x55, 0x66]);
+        let principal_garbage = identity(&[AuthCtx::default().encode_to_vec(), vec![0xff, 0xff]]);
+
+        [truncated, trailing, principal_garbage]
+            .iter()
+            .for_each(|stored| {
+                assert!(stream_internal_authority(stored).is_err(), "{stored:?}");
+                assert!(
+                    stream_effective_identity_is_internal(stored).is_err(),
+                    "{stored:?}"
+                );
+            });
     }
 }

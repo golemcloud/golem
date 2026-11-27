@@ -350,8 +350,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// What the loop does when the oplog does not give what the next work needs: the status
     /// could not be rebuilt, for example after a commit whose receipt its caller already took, or
     /// the selected pending invocation could not be hydrated. The failure is recorded like a
-    /// failed recovery: an oplog whose storage did not answer recovers after a delay and keeps its
-    /// pending work, and one that does not read for good stops the agent with the cause.
+    /// failed recovery: an oplog whose storage did not answer adds no entry, recovers after a
+    /// delay and keeps its pending work, and one that does not read for good stops the agent with
+    /// the cause.
     pub(super) async fn unreadable_oplog_outcome(
         &self,
         error: &WorkerExecutorError,
@@ -468,7 +469,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             Err(error) => {
                 warn!(
                     agent_id = %self.owned_agent_id.agent_id,
-                    "Failed to hydrate pending invocation from oplog: {error}"
+                    %error,
+                    "Failed to hydrate pending invocation from oplog"
                 );
                 return self.unreadable_oplog_outcome(&error).await;
             }
@@ -516,7 +518,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         .await;
 
         match outcome {
-            CommandOutcome::Continue => {
+            Err(error) => self.unreadable_oplog_outcome(&error).await,
+            Ok(CommandOutcome::Continue) => {
                 if self.on_external_invocation_completed().await {
                     return CommandOutcome::Continue;
                 }
@@ -540,7 +543,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 // Revisit commands that arrived during execution before entering idle.
                 CommandOutcome::Continue
             }
-            other => other,
+            Ok(other) => other,
         }
     }
 }

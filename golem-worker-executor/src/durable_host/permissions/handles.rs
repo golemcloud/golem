@@ -19,8 +19,8 @@ use super::{
     HostResponsePermissionCardLiveness, InternalRetryResult, NotCancellable, PermissionCardEntry,
     PermissionCardHandleRep, PermissionCardResolver, PermissionCardValuePayload,
     ResolvedPermissionCard, Resource, ScopeCard, SerializablePermissionCardLiveness, StoredCard,
-    Uuid, WorkerCtx, WorkerExecutorError, anyhow, deserialize, permission_error_to_anyhow,
-    permissions_types, serialize, worker_error_to_permission_error,
+    Uuid, WorkerCtx, WorkerExecutorError, permission_error_to_anyhow, permissions_types, serialize,
+    worker_error_to_permission_error,
 };
 
 impl PermissionCardEntry {
@@ -473,6 +473,7 @@ pub(super) async fn resolve_permission_card<Ctx: WorkerCtx>(
         DurableFunctionType::ReadRemote,
     )
     .await?;
+    let start_index = call.start_index();
     let response = 'result: {
         if !call.is_live() {
             let recorded = match call.recorded_request(ctx).await {
@@ -514,9 +515,11 @@ pub(super) async fn resolve_permission_card<Ctx: WorkerCtx>(
 
     match response.liveness {
         SerializablePermissionCardLiveness::Live(card) => {
-            let card: StoredCard = deserialize(&card).map_err(|error| {
-                anyhow!("failed to deserialize the recorded permission card {card_id}: {error}")
-            })?;
+            let card = super::creation::decode_recorded_card(
+                &ctx.state.owned_agent_id.agent_id,
+                start_index,
+                &card,
+            )?;
             if snapshot_matches_card(&snapshot, &card) {
                 Ok(Ok(card))
             } else {

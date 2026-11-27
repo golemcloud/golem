@@ -6,8 +6,8 @@
 //
 //     http://license.golem.cloud/LICENSE
 
-use super::{DurableStreamStore, ProducerStreamIndex, StreamStoreError};
-use crate::services::oplog::{Oplog, OplogOps};
+use super::{DurableStreamStore, ProducerStreamIndex, StreamStoreError, download_history_record};
+use crate::services::oplog::Oplog;
 use crate::services::worker_fork::lineage::StreamForkLineage;
 use golem_common::base_model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, LocalStreamId, StreamForkCutRecord,
@@ -15,7 +15,7 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentFingerprint, OplogIndex, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, OwnedAgentId};
 use std::collections::HashSet;
 
 impl DurableStreamStore {
@@ -90,7 +90,7 @@ impl DurableStreamStore {
         if cut_index < horizon
             && matches!(oplog.read(cut_index).await?, OplogEntry::Revert { .. })
             && let OplogEntry::StreamSession { record, .. } = oplog.read(cut_index.next()).await?
-            && matches!(oplog.download_payload(record).await.map_err(StreamStoreError::Oplog)?,
+            && matches!(download_history_record(oplog, &source.0.agent_id, cut_index.next(), record).await?,
                 StreamSessionRecord::ForkCut(cut) if cut.revert.is_some())
         {
             return Err(StreamStoreError::InvalidOffset(
@@ -99,7 +99,7 @@ impl DurableStreamStore {
         }
         let lineage = StreamForkLineage::load_at_horizon(oplog, source.0, source.1, horizon)
             .await
-            .map_err(StreamStoreError::CorruptHistory)?;
+            .map_err(StreamStoreError::from)?;
         if revert && lineage.deleted_regions().is_in_deleted_region(cut_index) {
             return Err(StreamStoreError::InvalidOffset(
                 "revert must retain a visible prefix of the same agent".into(),
@@ -148,7 +148,7 @@ impl DurableStreamStore {
                     .map_or((OplogIndex::NONE, 1), |(index, cut)| {
                         (*index, cut.epoch_floor)
                     });
-                Self::max_issued_epoch(oplog, from, horizon)
+                Self::max_issued_epoch(oplog, &source.0.agent_id, from, horizon)
                     .await?
                     .max(floor)
                     .checked_add(1)
@@ -161,9 +161,9 @@ impl DurableStreamStore {
         };
         let retained_items = index.resolve_fork_prefix(&record)?;
         index.apply_fork_cut(&record, retained_items)?;
-        StreamForkLineage::validate_fork_cut(oplog, record.clone())
+        StreamForkLineage::validate_fork_cut(oplog, source.0, record.clone())
             .await
-            .map_err(StreamStoreError::CorruptHistory)?;
+            .map_err(StreamStoreError::from)?;
         Ok(record)
     }
 
@@ -178,6 +178,7 @@ impl DurableStreamStore {
     /// are deleted. Producer-side attachment records belong to other consumers' epoch spaces.
     async fn max_issued_epoch(
         oplog: &dyn Oplog,
+        agent_id: &AgentId,
         from: OplogIndex,
         horizon: OplogIndex,
     ) -> Result<u64, StreamStoreError> {
@@ -201,10 +202,7 @@ impl DurableStreamStore {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
                 };
-                let record = oplog
-                    .download_payload(record)
-                    .await
-                    .map_err(StreamStoreError::Oplog)?;
+                let record = download_history_record(oplog, agent_id, index, record).await?;
                 let epoch = match record {
                     StreamSessionRecord::Attached(record) => record.epoch,
                     StreamSessionRecord::ResumeAttempt(record) => record.accepted_epoch,

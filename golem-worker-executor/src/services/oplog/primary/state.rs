@@ -295,8 +295,11 @@ impl PrimaryOplogState {
         &mut self,
         previously_committed_through: OplogIndex,
         mut newly_committed: BTreeMap<OplogIndex, OplogEntry>,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         let committed_through = self.last_committed_idx;
+        let unreadable = |error| {
+            OplogError::Unreadable(UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
+        };
         let mut retained: BTreeMap<_, _> = std::mem::take(&mut self.retained_auto_commits)
             .into_iter()
             .flatten()
@@ -307,16 +310,20 @@ impl PrimaryOplogState {
         let mut entries = if self.last_reported_commit_idx < read_through {
             let start = self.last_reported_commit_idx.next();
             let count = u64::from(read_through) - u64::from(self.last_reported_commit_idx);
-            let entries = self.reader().read_source(start, count).await;
+            let entries = self
+                .reader()
+                .read_source(start, count)
+                .await
+                .map_err(unreadable)?;
             exact_from_source(OplogReadSource::Primary, start, count, entries)
-                .unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
+                .map_err(unreadable)?
         } else {
             BTreeMap::new()
         };
         entries.append(&mut retained);
         entries.append(&mut newly_committed);
         self.last_reported_commit_idx = committed_through;
-        entries
+        Ok(entries)
     }
 
     /// Trims the entries an archive transfer has copied, asserting the epoch this oplog was opened

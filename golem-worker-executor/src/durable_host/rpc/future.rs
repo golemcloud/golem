@@ -15,7 +15,7 @@
 use super::{
     DurableStreamingTaskParams, FutureInvokeCallHandle, FutureInvokeGetResult,
     FutureInvokeResultEntry, FutureInvokeResultState, FutureInvokeTaskHandle,
-    FutureInvokeTaskResult, RpcTargetActivation, RpcTask, SubscribeAny,
+    FutureInvokeTaskResult, RpcTargetActivation, RpcTask, RpcTaskResult, SubscribeAny,
     invoke_and_await_response_to_wire, rpc_span_finished, schema_value_to_wire_output,
     spawn_invoke_and_await_task, spawn_streaming_invoke_and_await_task,
 };
@@ -37,6 +37,7 @@ use crate::preview2::golem::agent::host::FutureInvokeResult;
 use crate::preview2::golem::agent::host::HostFutureInvokeResult;
 use crate::preview2::golem::agent::host::HostFutureInvokeResultWithStore;
 use crate::preview2::golem::agent::host::RpcError;
+use crate::services::rpc::RpcCallFailure;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -101,6 +102,26 @@ where
     Ok(decision == InternalRetryResult::RetryInternally)
 }
 
+/// [`retry_after_backoff`] for the result of a background task. A target history that does not
+/// read for good is the failure of the call: `get` records it and does not call again.
+async fn retry_after_backoff_unless_unreadable<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: &mut FutureInvokeCallHandle,
+    properties: golem_common::model::RetryProperties,
+    result: &Result<SchemaValue, RpcCallFailure>,
+) -> anyhow::Result<bool>
+where
+    U: 'static,
+    Ctx: WorkerCtx,
+{
+    match result {
+        Err(RpcCallFailure::Outcome(error)) => {
+            retry_after_backoff(accessor, handle, properties, &Err(error.clone())).await
+        }
+        Ok(_) | Err(RpcCallFailure::UnreadableTarget(_)) => Ok(false),
+    }
+}
+
 fn internal_rpc_child_key(request_key: &InvocationRequestKey) -> anyhow::Result<IdempotencyKey> {
     match request_key {
         InvocationRequestKey::Internal(key) => Ok(key.clone()),
@@ -133,7 +154,7 @@ impl Drop for RpcTask {
 }
 
 impl std::future::Future for RpcTask {
-    type Output = FutureInvokeTaskResult;
+    type Output = RpcTaskResult;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
@@ -500,7 +521,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                             )
                                             .await;
                                         }
-                                        retry = retry_after_backoff(accessor, &mut handle, retry_properties.clone(), &rpc_result) => retry?,
+                                        retry = retry_after_backoff_unless_unreadable(accessor, &mut handle, retry_properties.clone(), &rpc_result) => retry?,
                                     };
                                 if retry {
                                     let auth_ctx = retry_auth_ctx.clone().expect(
@@ -531,8 +552,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     )?));
                                     continue;
                                 }
-                                let rpc_result =
-                                    admit_rpc_result_secret_holds(accessor, rpc_result).await?;
+                                let rpc_result = admit_rpc_result_secret_holds(
+                                    accessor,
+                                    rpc_result.map_err(InternalRpcError::from),
+                                )
+                                .await?;
                                 let finish_span = rpc_span_finished(&span_id, &rpc_result);
                                 let completed = handle
                                     .complete_access_deferred_with_span(
@@ -677,7 +701,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                                     )
                                                     .await;
                                                 }
-                                                retry = retry_after_backoff(accessor, &mut live, retry_properties.clone(), &rpc_result) => retry?,
+                                                retry = retry_after_backoff_unless_unreadable(accessor, &mut live, retry_properties.clone(), &rpc_result) => retry?,
                                             };
                                         if retry {
                                             task = accessor.with(|mut access| {
@@ -702,9 +726,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                             })?;
                                             continue;
                                         }
-                                        let rpc_result =
-                                            admit_rpc_result_secret_holds(accessor, rpc_result)
-                                                .await?;
+                                        let rpc_result = admit_rpc_result_secret_holds(
+                                            accessor,
+                                            rpc_result.map_err(InternalRpcError::from),
+                                        )
+                                        .await?;
                                         let finish_span = rpc_span_finished(&span_id, &rpc_result);
                                         break live
                                             .complete_access_deferred_with_span(

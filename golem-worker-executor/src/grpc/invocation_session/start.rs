@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use super::{
-    AcceptanceRace, AgentInvocationResult, Arc, HasAll, HashMap, InvocationAccepted,
-    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
-    InvocationSessionResult, InvocationSessionState, ResponseLease, SessionError,
-    SessionStreamRole, StreamSession, UsesAllDeps, WorkerCtx, WorkerExecutorError,
-    WorkerExecutorImpl, detach_durable_attachment, durable_stream_mapping_to_proto,
-    end_attachment_on_failure, ends_only_the_attachment, invocation_request, invocation_response,
+    AcceptanceRace, AgentInvocationOutput, AgentInvocationResult, Arc, HasAll, HashMap,
+    InvocationAccepted, InvocationRejectionReason, InvocationRequest, InvocationResponse,
+    InvocationSessionCompletion, InvocationSessionResult, InvocationSessionState, ResponseLease,
+    SessionError, SessionStreamRole, StreamSession, UsesAllDeps, WorkerCtx, WorkerExecutorError,
+    WorkerExecutorImpl, durable_stream_mapping_to_proto, end_attachment_on_failure,
+    ends_only_the_attachment, invocation_request, invocation_response,
     invocation_session_completion, invocation_session_result, mpsc, persisted_invocation_result,
     pre_acceptance_rejection_reason, proto_agent_id_string, race_invocation_acceptance,
     rejection_worker_error, request_agent_id, request_idempotency_key, route_durable_request,
@@ -26,6 +26,61 @@ use super::{
     send_rejection_with_worker_error, send_unvalidated_rejection, send_worker_failure,
     until_response_closed, with_input_server_terminals,
 };
+
+use crate::worker::InvocationObservationFailure;
+use std::future::{Future, pending};
+
+use super::attachment::{AttachmentCleanup, CleanupEvent, join_output_pumps};
+
+enum InvocationObservation<F> {
+    InFlight(F),
+    Succeeded(Box<AgentInvocationOutput>),
+    InvocationFailed(Box<WorkerExecutorError>),
+    ObservationFailed(Box<WorkerExecutorError>),
+}
+
+impl<F> InvocationObservation<F>
+where
+    F: Future<Output = Result<AgentInvocationOutput, WorkerExecutorError>> + Unpin,
+{
+    fn accepted(
+        invocation: F,
+        early_output: Option<Result<AgentInvocationOutput, WorkerExecutorError>>,
+    ) -> Self {
+        match early_output {
+            Some(output) => Self::completed(output),
+            None => Self::InFlight(invocation),
+        }
+    }
+
+    fn completed(result: Result<AgentInvocationOutput, WorkerExecutorError>) -> Self {
+        match result {
+            Ok(output) => Self::Succeeded(Box::new(output)),
+            Err(error) if InvocationObservationFailure::classify(&error).is_some() => {
+                Self::ObservationFailed(Box::new(error))
+            }
+            Err(error) => Self::InvocationFailed(Box::new(error)),
+        }
+    }
+
+    fn is_in_flight(&self) -> bool {
+        matches!(self, Self::InFlight(_))
+    }
+
+    fn check_observation(&self) -> Result<(), WorkerExecutorError> {
+        match self {
+            Self::ObservationFailed(error) => Err((**error).clone()),
+            _ => Ok(()),
+        }
+    }
+
+    async fn wait_for_completion(&mut self) {
+        match self {
+            Self::InFlight(invocation) => *self = Self::completed(invocation.await),
+            _ => pending().await,
+        }
+    }
+}
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -141,12 +196,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             },
         )
         .await;
-        let (mut accepted, mut early_output, mut early_inbound) = match acceptance {
+        let (mut accepted, mut observation, mut early_inbound) = match acceptance {
             AcceptanceRace::Accepted {
                 acceptance,
                 early_output,
                 early_inbound,
-            } => (acceptance, early_output, early_inbound),
+            } => (
+                acceptance,
+                InvocationObservation::accepted(invocation, early_output),
+                early_inbound,
+            ),
             AcceptanceRace::InvocationFinished(result) => {
                 let (reason, error, worker_error) = match result {
                     Ok(_) => {
@@ -207,6 +266,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let queued = accepted.queued.take();
         let was_queued = queued.is_some();
+        // Observation must never run attachment cleanup, even while the original is current.
+        let mut cleanup = AttachmentCleanup::new(
+            accepted
+                .durable_streams
+                .clone()
+                .filter(|_| !accepted.joined_origin_observer),
+        );
         if let Some((attached, mut readiness)) = queued {
             *response_lease.lock().unwrap() = accepted
                 .durable_streams
@@ -248,26 +314,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await
                 .is_err()
             {
-                detach_durable_attachment(
-                    accepted
-                        .durable_streams
-                        .take()
-                        .filter(|_| !accepted.joined_origin_observer),
-                )
-                .await;
+                cleanup.finish().await;
+                return;
+            }
+            if let Err(error) = observation.check_observation() {
+                cleanup.observe(CleanupEvent::of_observation_failure(&error));
+                send_worker_failure(&responses, error).await;
+                cleanup.finish().await;
                 return;
             }
             let mut inbound_open = true;
             let ready = loop {
                 tokio::select! {
                     ready = &mut readiness => break ready,
-                    result = &mut invocation, if early_output.is_none() => early_output = Some(result),
+                    () = observation.wait_for_completion() => {
+                        if let Err(error) = observation.check_observation() {
+                            cleanup.observe(CleanupEvent::of_observation_failure(&error));
+                            send_worker_failure(&responses, error).await;
+                            cleanup.finish().await;
+                            return;
+                        }
+                    },
                     _ = outward.closed() => {
-                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
+                        cleanup.finish().await;
                         return;
                     },
                     _ = forwarder_stopped.cancelled() => {
-                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
+                        cleanup.finish().await;
                         return;
                     },
                     request = inbound.message(), if inbound_open => {
@@ -278,42 +351,52 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         if let Ok(Some(_)) = request {
                             send_protocol_failure(&responses, "stream controls require execution readiness").await;
                         }
-                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
+                        cleanup.finish().await;
                         return;
                     },
                 }
             };
-            match ready {
-                Ok((prepared, streams)) => {
-                    if let Some(queued) = &accepted.durable_streams
-                        && !accepted.joined_origin_observer
-                        && queued.ensure_current_attachment().await.is_err()
-                    {
-                        send_attachment_revocation(&responses, Ok(())).await;
-                        return;
-                    }
-                    accepted.component_revision =
-                        Some(prepared.attempt.invocation.target_component_revision);
-                    accepted.prepared = Some(prepared);
-                    // The ready session replaces the queued one, so it keeps the queued
-                    // response's ephemeral lease until the response ends.
-                    let lease = accepted
-                        .durable_streams
-                        .as_ref()
-                        .and_then(StreamSession::response_lease);
-                    accepted.durable_streams = Some(streams.with_response_lease(lease));
-                }
+            let (prepared, streams) = match ready {
+                Ok(ready) => ready,
                 Err(error) => {
+                    // A failed readiness never wrote the detach: a failed read leaves the
+                    // attachment unsettled, and any other failure ends this transport's hold.
+                    cleanup.observe(CleanupEvent::of_observation_failure(&error));
+                    cleanup.observe(CleanupEvent::AuthorityEnded);
                     send_worker_failure(&responses, error).await;
+                    cleanup.finish().await;
                     return;
                 }
+            };
+            if let Some(queued) = &accepted.durable_streams
+                && !accepted.joined_origin_observer
+                && let Err(error) = queued.ensure_current_attachment().await
+            {
+                cleanup.observe_error(&error);
+                cleanup.observe(CleanupEvent::AuthorityEnded);
+                send_attachment_revocation(&responses, Ok(())).await;
+                cleanup.finish().await;
+                return;
             }
+            accepted.component_revision =
+                Some(prepared.attempt.invocation.target_component_revision);
+            accepted.prepared = Some(prepared);
+            // The ready session replaces the queued one, so it keeps the queued
+            // response's ephemeral lease until the response ends.
+            let lease = accepted
+                .durable_streams
+                .as_ref()
+                .and_then(StreamSession::response_lease);
+            accepted.durable_streams = Some(streams.with_response_lease(lease));
+            // The ready session holds the attachment from here; the queued hold ends
+            // without a detach.
+            cleanup = AttachmentCleanup::new(
+                accepted
+                    .durable_streams
+                    .clone()
+                    .filter(|_| !accepted.joined_origin_observer),
+            );
         }
-        // Observation must never run attachment cleanup, even while the original is current.
-        let durable_attachment = accepted
-            .durable_streams
-            .clone()
-            .filter(|_| !accepted.joined_origin_observer);
         let native_tool = start.external_tool.is_some();
         *response_lease.lock().unwrap() = accepted
             .durable_streams
@@ -324,6 +407,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             match durable_streams.input_high_waters().await {
                 Ok(high_waters) => high_waters,
                 Err(error) => {
+                    cleanup.observe_error(&error);
                     tracing::warn!(
                         target = ?start.target,
                         attempt_id = ?start.attempt_id,
@@ -435,11 +519,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             _ = acceptance_forwarded => {}
             _ = responses.closed() => return,
         }
+        if let Err(error) = observation.check_observation() {
+            cleanup.observe(CleanupEvent::of_observation_failure(&error));
+            send_worker_failure(&responses, error).await;
+            return;
+        }
         if accepted.joined_origin_observer {
             let streams = accepted.durable_streams.as_ref().expect("durable observer");
             // No controls, pumps, finalization, or detach are permitted on this path.
             let observe = async {
-                let mut completed = early_output;
                 let result = loop {
                     if let Some(result) = streams.persisted_result().await.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))? {
                         break result;
@@ -453,17 +541,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         outcome.map_err(|details| WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned()))?;
                         return Err(WorkerExecutorError::runtime("session finished successfully without a persisted result"));
                     }
-                    if let Some(output) = completed.take() {
+                    if !observation.is_in_flight() {
                         if let Some(result) = streams.persisted_result().await.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))? {
                             break result;
                         }
-                        output?;
+                        if let InvocationObservation::InvocationFailed(error) = &observation {
+                            return Err((**error).clone());
+                        }
                         return Err(WorkerExecutorError::runtime("invocation finished without a persisted result"));
                     }
                     tokio::select! {
                         result = streams.wait_persisted_result() => { result.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?; },
                         outcome = streams.wait_persisted_finished() => { outcome.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?.ok(); },
-                        output = &mut invocation => completed = Some(output),
+                        () = observation.wait_for_completion() => observation.check_observation()?,
                     }
                 };
                 let new_stream_mappings = result.proto_mappings();
@@ -480,8 +570,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }).await.is_err() {
                     return Ok::<_, WorkerExecutorError>(());
                 }
-                let outcome = streams.wait_persisted_finished().await
-                    .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+                let finished = streams.wait_persisted_finished();
+                tokio::pin!(finished);
+                let outcome = tokio::select! {
+                    biased;
+                    outcome = &mut finished => outcome,
+                    () = observation.wait_for_completion() => {
+                        observation.check_observation()?;
+                        finished.await
+                    },
+                }.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
                 match outcome {
                     Ok(()) => {
                         let _ = responses.send(InvocationResponse {
@@ -517,8 +615,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
         if accepted.durable_replayed
             && let Some(streams) = &accepted.durable_streams
-            && streams.ensure_current_attachment().await.is_err()
+            && let Err(error) = streams.ensure_current_attachment().await
         {
+            // An unsuccessful authority check is not a transport detach.
+            cleanup.observe_error(&error);
+            cleanup.observe(CleanupEvent::AuthorityEnded);
             let _ = responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::AttachmentRevoked(
@@ -543,8 +644,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             route_durable_request(durable_streams, &responses, &state, request)
                                 .await
                         {
-                            end_attachment_on_failure(durable_streams, &responses, &high_waters, details, async {
-                                let _ = durable_streams.pump_output_streams(&responses).await;
+                            end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, details, async {
+                                durable_streams.pump_output_streams(&responses).await
                             }).await;
                             return;
                         }
@@ -554,7 +655,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }
             }
-            let mut completed_output = early_output;
             let early_output_ids = accepted.prepared.as_ref().map(|prepared| prepared.stream_mappings.iter()
                 .filter(|mapping| mapping.role.direction() == SessionStreamRole::Output)
                 .map(|mapping| mapping.transport_stream_id).collect::<Vec<_>>()).unwrap_or_default();
@@ -571,7 +671,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             let persisted_result = match persisted_invocation_result(durable_streams, native_tool).await {
                 Ok(Some(result)) => Some(result),
-                Ok(None) if completed_output.is_some() => None,
+                Ok(None) if !observation.is_in_flight() => None,
                 Ok(None) => {
                     let mut result = Box::pin(async {
                         loop {
@@ -591,6 +691,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     .map_err(|error| SessionError::from(format!("durable output pump task failed: {error}")))
                                     .and_then(|result| result);
                                 if let Err(error) = result {
+                                    cleanup.observe_error(&error);
                                     if !ends_only_the_attachment(&error) {
                                         send_protocol_failure(&responses, error).await;
                                     }
@@ -600,31 +701,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             result = &mut result => match result {
                                 Ok(result) => break Some(result),
                                 Err(error) => {
+                                    cleanup.observe_error(&error);
                                     send_protocol_failure(&responses, error).await;
                                     return;
                                 }
                             },
-                            output = &mut invocation => match output {
-                                Ok(output) => {
-                                    completed_output = Some(Ok(output));
-                                    drop(result);
-                                    match persisted_invocation_result(durable_streams, native_tool).await {
-                                        Ok(result) => break result,
-                                        Err(error) => {
-                                            send_protocol_failure(&responses, error).await;
-                                            return;
-                                        }
-                                    }
+                            () = observation.wait_for_completion() => {
+                                if let Err(error) = observation.check_observation() {
+                                    cleanup.observe(CleanupEvent::of_observation_failure(&error));
+                                    send_worker_failure(&responses, error).await;
+                                    return;
                                 }
-                                Err(error) => {
-                                    completed_output = Some(Err(error));
-                                    drop(result);
-                                    match persisted_invocation_result(durable_streams, native_tool).await {
-                                        Ok(result) => break result,
-                                        Err(error) => {
-                                            send_protocol_failure(&responses, error).await;
-                                            return;
-                                        }
+                                drop(result);
+                                match persisted_invocation_result(durable_streams, native_tool).await {
+                                    Ok(result) => break result,
+                                    Err(error) => {
+                                        cleanup.observe_error(&error);
+                                        send_protocol_failure(&responses, error).await;
+                                        return;
                                     }
                                 }
                             },
@@ -636,9 +730,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                         &state,
                                         request,
                                     ).await {
-                                        end_attachment_on_failure(durable_streams, &responses, &high_waters, details, async {
-                                            while output_pump.join_next().await.is_some() {}
-                                        }).await;
+                                        end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, details, join_output_pumps(&mut output_pump)).await;
                                         return;
                                     }
                                 }
@@ -647,6 +739,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 }
                             },
                             revocation = &mut attachment_revoked => {
+                                cleanup.observe(CleanupEvent::AuthorityEnded);
                                 send_attachment_revocation(&responses, revocation).await;
                                 return;
                             },
@@ -654,26 +747,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }
                 Err(error) => {
+                    cleanup.observe_error(&error);
                     send_protocol_failure(&responses, error).await;
                     return;
                 }
             };
-            if matches!(completed_output, Some(Err(_))) {
-                let Some(Err(error)) = completed_output.take() else {
-                    unreachable!("completed output was checked to contain an error");
-                };
+            if let InvocationObservation::InvocationFailed(error) = &observation {
                 let details = error.to_string();
                 if let Err(finish_error) = durable_streams.fail_invocation(details).await {
+                    cleanup.observe_error(&finish_error);
                     send_protocol_failure(&responses, finish_error).await;
                     return;
                 }
                 if persisted_result.is_none() {
-                    let _ = durable_streams.pump_input_cancellations(&responses, &high_waters).await;
-                    while output_pump.join_next().await.is_some() {}
-                    send_worker_failure(&responses, error).await;
+                    if let Err(error) = durable_streams
+                        .pump_input_cancellations(&responses, &high_waters).await
+                        && matches!(&error, SessionError::Unreadable(unreadable) if unreadable.is_transient())
+                    {
+                        cleanup.observe_error(&error);
+                        send_protocol_failure(&responses, error).await;
+                        return;
+                    }
+                    if let Err(error) = join_output_pumps(&mut output_pump).await {
+                        cleanup.observe_error(&error);
+                    }
+                    send_worker_failure(&responses, (**error).clone()).await;
                     return;
                 }
-                completed_output = Some(Err(error));
             }
             let Some(persisted_result) = persisted_result else {
                 send_protocol_failure(
@@ -717,31 +817,41 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             output_pump.spawn(async move {
                 output_streams.pump_output_streams_once(&HashMap::new(), &result_mapping_ids, &result_mapping_ids, &pumped_outputs, &output_responses).await
             });
-            let mut output_pump_finished = false;
-            while completed_output.is_none() || !output_pump_finished {
+            while observation.is_in_flight() || !output_pump.is_empty() {
                 tokio::select! {
-                    output = &mut invocation, if completed_output.is_none() => match output {
-                        Ok(output) => {
-                            completed_output = Some(Ok(output));
-                        },
-                        Err(error) => {
+                    () = observation.wait_for_completion() => {
+                        if let Err(error) = observation.check_observation() {
+                            cleanup.observe(CleanupEvent::of_observation_failure(&error));
+                            send_worker_failure(&responses, error).await;
+                            return;
+                        }
+                        if let InvocationObservation::InvocationFailed(error) = observation {
                             let details = error.to_string();
                             if let Err(finish_error) = durable_streams
                                 .fail_invocation(details)
                                 .await
                             {
+                                cleanup.observe_error(&finish_error);
                                 send_protocol_failure(&responses, finish_error).await;
                                 return;
                             }
-                            let _ = durable_streams
+                            if let Err(error) = durable_streams
                                 .pump_input_cancellations(&responses, &high_waters)
-                                .await;
-                            while output_pump.join_next().await.is_some() {}
-                            send_worker_failure(&responses, error).await;
+                                .await
+                                && matches!(&error, SessionError::Unreadable(unreadable) if unreadable.is_transient())
+                            {
+                                cleanup.observe_error(&error);
+                                send_protocol_failure(&responses, error).await;
+                                return;
+                            }
+                            if let Err(error) = join_output_pumps(&mut output_pump).await {
+                                cleanup.observe_error(&error);
+                            }
+                            send_worker_failure(&responses, *error).await;
                             return;
                         }
                     },
-                    result = output_pump.join_next(), if !output_pump_finished => {
+                    result = output_pump.join_next(), if !output_pump.is_empty() => {
                         let result = match result {
                             Some(Ok(result)) => result,
                             Some(Err(error)) => Err(format!(
@@ -749,16 +859,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             ).into()),
                             None => Err("durable output pump task stopped unexpectedly".to_string().into()),
                         };
-                        match result {
-                            Ok(()) => {
-                                output_pump_finished = output_pump.is_empty();
-                            },
-                            Err(error) => {
-                                end_attachment_on_failure(durable_streams, &responses, &high_waters, error, async {
-                                    while output_pump.join_next().await.is_some() {}
-                                }).await;
-                                return;
-                            }
+                        if let Err(error) = result {
+                            end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, error, join_output_pumps(&mut output_pump)).await;
+                            return;
                         }
                     },
                     request = inbound.message() => match request {
@@ -769,9 +872,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 &state,
                                 request,
                             ).await {
-                                end_attachment_on_failure(durable_streams, &responses, &high_waters, details, async {
-                                    while output_pump.join_next().await.is_some() {}
-                                }).await;
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, details, join_output_pumps(&mut output_pump)).await;
                                 return;
                             }
                         }
@@ -781,22 +882,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                     },
                     revocation = &mut attachment_revoked => {
+                        cleanup.observe(CleanupEvent::AuthorityEnded);
                         output_pump.shutdown().await;
                         send_attachment_revocation(&responses, revocation).await;
                         return;
                     }
                 }
             }
-            if let Some(Err(error)) = completed_output.take() {
-                let _ = durable_streams.pump_input_cancellations(&responses, &high_waters).await;
-                send_worker_failure(&responses, error).await;
+            if let InvocationObservation::InvocationFailed(error) = observation {
+                if let Err(error) = durable_streams
+                    .pump_input_cancellations(&responses, &high_waters).await
+                    && matches!(&error, SessionError::Unreadable(unreadable) if unreadable.is_transient())
+                {
+                    cleanup.observe_error(&error);
+                    send_protocol_failure(&responses, error).await;
+                    return;
+                }
+                send_worker_failure(&responses, *error).await;
                 return;
             }
             if let Err(error) = durable_streams.complete().await {
+                cleanup.observe_error(&error);
                 send_protocol_failure(&responses, error).await;
                 return;
             }
             if let Err(error) = durable_streams.pump_input_cancellations(&responses, &high_waters).await {
+                cleanup.observe_error(&error);
                 send_protocol_failure(&responses, error).await;
                 return;
             }
@@ -817,7 +928,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 &state,
                                 request,
                             ).await {
-                                end_attachment_on_failure(durable_streams, &responses, &high_waters, details, async {}).await;
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, details, async { Ok(()) }).await;
                                 return;
                             }
                         }
@@ -826,6 +937,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                     },
                     revocation = &mut attachment_revoked => {
+                        cleanup.observe(CleanupEvent::AuthorityEnded);
                         send_attachment_revocation(&responses, revocation).await;
                         return;
                     },
@@ -864,36 +976,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
-        let output = match early_output {
-            Some(output) => output,
-            None => {
-                tokio::select! {
-                    result = &mut invocation => result,
-                    request = inbound.message() => {
-                        if let Ok(Some(request)) = request {
-                            let details = state
-                                .lock()
-                                .await
-                                .validate_trusted_request(&request)
-                                .err()
-                                .unwrap_or_else(|| {
-                                    "scalar invocation received an unexpected stream-control request"
-                                        .to_string()
-                                });
-                            send_protocol_failure(&responses, details).await;
-                        }
-                        return;
+        if observation.is_in_flight() {
+            tokio::select! {
+                () = observation.wait_for_completion() => {},
+                request = inbound.message() => {
+                    if let Ok(Some(request)) = request {
+                        let details = state
+                            .lock()
+                            .await
+                            .validate_trusted_request(&request)
+                            .err()
+                            .unwrap_or_else(|| {
+                                "scalar invocation received an unexpected stream-control request"
+                                    .to_string()
+                            });
+                        send_protocol_failure(&responses, details).await;
                     }
+                    return;
                 }
             }
-        };
+        }
 
-        let output = match output {
-            Ok(output) => output,
-            Err(error) => {
-                send_worker_failure(&responses, error).await;
+        let output = match observation {
+            InvocationObservation::Succeeded(output) => *output,
+            InvocationObservation::InvocationFailed(error)
+            | InvocationObservation::ObservationFailed(error) => {
+                send_worker_failure(&responses, *error).await;
                 return;
             }
+            InvocationObservation::InFlight(_) => unreachable!("scalar invocation was not observed"),
         };
         // Only an awaited method invocation queues its acceptance until readiness; lookup,
         // trigger, schedule and tool sessions never receive a separate readiness frame.
@@ -988,6 +1099,60 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await;
         })
         .await;
-        detach_durable_attachment(durable_attachment).await;
+        cleanup.finish().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::FutureExt;
+    use std::future::ready;
+    use test_r::test;
+
+    #[test]
+    fn joined_observer_reports_read_errors_without_repolling_an_observed_invocation() {
+        let cancelled = WorkerExecutorError::InvocationCancelled;
+        let mut observation = InvocationObservation::accepted(ready(Err(cancelled.clone())), None);
+        observation.wait_for_completion().now_or_never().unwrap();
+        assert!(
+            matches!(&observation, InvocationObservation::InvocationFailed(error) if **error == cancelled)
+        );
+        assert!(observation.check_observation().is_ok());
+        assert!(observation.wait_for_completion().now_or_never().is_none());
+
+        let outage = WorkerExecutorError::recovery_required("temporary result read failure");
+        let mut observation = InvocationObservation::accepted(ready(Err(outage.clone())), None);
+        observation.wait_for_completion().now_or_never().unwrap();
+        assert_eq!(observation.check_observation(), Err(outage.clone()));
+        assert!(observation.wait_for_completion().now_or_never().is_none());
+
+        let mut early =
+            InvocationObservation::accepted(ready(Err(cancelled)), Some(Err(outage.clone())));
+        assert_eq!(early.check_observation(), Err(outage));
+        assert!(early.wait_for_completion().now_or_never().is_none());
+    }
+
+    #[test]
+    fn accepted_observer_keeps_scalar_output() {
+        let output = AgentInvocationOutput {
+            result: AgentInvocationResult::AgentInitialization,
+            consumed_fuel: Some(42),
+            invocation_status: None,
+            component_revision: None,
+            agent_id: None,
+            idempotency_key: None,
+            oplog_index: None,
+            agent_fingerprint: None,
+            background_failure: None,
+        };
+        let mut observation = InvocationObservation::accepted(
+            ready(Err(WorkerExecutorError::InvocationCancelled)),
+            Some(Ok(output.clone())),
+        );
+        assert!(observation.wait_for_completion().now_or_never().is_none());
+        assert!(
+            matches!(observation, InvocationObservation::Succeeded(observed) if *observed == output)
+        );
     }
 }

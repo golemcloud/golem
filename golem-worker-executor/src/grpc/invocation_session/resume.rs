@@ -12,17 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::attachment::{AttachmentCleanup, CleanupEvent};
 use super::{
     Arc, HasAll, HashMap, InvocationAccepted, InvocationRejected, InvocationRequest,
     InvocationResponse, InvocationSessionResult, InvocationSessionState, InvocationStart,
     PersistedInvocationTarget, ResponseLease, ResumeAttach, SessionError, SessionStreamRole,
     UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, build_resume_attempt,
-    detach_durable_attachment, durable_stream_mapping_to_proto, ends_only_the_attachment,
-    invocation_response, is_attachment_termination, mpsc, persisted_result_and_finished,
+    durable_stream_mapping_to_proto, ends_only_the_attachment, invocation_response,
+    is_attachment_termination, mpsc, persisted_result_and_finished,
     pre_acceptance_rejection_reason, resumed_input_schema, route_durable_request,
     send_attachment_revocation, send_protocol_failure, send_resumed_finished,
     until_response_closed, with_input_server_terminals,
 };
+
+/// Why Resume stops before its acceptance.
+enum ResumeStop {
+    /// The worker refused or failed the resume.
+    Failed(WorkerExecutorError),
+    /// The check of the queued attachment failed after readiness.
+    AttachmentCheck,
+}
+
+impl From<WorkerExecutorError> for ResumeStop {
+    fn from(error: WorkerExecutorError) -> Self {
+        Self::Failed(error)
+    }
+}
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -38,8 +53,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) {
         let rejection_identity = (resume.idempotency_key, resume.agent_id);
         let mut was_queued = false;
-        let mut attachment_ended = false;
         let mut captured_method_input = None;
+        // Until a queued attachment is found, this transport holds nothing.
+        let mut queued_cleanup = AttachmentCleanup::new(None);
         let result = async {
             Self::validate_auth_ctx(&resume.auth_ctx)?;
             let attempt = build_resume_attempt(
@@ -106,6 +122,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })) };
                 protocol_state.validate_response(&pending).map_err(WorkerExecutorError::runtime)?;
                 was_queued = true;
+                queued_cleanup = AttachmentCleanup::new(Some(streams.clone()));
                 *response_lease.lock().unwrap() = streams.response_lease();
                 let wait = async {
                     outward.send(pending).await.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
@@ -116,26 +133,36 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }.await;
                 if let Err(error) = wait {
-                    detach_durable_attachment(Some(streams)).await;
-                    return Err(error);
+                    queued_cleanup.observe(CleanupEvent::of_observation_failure(&error));
+                    return Err(error.into());
                 }
-                if streams.ensure_current_attachment().await.is_err() {
-                    send_attachment_revocation(&outward, Ok(())).await;
-                    attachment_ended = true;
-                    return Err(WorkerExecutorError::runtime("queued resume attachment was fenced"));
+                if let Err(error) = streams.ensure_current_attachment().await {
+                    queued_cleanup.observe_error(&error);
+                    queued_cleanup.observe(CleanupEvent::AuthorityEnded);
+                    return Err(ResumeStop::AttachmentCheck);
                 }
             }
-            worker.resume_durable_streaming_invocation(attempt).await
+            Ok::<_, ResumeStop>(
+                worker
+                    .resume_durable_streaming_invocation(attempt)
+                    .await
+                    .inspect_err(|error| {
+                        queued_cleanup.observe(CleanupEvent::of_failed_resume(error))
+                    })?,
+            )
         }
         .await;
         let mut acceptance = match result {
             Ok(acceptance) => acceptance,
-            Err(error) => {
-                if attachment_ended {
-                    return;
-                }
+            Err(ResumeStop::AttachmentCheck) => {
+                send_attachment_revocation(&outward, Ok(())).await;
+                queued_cleanup.finish().await;
+                return;
+            }
+            Err(ResumeStop::Failed(error)) => {
                 if was_queued {
                     super::send_worker_failure(&outward, error).await;
+                    queued_cleanup.finish().await;
                     return;
                 }
                 tracing::warn!(
@@ -162,8 +189,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
         };
-        let durable_attachment = acceptance.streams.clone();
-        *response_lease.lock().unwrap() = durable_attachment.response_lease();
+        // The accepted session holds the attachment from here; the queued hold ends without a
+        // detach.
+        drop(queued_cleanup);
+        *response_lease.lock().unwrap() = acceptance.streams.response_lease();
+        let mut cleanup = AttachmentCleanup::new(Some(acceptance.streams.clone()));
         let forwarder_stopped = tokio_util::sync::CancellationToken::new();
         until_response_closed(&outward, &forwarder_stopped, async {
             let result = async {
@@ -173,7 +203,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .invocation
                     .target_component_revision;
                 let (input_schema, input_element_types) =
-                    resumed_input_schema(&acceptance.prepared)?;
+                    resumed_input_schema(&acceptance.prepared)
+                        .map_err(|error| error.at(acceptance.prepared_index))?;
                 acceptance.streams = acceptance.streams.clone().with_input_schema(
                     Arc::new(input_schema),
                     component_revision,
@@ -212,6 +243,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (acceptance, cursor_map, terminal_cursor_stream_ids) = match result {
             Ok(result) => result,
             Err(error) => {
+                cleanup.observe(CleanupEvent::of_observation_failure(&error));
                 tracing::warn!(
                     agent_id = ?resume.agent_id,
                     attempt_id = ?resume.attempt_id,
@@ -268,6 +300,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let high_waters = match streams.input_high_waters().await {
             Ok(high_waters) => high_waters,
             Err(error) => {
+                cleanup.observe_error(&error);
                 send_protocol_failure(&responses, error).await;
                 drop(responses);
                 let _ = forwarder.await;
@@ -356,6 +389,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return;
         }
         if acceptance.replayed && streams.ensure_current_attachment().await.is_err() {
+            cleanup.observe(CleanupEvent::AuthorityEnded);
             let _ = responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::AttachmentRevoked(
@@ -401,6 +435,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 match persisted_result_and_finished(&streams, native_tool).await {
                     Ok(outcome) => outcome,
                     Err(error) => {
+                        cleanup.observe_error(&error);
                         send_protocol_failure(&responses, error).await;
                         return;
                     }
@@ -415,6 +450,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .map_err(|error| SessionError::from(format!("durable output pump task failed: {error}")))
                         .and_then(|result| result);
                     if let Err(error) = result {
+                        cleanup.observe_error(&error);
                         if !ends_only_the_attachment(&error) {
                             send_protocol_failure(&responses, error).await;
                         }
@@ -424,6 +460,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request = inbound.message() => match request {
                     Ok(Some(request)) => {
                         if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
+                            cleanup.observe_error(&error);
                             if !ends_only_the_attachment(&error) {
                                 send_protocol_failure(&responses, error).await;
                             }
@@ -433,6 +470,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     Ok(None) | Err(_) => return,
                 },
                 revocation = &mut attachment_revoked => {
+                    cleanup.observe(CleanupEvent::AuthorityEnded);
                     send_attachment_revocation(&responses, revocation).await;
                     return;
                 },
@@ -472,6 +510,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let root_output_mapping_ids = match streams.session_root_output_mapping_ids().await {
             Ok(root_output_mapping_ids) => root_output_mapping_ids,
             Err(error) => {
+                cleanup.observe_error(&error);
                 send_protocol_failure(&responses, error).await;
                 return;
             }
@@ -503,6 +542,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         match result {
                             Err(error) if is_attachment_termination(&error) => {}
                             Err(error) => {
+                                cleanup.observe_error(&error);
                                 if !ends_only_the_attachment(&error) {
                                     send_protocol_failure(&responses, error).await;
                                 }
@@ -515,6 +555,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     request = inbound.message() => match request {
                         Ok(Some(request)) => {
                             if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
+                                cleanup.observe_error(&error);
                                 if !ends_only_the_attachment(&error) {
                                     send_protocol_failure(&responses, error).await;
                                 }
@@ -527,6 +568,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         },
                     },
                     revocation = &mut attachment_revoked => {
+                        cleanup.observe(CleanupEvent::AuthorityEnded);
                         output_pump.shutdown().await;
                         send_attachment_revocation(&responses, revocation).await;
                         return;
@@ -541,12 +583,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return;
         }
         if let Err(error) = streams.complete().await {
+            cleanup.observe_error(&error);
             send_protocol_failure(&responses, error).await;
             drop(responses);
             let _ = forwarder.await;
             return;
         }
         if let Err(error) = streams.pump_input_cancellations(&responses, &high_waters).await {
+            cleanup.observe_error(&error);
             send_protocol_failure(&responses, error).await;
             drop(responses);
             let _ = forwarder.await;
@@ -560,6 +604,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request = inbound.message() => match request {
                     Ok(Some(request)) => {
                         if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
+                            cleanup.observe_error(&error);
                             if !ends_only_the_attachment(&error) {
                                 send_protocol_failure(&responses, error).await;
                             }
@@ -569,6 +614,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     Ok(None) | Err(_) => return,
                 },
                 revocation = &mut attachment_revoked => {
+                    cleanup.observe(CleanupEvent::AuthorityEnded);
                     send_attachment_revocation(&responses, revocation).await;
                     return;
                 },
@@ -576,12 +622,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
         match result {
             Ok(result) => send_resumed_finished(&responses, result).await,
-            Err(error) => send_protocol_failure(&responses, error).await,
+            Err(error) => {
+                cleanup.observe_error(&error);
+                send_protocol_failure(&responses, error).await;
+            }
         }
         drop(responses);
         let _ = forwarder.await;
         })
         .await;
-        detach_durable_attachment(Some(durable_attachment)).await;
+        cleanup.finish().await;
     }
 }

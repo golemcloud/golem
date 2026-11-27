@@ -178,13 +178,9 @@ pub(crate) fn calculate_entity_replay_progress(
                         bytes,
                         cached: None,
                     } => {
-                        decoded = try_deserialize::<StreamSessionRecord>(bytes)
-                            .map_err(|error| {
-                                format!("failed to decode consumer observation: {error}")
-                            })?
-                            .ok_or_else(|| {
-                                "unsupported consumer observation serialization".to_string()
-                            })?;
+                        decoded = decode::<StreamSessionRecord>(bytes).map_err(|error| {
+                            format!("failed to decode consumer observation: {error}")
+                        })?;
                         &decoded
                     }
                     OplogPayload::External { cached: None, .. } => {

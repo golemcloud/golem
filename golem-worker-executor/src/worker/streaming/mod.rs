@@ -14,29 +14,96 @@
 
 use crate::worker::*;
 use golem_common::model::durable_stream::{AttachmentId, StreamInvocationId};
+use golem_common::serialization::DecodeError;
+use std::ops::ControlFlow;
+
+use super::ingress::EnqueueInvocationOutcome;
+use super::state_actor::StoredAppend;
+
+struct StreamRecoveryWake(WorkerExecutorError);
+
+struct FailedStreamRecoveryWake {
+    read_error: WorkerExecutorError,
+    start_error: WorkerExecutorError,
+}
+
+impl StreamRecoveryWake {
+    fn after_committed_read(error: WorkerExecutorError) -> Result<Self, WorkerExecutorError> {
+        match InvocationObservationFailure::classify(&error) {
+            Some(InvocationObservationFailure::RetryableRead) => Ok(Self(error)),
+            _ => Err(error),
+        }
+    }
+
+    fn after_start(
+        self,
+        start: Result<(), WorkerExecutorError>,
+    ) -> ControlFlow<WorkerExecutorError, FailedStreamRecoveryWake> {
+        match start {
+            Ok(()) => ControlFlow::Break(self.0),
+            Err(error) if RetirementReason::of_error(&error).is_some() => ControlFlow::Break(error),
+            Err(start_error) => ControlFlow::Continue(FailedStreamRecoveryWake {
+                read_error: self.0,
+                start_error,
+            }),
+        }
+    }
+}
 
 /// Whether a request replays the retained stream attachment. A route session is created again
 /// with a fresh attempt and an expiry deadline computed at that creation, so it matches every
 /// other part of the retained acceptance, including the execution configuration. The binding
 /// checks the expiry policy. Any other session start must repeat the retained attempt exactly.
+///
+/// When the execution configuration is the only difference, the retained configuration must be
+/// readable. If it is not readable, the result is its decode error, not a mismatch.
 fn retained_acceptance_matches(
     retained: &StreamSessionAttachedRecord,
     requested: &golem_common::model::durable_stream::StreamSessionAcceptance,
     attempt_id: AttemptId,
-) -> bool {
-    match &requested.route_scope {
-        Some(_) => {
-            retained.acceptance
-                == golem_common::model::durable_stream::StreamSessionAcceptance {
-                    expiry_deadline_millis: retained.acceptance.expiry_deadline_millis,
-                    ..requested.clone()
-                }
-        }
-        None => retained.acceptance == *requested && retained.attempt_id == attempt_id,
+) -> Result<bool, DecodeError> {
+    let (expected, same_attempt) = match &requested.route_scope {
+        Some(_) => (
+            golem_common::model::durable_stream::StreamSessionAcceptance {
+                expiry_deadline_millis: retained.acceptance.expiry_deadline_millis,
+                ..requested.clone()
+            },
+            true,
+        ),
+        None => (requested.clone(), retained.attempt_id == attempt_id),
+    };
+    if !same_attempt {
+        return Ok(false);
     }
+    if retained.acceptance == expected {
+        return Ok(true);
+    }
+    if retained.acceptance
+        == (golem_common::model::durable_stream::StreamSessionAcceptance {
+            execution_config: retained.acceptance.execution_config.clone(),
+            ..expected
+        })
+    {
+        sessions::decode_stream_execution(&retained.acceptance.execution_config)?;
+    }
+    Ok(false)
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Whether a request repeats the stream attachment retained at `index`, under the rule of
+    /// `retained_acceptance_matches`. An unreadable retained execution configuration is a read
+    /// error of the entry at `index`.
+    pub(crate) fn retained_attachment_matches(
+        &self,
+        index: OplogIndex,
+        retained: &StreamSessionAttachedRecord,
+        requested: &golem_common::model::durable_stream::StreamSessionAcceptance,
+        attempt_id: AttemptId,
+    ) -> Result<bool, WorkerExecutorError> {
+        retained_acceptance_matches(retained, requested, attempt_id)
+            .map_err(|error| self.stream_execution_config_read_error(index, error))
+    }
+
     pub(in crate::worker) async fn ensure_matching_stream_attachment(
         &self,
         requested: &StreamSessionAttachedRecord,
@@ -44,18 +111,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let producer = self.durable_stream_producer().await?;
         let key =
             producer.qualify_session(&StreamRegistrationInvocation::Local(requested.session_key));
-        if let Some(retained) = self
-            .stream_session_records(&key, None)
-            .await?
-            .into_iter()
-            .find_map(|record| {
-                if let StreamSessionRecord::Attached(record) = record {
-                    Some(record)
-                } else {
-                    None
-                }
-            })
-            && !retained_acceptance_matches(&retained, &requested.acceptance, requested.attempt_id)
+        if let Some((index, retained)) = self.retained_stream_attachment(&key).await?
+            && !self.retained_attachment_matches(
+                index,
+                &retained,
+                &requested.acceptance,
+                requested.attempt_id,
+            )?
         {
             return Err(WorkerExecutorError::invalid_request(
                 "AttemptConflict: stream acceptance differs from the retained request",
@@ -86,12 +148,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if acceptance.public_session_id.is_empty() {
                 acceptance.public_session_id = key.to_string();
             }
-            let existing = worker.stream_session_records(&session_key, None).await?
-                .into_iter().find_map(|record| if let StreamSessionRecord::Attached(record) = record {
-                    Some(record)
-                } else { None });
-            let (attached, replayed) = if let Some(attached) = existing {
-                if !retained_acceptance_matches(&attached, &acceptance, attempt_id) {
+            let existing = worker.retained_stream_attachment(&session_key).await?;
+            let (attached, replayed) = if let Some((index, attached)) = existing {
+                if !worker.retained_attachment_matches(index, &attached, &acceptance, attempt_id)? {
                     return Err(WorkerExecutorError::invalid_request("AttemptConflict: stream acceptance does not match the retained request"));
                 }
                 (attached, true)
@@ -102,7 +161,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let AgentInvocation::AgentMethod { scope_card: Some(card), .. } = &invocation {
                     crate::services::card::validate_scope_card(worker.card_service().as_ref(), card).await?;
                 }
-                let attached = StreamSessionAttachedRecord {
+                let mut attached = StreamSessionAttachedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: key,
                     attachment_id: AttachmentId::primary(worker.owned_agent_id.environment_id, &worker.owned_agent_id.agent_id, &key)
@@ -114,12 +173,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 };
                 worker.schedule_stream_session_expiry(attached.acceptance.public_session_id.clone(), key,
                     attached.acceptance.expiry_deadline_millis).await?;
-                worker.enqueue_worker_invocation_with_attachment(invocation,
-                    read_only_cache::InvocationEffect::UnknownAssumeMutating, None, Some(attached.clone())).await?;
-                let attached = worker.stream_session_records(&session_key, None).await?
-                    .into_iter().find_map(|record| if let StreamSessionRecord::Attached(attached) = record { Some(attached) } else { None })
-                    .ok_or_else(|| WorkerExecutorError::runtime("committed invocation has no stream attachment"))?;
-                (attached, false)
+                match worker.enqueue_worker_invocation_with_attachment(invocation,
+                    read_only_cache::InvocationEffect::UnknownAssumeMutating, None, Some(attached.clone())).await? {
+                    EnqueueInvocationOutcome::Appended { stored: StoredAppend::Reported(index), .. } => {
+                        attached.pending_invocation_oplog_index = index;
+                        (attached, false)
+                    }
+                    EnqueueInvocationOutcome::Existing => {
+                        let (_, retained) = worker.retained_stream_attachment(&session_key).await?
+                            .ok_or_else(|| WorkerExecutorError::runtime("committed invocation has no stream attachment"))?;
+                        (retained, true)
+                    }
+                    EnqueueInvocationOutcome::Appended { stored: StoredAppend::Unreported(error), .. } => {
+                        drop(_session);
+                        return Err(worker.resolve_committed_invocation_failure(error.into()).await);
+                    }
+                }
             };
             worker.schedule_stream_session_expiry(attached.acceptance.public_session_id.clone(), key,
                 attached.acceptance.expiry_deadline_millis).await?;
@@ -164,7 +233,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
             .status
-            .map_err(WorkerExecutorError::runtime)?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
             .and_then(|status| status.attachment_epoch)
             .unwrap_or(epoch);
         Ok(StreamSession::open(
@@ -222,14 +291,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|_| WorkerExecutorError::invalid_request("Cannot resume a deleting worker"))?;
         let records = self
             .stream_session_records(&attempt.session_key, Some(attempt.attempt_id))
-            .await?;
+            .await?
+            .records;
         if records
             .iter()
-            .any(|record| matches!(record, StreamSessionRecord::Prepared(_)))
+            .any(|(_, record)| matches!(record, StreamSessionRecord::Prepared(_)))
         {
             return Ok(None);
         }
-        let attached = records.iter().find_map(|record| {
+        let attached = records.iter().find_map(|(_, record)| {
             if let StreamSessionRecord::Attached(record) = record {
                 Some(record.clone())
             } else {
@@ -261,7 +331,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "queued invocation has no output cursors",
             ));
         }
-        for record in &records {
+        for (_, record) in &records {
             if let StreamSessionRecord::ResumeAttempt(record) = record
                 && record.attempt.attempt_id == attempt.attempt_id
             {
@@ -338,7 +408,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .ok_or_else(|| {
                         WorkerExecutorError::runtime("ready session has no attachment status")
                     })?;
-                let (graph, elements) = crate::grpc::resumed_input_schema(&prepared)?;
+                let (graph, elements) =
+                    crate::grpc::resumed_input_schema(&prepared).map_err(|error| {
+                        match status.first_prepared {
+                            Some(index) => error.at(index).into(),
+                            None => WorkerExecutorError::from(error),
+                        }
+                    })?;
                 let streams = streams
                     .with_attachment(
                         status.attachment_epoch.unwrap_or_default(),
@@ -506,14 +582,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Err(self.retirement_error());
         }
         let session_key = request.attempt.session_key.clone();
-        let records = self.stream_session_records(&session_key, None).await?;
+        let records = self
+            .stream_session_records(&session_key, None)
+            .await?
+            .records;
         let status = self
             .oplog
             .raw_durable_stream_session_status(&session_key)
             .await
             .status
-            .map_err(WorkerExecutorError::runtime)?;
-        let initial_epoch = match records.iter().find_map(|record| match record {
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        let initial_epoch = match records.iter().find_map(|(_, record)| match record {
             StreamSessionRecord::Attached(attached) => Some(attached.epoch),
             _ => None,
         }) {
@@ -523,8 +602,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .unwrap_or(epoch),
             None => producer.attachment_epoch_floor(),
         };
-        let mut prepared_records = records.iter().filter_map(|record| match record {
-            StreamSessionRecord::Prepared(prepared) => Some(prepared.clone()),
+        let mut prepared_records = records.iter().filter_map(|(index, record)| match record {
+            StreamSessionRecord::Prepared(prepared) => Some((*index, prepared.clone())),
             _ => None,
         });
         let existing_prepared = prepared_records.next();
@@ -535,7 +614,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         if existing_prepared
             .as_ref()
-            .is_some_and(|prepared| prepared.route_scope != route_scope)
+            .is_some_and(|(_, prepared)| prepared.route_scope != route_scope)
         {
             return Err(WorkerExecutorError::invalid_request(
                 "IdempotencyConflict: the durable stream session belongs to a different route",
@@ -592,7 +671,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None
         };
 
-        let prepared = if let Some(prepared) = existing_prepared {
+        let prepared = if let Some((prepared_index, prepared)) = existing_prepared {
             let mut requested_attempt = request.attempt.clone();
             let requested_handles = if foreign_mappings.is_empty() {
                 let mut handles = Vec::with_capacity(request.registrations.len());
@@ -601,10 +680,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         producer
                             .validate_registration(registration)
                             .await
-                            .map_err(|_| {
-                                WorkerExecutorError::invalid_request(
-                                    "IdempotencyConflict: persisted durable stream registration does not match the invocation descriptor",
-                                )
+                            .map_err(|error| match error {
+                                StreamStoreError::RegistrationDivergence => {
+                                    WorkerExecutorError::invalid_request(
+                                        "IdempotencyConflict: persisted durable stream registration does not match the invocation descriptor",
+                                    )
+                                }
+                                error => SessionError::from(error)
+                                    .into_worker_executor_error(WorkerExecutorError::runtime),
                             })?,
                     );
                 }
@@ -634,6 +717,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     || prepared.attempt.invocation.stream_handles
                         != requested_attempt.invocation.stream_handles)
                 && same_origin_stream_invocation(&prepared.attempt, &requested_attempt)
+                    .map_err(|error| self.stream_origin_read_error(prepared_index, error))?
                 && prepared.stream_mappings.len() == foreign_mappings.len()
                 && prepared
                     .stream_mappings
@@ -652,6 +736,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 DurableStreamingAcceptanceMatch::StreamSlotSession => true,
             };
             if !descriptor_matches && !joined_origin {
+                self.validate_retained_stream_descriptor_config(
+                    prepared_index,
+                    &prepared.attempt.invocation,
+                    &requested_attempt.invocation,
+                )?;
                 return Err(WorkerExecutorError::invalid_request(
                     "IdempotencyConflict: the invocation key is already bound to a different durable stream descriptor",
                 ));
@@ -809,7 +898,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         drop(expiry_publication_guard);
 
-        let mut attached_records = records.iter().filter_map(|record| match record {
+        let mut attached_records = records.iter().filter_map(|(_, record)| match record {
             StreamSessionRecord::Attached(attached) => Some(attached),
             _ => None,
         });
@@ -852,7 +941,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             || foreign_mappings.is_empty()
             || records
                 .iter()
-                .any(|record| matches!(record, StreamSessionRecord::Finished(_)))
+                .any(|(_, record)| matches!(record, StreamSessionRecord::Finished(_)))
         {
             &[][..]
         } else {
@@ -942,9 +1031,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 continue;
             }
             let mut retry_delay = Duration::from_millis(10);
-            // Not bounded: the pending invocation and its attachment are already committed, so
-            // stopping would report a failure for an invocation the agent still runs. Only an
-            // agent this executor no longer owns stops retrying.
+            // Leave this guard before recovering from unreadable history. Retry ordinary
+            // activation errors while the owner still has authority.
             loop {
                 if self.owner_retirement_requested.is_cancelled() {
                     return Err(self.retirement_error());
@@ -960,7 +1048,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // A refusal is permanent. Retrying it would hold the worker lifecycle lock
                     // forever, and the retirement that has to take that lock could never stop the
                     // agent.
-                    Err(error @ SessionError::Fenced(_)) => {
+                    Err(error @ (SessionError::Fenced(_) | SessionError::Unreadable(_))) => {
                         return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
                     }
                     Err(error) => {
@@ -1002,11 +1090,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(instance_guard);
         // The instance guard is dropped and a local RPC caller holds no task-scope bind, so a
         // deletion may already have stopped the state actor.
-        if matches!(
-            self.try_lookup_invocation_result(&prepared.attempt.session_key.idempotency_key)
-                .await?,
-            LookupResult::Pending
-        ) {
+        let lookup = match self
+            .try_lookup_invocation_result(&prepared.attempt.session_key.idempotency_key)
+            .await
+        {
+            Ok(lookup) => lookup,
+            Err(error) => return Err(self.resolve_committed_invocation_failure(error).await),
+        };
+        if matches!(lookup, LookupResult::Pending) {
             Worker::start_if_needed(self.clone()).await?;
         }
         Ok(DurableStreamingInvocationAcceptance {
@@ -1016,6 +1107,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             joined_origin_observer: joined_origin,
         })
     }
+
+    pub(super) async fn resolve_committed_invocation_failure(
+        self: &Arc<Self>,
+        error: WorkerExecutorError,
+    ) -> WorkerExecutorError {
+        let wake = match StreamRecoveryWake::after_committed_read(error) {
+            Ok(wake) => wake,
+            Err(refusal) => return refusal,
+        };
+
+        // The owned admission task runs this wake even if its waiter is gone.
+        let start = Worker::start_if_needed(self.clone()).await.map(|_| ());
+        let failure = match wake.after_start(start) {
+            ControlFlow::Continue(failure) => failure,
+            ControlFlow::Break(refusal) => return refusal,
+        };
+        warn!(
+            agent_id = %self.agent_id(),
+            error = %failure.start_error,
+            "Failed to wake a committed invocation after a history read error"
+        );
+        failure.read_error
+    }
+
     /// Resumes or takes over an existing durable streaming invocation.
     pub async fn resume_durable_streaming_invocation(
         self: &Arc<Self>,
@@ -1079,8 +1194,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
             })
             .await
-            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))??;
-        if !acceptance.replayed || acceptance.streams.ensure_current_attachment().await.is_ok() {
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        // A stored read error fails the owner when it runs; the session stays as it is.
+        let acceptance = match acceptance {
+            Ok(acceptance) => acceptance,
+            Err(error) => return Err(self.resolve_committed_invocation_failure(error).await),
+        };
+        let activate_foreign = if acceptance.replayed {
+            match acceptance.streams.ensure_current_attachment().await {
+                Ok(()) => true,
+                Err(error @ (SessionError::Unreadable(_) | SessionError::Fenced(_))) => {
+                    return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
+                }
+                Err(_) => false,
+            }
+        } else {
+            true
+        };
+        if activate_foreign {
             for mapping in &acceptance.mappings {
                 if !producer.owns_handle_identity(&mapping.handle) {
                     if mapping.role.direction() == SessionStreamRole::Input
@@ -1145,13 +1276,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Err(error.clone());
         }
 
-        let records = self
+        let sessions::RetainedStreamSessionRecords {
+            records,
+            acceptance_mappings,
+        } = self
             .stream_session_records(&attempt.session_key, Some(attempt.attempt_id))
             .await?;
-        let prepared = records
+        let (prepared_index, prepared) = records
             .iter()
-            .find_map(|record| match record {
-                StreamSessionRecord::Prepared(record) => Some(record.clone()),
+            .find_map(|(index, record)| match record {
+                StreamSessionRecord::Prepared(record) => Some((*index, record.clone())),
                 _ => None,
             })
             .ok_or_else(|| {
@@ -1159,6 +1293,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "NotFound: durable Stream Session preparation was not found",
                 )
             })?;
+        // The owner decodes this input when it runs, so an input that does not decode is a read
+        // error of the Prepared entry, not a refusal of this attempt.
+        crate::grpc::resumed_input_schema(&prepared).map_err(|error| error.at(prepared_index))?;
         if prepared.attempt.attempt_id == attempt.attempt_id {
             return Err(WorkerExecutorError::invalid_request(
                 "AttemptConflict: a Start attempt ID cannot be reused for resume or takeover",
@@ -1166,7 +1303,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let mut mappings = prepared.stream_mappings.clone();
-        for record in &records {
+        for (_, record) in &records {
             match record {
                 StreamSessionRecord::Mapping(record) => {
                     if !mappings.contains(&record.mapping) {
@@ -1202,6 +1339,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 _ => {}
             }
         }
+        acceptance_mappings.into_iter().for_each(|mapping| {
+            if !mappings.contains(&mapping) {
+                mappings.push(mapping);
+            }
+        });
 
         let materialized_mappings = producer
             .materialize_bindings(&mappings)
@@ -1222,7 +1364,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Ok(base_streams.clone().with_attachment(epoch, attempt_id))
         };
 
-        for record in &records {
+        for (_, record) in &records {
             if let StreamSessionRecord::ResumeAttempt(existing) = record
                 && existing.attempt.attempt_id == attempt.attempt_id
             {
@@ -1236,6 +1378,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 drop(session_guard);
                 return Ok(DurableStreamingResumeAcceptance {
                     prepared,
+                    prepared_index,
                     mappings: materialized_mappings,
                     streams,
                     epoch: existing.accepted_epoch,
@@ -1318,6 +1461,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
         Ok(DurableStreamingResumeAcceptance {
             prepared,
+            prepared_index,
             mappings: materialized_mappings,
             streams,
             epoch: accepted_epoch,
@@ -1338,6 +1482,47 @@ mod tests {
     use golem_common::model::{InvocationId, OplogIndex};
     use test_r::test;
 
+    /// After a failed committed read, a start that passes or a start that retires the worker
+    /// ends the wake with the read error or the retirement. Any other start failure continues
+    /// with both errors, and the read error stays the answer.
+    #[test]
+    fn a_wake_continues_only_after_a_start_that_fails_without_a_retirement() {
+        use super::{FailedStreamRecoveryWake, StreamRecoveryWake};
+        use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+        use std::ops::ControlFlow;
+
+        let read = WorkerExecutorError::oplog_read_unavailable("primary did not answer");
+        let wake = || {
+            StreamRecoveryWake::after_committed_read(read.clone())
+                .ok()
+                .unwrap()
+        };
+        let lost = WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost,
+        };
+        let failed = WorkerExecutorError::unknown("the component did not load");
+
+        assert!(matches!(wake().after_start(Ok(())), ControlFlow::Break(error) if error == read));
+        assert!(
+            matches!(wake().after_start(Err(lost.clone())), ControlFlow::Break(error) if error == lost)
+        );
+        assert!(matches!(
+            wake().after_start(Err(failed.clone())),
+            ControlFlow::Continue(FailedStreamRecoveryWake { read_error, start_error })
+                if read_error == read && start_error == failed
+        ));
+    }
+
+    fn execution_config(stdout: bool) -> Vec<u8> {
+        golem_common::serialization::serialize(&(
+            Vec::<u8>::new(),
+            None::<Vec<(String, String)>>,
+            stdout,
+            false,
+        ))
+        .unwrap()
+    }
+
     fn acceptance(route_scope: Option<&str>) -> StreamSessionAcceptance {
         StreamSessionAcceptance {
             public_session_id: "session".to_string(),
@@ -1345,7 +1530,7 @@ mod tests {
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 60 },
             expiry_deadline_millis: Some(1_000),
             effective_identity: vec![1, 2],
-            execution_config: vec![3, 4],
+            execution_config: execution_config(false),
             live_join_buffer_events: 16,
             transport_stream_ids: vec![1],
         }
@@ -1376,11 +1561,14 @@ mod tests {
             expiry_deadline_millis: Some(2_000),
             ..acceptance(Some("route"))
         };
-        assert!(retained_acceptance_matches(
-            &retained,
-            &requested,
-            AttemptId(uuid::Uuid::from_u128(11))
-        ));
+        assert_eq!(
+            retained_acceptance_matches(
+                &retained,
+                &requested,
+                AttemptId(uuid::Uuid::from_u128(11))
+            ),
+            Ok(true)
+        );
     }
 
     #[test]
@@ -1391,7 +1579,7 @@ mod tests {
         );
         for requested in [
             StreamSessionAcceptance {
-                execution_config: vec![3, 5],
+                execution_config: execution_config(true),
                 ..acceptance(Some("route"))
             },
             StreamSessionAcceptance {
@@ -1407,12 +1595,13 @@ mod tests {
                 ..acceptance(Some("route"))
             },
         ] {
-            assert!(
-                !retained_acceptance_matches(
+            assert_eq!(
+                retained_acceptance_matches(
                     &retained,
                     &requested,
                     AttemptId(uuid::Uuid::from_u128(10))
                 ),
+                Ok(false),
                 "{requested:?}"
             );
         }
@@ -1422,23 +1611,98 @@ mod tests {
     fn a_session_without_a_route_must_repeat_the_attempt_and_the_deadline() {
         let attempt = AttemptId(uuid::Uuid::from_u128(10));
         let retained = retained(acceptance(None), attempt);
-        assert!(retained_acceptance_matches(
-            &retained,
-            &acceptance(None),
-            attempt
-        ));
-        assert!(!retained_acceptance_matches(
-            &retained,
-            &acceptance(None),
-            AttemptId(uuid::Uuid::from_u128(11))
-        ));
-        assert!(!retained_acceptance_matches(
-            &retained,
-            &StreamSessionAcceptance {
-                expiry_deadline_millis: Some(2_000),
+        assert_eq!(
+            retained_acceptance_matches(&retained, &acceptance(None), attempt),
+            Ok(true)
+        );
+        assert_eq!(
+            retained_acceptance_matches(
+                &retained,
+                &acceptance(None),
+                AttemptId(uuid::Uuid::from_u128(11))
+            ),
+            Ok(false)
+        );
+        assert_eq!(
+            retained_acceptance_matches(
+                &retained,
+                &StreamSessionAcceptance {
+                    expiry_deadline_millis: Some(2_000),
+                    ..acceptance(None)
+                },
+                attempt
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn an_unreadable_retained_configuration_is_a_read_error_only_when_it_decides_the_match() {
+        let attempt = AttemptId(uuid::Uuid::from_u128(10));
+        [None, Some("route")].into_iter().for_each(|route| {
+            let retained = retained(
+                StreamSessionAcceptance {
+                    execution_config: vec![99],
+                    ..acceptance(route)
+                },
+                attempt,
+            );
+            assert!(
+                retained_acceptance_matches(&retained, &acceptance(route), attempt).is_err(),
+                "{route:?}"
+            );
+            assert_eq!(
+                retained_acceptance_matches(
+                    &retained,
+                    &StreamSessionAcceptance {
+                        live_join_buffer_events: 17,
+                        ..acceptance(route)
+                    },
+                    attempt
+                ),
+                Ok(false),
+                "{route:?}"
+            );
+        });
+        let retained = retained(
+            StreamSessionAcceptance {
+                execution_config: vec![99],
                 ..acceptance(None)
             },
-            attempt
-        ));
+            attempt,
+        );
+        assert_eq!(
+            retained_acceptance_matches(
+                &retained,
+                &acceptance(None),
+                AttemptId(uuid::Uuid::from_u128(11))
+            ),
+            Ok(false)
+        );
+    }
+
+    /// Only a read of the history that failed for a time wakes the committed invocation. A read
+    /// that failed for good fails the agent and is returned as it is.
+    #[test]
+    fn only_a_temporary_read_failure_wakes_a_committed_invocation() {
+        use super::StreamRecoveryWake;
+        use golem_common::model::AgentId;
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+        let agent_id = AgentId::from_parts(7, 0x1628);
+        let unavailable = WorkerExecutorError::oplog_read_unavailable("primary did not answer");
+        assert!(StreamRecoveryWake::after_committed_read(unavailable.clone()).is_ok());
+        assert!(
+            StreamRecoveryWake::after_committed_read(WorkerExecutorError::failed_to_resume_worker(
+                agent_id,
+                unavailable
+            ))
+            .is_ok()
+        );
+        let failed = WorkerExecutorError::oplog_failed(agent_id, "oplog entry 9 is corrupt");
+        assert_eq!(
+            StreamRecoveryWake::after_committed_read(failed.clone()).err(),
+            Some(failed)
+        );
     }
 }

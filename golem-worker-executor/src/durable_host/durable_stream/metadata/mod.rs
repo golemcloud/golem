@@ -26,7 +26,10 @@ mod rows;
 pub(super) use indexed::read_terminal_event;
 #[allow(unused_imports)]
 pub(crate) use projection::ForkControlProjection;
-pub(crate) use projection::{ProducerMetadataProjection, project_producer_metadata};
+pub(crate) use projection::{
+    ProducerMetadataProjection, ProjectionError, project_producer_metadata, read_projection,
+    unanswered_index_read,
+};
 
 const ATTACHMENT_PAGE_SIZE: u64 = 128;
 const SESSION_PAGE_SIZE: u64 = 128;

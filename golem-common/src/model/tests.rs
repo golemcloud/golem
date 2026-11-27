@@ -1039,6 +1039,22 @@ fn timestamp_conversion() {
     assert_eq!(ts2, ts);
 }
 
+#[test]
+fn decode_rejects_a_timestamp_outside_the_calendar() {
+    use crate::serialization::{DecodeError, decode, serialize};
+
+    [i64::MAX as u64, u64::MAX].into_iter().for_each(|millis| {
+        let bytes = serialize(&millis).unwrap();
+        assert!(matches!(
+            decode::<Timestamp>(&bytes),
+            Err(DecodeError::InvalidData(_))
+        ));
+    });
+
+    let bytes = serialize(&1_234u64).unwrap();
+    assert_eq!(decode::<Timestamp>(&bytes).unwrap().to_millis(), 1_234);
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
 struct ExampleWithAccountId {
@@ -2332,7 +2348,7 @@ fn durable_stream_session_index_rejects_unloaded_external_payload() {
 }
 
 #[test]
-fn durable_stream_session_index_rejects_unsupported_inline_payload_version() {
+fn durable_stream_session_index_rejects_unknown_inline_payload_version() {
     use crate::model::oplog::{OplogEntry, OplogPayload};
 
     let entry = OplogEntry::StreamSession {
@@ -2340,15 +2356,18 @@ fn durable_stream_session_index_rejects_unsupported_inline_payload_version() {
         entity_parent_start_index: None,
         summary: None,
         record: OplogPayload::SerializedInline {
-            bytes: vec![0xff],
+            bytes: b"\xffprivate payload".to_vec(),
             cached: None,
         },
     };
 
     let error = DurableStreamSessionIndex::default()
-        .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
+        .apply_oplog_entry(OplogIndex::from_u64(7), &entry)
         .unwrap_err();
-    assert!(error.contains("unsupported serialization version"));
+    assert_eq!(
+        error,
+        "failed to decode inline durable stream session record at oplog index 7: unknown serialization version: 255"
+    );
 }
 
 #[test]

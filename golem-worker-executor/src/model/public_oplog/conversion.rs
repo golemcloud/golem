@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::{OplogPayloadDownloadError, UnreadableOplog};
 
 pub(super) fn host_response_to_public_value(
     response: HostResponse,
@@ -24,6 +25,63 @@ pub(super) fn host_response_to_public_value(
         response => response
             .into_typed_schema_value()
             .map_err(|error| error.to_string()),
+    }
+}
+
+/// Why an oplog entry has no public form.
+#[derive(Debug)]
+pub enum PublicEntryError {
+    /// A stored value of the entry does not read. It keeps the entry index and the read class.
+    Unreadable(UnreadableOplog),
+    /// The entry has no public form.
+    Other(String),
+}
+
+impl PublicEntryError {
+    /// The error of a stored payload of the entry at `index` in the oplog of `owned_agent_id`.
+    pub(super) fn unreadable(
+        owned_agent_id: &OwnedAgentId,
+        index: OplogIndex,
+        error: OplogPayloadDownloadError,
+    ) -> Self {
+        Self::Unreadable(UnreadableOplog::of_payload(
+            &owned_agent_id.agent_id,
+            "public oplog entry",
+            index,
+            error,
+        ))
+    }
+}
+
+impl From<String> for PublicEntryError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<UnreadableOplog> for PublicEntryError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Unreadable(error)
+    }
+}
+
+impl std::fmt::Display for PublicEntryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable(error) => write!(f, "{error}"),
+            Self::Other(error) => f.write_str(error),
+        }
+    }
+}
+
+/// An unreadable oplog is `OplogFailed`, or `RecoveryRequired` when a later read can pass. Any
+/// other error is unknown.
+impl From<PublicEntryError> for WorkerExecutorError {
+    fn from(error: PublicEntryError) -> Self {
+        match error {
+            PublicEntryError::Unreadable(error) => error.into(),
+            PublicEntryError::Other(error) => WorkerExecutorError::unknown(error),
+        }
     }
 }
 
@@ -41,7 +99,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, PublicEntryError> {
         let value = match value {
             golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
                 timestamp,
@@ -125,9 +183,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             golem_common::model::oplog::OplogEnrichmentEntry::Other(value) => value,
         };
         match value {
-            OplogEntry::Create { .. } => {
-                Err("Create must be projected before enrichment".to_string())
-            }
+            OplogEntry::Create { .. } => Err(PublicEntryError::Other(
+                "Create must be projected before enrichment".to_string(),
+            )),
             OplogEntry::Start {
                 timestamp,
                 parent_start_index,
@@ -143,6 +201,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let request_value = match request {
                     Some(request_payload) => Some(
                         public_host_request(
+                            oplog_index,
                             request_payload,
                             &oplog_service,
                             owned_agent_id,
@@ -177,7 +236,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let response_value = if let Some(response_payload) = response {
                     let host_response: HostResponse = oplog_service
                         .download_payload(owned_agent_id, agent_mode, response_payload)
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                        })?;
                     Some(host_response_to_public_value(host_response)?)
                 } else {
                     None
@@ -201,7 +263,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let partial_value = if let Some(partial_payload) = partial {
                     let host_response: HostResponse = oplog_service
                         .download_payload(owned_agent_id, agent_mode, partial_payload)
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                        })?;
                     Some(host_response_to_public_value(host_response)?)
                 } else {
                     None
@@ -244,7 +309,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let invocation_payload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?
                     .with_operation(*operation)?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
@@ -289,7 +357,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let invocation_result: AgentInvocationResult = oplog_service
                     .download_payload(owned_agent_id, agent_mode, result)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
 
                 let public_result = agent_invocation_result_to_public(
                     components.clone(),
@@ -386,7 +457,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let invocation_payload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?
                     .with_operation(*operation)?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
@@ -441,7 +515,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     } => {
                         let bytes = oplog_service
                             .download_payload(owned_agent_id, agent_mode, payload)
-                            .await?;
+                            .await
+                            .map_err(|error| {
+                                PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                            })?;
                         PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                             payload: bytes,
                             mime_type,
@@ -714,7 +791,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let bytes: Vec<u8> = oplog_service
                     .download_payload(owned_agent_id, agent_mode, data)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
 
                 let snapshot_data = raw_snapshot_to_public(RawSnapshotData {
                     data: bytes,
@@ -827,7 +907,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let host_request: HostRequest = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
 
                 Ok(PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
                     timestamp,
@@ -843,7 +926,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let record = oplog_service
                     .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
                 Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
                     timestamp,
                     record: record
@@ -877,7 +963,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     Some(payload) => Some(
                         oplog_service
                             .download_payload(owned_agent_id, agent_mode, payload)
-                            .await?,
+                            .await
+                            .map_err(|error| {
+                                PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                            })?,
                     ),
                     None => None,
                 };
@@ -896,7 +985,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let record = oplog_service
                     .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
                 Ok(PublicOplogEntry::StreamItems(StreamItemsParams {
                     timestamp,
                     record: record
@@ -909,7 +1001,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let record = oplog_service
                     .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
                 Ok(PublicOplogEntry::StreamTerminal(StreamTerminalParams {
                     timestamp,
                     record: record
@@ -922,7 +1017,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let record = oplog_service
                     .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
                 Ok(PublicOplogEntry::StreamSession(StreamSessionParams {
                     timestamp,
                     record: record
@@ -1049,16 +1147,18 @@ fn make_plugin_installation_description(
     }
 }
 
-/// The public value of the request of a recorded `Start`.
+/// The public value of the request of the recorded `Start` at `oplog_index`.
 async fn public_host_request(
+    oplog_index: OplogIndex,
     request_payload: OplogPayload<HostRequest>,
     oplog_service: &Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-) -> Result<TypedSchemaValue, String> {
+) -> Result<TypedSchemaValue, PublicEntryError> {
     let host_request: HostRequest = oplog_service
         .download_payload(owned_agent_id, agent_mode, request_payload)
-        .await?;
+        .await
+        .map_err(|error| PublicEntryError::unreadable(owned_agent_id, oplog_index, error))?;
 
     match host_request {
         HostRequest::EntityInvocation(request) => Ok(request.input),
@@ -1070,13 +1170,13 @@ async fn public_host_request(
             for (_, entry) in &mut inner.entries {
                 entry.clear();
             }
-            HostRequest::GolemApiOplogEnrich(inner)
+            Ok(HostRequest::GolemApiOplogEnrich(inner)
                 .into_typed_schema_value()
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?)
         }
-        other => other
+        other => Ok(other
             .into_typed_schema_value()
-            .map_err(|error| error.to_string()),
+            .map_err(|error| error.to_string())?),
     }
 }
 
@@ -1107,7 +1207,9 @@ pub(crate) async fn with_expected_request(
             request: Some(request),
             ..
         })) if function_name.to_string() == expected.function_name => {
-            public_host_request(request, oplog_service, owned_agent_id, agent_mode).await
+            public_host_request(index, request, oplog_service, owned_agent_id, agent_mode)
+                .await
+                .map_err(|error| error.to_string())
         }
         Ok(_) => Err(format!(
             "the entry at {index} is not a Start of {} with a request",

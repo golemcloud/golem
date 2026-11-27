@@ -123,6 +123,22 @@ pub struct RegisteredStream {
     pub session_mapping: Option<StreamSessionMapping>,
 }
 
+/// Reads a payload of the stream history entry at `index` in the oplog of `agent_id`. A payload
+/// that does not read makes that oplog unreadable at `index`, with its read class.
+async fn download_history_record<
+    T: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq + Send + Sync + 'static,
+>(
+    oplog: &dyn Oplog,
+    agent_id: &AgentId,
+    index: OplogIndex,
+    payload: OplogPayload<T>,
+) -> Result<T, UnreadableOplog> {
+    oplog
+        .download_payload_classified(payload)
+        .await
+        .map_err(|error| UnreadableOplog::of_payload(agent_id, "stream history", index, error))
+}
+
 fn qualify_local_stream(
     local_id: LocalStreamId,
     environment_id: EnvironmentId,
@@ -971,7 +987,7 @@ impl DurableStreamStore {
         let lineage =
             StreamForkLineage::load_at_horizon(oplog, &owner, producer_fingerprint, current_index)
                 .await
-                .map_err(StreamStoreError::CorruptHistory)?;
+                .map_err(StreamStoreError::from)?;
         let mut index = ProducerStreamIndex::default();
         let mut pending_nested_registrations = Vec::new();
         let mut covered = OplogIndex::NONE;
@@ -989,10 +1005,8 @@ impl DurableStreamStore {
                         record,
                         ..
                     } => {
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(StreamStoreError::Oplog)?;
+                        let record =
+                            download_history_record(oplog, producer, oplog_index, record).await?;
                         if matches!(
                             &record.coordinate,
                             StreamRegistrationRecordCoordinate::Nested { .. }
@@ -1024,10 +1038,8 @@ impl DurableStreamStore {
                         record,
                         ..
                     } => {
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(StreamStoreError::Oplog)?;
+                        let record =
+                            download_history_record(oplog, producer, oplog_index, record).await?;
                         index.apply_item_batch(
                             oplog_index,
                             entity_parent_start_index,
@@ -1055,10 +1067,8 @@ impl DurableStreamStore {
                                     .to_string(),
                             ));
                         }
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(StreamStoreError::Oplog)?;
+                        let record =
+                            download_history_record(oplog, producer, oplog_index, record).await?;
                         index.apply_terminal(
                             oplog_index,
                             entity_parent_start_index,
@@ -1077,11 +1087,15 @@ impl DurableStreamStore {
                                     .to_string(),
                             ));
                         }
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(StreamStoreError::Oplog)?;
-                        Self::validate_consumer_reobservation(oplog, oplog_index, &record).await?;
+                        let record =
+                            download_history_record(oplog, producer, oplog_index, record).await?;
+                        Self::validate_consumer_reobservation(
+                            producer,
+                            oplog,
+                            oplog_index,
+                            &record,
+                        )
+                        .await?;
                         if lineage.resets_control(oplog_index, &record) {
                             continue;
                         }

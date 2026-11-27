@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps, UnreadableOplog};
+use crate::services::oplog::{
+    Oplog, OplogOps, OplogReadError, OplogReadSource, OplogService, OplogServiceOps,
+    UnreadableOplog,
+};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, StreamForkCutRecord, StreamItemsPayload,
@@ -22,6 +25,7 @@ use golem_common::model::durable_stream::{
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{AgentFingerprint, OwnedAgentId};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, desert_rust::BinaryCodec)]
@@ -40,12 +44,37 @@ enum LineageSource<'a> {
     },
 }
 
+fn lineage_corruption(detail: impl Into<String>) -> OplogReadError {
+    OplogReadError::corruption(OplogReadSource::Other("stream fork lineage"), detail)
+}
+
+pub(in crate::services) async fn entry_requires_lineage_discovery(
+    service: &dyn OplogService,
+    owner: &OwnedAgentId,
+    mode: AgentMode,
+    entry: Cow<'_, OplogEntry>,
+) -> bool {
+    if matches!(*entry, OplogEntry::Revert { .. }) {
+        return true;
+    }
+    let record = match entry {
+        Cow::Borrowed(OplogEntry::StreamSession { record, .. }) => record.clone(),
+        Cow::Owned(OplogEntry::StreamSession { record, .. }) => record,
+        _ => return false,
+    };
+    // A later revert can delete an unreadable payload. Resolve the deletion mask first.
+    matches!(
+        service.download_payload(owner, mode, record).await,
+        Ok(StreamSessionRecord::ForkCut(_)) | Err(_)
+    )
+}
+
 impl LineageSource<'_> {
     async fn read_exact(
         &self,
         index: OplogIndex,
         count: u64,
-    ) -> Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+    ) -> Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         match self {
             Self::Open(oplog) => oplog.read_exact(index, count).await,
             Self::Service {
@@ -54,40 +83,43 @@ impl LineageSource<'_> {
                 mode,
             } => service.read_exact(owner, *mode, index, count).await,
         }
+        .map_err(|error| error.error)
     }
 
     async fn download_session(
         &self,
+        index: OplogIndex,
         payload: golem_common::model::oplog::OplogPayload<StreamSessionRecord>,
-    ) -> Result<StreamSessionRecord, String> {
+    ) -> Result<StreamSessionRecord, OplogReadError> {
         match self {
-            Self::Open(oplog) => oplog.download_payload(payload).await,
+            Self::Open(oplog) => oplog.download_payload_classified(payload).await,
             Self::Service {
                 service,
                 owner,
                 mode,
-            } => service
-                .download_payload(owner, *mode, payload)
-                .await
-                .map_err(String::from),
+            } => service.download_payload(owner, *mode, payload).await,
         }
+        .map_err(|error| {
+            OplogReadError::of_payload(OplogReadSource::Other("stream fork lineage"), index, error)
+        })
     }
 
     async fn download_registration(
         &self,
+        index: OplogIndex,
         payload: golem_common::model::oplog::OplogPayload<StreamRegisteredRecord>,
-    ) -> Result<StreamRegisteredRecord, String> {
+    ) -> Result<StreamRegisteredRecord, OplogReadError> {
         match self {
-            Self::Open(oplog) => oplog.download_payload(payload).await,
+            Self::Open(oplog) => oplog.download_payload_classified(payload).await,
             Self::Service {
                 service,
                 owner,
                 mode,
-            } => service
-                .download_payload(owner, *mode, payload)
-                .await
-                .map_err(String::from),
+            } => service.download_payload(owner, *mode, payload).await,
         }
+        .map_err(|error| {
+            OplogReadError::of_payload(OplogReadSource::Other("stream fork lineage"), index, error)
+        })
     }
 }
 
@@ -98,7 +130,8 @@ impl StreamForkLineage {
         mode: AgentMode,
         from: OplogIndex,
         horizon: OplogIndex,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, UnreadableOplog> {
+        let unreadable = |error| UnreadableOplog::new(&owner.agent_id, error);
         if from > horizon {
             return Ok(false);
         }
@@ -113,24 +146,20 @@ impl StreamForkLineage {
             let entries = source
                 .read_exact(covered.next(), count)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(unreadable)?;
             if entries.len() as u64 != count {
-                return Err("missing oplog entries while discovering stream fork lineage".into());
+                return Err(unreadable(lineage_corruption(
+                    "missing oplog entries while discovering stream fork lineage",
+                )));
             }
             for (index, entry) in entries {
                 if index != covered.next() {
-                    return Err("noncontiguous oplog while discovering stream fork lineage".into());
+                    return Err(unreadable(lineage_corruption(
+                        "noncontiguous oplog while discovering stream fork lineage",
+                    )));
                 }
                 covered = index;
-                if matches!(entry, OplogEntry::Revert { .. }) {
-                    return Ok(true);
-                }
-                if let OplogEntry::StreamSession { record, .. } = entry
-                    && matches!(
-                        source.download_session(record).await?,
-                        StreamSessionRecord::ForkCut(_)
-                    )
-                {
+                if entry_requires_lineage_discovery(service, owner, mode, Cow::Owned(entry)).await {
                     return Ok(true);
                 }
             }
@@ -142,25 +171,35 @@ impl StreamForkLineage {
         oplog: &dyn Oplog,
         owner: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, UnreadableOplog> {
         let horizon = oplog.current_oplog_index().await;
         Self::load_at_horizon(oplog, owner, fingerprint, horizon).await
     }
 
+    /// Loads the lineage of the open oplog of `owner` up to `horizon`. An entry that does not read
+    /// or a lineage that is not valid makes the oplog of `owner` unreadable.
     pub(crate) async fn load_at_horizon(
         oplog: &dyn Oplog,
-        _owner: &OwnedAgentId,
+        owner: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
         horizon: OplogIndex,
-    ) -> Result<Self, String> {
-        Self::load_from_source(LineageSource::Open(oplog), horizon, None).await
+    ) -> Result<Self, UnreadableOplog> {
+        Self::load_from_source(LineageSource::Open(oplog), horizon, None)
+            .await
+            .map_err(|error| UnreadableOplog::new(&owner.agent_id, error))
     }
 
+    /// Validates `cut` against the lineage of the open oplog of `owner` up to its cut index. An
+    /// entry that does not read or a lineage that is not valid with `cut` makes the oplog of
+    /// `owner` unreadable.
     pub(crate) async fn validate_fork_cut(
         oplog: &dyn Oplog,
+        owner: &OwnedAgentId,
         cut: StreamForkCutRecord,
-    ) -> Result<Self, String> {
-        Self::load_from_source(LineageSource::Open(oplog), cut.cut_index, Some(cut)).await
+    ) -> Result<Self, UnreadableOplog> {
+        Self::load_from_source(LineageSource::Open(oplog), cut.cut_index, Some(cut))
+            .await
+            .map_err(|error| UnreadableOplog::new(&owner.agent_id, error))
     }
 
     pub async fn load_from_service(
@@ -169,7 +208,7 @@ impl StreamForkLineage {
         mode: AgentMode,
         _fingerprint: AgentFingerprint,
         horizon: OplogIndex,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, UnreadableOplog> {
         Self::load_from_source(
             LineageSource::Service {
                 service,
@@ -180,13 +219,14 @@ impl StreamForkLineage {
             None,
         )
         .await
+        .map_err(|error| UnreadableOplog::new(&owner.agent_id, error))
     }
 
     async fn load_from_source(
         source: LineageSource<'_>,
         horizon: OplogIndex,
         pending_cut: Option<StreamForkCutRecord>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, OplogReadError> {
         // The first bounded pass reads no external payloads. It builds the complete deletion mask
         // used by the second pass, so payloads in deleted regions are never downloaded.
         let mut reverts = Vec::new();
@@ -194,20 +234,17 @@ impl StreamForkLineage {
         let mut covered = OplogIndex::NONE;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source
-                .read_exact(covered.next(), count)
-                .await
-                .map_err(|error| error.to_string())?;
+            let entries = source.read_exact(covered.next(), count).await?;
             if entries.len() as u64 != count {
-                return Err(
-                    "missing oplog entries while discovering reverted stream history".into(),
-                );
+                return Err(lineage_corruption(
+                    "missing oplog entries while discovering reverted stream history",
+                ));
             }
             for (index, entry) in entries {
                 if index != covered.next() {
-                    return Err(
-                        "noncontiguous oplog while discovering reverted stream history".into(),
-                    );
+                    return Err(lineage_corruption(
+                        "noncontiguous oplog while discovering reverted stream history",
+                    ));
                 }
                 covered = index;
                 if matches!(
@@ -234,16 +271,17 @@ impl StreamForkLineage {
         let mut covered = OplogIndex::NONE;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source
-                .read_exact(covered.next(), count)
-                .await
-                .map_err(|error| error.to_string())?;
+            let entries = source.read_exact(covered.next(), count).await?;
             if entries.len() as u64 != count {
-                return Err("missing oplog entries while loading stream fork lineage".into());
+                return Err(lineage_corruption(
+                    "missing oplog entries while loading stream fork lineage",
+                ));
             }
             for (index, entry) in entries {
                 if index != covered.next() {
-                    return Err("noncontiguous oplog while loading stream fork lineage".into());
+                    return Err(lineage_corruption(
+                        "noncontiguous oplog while loading stream fork lineage",
+                    ));
                 }
                 covered = index;
                 if deleted_regions.is_in_deleted_region(index) {
@@ -251,12 +289,14 @@ impl StreamForkLineage {
                 }
                 match entry {
                     OplogEntry::StreamRegistered { record, .. } => {
-                        registrations.push((index, source.download_registration(record).await?));
+                        registrations
+                            .push((index, source.download_registration(index, record).await?));
                     }
                     OplogEntry::StreamSession { record, .. } => {
-                        match source.download_session(record).await? {
+                        match source.download_session(index, record).await? {
                             StreamSessionRecord::ForkCut(cut) => {
-                                validate_revert_adjacency(index, &cut, &reverts)?;
+                                validate_revert_adjacency(index, &cut, &reverts)
+                                    .map_err(lineage_corruption)?;
                                 cuts.push((index, cut));
                             }
                             StreamSessionRecord::Finished(record) => {
@@ -270,7 +310,7 @@ impl StreamForkLineage {
             }
         }
         if let Some(cut) = pending_cut {
-            let marker = marker_index(&cut)?;
+            let marker = marker_index(&cut).map_err(lineage_corruption)?;
             cuts.push((marker, cut));
         }
         for (index, region) in &reverts {
@@ -280,10 +320,13 @@ impl StreamForkLineage {
                     index.next() == *marker && cut.revert.as_ref() == Some(region)
                 })
             {
-                return Err("reverted stream history has no adjacent fork marker".into());
+                return Err(lineage_corruption(
+                    "reverted stream history has no adjacent fork marker",
+                ));
             }
         }
-        let mut lineage = Self::validate_history(cuts, &registrations, &finished)?;
+        let mut lineage =
+            Self::validate_history(cuts, &registrations, &finished).map_err(lineage_corruption)?;
         lineage.deleted_regions = deleted_regions;
         lineage.revert_regions = reverts;
         Ok(lineage)

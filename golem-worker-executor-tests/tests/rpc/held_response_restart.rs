@@ -201,7 +201,7 @@ impl Rpc for HoldResponseRpc {
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         if method == "inc_by" {
             self.callee_callers
                 .lock()

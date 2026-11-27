@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
-use golem_common::serialization::deserialize;
+use golem_common::serialization::decode;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -209,7 +209,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
                     schedule_id: ScheduleId {
                         id: Uuid::parse_str(&row.schedule_id).map_err(|err| err.to_string())?,
                     },
-                    action: deserialize(&row.action)?,
+                    action: decode(&row.action).map_err(|error| error.to_string())?,
                     due_at: millis_to_datetime(row.due_at_ms)?,
                     lease_owner,
                     attempt_count: row.attempt_count as u32 + 1,

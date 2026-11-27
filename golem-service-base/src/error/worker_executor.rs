@@ -107,6 +107,7 @@ pub enum WorkerExecutorError {
     RecoveryRequired {
         details: String,
         retry_from: Option<OplogIndex>,
+        cause: RecoveryCause,
     },
     InvalidShardId {
         shard_id: ShardId,
@@ -175,6 +176,7 @@ pub enum WorkerExecutorError {
     OplogFailed {
         agent_id: AgentId,
         details: String,
+        cause: OplogFailureCause,
     },
     /// An oplog read refuses its cursor, because the cursor did not come from a page of this
     /// read. The caller starts again without a cursor.
@@ -189,6 +191,27 @@ pub enum WorkerExecutorError {
     /// A cancel request for an invocation that is running. Cancelling a running invocation is
     /// not supported yet; until it is, this typed answer replaces the spec's `202`.
     CannotCancelRunningInvocation,
+}
+
+/// What made a recovery necessary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
+pub enum RecoveryCause {
+    /// A cause that is not an oplog read.
+    Other,
+    /// An oplog read failed for a time. A later read can pass. The failed read is not an outcome
+    /// of the agent, and it does not permit a write to the oplog.
+    OplogReadUnavailable,
+}
+
+/// What failed in an oplog that fails its agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
+pub enum OplogFailureCause {
+    /// A read of the oplog failed for good: a source failed or gave corrupt data.
+    Read,
+    /// An archive layer did not store the entries of the oplog after its retries.
+    ArchiveWrite,
 }
 
 /// Why an oplog read refuses a cursor.
@@ -274,6 +297,21 @@ impl Display for ComponentRef<'_> {
 }
 
 impl WorkerExecutorError {
+    /// Whether an oplog read that failed for a time caused this error, also as the reason of a
+    /// failed resume at any depth. A recovery with another cause is not a failed read. A read
+    /// that failed for a time is not an outcome. A read that failed for good is `OplogFailed`,
+    /// which fails the agent.
+    pub fn is_oplog_read_failure(&self) -> bool {
+        match self {
+            Self::RecoveryRequired {
+                cause: RecoveryCause::OplogReadUnavailable,
+                ..
+            } => true,
+            Self::FailedToResumeAgent { reason, .. } => reason.is_oplog_read_failure(),
+            _ => false,
+        }
+    }
+
     pub fn failed_to_resume_worker(agent_id: AgentId, reason: WorkerExecutorError) -> Self {
         Self::FailedToResumeAgent {
             agent_id,
@@ -345,6 +383,7 @@ impl WorkerExecutorError {
         Self::RecoveryRequired {
             details: details.into(),
             retry_from: None,
+            cause: RecoveryCause::Other,
         }
     }
 
@@ -352,13 +391,34 @@ impl WorkerExecutorError {
         Self::RecoveryRequired {
             details: details.into(),
             retry_from: Some(retry_from),
+            cause: RecoveryCause::Other,
         }
     }
 
+    /// A recovery that an oplog read which failed for a time makes necessary.
+    pub fn oplog_read_unavailable(details: impl Into<String>) -> Self {
+        Self::RecoveryRequired {
+            details: details.into(),
+            retry_from: None,
+            cause: RecoveryCause::OplogReadUnavailable,
+        }
+    }
+
+    /// The oplog of `agent_id` does not read for good.
     pub fn oplog_failed(agent_id: AgentId, details: impl Into<String>) -> Self {
         Self::OplogFailed {
             agent_id,
             details: details.into(),
+            cause: OplogFailureCause::Read,
+        }
+    }
+
+    /// An archive layer did not store the oplog of `agent_id`.
+    pub fn oplog_archive_write_failed(agent_id: AgentId, details: impl Into<String>) -> Self {
+        Self::OplogFailed {
+            agent_id,
+            details: details.into(),
+            cause: OplogFailureCause::ArchiveWrite,
         }
     }
 
@@ -557,7 +617,9 @@ impl Display for WorkerExecutorError {
                 "The component service refused {} ({kind}): {reason}",
                 ComponentRef(component_id, component_revision.as_ref())
             ),
-            Self::OplogFailed { agent_id, details } => {
+            Self::OplogFailed {
+                agent_id, details, ..
+            } => {
                 write!(f, "The oplog of {agent_id} failed: {details}")
             }
             Self::StaleCursor {
@@ -1059,12 +1121,27 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
             }
             WorkerExecutorError::Runtime { details } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
-                    golem::worker::v1::RuntimeError { details },
+                    golem::worker::v1::RuntimeError {
+                        details,
+                        oplog_read: None,
+                    },
                 )),
             },
-            WorkerExecutorError::RecoveryRequired { details, .. } => Self {
+            WorkerExecutorError::RecoveryRequired { details, cause, .. } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
-                    golem::worker::v1::RuntimeError { details },
+                    golem::worker::v1::RuntimeError {
+                        details,
+                        oplog_read: match cause {
+                            RecoveryCause::Other => None,
+                            RecoveryCause::OplogReadUnavailable => {
+                                Some(golem::worker::v1::OplogReadFailure {
+                                    kind: Some(golem::worker::v1::oplog_read_failure::Kind::Unavailable(
+                                        golem::worker::v1::OplogReadUnavailable {},
+                                    )),
+                                })
+                            }
+                        },
+                    },
                 )),
             },
             WorkerExecutorError::InvalidShardId {
@@ -1145,6 +1222,7 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                         details: format!(
                             "Read-only agent method '{method}' attempted side effect via '{host_function}'"
                         ),
+                        oplog_read: None,
                     },
                 )),
             },
@@ -1152,6 +1230,7 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError {
                         details: failed.to_string(),
+                        oplog_read: None,
                     },
                 )),
             },
@@ -1449,9 +1528,14 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 Ok(Self::InvalidAccount)
             }
             Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(runtime_error)) => {
-                Ok(Self::Runtime {
-                    details: runtime_error.details,
-                })
+                let details = runtime_error.details;
+                match runtime_error.oplog_read.map(|failure| failure.kind) {
+                    None => Ok(Self::Runtime { details }),
+                    Some(None) => Err("Missing oplog read failure kind".to_string()),
+                    Some(Some(golem::worker::v1::oplog_read_failure::Kind::Unavailable(_))) => {
+                        Ok(Self::oplog_read_unavailable(details))
+                    }
+                }
             }
             Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(
                 inner,
@@ -1721,6 +1805,108 @@ mod read_only_violation_trap_tests {
                 Ok(expected)
             );
         }
+    }
+
+    #[test]
+    fn an_oplog_read_failure_is_found_through_failed_resumes_only_by_its_cause() {
+        let agent_id = AgentId::from_parts(7, 0x43);
+        let failed = WorkerExecutorError::oplog_failed(agent_id, "oplog entry 43 is corrupt");
+        let unavailable =
+            WorkerExecutorError::oplog_read_unavailable("primary storage did not answer");
+        let reads = [
+            unavailable.clone(),
+            WorkerExecutorError::failed_to_resume_worker(
+                agent_id,
+                WorkerExecutorError::failed_to_resume_worker(agent_id, unavailable),
+            ),
+        ];
+        // A read that failed for good fails the agent: it is not a failed read in this sense.
+        let others = [
+            failed.clone(),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, failed),
+            WorkerExecutorError::recovery_required("trapped body cleanup failed"),
+            WorkerExecutorError::recovery_required_from(
+                "incomplete output",
+                OplogIndex::from_u64(43),
+            ),
+            WorkerExecutorError::runtime("oplog entry 43 has unknown serialization version 255"),
+            WorkerExecutorError::failed_to_resume_worker(
+                agent_id,
+                WorkerExecutorError::runtime("the component did not instantiate"),
+            ),
+        ];
+        assert!(reads.iter().all(WorkerExecutorError::is_oplog_read_failure));
+        assert!(
+            !others
+                .iter()
+                .any(WorkerExecutorError::is_oplog_read_failure)
+        );
+    }
+
+    /// A read that failed for a time keeps its kind through gRPC as a recovery that the read
+    /// caused. An oplog that failed for good crosses as a runtime error whose text names the
+    /// agent. Other runtime errors and recoveries stay plain runtime errors.
+    #[test]
+    fn oplog_read_failures_keep_their_kind_through_grpc() {
+        let agent_id = AgentId::from_parts(7, 1628);
+        let failed = WorkerExecutorError::oplog_failed(
+            agent_id,
+            "oplog entry 43 has unknown serialization version 255",
+        );
+        let unavailable = WorkerExecutorError::oplog_read_unavailable(
+            "oplog of agent-7 is unreadable: primary storage did not answer",
+        );
+        let other_recovery = WorkerExecutorError::recovery_required_from(
+            "trapped body cleanup failed",
+            OplogIndex::from_u64(29),
+        );
+        let runtime = WorkerExecutorError::runtime("the guest stack overflowed");
+        let round_trip = |error: &WorkerExecutorError| {
+            let status: Status = error.clone().into();
+            (
+                status.code(),
+                WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(
+                    error.clone(),
+                )),
+            )
+        };
+
+        assert_eq!(
+            round_trip(&failed),
+            (
+                tonic::Code::Internal,
+                Ok(WorkerExecutorError::runtime(failed.to_string()))
+            )
+        );
+        assert!(
+            failed.to_string().contains(&agent_id.to_string()),
+            "{failed}"
+        );
+        assert_eq!(
+            round_trip(&unavailable),
+            (tonic::Code::Internal, Ok(unavailable))
+        );
+        assert_eq!(
+            round_trip(&other_recovery),
+            (
+                tonic::Code::Internal,
+                Ok(WorkerExecutorError::runtime("trapped body cleanup failed"))
+            )
+        );
+        assert_eq!(round_trip(&runtime), (tonic::Code::Internal, Ok(runtime)));
+        assert!(
+            WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::RuntimeError(
+                        golem::worker::v1::RuntimeError {
+                            details: "no kind".to_string(),
+                            oplog_read: Some(golem::worker::v1::OplogReadFailure { kind: None }),
+                        }
+                    )
+                ),
+            })
+            .is_err()
+        );
     }
 
     #[test]

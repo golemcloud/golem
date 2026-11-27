@@ -263,6 +263,70 @@ impl Fixture {
     }
 }
 
+/// A stored attachment row is the row of its key only when the attachment, the stream, the
+/// consumer environment and the consumer all match. A row stored under another key is a cache
+/// miss, not the row of the key that reads it.
+#[test]
+#[timeout("30s")]
+async fn an_attachment_row_decodes_only_for_its_own_key() {
+    let fixture = Fixture::new().await;
+    let producer = fixture.producer().await;
+    let handle = producer
+        .register(None, fixture.registration(0))
+        .await
+        .unwrap()
+        .value;
+    let key = crate::durable_host::durable_stream::tests::attachment_key(
+        &fixture.identity,
+        handle.stream_id,
+    );
+    producer.prepare_attachment(key.clone(), 100).await.unwrap();
+    let own = ProducerMetadataKey::Attachment(
+        key.attachment_id,
+        key.stream_id,
+        key.consumer_environment_id,
+        key.consumer,
+    );
+    let row = producer.index.lock().await.metadata_row(&own).unwrap();
+    let bytes = golem_common::serialization::serialize(&row).unwrap();
+    let other_consumer = golem_common::model::AgentId::from_parts(7, 0x0c);
+    let other_attachment = AttachmentId::primary(
+        key.consumer_environment_id,
+        &other_consumer,
+        &key.session_key.idempotency_key,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        ProducerMetadataRow::decode_for_key(&own, &bytes),
+        Ok(ProducerMetadataRow::Attachment(value)) if value.key == key
+    ));
+    [
+        ProducerMetadataKey::Attachment(
+            other_attachment,
+            key.stream_id,
+            key.consumer_environment_id,
+            key.consumer,
+        ),
+        ProducerMetadataKey::Attachment(
+            key.attachment_id,
+            key.stream_id,
+            key.consumer_environment_id,
+            other_consumer,
+        ),
+    ]
+    .iter()
+    .for_each(|other| {
+        assert!(
+            matches!(
+                ProducerMetadataRow::decode_for_key(other, &bytes),
+                Err(ProjectionError::CacheMiss)
+            ),
+            "{other:?}"
+        );
+    });
+}
+
 #[test]
 #[timeout("30s")]
 async fn active_attachment_count_is_available_after_cold_metadata_load() {
@@ -2374,6 +2438,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                 .service
                 .read_durable_stream_consumer_page(
                     &owner,
+                    AgentMode::Durable,
                     fixture.identity.fingerprint,
                     &target,
                     reader,
@@ -2455,6 +2520,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                     .service
                     .read_durable_stream_consumer_page(
                         &owner,
+                        AgentMode::Durable,
                         fixture.identity.fingerprint,
                         &target,
                         reader,

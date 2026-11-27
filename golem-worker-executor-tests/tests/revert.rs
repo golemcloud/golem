@@ -59,6 +59,153 @@ inherit_test_dep!(
 inherit_test_dep!(Tracing);
 
 #[test]
+#[timeout("4m")]
+async fn revert_validates_delivery_snapshots_only_in_its_retained_prefix(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use futures::StreamExt;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::component::{InstalledPlugin, PluginPriority};
+    use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+    use golem_common::model::oplog::OplogEntry;
+    use golem_common::model::plugin_registration::PluginRegistrationId;
+    use golem_common::serialization::{decode, serialize};
+    use golem_worker_executor::services::golem_config::OplogConfig;
+    use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
+    use golem_worker_executor::storage::indexed::{
+        IndexedStorageLabelledApi, IndexedStorageNamespace,
+    };
+    use golem_worker_executor_test_utils::{sqlite_storage_config, start_with_oplog_config};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_oplog_config(
+        deps,
+        &context,
+        Some(OplogConfig {
+            indexed_storage_layers: 1,
+            blob_storage_layers: 0,
+            ..Default::default()
+        }),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let indexed_config = golem_worker_executor::derive_disjoint_sqlite_config(
+        &sqlite_storage_config(deps, &context),
+        "indexed",
+    );
+    let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", indexed_config.database)).await?;
+
+    futures::stream::iter([(true, false), (true, true), (false, true)])
+        .then(|(corrupt, retain)| {
+            let executor = &executor;
+            let component = &component;
+            let indexed = &indexed;
+            let pool = &pool;
+            async move {
+                let agent = agent_key!("Counter", format!("delivery-cut-{corrupt}-{retain}"));
+                let id = executor.start_agent(&component.id, agent.clone()).await?;
+                executor
+                    .invoke_and_await_agent(component, &agent, "increment", data_value!())
+                    .await?;
+                let resident = executor.active_agent(&id).await.unwrap().primary();
+                let retained_index = resident.get_last_known_status().await.oplog_idx;
+                let grant = EnvironmentPluginGrantId::new();
+                let plugin = InstalledPlugin {
+                    environment_plugin_grant_id: grant,
+                    priority: PluginPriority(0),
+                    parameters: Default::default(),
+                    plugin_registration_id: PluginRegistrationId::new(),
+                    plugin_name: "delivery-cut".into(),
+                    plugin_version: "1".into(),
+                    oplog_processor_component_id: Some(component.id),
+                    oplog_processor_component_revision: Some(ComponentRevision::INITIAL),
+                    installed_by: context.account_id,
+                };
+                // Seed the producer's pre-send and confirmation shapes through the status actor.
+                let delivery = serialize(&(plugin, resident.get_latest_worker_metadata().await))
+                    .map_err(anyhow::Error::msg)?;
+                let checkpoint = |delivery: Option<Vec<u8>>| OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: golem_common::model::Timestamp::now_utc(),
+                    plugin_grant_id: grant,
+                    target_agent_id: id.agent_id,
+                    confirmed_up_to: if delivery.is_some() { OplogIndex::NONE } else { retained_index },
+                    sending_up_to: retained_index,
+                    last_batch_start: OplogIndex::INITIAL,
+                    source_component_revision: ComponentRevision::INITIAL,
+                    delivery,
+                };
+                let delivery_index = executor
+                    .add_and_commit_oplog_entry(&id.agent_id, checkpoint(Some(delivery)))
+                    .await?;
+                let confirmation = executor
+                    .add_and_commit_oplog_entry(&id.agent_id, checkpoint(None))
+                    .await?;
+                assert!(resident.get_last_known_status().await.oplog_idx >= confirmation);
+                assert!(Arc::ptr_eq(
+                    &resident,
+                    &executor.active_agent(&id).await.unwrap().primary()
+                ));
+
+                let namespace = IndexedStorageNamespace::OpLog {
+                    owned_agent_id: id.clone(),
+                    agent_mode: AgentMode::Durable,
+                };
+                let key = id.storage_key();
+                let read = || async { indexed.with_entity("test", "revert_delivery", "entry")
+                    .read_raw(namespace.clone(), &key, delivery_index.into(), delivery_index.into()).await };
+                let original = read().await?.pop().unwrap().1;
+                let stored = if corrupt {
+                    let mut entry: OplogEntry = decode(&original)?;
+                    let OplogEntry::OplogProcessorCheckpoint { delivery, .. } = &mut entry else {
+                        panic!("expected delivery checkpoint");
+                    };
+                    *delivery = Some(vec![255]);
+                    let bytes = serialize(&entry).map_err(anyhow::Error::msg)?;
+                    assert_eq!(sqlx::query("UPDATE index_storage SET value = ? WHERE namespace = 'durable-worker-oplog' AND key = ? AND id = ?")
+                        .bind(&bytes).bind(&key).bind(delivery_index.as_u64() as i64)
+                        .execute(pool).await?.rows_affected(), 1);
+                    bytes
+                } else { original };
+                let cut = if retain { delivery_index } else { retained_index };
+                let result = executor.revert(&id, RevertWorkerTarget::RevertToOplogIndex(
+                    RevertToOplogIndex { last_oplog_index: cut }
+                )).await;
+                assert_eq!(read().await?, vec![(delivery_index.into(), stored)]);
+                let stored_entries = indexed.with_entity("test", "revert_delivery", "entry")
+                    .read::<OplogEntry>(namespace.clone(), &key, 1, u64::MAX).await?;
+                if corrupt && retain {
+                    let message = format!("{:#}", result.expect_err("retained corruption must fail"));
+                    assert!(message.contains(&format!("oplog index {delivery_index}")), "{message}");
+                    assert!(message.contains("version: 255"), "{message}");
+                    assert!(!stored_entries.iter()
+                        .any(|(_, entry)| matches!(entry, OplogEntry::Revert { .. })));
+                } else {
+                    result?;
+                    assert!(stored_entries.iter().any(|(_, entry)| matches!(entry,
+                        OplogEntry::Revert { dropped_region, .. } if dropped_region.start == cut.next()
+                            && dropped_region.end >= confirmation)));
+                    assert_eq!(executor.invoke_and_await_agent(component, &agent, "increment", data_value!())
+                        .await?.into_typed::<u32>()?, 2);
+                }
+                Ok::<_, anyhow::Error>(())
+            }
+        })
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    pool.close().await;
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 #[timeout("4m")]
 async fn self_revert_is_rejected_without_stopping_the_agent(

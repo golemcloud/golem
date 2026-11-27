@@ -16,7 +16,7 @@ use super::*;
 
 /// Runs a storage operation under the retry policy, panicking on anything it cannot retry away.
 ///
-/// Reads, deletions and prefix drops keep this shape: a permanent failure there is a broken
+/// Deletions and prefix drops keep this shape: a permanent failure there is a broken
 /// deployment, and failing fast is the long-standing contract.
 pub(super) async fn retry_storage_op<T, F, Fut>(
     retry_config: &RetryConfig,
@@ -291,5 +291,81 @@ pub(super) async fn retry_oplog_append(
                 "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: {error}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+pub(super) mod tests {
+    use super::*;
+    use crate::services::oplog::tests::{
+        default_execution_status, default_last_known_status, make_agent_metadata,
+    };
+    use futures::StreamExt;
+    use golem_common::model::regions::OplogRegion;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+
+    pub(crate) async fn service(
+        storage: Arc<dyn IndexedStorage + Send + Sync>,
+    ) -> PrimaryOplogService {
+        PrimaryOplogService::new(
+            storage,
+            Arc::new(InMemoryBlobStorage::new()),
+            100,
+            100,
+            1024,
+            32,
+            RetryConfig {
+                max_attempts: 2,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(1),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn create(
+        service: &PrimaryOplogService,
+        agent_id: AgentId,
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        create_owned(service, &OwnedAgentId::new(EnvironmentId::new(), &agent_id)).await
+    }
+
+    async fn create_owned(
+        service: &PrimaryOplogService,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        let agent_id = owned_agent_id.agent_id;
+        let account_id = golem_common::model::account::AccountId::new();
+        let environment_id = owned_agent_id.environment_id();
+        service
+            .create_fresh(
+                &mut service.lock_lifecycle(&agent_id).await,
+                owned_agent_id,
+                AgentMode::Durable,
+                OplogEntry::jump(
+                    None,
+                    OplogRegion {
+                        start: OplogIndex::NONE,
+                        end: OplogIndex::NONE,
+                    },
+                ),
+                make_agent_metadata(agent_id, account_id, environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+    }
+
+    pub(crate) async fn add_all(oplog: &Arc<dyn Oplog>, sizes: std::ops::RangeInclusive<u64>) {
+        futures::stream::iter(sizes)
+            .then(|size| {
+                let oplog = oplog.clone();
+                async move { oplog.add(OplogEntry::grow_memory(size)).await.unwrap() }
+            })
+            .collect::<Vec<_>>()
+            .await;
     }
 }

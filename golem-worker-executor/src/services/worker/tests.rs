@@ -657,6 +657,90 @@ async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() 
     );
 }
 
+/// The stored rejections are a hint that a start can lose: a set that does not decode is a miss,
+/// not a failed start, and the next rejection replaces it.
+#[test]
+async fn undecodable_stored_rejections_are_a_miss_that_the_next_rejection_replaces() {
+    let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
+    let fingerprint = AgentFingerprint::new();
+    service
+        .key_value_storage
+        .with_entity("test", "corrupt_rejections", "oplog_indexes")
+        .set_raw(
+            DefaultWorkerService::rejected_periodic_snapshots_namespace(&owned_agent_id),
+            &DefaultWorkerService::rejected_periodic_snapshots_field(fingerprint),
+            &[0xff, 0x13, 0x37],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .get_rejected_periodic_snapshots(&owned_agent_id, fingerprint)
+            .await
+            .unwrap(),
+        HashSet::new()
+    );
+    service
+        .reject_periodic_snapshots(
+            &owned_agent_id,
+            fingerprint,
+            &with_candidates(12, Some(7)),
+            &HashSet::from([OplogIndex::from_u64(12)]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .get_rejected_periodic_snapshots(&owned_agent_id, fingerprint)
+            .await
+            .unwrap(),
+        HashSet::from([OplogIndex::from_u64(12)])
+    );
+}
+
+#[test]
+async fn unreadable_status_cache_is_refolded_and_replaced() {
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let owned_agent_id = test_owned_agent_id("unreadable-status-cache");
+    let fingerprint = AgentFingerprint::new();
+    let service = DefaultWorkerService::new(
+        storage.clone(),
+        Arc::new(ShardServiceDefault::new()),
+        Arc::new(IndexTestOplogService::new(BTreeMap::from([
+            (
+                OplogIndex::INITIAL,
+                test_create_entry(&owned_agent_id, AgentMode::Durable, fingerprint),
+            ),
+            (OplogIndex::from_u64(2), OplogEntry::exited()),
+        ]))),
+        Arc::new(IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let namespace = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
+    storage
+        .with_entity("test", "corrupt", "status")
+        .set_raw(
+            namespace.clone(),
+            status::STATUS_CORE_FIELD,
+            b"\xffprivate payload",
+        )
+        .await
+        .unwrap();
+
+    let metadata = service.get(&owned_agent_id).await.unwrap().unwrap();
+    let status = metadata.last_known_status.unwrap();
+    assert_eq!(status.status, AgentStatus::Exited);
+    assert_eq!(status.oplog_idx, OplogIndex::from_u64(2));
+    assert_eq!(
+        service
+            .read_split_status(&owned_agent_id, namespace)
+            .await
+            .unwrap(),
+        Some(status)
+    );
+}
+
 #[test]
 async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
     let storage = Arc::new(InMemoryKeyValueStorage::new());
@@ -851,7 +935,9 @@ async fn invocation_index_metadata(
     service: &DefaultWorkerService,
     owned_agent_id: &OwnedAgentId,
 ) -> InvocationResultIndexMetadata {
-    let value: Option<Result<InvocationResultIndexMetadata, String>> = service
+    let value: Option<
+        Result<InvocationResultIndexMetadata, golem_common::serialization::DecodeError>,
+    > = service
         .key_value_storage
         .with_entity("test", "read_invocation_result_index", "metadata")
         .get_attempt_deserialize(
@@ -1755,7 +1841,7 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
     })
     .unwrap();
     malformed_metadata.pop();
-    assert!(deserialize::<InvocationResultIndexMetadata>(&malformed_metadata).is_err());
+    assert!(decode::<InvocationResultIndexMetadata>(&malformed_metadata).is_err());
     inner
         .set_many(
             "test",
@@ -3703,7 +3789,7 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
             "invocation_result",
         )
         .set_raw(
-            namespace,
+            namespace.clone(),
             &invocation_result_index_field(&first),
             &[0xff, 0x00],
         )
@@ -3745,6 +3831,44 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
     assert_eq!(
         positions_only(lookup(first).await),
         InvocationResultIndexLookup::Found(result_at(3))
+    );
+    assert_eq!(
+        positions_only(lookup(second).await),
+        InvocationResultIndexLookup::Found(result_at(5))
+    );
+
+    storage
+        .with_entity("test", "corrupt_result_listing", "invocation_result")
+        .set_raw(namespace, &invocation_result_index_field(&first), &[3])
+        .await
+        .unwrap();
+    assert!(
+        service
+            .list_invocation_result_index(&owned_agent_id, invocation_index_fingerprint(), &status,)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        lookup(second).await,
+        InvocationResultIndexLookup::Incomplete
+    );
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        positions_only(lookup(first).await),
+        InvocationResultIndexLookup::Found(result_at(3))
+    );
+    assert_eq!(
+        positions_only(lookup(second).await),
+        InvocationResultIndexLookup::Found(result_at(5))
     );
 }
 

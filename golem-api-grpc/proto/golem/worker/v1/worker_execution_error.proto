@@ -179,7 +179,20 @@ message UnexpectedOplogEntry {
 
 message RuntimeError {
   string details = 1;
+  // Set only when an oplog read that failed for a time caused the error. Such a read is not an
+  // outcome of the invocation.
+  OplogReadFailure oplog_read = 2;
 }
+
+// An oplog read that failed.
+message OplogReadFailure {
+  oneof kind {
+    // The read failed for a time. A later read can pass.
+    OplogReadUnavailable unavailable = 2;
+  }
+}
+
+message OplogReadUnavailable {}
 
 message InvalidShardId {
   golem.shardmanager.ShardId shard_id = 1;

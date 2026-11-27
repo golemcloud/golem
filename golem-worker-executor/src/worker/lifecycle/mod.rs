@@ -287,13 +287,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             force,
         ) {
             ResumeDecision::PreviousFailed => {
+                // An unreadable history gives its read error, not a prior failure.
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     deps,
                     owned_agent_id,
                     metadata.agent_mode,
                     &metadata.last_known_status,
                 )
-                .await;
+                .await?;
                 if let Some(last_error) = error_and_retry_count {
                     return if metadata.last_known_status.last_error_kind
                         == Some(golem_common::model::oplog::OplogErrorKind::Recovery)
@@ -365,7 +366,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        if metadata.last_known_status.component_revision == target_revision {
+        // A request that stored its update and then failed to read the status after it is
+        // retried by its caller. The duplicate checks and the decision read a repaired status, so
+        // the retry finds the stored update instead of a status that lags behind it.
+        let status = worker.try_get_repaired_status().await?;
+        if status.component_revision == target_revision {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is already at the target version",
             ));
@@ -416,21 +421,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         match mode {
             UpdateMode::Automatic => {
-                if has_duplicate_pending_update(&metadata.last_known_status, target_revision) {
+                if has_duplicate_pending_update(&status, target_revision) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
                     ));
                 }
             }
             UpdateMode::Manual => {
-                if metadata
-                    .last_known_status
-                    .pending_invocations
-                    .iter()
-                    .any(|invocation| {
-                        invocation.manual_update_target_revision == Some(target_revision)
-                    })
-                {
+                if status.pending_invocations.iter().any(|invocation| {
+                    invocation.manual_update_target_revision == Some(target_revision)
+                }) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
                     ));
@@ -438,7 +438,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        let decision = update_decision(&metadata.last_known_status.status, mode, disable_wakeup);
+        let decision = update_decision(&status.status, mode, disable_wakeup);
         match (mode, decision) {
             (UpdateMode::Automatic, UpdateDecision::Ignore) => Err(
                 WorkerExecutorError::invalid_request("Cannot update an exited worker"),
@@ -829,7 +829,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // when this request reaches the queue head.
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
-        let status = self.state_actor.status().await;
+        let status = self.get_repaired_status().await?;
         if lifecycle::has_duplicate_pending_update(&status, target_revision) {
             return Err(WorkerExecutorError::invalid_request(
                 "The same update is already in progress",
@@ -1514,6 +1514,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 region_end.next(),
                 OplogEntry::revert(dropped_region.clone()),
             );
+            let prospective_deleted = crate::worker::status::deleted_regions(
+                last_known_status.deleted_regions.clone(),
+                &prospective_entries,
+            );
             let retained_status = AgentStatusRecord {
                 invocation_results: self.config().invocation_results.membership(),
                 ..Default::default()
@@ -1523,7 +1527,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self,
                 &self.owned_agent_id,
                 self.agent_mode(),
-                &last_known_status.deleted_regions,
+                &prospective_deleted,
                 &mut prospective_entries,
             )
             .await?;
@@ -1532,7 +1536,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &self.owned_agent_id,
                 self.agent_mode(),
                 &retained_status,
-                &last_known_status.deleted_regions,
+                &prospective_deleted,
                 &mut prospective_entries,
             )
             .await?;

@@ -39,6 +39,7 @@ use lifecycle::stop::{
     acknowledge_no_store_interruption, complete_stopping_worker, merge_final_worker_state,
     merge_run_loop_failure, terminal_write_failure,
 };
+pub(crate) use outcome::InvocationObservationFailure;
 #[cfg(test)]
 use outcome::{
     is_infrastructure_recovery_error, lookup_result_from_cached_result, recovery_agent_error,
@@ -443,6 +444,8 @@ pub struct DurableStreamingInvocationAcceptance {
 /// Durable state returned after resuming or taking over a streaming invocation.
 pub struct DurableStreamingResumeAcceptance {
     pub prepared: StreamSessionPreparedRecord,
+    /// The oplog index of `prepared`.
+    pub prepared_index: OplogIndex,
     pub mappings: Vec<StreamSessionMappingRecord>,
     pub streams: StreamSession,
     pub epoch: u64,
@@ -1513,8 +1516,7 @@ use read_only_cache::{build_read_only_cache_entry, is_no_cache, populate_read_on
 use runtime::shared_linear_memory_error;
 use streaming::sessions::{
     durable_stream_attempt_error_outcome, persisted_stream_descriptor_matches,
-    stream_attempt_matches, stream_output_consumer_is_observer, stream_slot_session_matches,
-    validate_stream_session_record,
+    stream_attempt_matches, stream_slot_session_matches, validate_stream_session_record,
 };
 pub(crate) use streaming::sessions::{
     same_origin_queued_request, same_origin_stream_invocation, stream_session_record_key,

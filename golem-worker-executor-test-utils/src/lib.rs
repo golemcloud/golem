@@ -3991,7 +3991,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
+    ) -> Result<Option<LastError>, golem_worker_executor::services::oplog::UnreadableOplog> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
@@ -9718,7 +9718,7 @@ impl Rpc for RecordingRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
-    ) -> Result<SchemaValue, ServiceRpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         if method_name == self.method_name {
             self.attempts.lock().unwrap().push(idempotency_key.clone());
@@ -9896,7 +9896,7 @@ impl Rpc for FailingRpc {
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
-    ) -> Result<SchemaValue, ServiceRpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         if self
             .remaining_failures
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
@@ -9904,7 +9904,8 @@ impl Rpc for FailingRpc {
         {
             Err(ServiceRpcError::RemoteInternalError {
                 details: "transient test failure".to_string(),
-            })
+            }
+            .into())
         } else {
             self.inner
                 .invoke_and_await(

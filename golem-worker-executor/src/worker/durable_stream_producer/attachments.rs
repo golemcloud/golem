@@ -153,8 +153,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             } else {
                 StreamRegistrationInvocation::Remote(key.clone())
             };
+            let producer = self.durable_stream_producer().await?;
             let streams = StreamSession::new(
-                self.durable_stream_producer().await?,
+                producer.clone(),
                 self.oplog.clone(),
                 session_reference.clone(),
                 std::iter::empty(),
@@ -196,51 +197,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 continue;
             }
             if matches!(session_reference, StreamRegistrationInvocation::Local(_)) {
-                if let Some(status) = self
-                    .oplog
-                    .raw_durable_stream_session_status(&key)
+                self.read_local_topology_authority(&producer, &key, &metadata)
                     .await
-                    .status
-                    .map_err(WorkerExecutorError::runtime)?
-                    && let Some(error) = status.lifecycle_error
-                {
-                    return Err(WorkerExecutorError::runtime(error));
-                }
-                let prepared = self
-                    .read_stream_session_record(metadata.prepared_position().ok_or_else(|| {
-                        WorkerExecutorError::runtime(
-                            "local durable topology has no Prepared session authority",
-                        )
-                    })?)
-                    .await?;
-                let attached = self
-                    .read_stream_session_record(metadata.attached_position().ok_or_else(|| {
-                        WorkerExecutorError::runtime(
-                            "local durable topology has no attachment authority",
-                        )
-                    })?)
-                    .await?;
-                let (
-                    StreamSessionRecord::Prepared(prepared),
-                    StreamSessionRecord::Attached(attached),
-                ) = (prepared, attached)
-                else {
-                    return Err(WorkerExecutorError::runtime(
-                        "durable session index references incorrect control records",
-                    ));
-                };
-                if prepared.session_key != key.idempotency_key
-                    || attached.session_key != key.idempotency_key
-                    || attached.attempt_id != prepared.attempt.attempt_id
-                    || attached.epoch == 0
-                    || attached.attachment_id != prepared.attempt.attachment_id
-                    || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
-                        OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == key.idempotency_key)
-                {
-                    return Err(WorkerExecutorError::runtime(
-                        "durable Attached record does not exactly identify its Prepared attempt and pending invocation",
-                    ));
-                }
+                    .map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?;
             }
             recoverable.push((
                 key,
@@ -309,6 +270,56 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
         }
         Ok(self.durable_topology_recovery.lock().await.needs_recovery())
+    }
+
+    async fn read_local_topology_authority(
+        &self,
+        producer: &DurableStreamStore,
+        key: &StreamSessionKey,
+        metadata: &SessionControlMetadata,
+    ) -> Result<(), SessionError> {
+        if let Some(status) = self
+            .oplog
+            .raw_durable_stream_session_status(key)
+            .await
+            .status?
+            && let Some(error) = status.lifecycle_error
+        {
+            return Err(error.into());
+        }
+        let prepared = producer
+            .read_session_record(
+                metadata
+                    .prepared_position()
+                    .ok_or("local durable topology has no Prepared session authority")?,
+            )
+            .await?;
+        let attached = producer
+            .read_session_record(
+                metadata
+                    .attached_position()
+                    .ok_or("local durable topology has no attachment authority")?,
+            )
+            .await?;
+        let (StreamSessionRecord::Prepared(prepared), StreamSessionRecord::Attached(attached)) =
+            (prepared, attached)
+        else {
+            return Err("durable session index references incorrect control records".into());
+        };
+        if prepared.session_key != key.idempotency_key
+            || attached.session_key != key.idempotency_key
+            || attached.attempt_id != prepared.attempt.attempt_id
+            || attached.epoch == 0
+            || attached.attachment_id != prepared.attempt.attachment_id
+            || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
+                OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == key.idempotency_key)
+        {
+            return Err(
+                "durable Attached record does not exactly identify its Prepared attempt and pending invocation"
+                    .into(),
+            );
+        }
+        Ok(())
     }
     pub(crate) async fn control_durable_stream_attachment(
         &self,
@@ -471,10 +482,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         })?
                         .direction()
                         == SessionStreamRole::Output
-                    && let Some(prepared) = self
-                        .prepared_stream_session(&source.idempotency_key)
+                    && self
+                        .stream_output_consumer_is_observer(&source.idempotency_key, &key)
                         .await?
-                    && stream_output_consumer_is_observer(&prepared.attempt, &key)?
                 {
                     return producer
                         .finalize_attachment(
@@ -826,7 +836,17 @@ impl DurableTopologyRecoveryCache {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
                 };
-                let record = oplog.download_payload(record.clone()).await?;
+                let record = oplog
+                    .download_payload_classified(record.clone())
+                    .await
+                    .map_err(|error| {
+                        UnreadableOplog::of_payload(
+                            &owner.agent_id,
+                            "stream topology history payload",
+                            *index,
+                            error,
+                        )
+                    })?;
                 if !record.has_supported_format() {
                     return Err(
                         "unsupported or malformed durable Stream Session record version".into(),

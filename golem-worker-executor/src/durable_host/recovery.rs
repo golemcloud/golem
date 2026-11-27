@@ -723,7 +723,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
+    ) -> Result<Option<LastError>, crate::services::oplog::UnreadableOplog> {
         last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
     }
 
@@ -965,8 +965,7 @@ impl AttemptFailure {
         match self {
             Self::Load(
                 SnapshotRecoveryResult::Failed(error, _)
-                | SnapshotRecoveryResult::Unavailable(error, _)
-                | SnapshotRecoveryResult::Lost(error),
+                | SnapshotRecoveryResult::Unavailable(error, _),
             )
             | Self::Replay(ReplayFailure { error, .. }) => error,
             Self::Load(_) => WorkerExecutorError::runtime(

@@ -13,6 +13,7 @@ use crate::durable_host::durable_stream::{
     RegisteredStream,
     tests::{attachment_key, identity},
 };
+use crate::services::oplog::OplogOps;
 use crate::services::worker_fork::lineage::StreamForkLineage;
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, LocalStreamReaderId,
@@ -933,7 +934,7 @@ async fn fork_cut_validation_rejects_a_malformed_request_hash() {
 
     cut.request_hash.clear();
     assert!(
-        StreamForkLineage::validate_fork_cut(&oplog, cut)
+        StreamForkLineage::validate_fork_cut(&oplog, &owner, cut)
             .await
             .is_err(),
         "the persisted request hash must remain a 32-byte digest"
@@ -1989,4 +1990,65 @@ fn super_registration(session: &StreamSessionKey, path: u32) -> ProducerRegistra
         source_kind: StreamSourceKind::InvocationOutput,
         session_mapping: None,
     }
+}
+
+#[test]
+async fn fork_cut_keeps_the_index_and_class_of_an_unreadable_lineage_record() {
+    use crate::durable_host::durable_stream::tests::TestOplog;
+    use crate::services::oplog::OplogReadError;
+    use golem_common::model::Timestamp;
+    use golem_common::model::oplog::OplogPayload;
+
+    let identity = identity();
+    let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
+    let oplog = TestOplog::default();
+    let appends = &oplog;
+    futures::StreamExt::for_each(futures::stream::iter(1..=3), |size| async move {
+        appends.add(OplogEntry::grow_memory(size)).await.unwrap();
+    })
+    .await;
+    let unreadable_index = oplog
+        .add(OplogEntry::StreamSession {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            summary: None,
+            record: OplogPayload::SerializedInline {
+                bytes: vec![255, 7, 7],
+                cached: None,
+            },
+        })
+        .await
+        .unwrap();
+    let cut_index = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
+
+    let error = DurableStreamStore::prepare_fork_cut(
+        &oplog,
+        (&owner, identity.fingerprint),
+        (&owner, identity.fingerprint),
+        cut_index,
+        cut_index,
+        None,
+        [0; 32],
+        false,
+    )
+    .await
+    .expect_err("an undecodable lineage record must fail the fork cut");
+
+    let StreamStoreError::Unreadable(unreadable) = &error else {
+        panic!("expected an unreadable oplog, got {error:?}");
+    };
+    assert_eq!(unreadable.agent_id, identity.agent_id);
+    assert!(matches!(
+        unreadable.error,
+        OplogReadError::Corruption { .. }
+    ));
+    let text = unreadable.to_string();
+    assert!(
+        text.contains(&format!("at oplog index {unreadable_index}:")),
+        "{text}"
+    );
+    assert!(
+        text.contains("unknown serialization version: 255"),
+        "{text}"
+    );
 }

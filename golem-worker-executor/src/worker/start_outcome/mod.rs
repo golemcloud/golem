@@ -24,9 +24,9 @@ use crate::durable_host::revision_update::UpdateStateError;
 use crate::model::{FailureProvenance, SnapshotReplayPurpose};
 use crate::services::agent_filesystem::{Error as FilesystemError, RestoreClass};
 use crate::services::agent_filesystem_snapshots::SnapshotsDisabled;
-use crate::worker::RetryDecision;
 use crate::worker::instance::{InstanceCreationFailure, InstanceCreationStage};
 use crate::worker::snapshot_selection::SourceFound;
+use crate::worker::{InvocationObservationFailure, RetryDecision};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     AgentError, FailedSnapshotAssistedUpdateDetails, OplogEntry, OplogIndex, ReplayDivergence,
@@ -111,9 +111,6 @@ pub(crate) enum SnapshotRecoveryResult {
     /// The load could not run or did not finish with the error; the provenance tells where the
     /// failure came from.
     Unavailable(WorkerExecutorError, FailureProvenance),
-    /// The payload of the application snapshot of the selected record of a snapshot-assisted
-    /// update is missing or does not decode: the record is lost.
-    Lost(WorkerExecutorError),
     Retry(RetryDecision),
 }
 
@@ -456,8 +453,6 @@ enum StartProblem {
     },
     LoadRetry,
     LoadUnavailable,
-    /// The payload of the selected record is lost; only a snapshot-assisted attempt reports it.
-    LoadLost,
     LoadFailed,
     ManualLoadFailed,
     ManualLoadInterrupted,
@@ -481,16 +476,18 @@ enum StartProblem {
     /// start loads the files of a target; every other start loads the files of the revision that
     /// the agent runs.
     InitialFileRefused(BlobRefusal),
-    /// The oplog of the agent failed: it does not read or an archive layer did not store it. It is
-    /// the row of every such error, whatever the
-    /// step of the start that read the oplog.
-    OplogFailed,
+    /// The oplog of the agent failed: it does not read or an archive layer did not store it. Or a
+    /// read of stored data failed for a time, also in the reason of a failed resume
+    /// ([`InvocationObservationFailure::stored_read`]). It is the row of every such error,
+    /// whatever the step of the start that read the data. No column records a failed update or a
+    /// failed invocation for it.
+    StoredRead,
 }
 
 impl StartProblem {
     fn of(error: &RawStartError<'_>) -> Self {
-        if error.oplog_failed() {
-            return Self::OplogFailed;
+        if error.stored_read() {
+            return Self::StoredRead;
         }
         match error {
             RawStartError::StaleSource(_) => Self::StaleSource,
@@ -532,7 +529,6 @@ impl StartProblem {
                     WorkerExecutorError::Interrupted { .. } => Self::Interrupted,
                     _ => Self::LoadUnavailable,
                 },
-                SnapshotRecoveryResult::Lost(_) => Self::LoadLost,
                 SnapshotRecoveryResult::Failed(_, _) => Self::LoadFailed,
                 SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                     Self::ReplayError
@@ -710,9 +706,10 @@ enum Cell {
 /// The outcome table. A cell that cannot occur passes the error.
 fn cell(column: Column, problem: StartProblem) -> Cell {
     use StartProblem as Problem;
-    // An oplog that failed fails the start in every column. Skipping or rejecting the
-    // record, or failing the update, would start the agent from another history.
-    if problem == Problem::OplogFailed {
+    // A failed stored read passes in every column. Skipping or rejecting the record, or failing
+    // the update, would take the read error as an outcome or start the agent from another
+    // history.
+    if problem == Problem::StoredRead {
         return Cell::Pass;
     }
     let fail = Cell::Fail(Failure::PLAIN);
@@ -810,7 +807,7 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             | Problem::AgentFailed
             | Problem::ReplayError => fail,
             Problem::Disabled => coded(Code::RestoreNeedsFilesystemSnapshots),
-            Problem::Restore(RestoreClass::Lost) | Problem::LoadLost => Cell::Fail(Failure {
+            Problem::Restore(RestoreClass::Lost) => Cell::Fail(Failure {
                 code: Some(Code::SnapshotUnavailable),
                 fault: Some(SnapshotFault::Unavailable),
                 reject_selected: true,
@@ -951,12 +948,11 @@ fn problem_class(problem: StartProblem) -> UpdateFailureClass {
         | Problem::AgentFailed
         | Problem::ReplayError
         | Problem::AfterReplay
-        | Problem::OplogFailed => Class::Operational,
+        | Problem::StoredRead => Class::Operational,
         Problem::StaleSource
         | Problem::Disabled
         | Problem::Restore(_)
         | Problem::RestoreConflict
-        | Problem::LoadLost
         | Problem::LoadFailed
         | Problem::ManualLoadFailed
         | Problem::ManualLoadExited
@@ -1054,8 +1050,7 @@ fn raw_text(error: &RawStartError<'_>) -> String {
         RawStartError::Filesystem(error) | RawStartError::Finish(error) => error.to_string(),
         RawStartError::Load(result) => match result {
             SnapshotRecoveryResult::Failed(error, _)
-            | SnapshotRecoveryResult::Unavailable(error, _)
-            | SnapshotRecoveryResult::Lost(error) => error.to_string(),
+            | SnapshotRecoveryResult::Unavailable(error, _) => error.to_string(),
             SnapshotRecoveryResult::NotAttempted => {
                 "the update did not attempt its required snapshot".to_string()
             }
@@ -1086,8 +1081,7 @@ impl RawStartError<'_> {
             RawStartError::Instantiation(failure) => Some(&failure.error),
             RawStartError::Load(
                 SnapshotRecoveryResult::Failed(error, _)
-                | SnapshotRecoveryResult::Unavailable(error, _)
-                | SnapshotRecoveryResult::Lost(error),
+                | SnapshotRecoveryResult::Unavailable(error, _),
             ) => Some(error),
             _ => None,
         }
@@ -1121,12 +1115,13 @@ impl RawStartError<'_> {
         }
     }
 
-    /// Whether the start failed because the oplog of the agent failed.
-    fn oplog_failed(&self) -> bool {
-        matches!(
-            self.carried_error(),
-            Some(WorkerExecutorError::OplogFailed { .. })
-        )
+    /// Whether the start failed because the oplog of the agent failed, or because a read of
+    /// stored data failed for a time.
+    fn stored_read(&self) -> bool {
+        self.carried_error().is_some_and(|error| {
+            matches!(error, WorkerExecutorError::OplogFailed { .. })
+                || InvocationObservationFailure::is_stored_read(error)
+        })
     }
 
     /// The error of the problem as it is, for the recovery path: a filesystem failure as a

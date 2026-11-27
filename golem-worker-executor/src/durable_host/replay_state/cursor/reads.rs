@@ -593,6 +593,21 @@ impl ReplayState {
         })
     }
 
+    /// The read error of a stored payload of the entry at `index`. It keeps the entry index and
+    /// the read class: a storage that did not answer can read later, and corrupt data fails the
+    /// agent. It is not a divergence, because the replay did not compare a value.
+    fn unreadable_payload(
+        &self,
+        source: &'static str,
+        index: OplogIndex,
+        error: crate::services::oplog::OplogPayloadDownloadError,
+    ) -> WorkerExecutorError {
+        use crate::services::oplog::UnreadableOplog;
+
+        UnreadableOplog::of_payload(&self.cursor.owned_agent_id.agent_id, source, index, error)
+            .into()
+    }
+
     /// Reports whether the replay-visible owner oplog contains a terminal for `start_index`.
     /// Entity reconstruction uses this before starting its fresh Store so the invocation context
     /// distinguishes reconstruction of a completed body from repair of an incomplete Start. The
@@ -1112,19 +1127,12 @@ impl ReplayState {
                             .oplog
                             .download_request_classified(*operation, payload)
                             .await
-                            .map_err(|error| match error {
-                                crate::services::oplog::OplogPayloadDownloadError::Backend(
-                                    error,
-                                ) => WorkerExecutorError::recovery_required(format!(
-                                    "failed to download agent invocation payload: {error:#}"
-                                )),
-                                crate::services::oplog::OplogPayloadDownloadError::Corrupt(
-                                    error,
-                                ) => WorkerExecutorError::unexpected_oplog_entry(
+                            .map_err(|error| {
+                                self.unreadable_payload(
+                                    "replayed agent invocation request payload",
                                     oplog_index,
-                                    "valid agent invocation payload",
-                                    format!("{error:#}"),
-                                ),
+                                    error,
+                                )
                             })?;
 
                         let invocation_context =
@@ -1180,12 +1188,14 @@ impl ReplayState {
                 let result = self
                     .cursor
                     .oplog
-                    .download_payload(result)
+                    .download_payload_classified(result)
                     .await
-                    .map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "failed to deserialize agent invocation result payload: {err}"
-                        ))
+                    .map_err(|error| {
+                        self.unreadable_payload(
+                            "replayed agent invocation result payload",
+                            index,
+                            error,
+                        )
                     })?;
                 Ok((index, result))
             }

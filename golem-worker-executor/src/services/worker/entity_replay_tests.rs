@@ -131,16 +131,16 @@ fn entity_replay_growing_continuation_writes_only_changed_keys() {
         for (key, bytes) in &sets {
             if key == "eo:1" {
                 assert_eq!(
-                    deserialize::<OpenEntityReplayScope>(bytes).unwrap(),
+                    decode::<OpenEntityReplayScope>(bytes).unwrap(),
                     OpenEntityReplayScope {
                         last_required: Some(index),
                         parent_entity: None,
                     }
                 );
             } else if key.starts_with("ep:") {
-                assert_eq!(deserialize::<OplogIndex>(bytes).unwrap(), root);
+                assert_eq!(decode::<OplogIndex>(bytes).unwrap(), root);
             } else if key.starts_with("em:") {
-                deserialize::<()>(bytes).unwrap();
+                decode::<()>(bytes).unwrap();
             }
         }
         fields.extend(sets.into_iter().map(|(k, v)| (k, v.into())));
