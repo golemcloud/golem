@@ -4337,11 +4337,39 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
     assert_eq!(clamped.scan.limit.entries, 2);
     assert_eq!(clamped.scan.charged_entries, 2);
     assert_eq!((clamped.next, clamped.scan.exhausted), (None, true));
+    let clamped_time = read(
+        None,
+        from,
+        to,
+        10,
+        allowance(100),
+        search_scan_budget(100, std::time::Duration::from_millis(1_250)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(clamped_time.scan.limit.millis, 1_250);
+
     let spent = read(None, from, to, 10, allowance(0), configured)
         .await
         .unwrap();
     assert_eq!(spent.scan.charged_entries, 0);
     assert_eq!((spent.next, spent.scan.exhausted), (None, true));
+
+    // A fresh range after the tail still accounts for the work of finding its revision.
+    let last = *indices.last().unwrap();
+    let after = last.next();
+    for (limit, charged, exhausted) in [(100, last.as_u64(), false), (2, 2, true)] {
+        let page = read(None, after, after.next(), 10, allowance(limit), configured)
+            .await
+            .unwrap();
+        assert!(page.entries.is_empty());
+        assert_eq!((page.first_index_in_chunk, page.last_index), (after, last));
+        assert_eq!(page.next, None);
+        assert_eq!(
+            (page.scan.charged_entries, page.scan.exhausted),
+            (charged, exhausted)
+        );
+    }
 }
 
 #[test]
@@ -4561,6 +4589,26 @@ async fn a_remote_search_with_a_start_charges_its_revision_scan_and_continues_it
         matches!(page_start, Err(WorkerExecutorError::InvalidRequest { .. })),
         "{page_start:?}"
     );
+
+    // The cursor fits the requested range but is stale against the current oplog tail.
+    let last = *indices.last().unwrap();
+    let range = OplogRange::new(Some(indices[1]), Some(last.next().next())).unwrap();
+    let stale = search(
+        Some(OplogCursor {
+            next_oplog_index: last.next().as_u64(),
+            current_component_revision: 4,
+            query_hash: OplogCursor::query_hash(Some("needle")),
+            scan_to: None,
+        }),
+        range,
+        search_scan_budget(10, std::time::Duration::from_secs(600)),
+    )
+    .await;
+    assert!(matches!(
+        stale,
+        Err(WorkerExecutorError::StaleCursor { next_oplog_index, .. })
+            if next_oplog_index == last.next()
+    ));
 }
 
 #[test]

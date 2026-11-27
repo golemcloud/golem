@@ -873,17 +873,19 @@ pub async fn get_public_oplog_range_page(
         last_index,
         scan,
     };
-    if start > end {
-        if cursor.is_some() {
-            return Err(stale_oplog_cursor(owned_agent_id, start, last_index));
-        }
-        return Ok(empty(None, scan.report(false)));
+    if start > end && cursor.is_some() {
+        return Err(stale_oplog_cursor(owned_agent_id, start, last_index));
     }
     let cursor_at = |next: OplogIndex, revision: ComponentRevision, scan_to| OplogCursor {
         next_oplog_index: next.as_u64(),
         current_component_revision: revision.into(),
         query_hash: OplogCursor::query_hash(None),
         scan_to,
+    };
+    let scan_end = if start > last_index {
+        last_index.next()
+    } else {
+        start
     };
     let revision = match resume {
         OplogSearchResume::Read(_) => revision,
@@ -893,7 +895,7 @@ pub async fn get_public_oplog_range_page(
             agent_mode,
             next,
             revision,
-            start,
+            scan_end,
             u64::from(allowance.is_none()),
             &mut scan,
         )
@@ -901,13 +903,15 @@ pub async fn get_public_oplog_range_page(
         {
             RevisionScan::Found(revision) => revision,
             RevisionScan::Spent { next, revision } => {
-                let next = allowance
-                    .is_none()
+                let next = (allowance.is_none() && start <= end)
                     .then(|| cursor_at(next, revision, Some(start.as_u64())));
                 return Ok(empty(next, scan.report(true)));
             }
         },
     };
+    if start > end {
+        return Ok(empty(None, scan.report(false)));
+    }
     if scan.is_spent() && (allowance.is_some() || scan.scanned > 0) {
         return Ok(empty(
             Some(cursor_at(start, revision, None)),
@@ -1073,3 +1077,6 @@ fn stale_oplog_cursor(
         reason: StaleCursorReason::PastEnd { last_oplog_index },
     }
 }
+
+#[cfg(test)]
+mod tests;
