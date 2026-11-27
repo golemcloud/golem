@@ -264,6 +264,195 @@ pub(crate) async fn start_registry() -> anyhow::Result<(ContainerAsync<GenericIm
     Ok((registry, host))
 }
 
+#[test]
+#[timeout("60s")]
+async fn install_oci_reports_signers_without_changing_the_lock() -> anyhow::Result<()> {
+    use axum::body::Bytes;
+    use axum::http::{StatusCode, Uri};
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use sigstore_crypto::KeyPair;
+    use std::collections::HashMap;
+    use std::io::Read;
+    use std::sync::{Arc, Mutex};
+
+    const BUNDLE: &str = "application/vnd.dev.sigstore.bundle.v0.3+json";
+    const PAYLOAD: &str = "application/vnd.in-toto+json";
+    const INDEX: &str = "application/vnd.oci.image.index.v1+json";
+
+    let dir = tempfile::tempdir()?;
+    let root = dir.path();
+    let archive = root.join("package.tar");
+    let digest = write_install_fixture(&archive, "remote", wat::parse_str("(component)")?);
+    let mut routes = HashMap::new();
+    for entry in tar::Archive::new(fs::File::open(archive)?).entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let Some(hex) = path.to_str().and_then(|p| p.strip_prefix("blobs/sha256/")) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        let path = if format!("sha256:{hex}") == digest {
+            "/v2/packages/remote/manifests/1.0".into()
+        } else {
+            format!("/v2/packages/remote/blobs/sha256:{hex}")
+        };
+        routes.insert(path, Bytes::from(bytes));
+    }
+
+    let key = KeyPair::generate_ecdsa_p256()?;
+    let spki = key.public_key_der()?;
+    let verified = format!(
+        "Package signer \"sha256:{:x}\" verified",
+        Sha256::digest(spki.as_bytes())
+    );
+    fs::write(root.join("signer.pem"), spki.to_pem())?;
+    fs::write(
+        root.join("other.pem"),
+        KeyPair::generate_ecdsa_p256()?.public_key_der()?.to_pem(),
+    )?;
+
+    let payload = serde_json::to_vec(&json!({
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicateType": "https://sigstore.dev/cosign/sign/v1",
+        "subject": [{"name": "remote", "digest": {"sha256": digest.strip_prefix("sha256:").unwrap()}}]
+    }))?;
+    let mut pae = format!("DSSEv1 {} {PAYLOAD} {} ", PAYLOAD.len(), payload.len()).into_bytes();
+    pae.extend(&payload);
+    let signature = key.sign(&pae)?;
+    let mut index_for = |signature: &[u8]| -> anyhow::Result<Bytes> {
+        let mut add = |kind, media, value| -> anyhow::Result<Value> {
+            let bytes = serde_json::to_vec(&value)?;
+            let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+            let descriptor = json!({"mediaType": media, "size": bytes.len(), "digest": digest});
+            routes.insert(format!("/v2/packages/remote/{kind}/{digest}"), bytes.into());
+            Ok(descriptor)
+        };
+        let layer = add(
+            "blobs",
+            BUNDLE,
+            json!({
+                "mediaType": BUNDLE,
+                "verificationMaterial": {"publicKey": {"hint": ""}},
+                "dsseEnvelope": {
+                    "payloadType": PAYLOAD, "payload": STANDARD.encode(&payload),
+                    "signatures": [{"sig": STANDARD.encode(signature)}]
+                }
+            }),
+        )?;
+        let mut referrer = add(
+            "manifests",
+            package::MANIFEST,
+            json!({
+                "schemaVersion": 2, "mediaType": package::MANIFEST, "artifactType": BUNDLE,
+                "subject": {"mediaType": package::MANIFEST, "digest": digest, "size": 0},
+                "layers": [layer]
+            }),
+        )?;
+        referrer["artifactType"] = json!(BUNDLE);
+        Ok(serde_json::to_vec(&json!({
+            "schemaVersion": 2, "mediaType": INDEX, "manifests": [referrer]
+        }))?
+        .into())
+    };
+    let signed = index_for(signature.as_bytes())?;
+    let mut tampered = signature.as_bytes().to_vec();
+    *tampered.last_mut().unwrap() ^= 1;
+    let tampered = index_for(&tampered)?;
+
+    let native = format!("/v2/packages/remote/referrers/{digest}");
+    let fallback = format!("/v2/packages/remote/manifests/{}", digest.replace(':', "-"));
+    let routes = Arc::new(Mutex::new(routes));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let source = format!("oci://{}/packages/remote:1.0", listener.local_addr()?);
+    let server_routes = routes.clone();
+    let app = axum::Router::new().fallback(move |uri: Uri| {
+        let body = server_routes.lock().unwrap().get(uri.path()).cloned();
+        async move { body.ok_or(StatusCode::NOT_FOUND) }
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let manifest = format!(
+        "manifestVersion: {}\napp: installer\n",
+        versions::sdk::MANIFEST
+    );
+    let unverifiable =
+        "Package signer unverifiable (signature does not verify with a trusted signing key)";
+    let mut unsigned_lock = None;
+    for (label, index, store, expected) in [
+        ("unsigned", None, None, "Package has no Cosign signature"),
+        (
+            "native",
+            Some((&native, &signed)),
+            Some("signer.pem"),
+            verified.as_str(),
+        ),
+        (
+            "fallback",
+            Some((&fallback, &signed)),
+            Some("signer.pem"),
+            verified.as_str(),
+        ),
+        (
+            "bundled store",
+            Some((&native, &signed)),
+            None,
+            unverifiable,
+        ),
+        (
+            "wrong override",
+            Some((&native, &signed)),
+            Some("other.pem"),
+            unverifiable,
+        ),
+        (
+            "tampered",
+            Some((&native, &tampered)),
+            Some("signer.pem"),
+            unverifiable,
+        ),
+    ] {
+        {
+            let mut routes = routes.lock().unwrap();
+            routes.remove(&native);
+            routes.remove(&fallback);
+            if let Some((path, body)) = index {
+                routes.insert(path.clone(), body.clone());
+            }
+        }
+        fs::write(root.join("golem.yaml"), &manifest)?;
+        let lock = root.join("golem.lock");
+        if unsigned_lock.is_some() {
+            fs::remove_file(&lock)?;
+        }
+        let mut args = vec!["install", &source];
+        if let Some(store) = store {
+            args.extend(["--trust-store", store]);
+        }
+        let result = run_cli(root, &args).await;
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(result.status.success(), "{label}: {stderr}");
+        let reports: Vec<_> = stderr
+            .lines()
+            .filter(|line| {
+                line.starts_with("Package sign")
+                    || line.starts_with("Package has no Cosign signature")
+            })
+            .collect();
+        assert_eq!(reports, [expected], "{label}: {stderr}");
+        let current = fs::read(&lock)?;
+        assert_eq!(
+            unsigned_lock.get_or_insert_with(|| current.clone()),
+            &current,
+            "{label}"
+        );
+    }
+    server.abort();
+    Ok(())
+}
+
 pub(crate) async fn push_package(reference: &str, archive: &[u8]) -> anyhow::Result<()> {
     use oci_client::{
         Client, Reference,
