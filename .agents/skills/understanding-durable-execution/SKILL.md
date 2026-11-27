@@ -1340,8 +1340,13 @@ resolves an observation-only owner from storage. Archive failure or cancellation
 it never grants access to the old poisoned producer or restarts the ephemeral invocation.
 
 Normal archival and explicit interruption share `Worker::quiesce_for_owner_retirement` under
-the owner-cleanup lock: stop execution, drain stream retirement and lifecycle/forwarding work,
-commit, then stop status writers. Only explicit interruption records a pending terminal interrupt.
+the owner-cleanup lock: stop execution, then retire the stream producer and drain that retirement
+and lifecycle/forwarding work, commit, then stop status writers. The producer is retired after the
+stop, so an interrupted streaming invocation records its session `Finished` while the stop unwinds
+it; only a lost shard fences the producer when the retirement is recorded, and writes no terminal.
+An interrupt queued while the Store is suspended reaches no guest; the invocation publishes it when
+it sets the Store running (`publish_interrupt_queued_before_running`), so a guest that blocks on a
+stream read still observes it. Only explicit interruption records a pending terminal interrupt.
 Archival moves the oplog before removing the cached worker. The open oplog generation and its
 forwarding wrapper may be reused by the next worker, so ordinary retirement does not close their
 task admission or forwarding. Deletion claims ownership under the same owner-cleanup lock, then
