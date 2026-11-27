@@ -694,6 +694,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
 
 mod dependencies;
 mod direct;
+mod invocation_handle;
 mod remote;
 
 #[cfg(test)]
