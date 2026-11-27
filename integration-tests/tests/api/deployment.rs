@@ -18,6 +18,7 @@ use golem_client::api::{
 };
 use golem_client::model::AgentSecretCreation;
 use golem_client::model::DeploymentCreation;
+use golem_common::model::Timestamp;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
@@ -73,12 +74,17 @@ use golem_common::schema::tool::{
 use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_common::schema::{ExternalSchemaValue, FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_key, data_value};
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::{BlobStorageLabelledApi, BlobStorageNamespace};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use integration_tests::agents::lookup_keyed_agent;
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::fs::File;
 
@@ -434,24 +440,61 @@ fn assert_secret_type_is_string(secret_type: &SchemaGraph) {
     ));
 }
 
+struct CompiledArtifact {
+    key: PathBuf,
+    last_modified_at: Timestamp,
+}
+
+async fn wait_for_compiled_artifact(
+    blob_storage: &FileSystemBlobStorage,
+    wasm_hash: Hash,
+) -> anyhow::Result<CompiledArtifact> {
+    const ARTIFACT_TIMEOUT: Duration = Duration::from_secs(30);
+    let blobs = blob_storage.with("packaged_wasm", "wait_for_compiled_artifact");
+    let namespace = BlobStorageNamespace::CompilationCache;
+    let directory = PathBuf::from(wasm_hash.to_string());
+    tokio::time::timeout(ARTIFACT_TIMEOUT, async {
+        loop {
+            let objects = blobs.list_dir(namespace.clone(), &directory).await?;
+            if !objects.is_empty() {
+                assert_eq!(objects.len(), 1, "one compiled artifact per Wasm hash");
+                let key = objects.into_iter().next().unwrap();
+                let metadata = blobs
+                    .get_metadata(namespace.clone(), &key)
+                    .await?
+                    .expect("the compiled artifact must exist");
+                if metadata.size > 0 {
+                    return Ok::<_, anyhow::Error>(CompiledArtifact {
+                        key,
+                        last_modified_at: metadata.last_modified_at,
+                    });
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await?
+}
+
 #[test]
-#[timeout("60s")]
+#[timeout("90s")]
 async fn packaged_wasm_uses_one_compiled_artifact_across_environments(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    use golem_test_framework::config::EnvBasedTestDependenciesConfig;
-    use sha2::{Digest, Sha256};
-    use std::time::Duration;
-
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, first) = user.app_and_env().await?;
     let (_, second) = user.app_and_env().await?;
     let (_, marker_env) = user.app_and_env().await?;
+    // The spawned compiler uses this store, not deps.blob_storage(), which holds DSL fixtures.
+    let blob_storage = FileSystemBlobStorage::attach_existing(
+        &std::env::temp_dir().join("ittest-local-object-store/golem"),
+    )?;
 
     // An empty component with a unique custom section avoids hitting an artifact from another run.
     let mut wasm = b"\0asm\x0d\0\x01\0\0\x12\x01x".to_vec();
     wasm.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
+    let wasm_hash = Hash::new(blake3::hash(&wasm));
     let digest = format!("sha256:{:x}", Sha256::digest(&wasm));
     let request = serde_json::from_value(json!({
         "componentName": "probe:packaged",
@@ -462,10 +505,12 @@ async fn packaged_wasm_uses_one_compiled_artifact_across_environments(
         },
     }))?;
 
+    let mut original_artifact = None;
     for environment in [&first, &second] {
-        client
+        let component = client
             .create_component(&environment.id.0, &request, wasm.clone(), None::<Vec<u8>>)
             .await?;
+        assert_eq!(component.wasm_hash, wasm_hash);
         let plan = client
             .get_environment_deployment_plan(&environment.id.0)
             .await?;
@@ -475,58 +520,57 @@ async fn packaged_wasm_uses_one_compiled_artifact_across_environments(
                 &deployment_creation(&plan, "0.0.1", plan.deployment_hash, vec![], vec![]),
             )
             .await?;
+        if environment.id == first.id {
+            let artifact = wait_for_compiled_artifact(&blob_storage, wasm_hash).await?;
+            // Blob metadata has millisecond precision. A later rewrite must have a new timestamp.
+            while Timestamp::now_utc().to_millis() <= artifact.last_modified_at.to_millis() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            original_artifact = Some(artifact);
+        }
     }
 
-    // A different artifact submitted after the duplicate tells us the compiler has processed it.
+    // Compile and upload queues are FIFO. This distinct artifact is a barrier after the duplicate.
     let mut changed_wasm = wasm;
     changed_wasm[11] = b'y';
+    let changed_hash = Hash::new(blake3::hash(&changed_wasm));
+    assert_ne!(changed_hash, wasm_hash);
     let marker = serde_json::from_value(json!({ "componentName": "probe:marker" }))?;
-    client
+    let marker_component = client
         .create_component(&marker_env.id.0, &marker, changed_wasm, None::<Vec<u8>>)
         .await?;
+    assert_eq!(marker_component.wasm_hash, changed_hash);
 
-    let port = EnvBasedTestDependenciesConfig::new().compilation_http_port;
-    let http = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{port}/metrics");
-    let uploads = |metrics: &str, environment_id| {
-        let label = format!("environment_id=\"{environment_id}\"");
-        metrics
-            .lines()
-            .filter(|line| {
-                line.starts_with("golem_compilation_cache_objects_written_total{")
-                    && line.contains(&label)
-            })
-            .map(|line| {
-                line.split_whitespace()
-                    .nth(1)
-                    .unwrap()
-                    .parse::<u64>()
-                    .unwrap()
-            })
-            .sum::<u64>()
-    };
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let metrics = http
-                .get(&url)
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await?;
-            if uploads(&metrics, marker_env.id) == 1 {
-                assert_eq!(uploads(&metrics, first.id), 1);
-                assert_eq!(
-                    uploads(&metrics, second.id),
-                    0,
-                    "the second environment should reuse the compiled artifact"
-                );
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await??;
+    let marker_artifact = wait_for_compiled_artifact(&blob_storage, changed_hash).await?;
+    let original_artifact = original_artifact.unwrap();
+    assert_ne!(marker_artifact.key, original_artifact.key);
+    assert_eq!(
+        marker_artifact.key.file_name(),
+        original_artifact.key.file_name(),
+        "distinct Wasm uses the same engine fingerprint but a different cache key"
+    );
+    let blobs = blob_storage.with("packaged_wasm", "check_reuse");
+    assert_eq!(
+        blobs
+            .list_dir(
+                BlobStorageNamespace::CompilationCache,
+                Path::new(&wasm_hash.to_string()),
+            )
+            .await?,
+        vec![original_artifact.key.clone()],
+        "both environments must share one compiled artifact"
+    );
+    let metadata = blobs
+        .get_metadata(
+            BlobStorageNamespace::CompilationCache,
+            &original_artifact.key,
+        )
+        .await?
+        .expect("the shared compiled artifact must still exist");
+    assert_eq!(
+        metadata.last_modified_at, original_artifact.last_modified_at,
+        "the second environment must reuse the artifact without rewriting it"
+    );
 
     Ok(())
 }

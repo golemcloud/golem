@@ -9,6 +9,7 @@ use golem_cli::sdk_overrides::SdkOverrides;
 use golem_client::model::{NativeToolInvocationResponse, NativeToolResult};
 use golem_common::model::invocation_session_public::PublicInvocationResult;
 use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
+use golem_common::model::{InvocationOwner, OwnedInvocationId};
 use golem_common::schema::{
     TypedSchemaValue,
     render::{from_json_value, to_json_value},
@@ -133,7 +134,7 @@ async fn checked_call(
     ctx: &TestContext,
     descriptor: &FixtureDescriptor,
     call: &CheckedCall,
-) -> anyhow::Result<(Value, Option<String>)> {
+) -> anyhow::Result<(Value, Option<OwnedInvocationId>)> {
     match &call.target {
         CallTarget::Invoke { agent, method } => {
             let binding = descriptor
@@ -161,6 +162,7 @@ async fn checked_call(
                 .map(serde_json::from_str::<InvokeResultView>);
             let result = values.next().context("missing invocation result")??;
             ensure!(values.next().is_none(), "multiple invocation results");
+            let invocation_id = result.idempotency_key.parse()?;
             let result = result
                 .result_json
                 .as_ref()
@@ -180,7 +182,10 @@ async fn checked_call(
             ensure!(metadata.len() == 1, "expected one invoked agent");
             Ok((
                 checked_value(result, &call.expected)?,
-                Some(metadata[0].metadata.agent_id.to_string()),
+                Some(OwnedInvocationId::new(
+                    metadata[0].metadata.agent_id,
+                    invocation_id,
+                )),
             ))
         }
         CallTarget::Http { method, path } => {
@@ -310,13 +315,18 @@ async fn checked_call(
             let document = documents.next().context("missing tool result")??;
             ensure!(documents.next().is_none(), "multiple tool results");
             let owner = if streaming {
-                document.pointer("/target/agentId")
+                document.get("invocationId")
             } else {
-                document.pointer("/response/agentId")
+                document.pointer("/response/invocationId")
             }
             .and_then(Value::as_str)
-            .context("tool result did not identify its ephemeral owner")?
-            .to_owned();
+            .context("tool result did not identify its invocation")?
+            .parse::<OwnedInvocationId>()
+            .map_err(anyhow::Error::msg)?;
+            ensure!(
+                matches!(owner.owner(), InvocationOwner::Tool(name) if name.as_str() == tool.as_str()),
+                "tool invocation belongs to a different owner"
+            );
             let actual = if streaming {
                 match serde_json::from_value::<PublicInvocationResult>(
                     document
@@ -371,7 +381,11 @@ async fn checked_call(
     }
 }
 
-async fn no_network(ctx: &TestContext, component: &str, owner: &str) -> anyhow::Result<()> {
+async fn no_network(
+    ctx: &TestContext,
+    component: &str,
+    invocation_id: &OwnedInvocationId,
+) -> anyhow::Result<()> {
     let output = command(
         ctx,
         vec![
@@ -388,6 +402,28 @@ async fn no_network(ctx: &TestContext, component: &str, owner: &str) -> anyhow::
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()?;
+    let owner = match invocation_id.owner() {
+        InvocationOwner::Agent(agent_id) => *agent_id,
+        InvocationOwner::Tool(_) => {
+            let invocation: golem_client::model::Invocation = client
+                .get(format!(
+                    "{}/v1/runtime/envs/{}/invocations/{invocation_id}",
+                    ctx.worker_service_url(),
+                    components[0].0.environment_id,
+                ))
+                .bearer_auth(golem_client::LOCAL_WELL_KNOWN_TOKEN)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            ensure!(
+                invocation.summary.invocation_id == invocation_id.to_string(),
+                "invocation lookup returned a different invocation"
+            );
+            invocation.summary.agent_id.into()
+        }
+    };
     let mut entries: Vec<AgentOplogEntryView> = Vec::new();
     let mut from = 1;
     loop {
@@ -400,7 +436,7 @@ async fn no_network(ctx: &TestContext, component: &str, owner: &str) -> anyhow::
             .map_err(|_| anyhow::anyhow!("invalid oplog URL"))?
             .pop()
             .pop()
-            .push(owner)
+            .push(&owner.to_string())
             .push("oplog");
         let page: golem_client::model::GetOplogResponse = client
             .get(url)
@@ -429,7 +465,22 @@ async fn no_network(ctx: &TestContext, component: &str, owner: &str) -> anyhow::
         ensure!(last < page.last_index, "oplog exceeds its last index");
         from = last + 1;
     }
-    check_no_network(&entries)
+    check_no_network(&entries)?;
+    if let InvocationOwner::Tool(tool_name) = invocation_id.owner() {
+        let AgentOplogEntryContent::Full(PublicOplogEntry::Create(create)) = &entries[0].entry
+        else {
+            bail!("tool invocation oplog does not begin with Create");
+        };
+        let tool = create
+            .standalone_tool
+            .as_ref()
+            .context("tool invocation oplog has no standalone tool identity")?;
+        ensure!(
+            &tool.tool_name == tool_name && tool.invocation_id == invocation_id.id(),
+            "oplog belongs to a different tool invocation"
+        );
+    }
+    Ok(())
 }
 
 fn check_no_network(entries: &[AgentOplogEntryView]) -> anyhow::Result<()> {
@@ -1625,7 +1676,7 @@ async fn sdk_fixtures(sdk: Sdk) {
                     component,
                     first
                         .1
-                        .as_deref()
+                        .as_ref()
                         .context("first call has no oplog owner")?,
                 )
                 .await {
@@ -1651,7 +1702,7 @@ async fn sdk_fixtures(sdk: Sdk) {
                     component,
                     repeated
                         .1
-                        .as_deref()
+                        .as_ref()
                         .context("fresh first call has no oplog owner")?,
                 )
                 .await?;
