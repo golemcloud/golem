@@ -90,6 +90,12 @@ eviction. Parallel builds can temporarily exceed the limit. The cache lives at
 `<Golem config directory>/js-compilation-cache`; deleting it only makes the next
 build cold. The output Wasm is standalone and does not need this cache or external JS.
 
+The failure tests preinitialize small JavaScript sources, written inline in the Rust
+tests, in the TypeScript guest. They check the error that `golem build` prints when
+preinitialization fails: a module-level host call names the component and the
+qualified import, a module-level throw keeps its JavaScript message and stack, and
+a corrupt input keeps the optimizer's original error.
+
 The tests do not call the agent's `get` method or cover worker execution, awaited
 I/O or source-map diagnostic accuracy. Source maps accompany the build outputs for
 inspection; dependency paths omit pnpm's virtual-store prefix and use forward slashes.

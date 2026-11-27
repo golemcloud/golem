@@ -1,8 +1,9 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
+use crate::model::component::ComponentName;
 use crate::wasmtime_config::create_wasmtime_config_without_fs_cache;
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use camino::Utf8Path;
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
@@ -14,7 +15,14 @@ pub const JS_COMPILATION_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Preinitializes the current JavaScript source in an unchanged guest template.
 /// Only compiled native code is cached; each call initializes a fresh instance.
+///
+/// A failure names the component. When the initializer traps, the error keeps the guest's
+/// diagnostics, such as a JavaScript exception and its stack, and the trap cause, such as
+/// the qualified import that module-level code called. It drops the Wasm backtrace of the
+/// guest runtime and the `unreachable` trap that follows a reported guest failure. Other
+/// optimizer failures keep their original error.
 pub async fn preinitialize_js(
+    component_name: &ComponentName,
     input: &Utf8Path,
     output: &Utf8Path,
     source: String,
@@ -72,7 +80,42 @@ pub async fn preinitialize_js(
             tracing::warn!(error = %error, "Failed to trim JavaScript compilation cache");
         }
     }
-    result
+    result.map_err(|error| preinitialization_error(component_name, error))
+}
+
+fn preinitialization_error(component_name: &ComponentName, error: anyhow::Error) -> anyhow::Error {
+    let failed = format!("Failed to pre-initialize component {component_name}");
+    if error.downcast_ref::<wasmtime::WasmBacktrace>().is_none() {
+        return error.context(failed);
+    }
+
+    // The optimizer adds the guest's stderr tail as the outermost context.
+    let guest_stderr = error
+        .chain()
+        .next()
+        .map(ToString::to_string)
+        .filter(|diagnostic| diagnostic.starts_with("Guest stderr"))
+        .map(|diagnostic| {
+            diagnostic
+                .split_once('\n')
+                .map_or("", |(_, stderr)| stderr)
+                .trim()
+                .to_string()
+        })
+        .filter(|diagnostic| !diagnostic.is_empty());
+
+    let root_cause = error.root_cause();
+    let reported_abort = guest_stderr.is_some()
+        && matches!(
+            root_cause.downcast_ref::<wasmtime::Trap>(),
+            Some(wasmtime::Trap::UnreachableCodeReached)
+        );
+
+    match (guest_stderr, reported_abort) {
+        (Some(guest_stderr), true) => anyhow!("{failed}:\n{guest_stderr}"),
+        (Some(guest_stderr), false) => anyhow!("{failed}: {root_cause}\n{guest_stderr}"),
+        (None, _) => anyhow!("{failed}: {root_cause}"),
+    }
 }
 
 fn trim_compilation_cache(directory: &Path) -> anyhow::Result<()> {

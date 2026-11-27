@@ -5,6 +5,7 @@ use anyhow::{Context, ensure};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::javascript::{JS_COMPILATION_CACHE_MAX_BYTES, preinitialize_js};
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
+use golem_common::model::component::ComponentName;
 use std::path::{Path, PathBuf};
 use test_r::{test, timeout};
 
@@ -46,6 +47,7 @@ async fn smoke_test(guest: &Path, bundle: &Path, expected: &str) -> anyhow::Resu
     );
     assert_ne!(quick_agents[0].description, expected);
     golem_common::javascript::preinitialize_js(
+        &ComponentName("js-guest:smoke".to_string()),
         Utf8Path::from_path(guest).context("Non-UTF-8 guest path")?,
         Utf8Path::from_path(&initialized).context("Non-UTF-8 temporary path")?,
         source,
@@ -58,6 +60,120 @@ async fn smoke_test(guest: &Path, bundle: &Path, expected: &str) -> anyhow::Resu
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].type_name.0, "JsGuestSmoke");
     assert_eq!(agents[0].description, expected);
+    Ok(())
+}
+
+/// Preinitializes `source` in the TypeScript guest and returns the reported failure.
+async fn preinitialization_failure(component: &str, source: &str) -> anyhow::Result<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let guest = root.join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm");
+    ensure!(
+        guest.is_file(),
+        "Missing JS guest {}; build its SDK agent template first",
+        guest.display()
+    );
+    let directory = tempfile::tempdir()?;
+    let initialized = directory.path().join("initialized.wasm");
+    let error = preinitialize_js(
+        &ComponentName(component.to_string()),
+        Utf8Path::from_path(&guest).context("Non-UTF-8 guest path")?,
+        Utf8Path::from_path(&initialized).context("Non-UTF-8 temporary path")?,
+        source.to_string(),
+        None,
+    )
+    .await
+    .expect_err("preinitialization must fail");
+    ensure!(
+        !initialized.exists(),
+        "a failed preinitialization wrote output"
+    );
+    Ok(format!("{error:#}"))
+}
+
+#[test]
+#[timeout("120s")]
+async fn module_level_host_call_names_import_and_component() -> anyhow::Result<()> {
+    let text = preinitialization_failure(
+        "js-guest:config-read",
+        r#"import { getConfigValue } from 'golem:agent/host@2.0.0';
+const metadata = { doc: undefined, aliases: [], examples: [], deprecated: undefined, role: undefined };
+const graph = { typeNodes: [{ body: { tag: 'bool-type' }, metadata }], defs: [], root: 0 };
+export default getConfigValue(['greeting'], graph);"#,
+    )
+    .await?;
+    assert_eq!(
+        text,
+        "Failed to pre-initialize component js-guest:config-read: wizer pre-initialization \
+         called unknown import `golem:agent/host@2.0.0#get-config-value` — this import is not \
+         available during pre-initialization"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn module_level_throw_keeps_javascript_message_and_stack() -> anyhow::Result<()> {
+    let text = preinitialization_failure(
+        "js-guest:throw",
+        "function loadSettings() { throw new TypeError('settings are missing'); }\n\
+         export default loadSettings();",
+    )
+    .await?;
+    assert!(
+        text.starts_with("Failed to pre-initialize component js-guest:throw:\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("JavaScript error: TypeError: settings are missing\n"),
+        "{text}"
+    );
+    assert!(text.contains("at loadSettings (user:"), "{text}");
+    for noise in [
+        "wasm backtrace",
+        "agent_guest.wasm!",
+        "unreachable",
+        "panicked at",
+        "RUST_BACKTRACE",
+    ] {
+        assert!(!text.contains(noise), "{noise:?} in:\n{text}");
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn non_trap_failure_keeps_original_error() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let input = Utf8Path::from_path(directory.path())
+        .context("Non-UTF-8 temporary path")?
+        .join("corrupt.wasm");
+    let output = input.with_file_name("initialized.wasm");
+    std::fs::write(&input, b"\0asm corrupt component")?;
+    let sources = [String::new()];
+    let original = wasm_rquickjs::optimize_component_with_options(
+        &input,
+        &output,
+        "wizer-initialize",
+        &wasm_rquickjs::OptimizeOptions {
+            sources: Some(&sources),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("a corrupt component must fail");
+    let error = preinitialize_js(
+        &ComponentName("js-guest:corrupt".to_string()),
+        &input,
+        &output,
+        String::new(),
+        None,
+    )
+    .await
+    .expect_err("a corrupt component must fail");
+    assert_eq!(
+        format!("{error:#}"),
+        format!("Failed to pre-initialize component js-guest:corrupt: {original:#}")
+    );
     Ok(())
 }
 
@@ -100,6 +216,7 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
         root.join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
     )
     .unwrap();
+    let cache_test = ComponentName("js-guest:cache".to_string());
     let source = std::fs::read_to_string(bundle("ts")?)?;
     let edited = source.replace("TS initialized value:", "Edited TS initialized value:");
     assert_ne!(
@@ -115,19 +232,31 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
     let edited_cached = dir.join("edited-cached.wasm");
     let edited_uncached = dir.join("edited-uncached.wasm");
 
-    let stats = preinitialize_js(&guest, &cold, source.clone(), Some(cache.as_std_path()))
-        .await?
-        .compilation_cache
-        .unwrap();
+    let stats = preinitialize_js(
+        &cache_test,
+        &guest,
+        &cold,
+        source.clone(),
+        Some(cache.as_std_path()),
+    )
+    .await?
+    .compilation_cache
+    .unwrap();
     assert!(stats.misses > 0);
-    let stats = preinitialize_js(&guest, &warm, source.clone(), Some(cache.as_std_path()))
-        .await?
-        .compilation_cache
-        .unwrap();
+    let stats = preinitialize_js(
+        &cache_test,
+        &guest,
+        &warm,
+        source.clone(),
+        Some(cache.as_std_path()),
+    )
+    .await?
+    .compilation_cache
+    .unwrap();
     assert!(stats.hits > 0);
     assert_eq!(stats.misses, 0);
     assert!(
-        preinitialize_js(&guest, &uncached, source.clone(), None)
+        preinitialize_js(&cache_test, &guest, &uncached, source.clone(), None)
             .await?
             .compilation_cache
             .is_none()
@@ -140,6 +269,7 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
     let fallback = dir.join("fallback.wasm");
     assert!(
         preinitialize_js(
+            &cache_test,
             &guest,
             &fallback,
             source.clone(),
@@ -152,6 +282,7 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
     assert_eq!(std::fs::read(&fallback)?, std::fs::read(&uncached)?);
 
     let stats = preinitialize_js(
+        &cache_test,
         &guest,
         &edited_cached,
         edited.clone(),
@@ -165,7 +296,7 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
         "a JS edit must reuse compiled template code"
     );
     assert_eq!(stats.misses, 0);
-    preinitialize_js(&guest, &edited_uncached, edited.clone(), None).await?;
+    preinitialize_js(&cache_test, &guest, &edited_uncached, edited.clone(), None).await?;
     assert_eq!(
         std::fs::read(&edited_cached)?,
         std::fs::read(&edited_uncached)?
@@ -180,12 +311,19 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
     let parallel_b = dir.join("parallel-b.wasm");
     let (a, b) = tokio::join!(
         preinitialize_js(
+            &cache_test,
             &guest,
             &parallel_a,
             source.clone(),
             Some(cache.as_std_path())
         ),
-        preinitialize_js(&guest, &parallel_b, edited, Some(cache.as_std_path())),
+        preinitialize_js(
+            &cache_test,
+            &guest,
+            &parallel_b,
+            edited,
+            Some(cache.as_std_path())
+        ),
     );
     a?;
     b?;
@@ -226,10 +364,16 @@ async fn typescript_compilation_cache() -> anyhow::Result<()> {
         }
     }
     let recovered = dir.join("recovered.wasm");
-    let stats = preinitialize_js(&guest, &recovered, source, Some(cache.as_std_path()))
-        .await?
-        .compilation_cache
-        .unwrap();
+    let stats = preinitialize_js(
+        &cache_test,
+        &guest,
+        &recovered,
+        source,
+        Some(cache.as_std_path()),
+    )
+    .await?
+    .compilation_cache
+    .unwrap();
     assert!(stats.misses > 0);
     assert_eq!(std::fs::read(&recovered)?, std::fs::read(&uncached)?);
     Ok(())
@@ -246,6 +390,7 @@ async fn compilation_cache_evicts_cold_entries_together() -> anyhow::Result<()> 
         root.join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
     )
     .unwrap();
+    let cache_test = ComponentName("js-guest:cache".to_string());
     let source = std::fs::read_to_string(bundle("ts")?)?;
     let directory = tempfile::tempdir()?;
     let directory = Utf8Path::from_path(directory.path()).unwrap();
@@ -266,7 +411,14 @@ async fn compilation_cache_evicts_cold_entries_together() -> anyhow::Result<()> 
     for name in ["entry.wip-123", ".cleanup.wip-123", "maintenance.lock"] {
         std::fs::write(cache.join(name), "in progress")?;
     }
-    preinitialize_js(&guest, &output, source, Some(cache.as_std_path())).await?;
+    preinitialize_js(
+        &cache_test,
+        &guest,
+        &output,
+        source,
+        Some(cache.as_std_path()),
+    )
+    .await?;
     for name in [
         "hot",
         "hot.stats",
