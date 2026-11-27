@@ -1,0 +1,936 @@
+[
+  {
+    "section": "4.3.3. Push Notification Payload",
+    "line": 848,
+    "source": "POST {webhook_url}\nAuthorization: {authentication_scheme} {credentials}\nContent-Type: application/a2a+json\n\n{\n  /* StreamResponse object - one of: */\n  \"task\": { /* Task object */ },\n  \"message\": { /* Message object */ },\n  \"statusUpdate\": { /* TaskStatusUpdateEvent object */ },\n  \"artifactUpdate\": { /* TaskArtifactUpdateEvent object */ }\n}\n",
+    "kind": "Illustration",
+    "reason": "Push webhook template, containing placeholder JSON."
+  },
+  {
+    "section": "4.6.1. Extension Declaration",
+    "line": 1008,
+    "source": "{\n  \"name\": \"Research Assistant Agent\",\n  \"description\": \"AI agent for academic research and fact-checking\",\n  \"supportedInterfaces\": [\n    {\n      \"url\": \"https://research-agent.example.com/a2a/v1\",\n      \"protocolBinding\": \"HTTP+JSON\",\n      \"protocolVersion\": \"0.3\",\n    }\n  ],\n  \"capabilities\": {\n    \"streaming\": false,\n    \"pushNotifications\": false,\n    \"extensions\": [\n      {\n        \"uri\": \"https://standards.org/extensions/citations/v1\",\n        \"description\": \"Provides citation formatting and source verification\",\n        \"required\": false\n      },\n      {\n        \"uri\": \"https://example.com/extensions/geolocation/v1\",\n        \"description\": \"Location-based search capabilities\",\n        \"required\": false\n      }\n    ]\n  },\n  \"defaultInputModes\": [\"text/plain\"],\n  \"defaultOutputModes\": [\"text/plain\"],\n  \"skills\": [\n    {\n      \"id\": \"academic-research\",\n      \"name\": \"Academic Research Assistant\",\n      \"description\": \"Provides research assistance with citations and source verification\",\n      \"tags\": [\"research\", \"citations\", \"academic\"],\n      \"examples\": [\"Find peer-reviewed articles on climate change\"],\n      \"inputModes\": [\"text/plain\"],\n      \"outputModes\": [\"text/plain\"]\n    }\n  ]\n}\n",
+    "kind": "Illustration",
+    "reason": "Trailing comma; omits REQUIRED version."
+  },
+  {
+    "section": "4.6.1. Extension Declaration",
+    "line": 1055,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\nA2A-Extensions: https://example.com/extensions/geolocation/v1,https://standards.org/extensions/citations/v1\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [{\"text\": \"Find restaurants near me\"}],\n    \"extensions\": [\"https://example.com/extensions/geolocation/v1\"],\n    \"metadata\": {\n      \"https://example.com/extensions/geolocation/v1\": {\n        \"latitude\": 37.7749,\n        \"longitude\": -122.4194\n      }\n    }\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Find restaurants near me"
+          }
+        ],
+        "extensions": [
+          "https://example.com/extensions/geolocation/v1"
+        ],
+        "metadata": {
+          "https://example.com/extensions/geolocation/v1": {
+            "latitude": 37.7749,
+            "longitude": -122.4194
+          }
+        }
+      }
+    },
+    "expected": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Find restaurants near me"
+          }
+        ],
+        "extensions": [
+          "https://example.com/extensions/geolocation/v1"
+        ],
+        "metadata": {
+          "https://example.com/extensions/geolocation/v1": {
+            "latitude": 37.7749,
+            "longitude": -122.4194
+          }
+        },
+        "messageId": ""
+      }
+    },
+    "reason": "Message omits REQUIRED messageId; encoder restores it under §5.7."
+  },
+  {
+    "section": "4.6.2. Extensions Points",
+    "line": 1087,
+    "source": "{\n  \"role\": \"ROLE_USER\",\n  \"parts\": [\n    {\"text\": \"Find restaurants near me\"}\n  ],\n  \"extensions\": [\"https://example.com/extensions/geolocation/v1\"],\n  \"metadata\": {\n    \"https://example.com/extensions/geolocation/v1\": {\n      \"latitude\": 37.7749,\n      \"longitude\": -122.4194,\n      \"accuracy\": 10.0,\n      \"timestamp\": \"2025-10-21T14:30:00Z\"\n    }\n  }\n}\n",
+    "kind": "Message",
+    "value": {
+      "role": "ROLE_USER",
+      "parts": [
+        {
+          "text": "Find restaurants near me"
+        }
+      ],
+      "extensions": [
+        "https://example.com/extensions/geolocation/v1"
+      ],
+      "metadata": {
+        "https://example.com/extensions/geolocation/v1": {
+          "latitude": 37.7749,
+          "longitude": -122.4194,
+          "accuracy": 10.0,
+          "timestamp": "2025-10-21T14:30:00Z"
+        }
+      }
+    },
+    "expected": {
+      "role": "ROLE_USER",
+      "parts": [
+        {
+          "text": "Find restaurants near me"
+        }
+      ],
+      "extensions": [
+        "https://example.com/extensions/geolocation/v1"
+      ],
+      "metadata": {
+        "https://example.com/extensions/geolocation/v1": {
+          "latitude": 37.7749,
+          "longitude": -122.4194,
+          "accuracy": 10.0,
+          "timestamp": "2025-10-21T14:30:00Z"
+        }
+      },
+      "messageId": ""
+    },
+    "reason": "Message omits REQUIRED messageId; encoder restores it under §5.7."
+  },
+  {
+    "section": "4.6.2. Extensions Points",
+    "line": 1111,
+    "source": "{\n  \"artifactId\": \"research-summary-001\",\n  \"name\": \"Climate Change Summary\",\n  \"parts\": [\n    {\n      \"text\": \"Global temperatures have risen by 1.1°C since pre-industrial times, with significant impacts on weather patterns and sea levels.\"\n    }\n  ],\n  \"extensions\": [\"https://standards.org/extensions/citations/v1\"],\n  \"metadata\": {\n    \"https://standards.org/extensions/citations/v1\": {\n      \"sources\": [\n        {\n          \"title\": \"Global Temperature Anomalies - 2023 Report\",\n          \"authors\": [\"Smith, J.\", \"Johnson, M.\"],\n          \"url\": \"https://climate.gov/reports/2023-temperature\",\n          \"accessDate\": \"2025-10-21\",\n          \"relevantText\": \"Global temperatures have risen by 1.1°C\"\n        }\n      ]\n    }\n  }\n}\n",
+    "kind": "Artifact",
+    "value": {
+      "artifactId": "research-summary-001",
+      "name": "Climate Change Summary",
+      "parts": [
+        {
+          "text": "Global temperatures have risen by 1.1°C since pre-industrial times, with significant impacts on weather patterns and sea levels."
+        }
+      ],
+      "extensions": [
+        "https://standards.org/extensions/citations/v1"
+      ],
+      "metadata": {
+        "https://standards.org/extensions/citations/v1": {
+          "sources": [
+            {
+              "title": "Global Temperature Anomalies - 2023 Report",
+              "authors": [
+                "Smith, J.",
+                "Johnson, M."
+              ],
+              "url": "https://climate.gov/reports/2023-temperature",
+              "accessDate": "2025-10-21",
+              "relevantText": "Global temperatures have risen by 1.1°C"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "section": "5.6.1. Timestamps",
+    "line": 1241,
+    "source": "{\n  \"timestamp\": \"2025-10-28T10:30:00.000Z\",\n  \"createdAt\": \"2025-10-28T14:25:33.142Z\",\n  \"lastModified\": \"2025-10-31T17:45:22.891Z\"\n}\n",
+    "kind": "Illustration",
+    "reason": "Timestamp illustration, not a protocol object."
+  },
+  {
+    "section": "5.8. Custom Binding Identification",
+    "line": 1285,
+    "source": "{\n  \"supportedInterfaces\": [\n    {\n      \"url\": \"wss://agent.example.com/a2a/websocket\",\n      \"protocolBinding\": \"https://example.com/bindings/websocket/v1\",\n      \"protocolVersion\": \"1.0\"\n    }\n  ]\n}\n",
+    "kind": "Illustration",
+    "reason": "AgentCard fragment; includes a custom binding."
+  },
+  {
+    "section": "6.1. Basic Task Execution",
+    "line": 1314,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [{\"text\": \"What is the weather today?\"}],\n    \"messageId\": \"msg-uuid\"\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "What is the weather today?"
+          }
+        ],
+        "messageId": "msg-uuid"
+      }
+    }
+  },
+  {
+    "section": "6.1. Basic Task Execution",
+    "line": 1331,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"task\": {\n    \"id\": \"task-uuid\",\n    \"contextId\": \"context-uuid\",\n    \"status\": {\"state\": \"TASK_STATE_COMPLETED\"},\n    \"artifacts\": [{\n      \"artifactId\": \"artifact-uuid\",\n      \"name\": \"Weather Report\",\n      \"parts\": [{\"text\": \"Today will be sunny with a high of 75°F\"}]\n    }]\n  }\n}\n",
+    "kind": "SendMessageResponse",
+    "value": {
+      "task": {
+        "id": "task-uuid",
+        "contextId": "context-uuid",
+        "status": {
+          "state": "TASK_STATE_COMPLETED"
+        },
+        "artifacts": [
+          {
+            "artifactId": "artifact-uuid",
+            "name": "Weather Report",
+            "parts": [
+              {
+                "text": "Today will be sunny with a high of 75°F"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "section": "6.2. Streaming Task Execution",
+    "line": 1355,
+    "source": "POST /message:stream HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [{\"text\": \"Write a detailed report on climate change\"}],\n    \"messageId\": \"msg-uuid\"\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Write a detailed report on climate change"
+          }
+        ],
+        "messageId": "msg-uuid"
+      }
+    }
+  },
+  {
+    "section": "6.2. Streaming Task Execution",
+    "line": 1372,
+    "source": "HTTP/1.1 200 OK\nContent-Type: text/event-stream\n\ndata: {\"task\": {\"id\": \"task-uuid\", \"status\": {\"state\": \"TASK_STATE_WORKING\"}}}\n\ndata: {\"artifactUpdate\": {\"taskId\": \"task-uuid\", \"artifact\": {\"parts\": [{\"text\": \"# Climate Change Report\\n\\n\"}]}}}\n\ndata: {\"statusUpdate\": {\"taskId\": \"task-uuid\", \"status\": {\"state\": \"TASK_STATE_COMPLETED\"}}}\n",
+    "kind": "StreamSequence",
+    "value": [
+      {
+        "task": {
+          "id": "task-uuid",
+          "status": {
+            "state": "TASK_STATE_WORKING"
+          }
+        }
+      },
+      {
+        "artifactUpdate": {
+          "taskId": "task-uuid",
+          "artifact": {
+            "parts": [
+              {
+                "text": "# Climate Change Report\n\n"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "statusUpdate": {
+          "taskId": "task-uuid",
+          "status": {
+            "state": "TASK_STATE_COMPLETED"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "section": "6.3. Multi-Turn Interaction",
+    "line": 1389,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [{\"text\": \"Book me a flight\"}],\n    \"messageId\": \"msg-1\"\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Book me a flight"
+          }
+        ],
+        "messageId": "msg-1"
+      }
+    }
+  },
+  {
+    "section": "6.3. Multi-Turn Interaction",
+    "line": 1406,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"task\": {\n    \"id\": \"task-uuid\",\n    \"status\": {\n      \"state\": \"TASK_STATE_INPUT_REQUIRED\",\n      \"message\": {\n        \"role\": \"ROLE_AGENT\",\n        \"parts\": [{\"text\": \"I need more details. Where would you like to fly from and to?\"}]\n      }\n    }\n  }\n}\n",
+    "kind": "SendMessageResponse",
+    "value": {
+      "task": {
+        "id": "task-uuid",
+        "status": {
+          "state": "TASK_STATE_INPUT_REQUIRED",
+          "message": {
+            "role": "ROLE_AGENT",
+            "parts": [
+              {
+                "text": "I need more details. Where would you like to fly from and to?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expected": {
+      "task": {
+        "id": "task-uuid",
+        "status": {
+          "state": "TASK_STATE_INPUT_REQUIRED",
+          "message": {
+            "role": "ROLE_AGENT",
+            "parts": [
+              {
+                "text": "I need more details. Where would you like to fly from and to?"
+              }
+            ],
+            "messageId": ""
+          }
+        }
+      }
+    },
+    "reason": "Nested status message omits REQUIRED messageId; encoder restores it under §5.7."
+  },
+  {
+    "section": "6.3. Multi-Turn Interaction",
+    "line": 1426,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\n\n{\n  \"message\": {\n    \"taskId\": \"task-uuid\",\n    \"role\": \"ROLE_USER\",\n    \"parts\": [{\"text\": \"From San Francisco to New York\"}],\n    \"messageId\": \"msg-2\"\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "taskId": "task-uuid",
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "From San Francisco to New York"
+          }
+        ],
+        "messageId": "msg-2"
+      }
+    }
+  },
+  {
+    "section": "6.4. Version Negotiation Error",
+    "line": 1448,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\nA2A-Version: 0.5\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [{\"text\": \"Hello\"}],\n    \"messageId\": \"msg-uuid\"\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Hello"
+          }
+        ],
+        "messageId": "msg-uuid"
+      }
+    }
+  },
+  {
+    "section": "6.4. Version Negotiation Error",
+    "line": 1466,
+    "source": "HTTP/1.1 400 Bad Request\nContent-Type: application/problem+json\n\n{\n  \"type\": \"https://a2a-protocol.org/errors/version-not-supported\",\n  \"title\": \"Protocol Version Not Supported\",\n  \"status\": 400,\n  \"detail\": \"The requested A2A protocol version 0.5 is not supported by this agent\",\n  \"supportedVersions\": [\"0.3\"]\n}\n",
+    "kind": "Illustration",
+    "reason": "RFC 9457 illustration conflicts with normative §11.6."
+  },
+  {
+    "section": "Request: All tasks from a specific context",
+    "line": 1495,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"tasks\": [\n    {\n      \"id\": \"3f36680c-7f37-4a5f-945e-d78981fafd36\",\n      \"contextId\": \"c295ea44-7543-4f78-b524-7a38915ad6e4\",\n      \"status\": {\n        \"state\": \"TASK_STATE_COMPLETED\",\n        \"timestamp\": \"2024-03-15T10:15:00Z\"\n      }\n    }\n  ],\n  \"totalSize\": 5,\n  \"pageSize\": 10,\n  \"nextPageToken\": \"\"\n}\n",
+    "kind": "ListTasksResponse",
+    "value": {
+      "tasks": [
+        {
+          "id": "3f36680c-7f37-4a5f-945e-d78981fafd36",
+          "contextId": "c295ea44-7543-4f78-b524-7a38915ad6e4",
+          "status": {
+            "state": "TASK_STATE_COMPLETED",
+            "timestamp": "2024-03-15T10:15:00Z"
+          }
+        }
+      ],
+      "totalSize": 5,
+      "pageSize": 10,
+      "nextPageToken": ""
+    }
+  },
+  {
+    "section": "Request: All working tasks across all contexts",
+    "line": 1528,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"tasks\": [\n    {\n      \"id\": \"789abc-def0-1234-5678-9abcdef01234\",\n      \"contextId\": \"another-context-id\",\n      \"status\": {\n        \"state\": \"TASK_STATE_WORKING\",\n        \"message\": {\n          \"role\": \"ROLE_AGENT\",\n          \"parts\": [\n            {\n              \"text\": \"Processing your document analysis...\"\n            }\n          ],\n          \"messageId\": \"msg-status-update\"\n        },\n        \"timestamp\": \"2024-03-15T10:20:00Z\"\n      }\n    }\n  ],\n  \"totalSize\": 1,\n  \"pageSize\": 20,\n  \"nextPageToken\": \"\"\n}\n",
+    "kind": "ListTasksResponse",
+    "value": {
+      "tasks": [
+        {
+          "id": "789abc-def0-1234-5678-9abcdef01234",
+          "contextId": "another-context-id",
+          "status": {
+            "state": "TASK_STATE_WORKING",
+            "message": {
+              "role": "ROLE_AGENT",
+              "parts": [
+                {
+                  "text": "Processing your document analysis..."
+                }
+              ],
+              "messageId": "msg-status-update"
+            },
+            "timestamp": "2024-03-15T10:20:00Z"
+          }
+        }
+      ],
+      "totalSize": 1,
+      "pageSize": 20,
+      "nextPageToken": ""
+    }
+  },
+  {
+    "section": "Pagination Example",
+    "line": 1570,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"tasks\": [\n    /* ... additional tasks */\n  ],\n  \"totalSize\": 15,\n  \"pageSize\": 10,\n  \"nextPageToken\": \"base64-encoded-next-cursor-token\"\n}\n",
+    "kind": "Illustration",
+    "reason": "Placeholder comment for additional tasks."
+  },
+  {
+    "section": "Validation Error Example",
+    "line": 1596,
+    "source": "HTTP/1.1 400 Bad Request\nContent-Type: application/problem+json\n\n{\n  \"status\": 400,\n  \"detail\": \"Invalid parameters\",\n  \"errors\": [\n    {\n      \"field\": \"pageSize\",\n      \"message\": \"Must be between 1 and 100 inclusive, got 150\"\n    },\n    {\n      \"field\": \"historyLength\",\n      \"message\": \"Must be non-negative integer, got -5\"\n    },\n    {\n      \"field\": \"status\",\n      \"message\": \"Invalid status value 'TASK_STATE_RUNNING'. Must be one of: TASK_STATE_SUBMITTED, TASK_STATE_WORKING, TASK_STATE_COMPLETED, TASK_STATE_FAILED, TASK_STATE_CANCELED, TASK_STATE_REJECTED, TASK_STATE_INPUT_REQUIRED, TASK_STATE_AUTH_REQUIRED\"\n    }\n  ]\n}\n",
+    "kind": "Illustration",
+    "reason": "RFC 9457 illustration conflicts with normative §11.6."
+  },
+  {
+    "section": "6.6. Push Notification Setup and Usage",
+    "line": 1626,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [\n      {\n        \"text\": \"Generate the Q1 sales report. This usually takes a while. Notify me when it's ready.\"\n      }\n    ],\n    \"messageId\": \"6dbc13b5-bd57-4c2b-b503-24e381b6c8d6\"\n  },\n  \"configuration\": {\n    \"taskPushNotificationConfig\": {\n      \"url\": \"https://client.example.com/webhook/a2a-notifications\",\n      \"authentication\": {\n        \"scheme\": \"Bearer\",\n        \"credentials\": \"secure-client-token-for-task-aaa\"\n      }\n    }\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Generate the Q1 sales report. This usually takes a while. Notify me when it's ready."
+          }
+        ],
+        "messageId": "6dbc13b5-bd57-4c2b-b503-24e381b6c8d6"
+      },
+      "configuration": {
+        "taskPushNotificationConfig": {
+          "url": "https://client.example.com/webhook/a2a-notifications",
+          "authentication": {
+            "scheme": "Bearer",
+            "credentials": "secure-client-token-for-task-aaa"
+          }
+        }
+      }
+    }
+  },
+  {
+    "section": "6.6. Push Notification Setup and Usage",
+    "line": 1656,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"task\": {\n    \"id\": \"43667960-d455-4453-b0cf-1bae4955270d\",\n    \"contextId\": \"c295ea44-7543-4f78-b524-7a38915ad6e4\",\n    \"status\": {\n      \"state\": \"TASK_STATE_SUBMITTED\",\n      \"timestamp\": \"2024-03-15T11:00:00Z\"\n    }\n  }\n}\n",
+    "kind": "SendMessageResponse",
+    "value": {
+      "task": {
+        "id": "43667960-d455-4453-b0cf-1bae4955270d",
+        "contextId": "c295ea44-7543-4f78-b524-7a38915ad6e4",
+        "status": {
+          "state": "TASK_STATE_SUBMITTED",
+          "timestamp": "2024-03-15T11:00:00Z"
+        }
+      }
+    }
+  },
+  {
+    "section": "6.6. Push Notification Setup and Usage",
+    "line": 1674,
+    "source": "POST /webhook/a2a-notifications HTTP/1.1\nHost: client.example.com\nAuthorization: Bearer secure-client-token-for-task-aaa\nContent-Type: application/a2a+json\n\n{\n  \"statusUpdate\": {\n    \"taskId\": \"43667960-d455-4453-b0cf-1bae4955270d\",\n    \"contextId\": \"c295ea44-7543-4f78-b524-7a38915ad6e4\",\n    \"status\": {\n      \"state\": \"TASK_STATE_COMPLETED\",\n      \"timestamp\": \"2024-03-15T18:30:00Z\"\n    }\n  }\n}\n",
+    "kind": "StreamResponse",
+    "value": {
+      "statusUpdate": {
+        "taskId": "43667960-d455-4453-b0cf-1bae4955270d",
+        "contextId": "c295ea44-7543-4f78-b524-7a38915ad6e4",
+        "status": {
+          "state": "TASK_STATE_COMPLETED",
+          "timestamp": "2024-03-15T18:30:00Z"
+        }
+      }
+    }
+  },
+  {
+    "section": "6.7. File Exchange (Upload and Download)",
+    "line": 1698,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [\n      {\n        \"text\": \"Analyze this image and highlight any faces.\"\n      },\n      {\n        \"raw\": \"iVBORw0KGgoAAAANSUhEUgAAAAUA...\"\n        \"filename\": \"input_image.png\",\n        \"mediaType\": \"image/png\",\n      }\n    ],\n    \"messageId\": \"6dbc13b5-bd57-4c2b-b503-24e381b6c8d6\"\n  }\n}\n",
+    "kind": "Illustration",
+    "reason": "Missing comma, trailing comma and truncated base64."
+  },
+  {
+    "section": "6.7. File Exchange (Upload and Download)",
+    "line": 1724,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"task\": {\n    \"id\": \"43667960-d455-4453-b0cf-1bae4955270d\",\n    \"contextId\": \"c295ea44-7543-4f78-b524-7a38915ad6e4\",\n    \"status\": {\n      \"state\": \"TASK_STATE_COMPLETED\",\n      \"timestamp\": \"2024-03-15T12:05:00Z\"\n    },\n    \"artifacts\": [\n      {\n        \"artifactId\": \"9b6934dd-37e3-4eb1-8766-962efaab63a1\",\n        \"name\": \"processed_image_with_faces.png\",\n        \"parts\": [\n          {\n            \"url\": \"https://storage.example.com/processed/task-bbb/output.png?token=xyz\",\n            \"filename\": \"output.png\",\n            \"mediaType\": \"image/png\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+    "kind": "SendMessageResponse",
+    "value": {
+      "task": {
+        "id": "43667960-d455-4453-b0cf-1bae4955270d",
+        "contextId": "c295ea44-7543-4f78-b524-7a38915ad6e4",
+        "status": {
+          "state": "TASK_STATE_COMPLETED",
+          "timestamp": "2024-03-15T12:05:00Z"
+        },
+        "artifacts": [
+          {
+            "artifactId": "9b6934dd-37e3-4eb1-8766-962efaab63a1",
+            "name": "processed_image_with_faces.png",
+            "parts": [
+              {
+                "url": "https://storage.example.com/processed/task-bbb/output.png?token=xyz",
+                "filename": "output.png",
+                "mediaType": "image/png"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "section": "6.8. Structured Data Exchange",
+    "line": 1759,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [\n      {\n        \"text\": \"Show me a list of my open IT tickets\",\n        \"metadata\": {\n          \"mediaType\": \"application/json\",\n          \"schema\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"object\",\n              \"properties\": {\n                \"ticketNumber\": { \"type\": \"string\" },\n                \"description\": { \"type\": \"string\" }\n              }\n            }\n          }\n        }\n      }\n    ],\n    \"messageId\": \"85b26db5-ffbb-4278-a5da-a7b09dea1b47\"\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Show me a list of my open IT tickets",
+            "metadata": {
+              "mediaType": "application/json",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "ticketNumber": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "messageId": "85b26db5-ffbb-4278-a5da-a7b09dea1b47"
+      }
+    }
+  },
+  {
+    "section": "6.8. Structured Data Exchange",
+    "line": 1793,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"task\": {\n    \"id\": \"d8c6243f-5f7a-4f6f-821d-957ce51e856c\",\n    \"contextId\": \"c295ea44-7543-4f78-b524-7a38915ad6e4\",\n    \"status\": {\n      \"state\": \"TASK_STATE_COMPLETED\",\n      \"timestamp\": \"2025-04-17T17:47:09.680794Z\"\n    },\n    \"artifacts\": [\n      {\n        \"artifactId\": \"c5e0382f-b57f-4da7-87d8-b85171fad17c\",\n        \"parts\": [\n          {\n            \"text\": \"[{\\\"ticketNumber\\\":\\\"REQ12312\\\",\\\"description\\\":\\\"request for VPN access\\\"},{\\\"ticketNumber\\\":\\\"REQ23422\\\",\\\"description\\\":\\\"Add to DL - team-gcp-onboarding\\\"}]\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+    "kind": "SendMessageResponse",
+    "value": {
+      "task": {
+        "id": "d8c6243f-5f7a-4f6f-821d-957ce51e856c",
+        "contextId": "c295ea44-7543-4f78-b524-7a38915ad6e4",
+        "status": {
+          "state": "TASK_STATE_COMPLETED",
+          "timestamp": "2025-04-17T17:47:09.680794Z"
+        },
+        "artifacts": [
+          {
+            "artifactId": "c5e0382f-b57f-4da7-87d8-b85171fad17c",
+            "parts": [
+              {
+                "text": "[{\"ticketNumber\":\"REQ12312\",\"description\":\"request for VPN access\"},{\"ticketNumber\":\"REQ23422\",\"description\":\"Add to DL - team-gcp-onboarding\"}]"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "section": "6.9. Fetching Authenticated Extended Agent Card",
+    "line": 1832,
+    "source": "{\n  \"capabilities\": {\n    \"extendedAgentCard\": true\n  },\n  \"securitySchemes\": {\n    \"google\": {\n      \"openIdConnectSecurityScheme\": {\n        \"openIdConnectUrl\": \"https://accounts.google.com/.well-known/openid-configuration\"\n      }\n    }\n  }\n}\n",
+    "kind": "Illustration",
+    "reason": "AgentCard fragment."
+  },
+  {
+    "section": "Step 3: Client fetches authenticated extended Agent Card",
+    "line": 1859,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"name\": \"Extended Agent with Additional Skills\",\n  \"skills\": [\n    /* Extended skills available to authenticated users */\n  ]\n}\n",
+    "kind": "Illustration",
+    "reason": "AgentCard fragment with placeholder comment."
+  },
+  {
+    "section": "8.4.1. Canonicalization Requirements",
+    "line": 2029,
+    "source": "{\n  \"name\": \"Example Agent\",\n  \"description\": \"\",\n  \"capabilities\": {\n    \"streaming\": false,\n    \"pushNotifications\": false,\n    \"extensions\": []\n  },\n  \"skills\": []\n}\n",
+    "kind": "Illustration",
+    "reason": "AgentCard canonicalization fragment, not a complete card."
+  },
+  {
+    "section": "8.4.1. Canonicalization Requirements",
+    "line": 2054,
+    "source": "{\"capabilities\":{\"pushNotifications\":false,\"streaming\":false},\"description\":\"\",\"name\":\"Example Agent\",\"skills\":[]}\n",
+    "kind": "Illustration",
+    "reason": "AgentCard canonicalization fragment, not a complete card."
+  },
+  {
+    "section": "8.4.2. Signature Format",
+    "line": 2104,
+    "source": "{\n  \"protected\": \"eyJhbGciOiJFUzI1NiIsInR5cCI6IkpPU0UiLCJraWQiOiJrZXktMSIsImprdSI6Imh0dHBzOi8vZXhhbXBsZS5jb20vYWdlbnQvandrcy5qc29uIn0\",\n  \"signature\": \"QFdkNLNszlGj3z3u0YQGt_T9LixY3qtdQpZmsTdDHDe3fXV9y9-B3m2-XgCpzuhiLt8E0tV6HXoZKHv4GtHgKQ\"\n}\n",
+    "kind": "Illustration",
+    "reason": "JWS signature fragment, not a protocol payload."
+  },
+  {
+    "section": "8.4.2. Signature Format",
+    "line": 2113,
+    "source": "{\"alg\":\"ES256\",\"typ\":\"JOSE\",\"kid\":\"key-1\",\"jku\":\"https://example.com/agent/jwks.json\"}\n",
+    "kind": "Illustration",
+    "reason": "JWS protected header, not a protocol payload."
+  },
+  {
+    "section": "8.5. Sample Agent Card",
+    "line": 2138,
+    "source": "{\n  \"name\": \"GeoSpatial Route Planner Agent\",\n  \"description\": \"Provides advanced route planning, traffic analysis, and custom map generation services. This agent can calculate optimal routes, estimate travel times considering real-time traffic, and create personalized maps with points of interest.\",\n  \"supportedInterfaces\": [\n    {\"url\": \"https://georoute-agent.example.com/a2a/v1\", \"protocolBinding\": \"JSONRPC\", \"protocolVersion\": \"1.0\"},\n    {\"url\": \"https://georoute-agent.example.com/a2a/grpc\", \"protocolBinding\": \"GRPC\", \"protocolVersion\": \"1.0\"},\n    {\"url\": \"https://georoute-agent.example.com/a2a/json\", \"protocolBinding\": \"HTTP+JSON\", \"protocolVersion\": \"1.0\"}\n  ],\n  \"provider\": {\n    \"organization\": \"Example Geo Services Inc.\",\n    \"url\": \"https://www.examplegeoservices.com\"\n  },\n  \"iconUrl\": \"https://georoute-agent.example.com/icon.png\",\n  \"version\": \"1.2.0\",\n  \"documentationUrl\": \"https://docs.examplegeoservices.com/georoute-agent/api\",\n  \"capabilities\": {\n    \"streaming\": true,\n    \"pushNotifications\": true,\n    \"extendedAgentCard\": true\n  },\n  \"securitySchemes\": {\n    \"google\": {\n      \"openIdConnectSecurityScheme\": {\n        \"openIdConnectUrl\": \"https://accounts.google.com/.well-known/openid-configuration\"\n      }\n    }\n  },\n  \"security\": [{ \"google\": [\"openid\", \"profile\", \"email\"] }],\n  \"defaultInputModes\": [\"application/json\", \"text/plain\"],\n  \"defaultOutputModes\": [\"application/json\", \"image/png\"],\n  \"skills\": [\n    {\n      \"id\": \"route-optimizer-traffic\",\n      \"name\": \"Traffic-Aware Route Optimizer\",\n      \"description\": \"Calculates the optimal driving route between two or more locations, taking into account real-time traffic conditions, road closures, and user preferences (e.g., avoid tolls, prefer highways).\",\n      \"tags\": [\"maps\", \"routing\", \"navigation\", \"directions\", \"traffic\"],\n      \"examples\": [\n        \"Plan a route from '1600 Amphitheatre Parkway, Mountain View, CA' to 'San Francisco International Airport' avoiding tolls.\",\n        \"{\\\"origin\\\": {\\\"lat\\\": 37.422, \\\"lng\\\": -122.084}, \\\"destination\\\": {\\\"lat\\\": 37.7749, \\\"lng\\\": -122.4194}, \\\"preferences\\\": [\\\"avoid_ferries\\\"]}\"\n      ],\n      \"inputModes\": [\"application/json\", \"text/plain\"],\n      \"outputModes\": [\n        \"application/json\",\n        \"application/vnd.geo+json\",\n        \"text/html\"\n      ]\n    },\n    {\n      \"id\": \"custom-map-generator\",\n      \"name\": \"Personalized Map Generator\",\n      \"description\": \"Creates custom map images or interactive map views based on user-defined points of interest, routes, and style preferences. Can overlay data layers.\",\n      \"tags\": [\"maps\", \"customization\", \"visualization\", \"cartography\"],\n      \"examples\": [\n        \"Generate a map of my upcoming road trip with all planned stops highlighted.\",\n        \"Show me a map visualizing all coffee shops within a 1-mile radius of my current location.\"\n      ],\n      \"inputModes\": [\"application/json\"],\n      \"outputModes\": [\n        \"image/png\",\n        \"image/jpeg\",\n        \"application/json\",\n        \"text/html\"\n      ]\n    }\n  ],\n  \"signatures\": [\n    {\n      \"protected\": \"eyJhbGciOiJFUzI1NiIsInR5cCI6IkpPU0UiLCJraWQiOiJrZXktMSIsImprdSI6Imh0dHBzOi8vZXhhbXBsZS5jb20vYWdlbnQvandrcy5qc29uIn0\",\n      \"signature\": \"QFdkNLNszlGj3z3u0YQGt_T9LixY3qtdQpZmsTdDHDe3fXV9y9-B3m2-XgCpzuhiLt8E0tV6HXoZKHv4GtHgKQ\"\n    }\n  ]\n}\n",
+    "kind": "Illustration",
+    "reason": "Uses security rather than the normative securityRequirements field."
+  },
+  {
+    "section": "9.2. Service Parameter Transmission",
+    "line": 2252,
+    "source": "POST /rpc HTTP/1.1\nHost: agent.example.com\nContent-Type: application/json\nAuthorization: Bearer token\nA2A-Version: 0.3\nA2A-Extensions: https://example.com/extensions/geolocation/v1,https://standards.org/extensions/citations/v1\n\n{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": { /* SendMessageRequest */ }\n}\n",
+    "kind": "Illustration",
+    "reason": "Placeholder method parameters."
+  },
+  {
+    "section": "9.3. Base Request Structure",
+    "line": 2272,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"unique-request-id\",\n  \"method\": \"category/action\",\n  \"params\": { /* method-specific parameters */ }\n}\n",
+    "kind": "Illustration",
+    "reason": "Placeholder method name and parameters."
+  },
+  {
+    "section": "9.4.1. `SendMessage`",
+    "line": 2289,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": { /* SendMessageRequest object */ }\n}\n",
+    "kind": "Illustration",
+    "reason": "Placeholder method parameters."
+  },
+  {
+    "section": "9.4.1. `SendMessage`",
+    "line": 2302,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"result\": {\n    /* SendMessageResponse object, contains one of:\n     * \"task\": { Task object }\n     * \"message\": { Message object }\n    */\n  }\n",
+    "kind": "Illustration",
+    "reason": "Placeholder response and missing closing brace."
+  },
+  {
+    "section": "9.4.2. `SendStreamingMessage`",
+    "line": 2324,
+    "source": "data: {\"jsonrpc\": \"2.0\", \"id\": 1, \"result\": { /* StreamResponse object */ }}\n\ndata: {\"jsonrpc\": \"2.0\", \"id\": 1, \"result\": { /* StreamResponse object */ }}\n",
+    "kind": "Illustration",
+    "reason": "Placeholder stream payloads."
+  },
+  {
+    "section": "9.4.3. `GetTask`",
+    "line": 2338,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 2,\n  \"method\": \"GetTask\",\n  \"params\": {\n    \"id\": \"task-uuid\",\n    \"historyLength\": 10\n  }\n}\n",
+    "kind": "JsonRpcRequest",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "GetTask",
+      "params": {
+        "id": "task-uuid",
+        "historyLength": 10
+      }
+    }
+  },
+  {
+    "section": "9.4.4. `ListTasks`",
+    "line": 2356,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 3,\n  \"method\": \"ListTasks\",\n  \"params\": {\n    \"contextId\": \"context-uuid\",\n    \"status\": \"TASK_STATE_WORKING\",\n    \"pageSize\": 50,\n    \"pageToken\": \"cursor-token\"\n  }\n}\n",
+    "kind": "JsonRpcRequest",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "ListTasks",
+      "params": {
+        "contextId": "context-uuid",
+        "status": "TASK_STATE_WORKING",
+        "pageSize": 50,
+        "pageToken": "cursor-token"
+      }
+    }
+  },
+  {
+    "section": "9.4.5. `CancelTask`",
+    "line": 2376,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 4,\n  \"method\": \"CancelTask\",\n  \"params\": {\n    \"id\": \"task-uuid\"\n  }\n}\n",
+    "kind": "JsonRpcRequest",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "CancelTask",
+      "params": {
+        "id": "task-uuid"
+      }
+    }
+  },
+  {
+    "section": "9.4.6. `SubscribeToTask`",
+    "line": 2395,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 5,\n  \"method\": \"SubscribeToTask\",\n  \"params\": {\n    \"id\": \"task-uuid\"\n  }\n}\n",
+    "kind": "JsonRpcRequest",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "SubscribeToTask",
+      "params": {
+        "id": "task-uuid"
+      }
+    }
+  },
+  {
+    "section": "9.4.8. `GetExtendedAgentCard`",
+    "line": 2423,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 6,\n  \"method\": \"GetExtendedAgentCard\"\n}\n",
+    "kind": "JsonRpcRequest",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "method": "GetExtendedAgentCard"
+    }
+  },
+  {
+    "section": "9.5. Error Handling",
+    "line": 2459,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"error\": {\n    \"code\": -32602,\n    \"message\": \"Invalid parameters\",\n    \"data\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"message.parts\",\n            \"description\": \"At least one part is required\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+    "kind": "JsonRpcResponse",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32602,
+        "message": "Invalid parameters",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "message.parts",
+                "description": "At least one part is required"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "section": "9.5. Error Handling",
+    "line": 2483,
+    "source": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 2,\n  \"error\": {\n    \"code\": -32001,\n    \"message\": \"Task not found\",\n    \"data\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"TASK_NOT_FOUND\",\n        \"domain\": \"a2a-protocol.org\",\n        \"metadata\": {\n          \"taskId\": \"nonexistent-task-id\",\n          \"timestamp\": \"2025-11-09T10:30:00.000Z\"\n        }\n      }\n    ]\n  }\n}\n",
+    "kind": "JsonRpcResponse",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "error": {
+        "code": -32001,
+        "message": "Task not found",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "TASK_NOT_FOUND",
+            "domain": "a2a-protocol.org",
+            "metadata": {
+              "taskId": "nonexistent-task-id",
+              "timestamp": "2025-11-09T10:30:00.000Z"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "section": "11.2. Service Parameter Transmission",
+    "line": 2767,
+    "source": "POST /message:send HTTP/1.1\nHost: agent.example.com\nContent-Type: application/a2a+json\nAuthorization: Bearer token\nA2A-Version: 0.3\nA2A-Extensions: https://example.com/extensions/geolocation/v1,https://standards.org/extensions/citations/v1\n\n{\n  \"message\": {\n    \"role\": \"ROLE_USER\",\n    \"parts\": [{\"text\": \"Find restaurants near me\"}]\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Find restaurants near me"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Find restaurants near me"
+          }
+        ],
+        "messageId": ""
+      }
+    },
+    "reason": "Message omits REQUIRED messageId; encoder restores it under §5.7."
+  },
+  {
+    "section": "11.4. Request/Response Format",
+    "line": 2814,
+    "source": "POST /message:send\nContent-Type: application/a2a+json\n\n{\n  \"message\": {\n    \"messageId\": \"uuid\",\n    \"role\": \"ROLE_USER\",\n    \"parts\": [{\"text\": \"Hello\"}]\n  },\n  \"configuration\": {\n    \"acceptedOutputModes\": [\"text/plain\"]\n  }\n}\n",
+    "kind": "SendMessageRequest",
+    "value": {
+      "message": {
+        "messageId": "uuid",
+        "role": "ROLE_USER",
+        "parts": [
+          {
+            "text": "Hello"
+          }
+        ]
+      },
+      "configuration": {
+        "acceptedOutputModes": [
+          "text/plain"
+        ]
+      }
+    }
+  },
+  {
+    "section": "11.4. Request/Response Format",
+    "line": 2834,
+    "source": "HTTP/1.1 200 OK\nContent-Type: application/a2a+json\n\n{\n  \"task\": {\n    \"id\": \"task-uuid\",\n    \"contextId\": \"context-uuid\",\n    \"status\": {\n      \"state\": \"TASK_STATE_COMPLETED\"\n    }\n  }\n}\n",
+    "kind": "SendMessageResponse",
+    "value": {
+      "task": {
+        "id": "task-uuid",
+        "contextId": "context-uuid",
+        "status": {
+          "state": "TASK_STATE_COMPLETED"
+        }
+      }
+    }
+  },
+  {
+    "section": "11.5. Query Parameter Naming for Request Parameters",
+    "line": 2878,
+    "source": "GET /tasks/{id}?historyLength=10\n",
+    "kind": "Illustration",
+    "reason": "Push webhook template, containing placeholder JSON."
+  },
+  {
+    "section": "11.6. Error Handling",
+    "line": 2920,
+    "source": "HTTP/1.1 404 Not Found\nContent-Type: application/a2a+json\n\n{\n  \"error\": {\n    \"code\": 404,\n    \"status\": \"NOT_FOUND\",\n    \"message\": \"The specified task ID does not exist or is not accessible\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"TASK_NOT_FOUND\",\n        \"domain\": \"a2a-protocol.org\",\n        \"metadata\": {\n          \"taskId\": \"task-123\",\n          \"timestamp\": \"2025-11-09T10:30:00.000Z\"\n        }\n      }\n    ]\n  }\n}\n",
+    "kind": "HttpError",
+    "value": {
+      "error": {
+        "code": 404,
+        "status": "NOT_FOUND",
+        "message": "The specified task ID does not exist or is not accessible",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "TASK_NOT_FOUND",
+            "domain": "a2a-protocol.org",
+            "metadata": {
+              "taskId": "task-123",
+              "timestamp": "2025-11-09T10:30:00.000Z"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "section": "11.7. Streaming",
+    "line": 2952,
+    "source": "POST /message:stream\nContent-Type: application/a2a+json\n\n{ /* SendMessageRequest object */ }\n",
+    "kind": "Illustration",
+    "reason": "Placeholder method parameters."
+  },
+  {
+    "section": "11.7. Streaming",
+    "line": 2963,
+    "source": "HTTP/1.1 200 OK\nContent-Type: text/event-stream\n\ndata: { /* StreamResponse object */ }\n\ndata: { /* StreamResponse object */ }\n",
+    "kind": "Illustration",
+    "reason": "Placeholder stream payloads."
+  },
+  {
+    "section": "12.7. Agent Card Declaration",
+    "line": 3049,
+    "source": "{\n  \"supportedInterfaces\": [\n    {\n      \"url\": \"wss://agent.example.com/a2a/websocket\",\n      \"protocolBinding\": \"https://example.com/bindings/websocket/v1\"\n    }\n  ]\n}\n",
+    "kind": "Illustration",
+    "reason": "Custom-binding AgentCard fragment."
+  },
+  {
+    "section": "A.2.1 Breaking Change: Kind Discriminator Removed",
+    "line": 3441,
+    "source": "{\n  \"kind\": \"text\",\n  \"text\": \"Hello, world!\"\n}\n",
+    "kind": "Illustration",
+    "reason": "Legacy format outside scope."
+  },
+  {
+    "section": "A.2.1 Breaking Change: Kind Discriminator Removed",
+    "line": 3450,
+    "source": "{\n  \"kind\": \"file\",\n  \"file\": {\n    \"name\": \"diagram.png\",\n    \"mimeType\": \"image/png\",\n    \"fileWithBytes\": \"iVBORw0KGgo...\"\n  }\n}\n",
+    "kind": "Illustration",
+    "reason": "Legacy format outside scope."
+  },
+  {
+    "section": "A.2.1 Breaking Change: Kind Discriminator Removed",
+    "line": 3466,
+    "source": "{\n  \"text\": \"Hello, world!\"\n}\n",
+    "kind": "Part",
+    "value": {
+      "text": "Hello, world!"
+    }
+  },
+  {
+    "section": "A.2.1 Breaking Change: Kind Discriminator Removed",
+    "line": 3474,
+    "source": "{\n  \"raw\": \"iVBORw0KGgo...\",\n  \"filename\": \"diagram.png\",\n  \"mediaType\": \"image/png\"\n}\n",
+    "kind": "Illustration",
+    "reason": "Truncated base64 illustration."
+  },
+  {
+    "section": "A.2.2 Breaking Change: Extended Agent Card Field Relocated",
+    "line": 3535,
+    "source": "{\n  \"supportsExtendedAgentCard\": true,\n  \"capabilities\": {\n    \"streaming\": true\n  }\n}\n",
+    "kind": "Illustration",
+    "reason": "Legacy format outside scope."
+  },
+  {
+    "section": "A.2.2 Breaking Change: Extended Agent Card Field Relocated",
+    "line": 3546,
+    "source": "{\n  \"capabilities\": {\n    \"streaming\": true,\n    \"extendedAgentCard\": true\n  }\n}\n",
+    "kind": "Illustration",
+    "reason": "AgentCard fragment."
+  }
+]

@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "golem-a2a",
     "golem-ai-contract",
     "golem-api-grpc",
     "golem-async-trait",
@@ -48,6 +49,7 @@ print_stderr = "deny"
 license-file = "LICENSE"
 
 [workspace.dependencies]
+golem-a2a = { version = "=0.0.0", path = "golem-a2a" }
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-async-trait = { version = "=0.0.0", path = "golem-async-trait" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
@@ -76,6 +78,8 @@ golem-worker-service = { path = "golem-worker-service" }
 golem-xfs-quotad = { version = "=0.0.0", path = "golem-xfs-quotad" }
 
 
+a2a = { package = "a2a-lf", version = "=0.4.3" }
+a2a-pb = "=0.4.0"
 anyhow = "1.0.97"
 applying = "1.0.1"
 arc-swap = "1.9.1"
