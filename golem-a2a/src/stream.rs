@@ -14,6 +14,7 @@
 
 //! Binding-specific stream payloads and shared library SSE framing.
 use crate::{ProtoJsonPayloadError, jsonrpc, wire};
+use a2a::errors::error_code;
 use a2a::{A2AError, StreamResponse};
 use bytes::Bytes;
 use futures::Stream;
@@ -48,8 +49,8 @@ pub fn encode_jsonrpc(
     Ok(JsonRpcResponse::success(id, wire::to_value(event)?))
 }
 
-/// Require the original ID so interleaved or miscorrelated responses cannot
-/// silently become events in another request's stream.
+/// Require the original ID except for parse/invalid-request errors whose
+/// null ID indicates that the peer could not identify the request.
 pub fn decode_jsonrpc(value: Value, id: &JsonRpcId) -> Result<StreamResponse, DecodeError> {
     if value.get("result").is_some() == value.get("error").is_some() {
         return Err(DecodeError::Envelope(
@@ -57,8 +58,15 @@ pub fn decode_jsonrpc(value: Value, id: &JsonRpcId) -> Result<StreamResponse, De
         ));
     }
     let response: JsonRpcResponse = serde_json::from_value(value)?;
+    let unidentified_request = response.id == JsonRpcId::Null
+        && response.error.as_ref().is_some_and(|error| {
+            matches!(
+                error.code,
+                error_code::PARSE_ERROR | error_code::INVALID_REQUEST
+            )
+        });
     if response.jsonrpc != "2.0"
-        || &response.id != id
+        || (&response.id != id && !unidentified_request)
         || response.result.is_some() == response.error.is_some()
     {
         return Err(DecodeError::Envelope(

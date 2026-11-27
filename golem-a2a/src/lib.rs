@@ -26,6 +26,28 @@ pub mod wire;
 
 pub const MEDIA_TYPE: &str = "application/a2a+json";
 
+fn deserialize_error_details<'de, D>(deserializer: D) -> Result<Vec<a2a::TypedDetail>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let details: Vec<serde_json::Value> = serde::Deserialize::deserialize(deserializer)?;
+    if details.iter().any(|detail| {
+        detail
+            .get("@type")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(str::is_empty)
+    }) {
+        return Err(serde::de::Error::custom(
+            "A2A error details require a nonempty string @type",
+        ));
+    }
+    details
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<Result<_, _>>()
+        .map_err(serde::de::Error::custom)
+}
+
 #[cfg(test)]
 test_r::enable!();
 

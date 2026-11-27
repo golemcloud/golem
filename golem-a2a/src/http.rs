@@ -106,6 +106,11 @@ pub fn match_route<'a>(verb: &str, path: &'a str) -> Option<RouteMatch<'a>> {
                 return false;
             };
             if let Some(suffix) = segment.strip_prefix("{id}") {
+                if route.method == methods::GET_TASK
+                    && (value.ends_with(":cancel") || value.ends_with(":subscribe"))
+                {
+                    return false;
+                }
                 if let Some(id) = value.strip_suffix(suffix).filter(|id| !id.is_empty()) {
                     task_id = Some(id);
                     return true;
@@ -137,9 +142,10 @@ struct ErrorBody {
 #[derive(Serialize, Deserialize)]
 struct Status {
     code: u16,
+    #[serde(default)]
     status: String,
     message: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_error_details")]
     details: Vec<TypedDetail>,
 }
 
@@ -185,7 +191,7 @@ pub fn encode_error(error: &A2AError) -> Result<Value, serde_json::Error> {
 /// supplies no protocol reason, preserve the failure as a generic A2A error.
 pub fn decode_error(value: Value) -> Result<A2AError, serde_json::Error> {
     let Status {
-        code: _,
+        code,
         status,
         message,
         details,
@@ -194,7 +200,13 @@ pub fn decode_error(value: Value) -> Result<A2AError, serde_json::Error> {
         "NOT_FOUND" => error_code::TASK_NOT_FOUND,
         "INVALID_ARGUMENT" => error_code::INVALID_PARAMS,
         "UNIMPLEMENTED" => error_code::METHOD_NOT_FOUND,
-        _ => error_code::INTERNAL_ERROR,
+        "INTERNAL" | "FAILED_PRECONDITION" => error_code::INTERNAL_ERROR,
+        _ => match code {
+            400 => error_code::INVALID_PARAMS,
+            404 => error_code::TASK_NOT_FOUND,
+            501 => error_code::METHOD_NOT_FOUND,
+            _ => error_code::INTERNAL_ERROR,
+        },
     });
     Ok(A2AError {
         code,

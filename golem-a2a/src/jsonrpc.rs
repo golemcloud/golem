@@ -13,8 +13,8 @@
 // limitations under the License.
 
 //! JSON-RPC envelopes are upstream types; payloads are ProtoJSON values.
+use a2a::A2AError;
 pub use a2a::jsonrpc::*;
-use a2a::{A2AError, TypedDetail};
 use serde_json::Value;
 
 /// A malformed JSON body has no trustworthy request ID (§9.5).
@@ -25,16 +25,16 @@ pub fn parse_request(body: &[u8]) -> Result<JsonRpcRequest, JsonRpcResponse> {
             A2AError::parse_error(error.to_string()).to_jsonrpc_error(),
         )
     })?;
+    let id = value
+        .get("id")
+        .cloned()
+        .and_then(|id| serde_json::from_value(id).ok())
+        .unwrap_or(JsonRpcId::Null);
     // Check presence before serde turns an explicit null into None.
     if value
         .get("params")
         .is_some_and(|params| !params.is_object() && !params.is_array())
     {
-        let id = value
-            .get("id")
-            .cloned()
-            .and_then(|id| serde_json::from_value(id).ok())
-            .unwrap_or(JsonRpcId::Null);
         return Err(JsonRpcResponse::error(
             id,
             A2AError::invalid_request("params must be an object or array").to_jsonrpc_error(),
@@ -42,7 +42,7 @@ pub fn parse_request(body: &[u8]) -> Result<JsonRpcRequest, JsonRpcResponse> {
     }
     let request: JsonRpcRequest = serde_json::from_value(value).map_err(|error| {
         JsonRpcResponse::error(
-            JsonRpcId::Null,
+            id,
             A2AError::invalid_request(error.to_string()).to_jsonrpc_error(),
         )
     })?;
@@ -56,7 +56,10 @@ pub fn parse_request(body: &[u8]) -> Result<JsonRpcRequest, JsonRpcResponse> {
 }
 
 pub fn decode_error(error: JsonRpcError) -> Result<A2AError, serde_json::Error> {
-    let details: Option<Vec<TypedDetail>> = error.data.map(serde_json::from_value).transpose()?;
+    let details = error
+        .data
+        .map(crate::deserialize_error_details)
+        .transpose()?;
     Ok(A2AError {
         code: error.code,
         message: error.message,

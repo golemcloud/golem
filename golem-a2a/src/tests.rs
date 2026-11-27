@@ -375,6 +375,85 @@ fn binding_error_mappings_follow_specification_5_4() {
         assert_eq!(decoded.code, code);
         assert_eq!(decoded.message, error.message);
         assert_eq!(http::encode_error(&decoded).unwrap(), body);
+        let mut without_status = body;
+        without_status["error"]
+            .as_object_mut()
+            .unwrap()
+            .remove("status");
+        let decoded = http::decode_error(without_status).unwrap();
+        assert_eq!(decoded.code, code);
+        assert_eq!(decoded.message, error.message);
+    }
+}
+
+#[test]
+fn error_details_and_http_fallbacks() {
+    let details = json!([
+        {"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"message","description":"required"}]},
+        {"@type":"example.org/CustomDetail","context":{"items":[null,42,"x"]}}
+    ]);
+    let rpc_error = jsonrpc::decode_error(jsonrpc::JsonRpcError {
+        code: -32602,
+        message: "bad input".into(),
+        data: Some(details.clone()),
+    })
+    .unwrap();
+    let http_error = http::decode_error(json!({"error":{
+        "code":400,"message":"bad input","details":details
+    }}))
+    .unwrap();
+    for error in [rpc_error, http_error] {
+        assert_eq!(error.code, -32602);
+        assert_eq!(error.message, "bad input");
+        assert_eq!(
+            serde_json::to_value(error.details.unwrap()).unwrap(),
+            details
+        );
+    }
+    for invalid in [
+        json!({"taskId":"t1"}),
+        json!("explanation"),
+        json!([true]),
+        json!([{}]),
+        json!([{"@type":42}]),
+        json!([{"@type":""}]),
+        json!([details[0], {}]),
+    ] {
+        assert!(
+            jsonrpc::decode_error(jsonrpc::JsonRpcError {
+                code: -32603,
+                message: "failure".into(),
+                data: Some(invalid.clone()),
+            })
+            .is_err()
+        );
+        assert!(
+            http::decode_error(json!({"error":{
+                "code":500,"message":"failure","details":invalid
+            }}))
+            .is_err()
+        );
+    }
+    let no_details = jsonrpc::decode_error(jsonrpc::JsonRpcError {
+        code: -32603,
+        message: "failure".into(),
+        data: None,
+    })
+    .unwrap();
+    assert_eq!(no_details.code, -32603);
+    assert!(no_details.details.is_none());
+    for (status, code) in [(400, -32602), (404, -32001), (500, -32603), (501, -32601)] {
+        let error =
+            http::decode_error(json!({"error":{"code":status,"message":"failure"}})).unwrap();
+        assert_eq!(error.code, code);
+        assert_eq!(error.message, "failure");
+        assert!(error.details.is_none());
+    }
+    for incomplete in [
+        json!({"error":{"message":"failure"}}),
+        json!({"error":{"code":500}}),
+    ] {
+        assert!(http::decode_error(incomplete).is_err());
     }
 }
 
@@ -446,6 +525,21 @@ fn routes_equal_specification_5_3() {
             .task_id,
         Some("t%3Acancel")
     );
+    for action in ["cancel", "subscribe"] {
+        let path = format!("/tasks/{id}:{action}");
+        for verb in ["GET", "DELETE", "PUT", "HEAD"] {
+            assert!(http::match_route(verb, &path).is_none(), "{verb} {path}");
+        }
+        for escaped in ["%3A", "%3a"] {
+            let escaped_id = format!("{id}{escaped}{action}");
+            assert_eq!(
+                http::match_route("GET", &format!("/tasks/{escaped_id}"))
+                    .unwrap()
+                    .task_id,
+                Some(escaped_id.as_str())
+            );
+        }
+    }
 }
 
 #[test]
@@ -472,6 +566,51 @@ fn jsonrpc_ids_parse_errors_and_stream_failures() {
     let malformed = jsonrpc::parse_request(br#"{"id":9,"method":"GetTask", "#).unwrap_err();
     assert_eq!(malformed.id, jsonrpc::JsonRpcId::Null);
     assert_eq!(malformed.error.unwrap().code, -32700);
+    for id in [json!(5), json!("five")] {
+        for (field, invalid) in [
+            ("method", json!(7)),
+            ("jsonrpc", json!(7)),
+            ("jsonrpc", json!("1.0")),
+            ("params", json!(42)),
+        ] {
+            let mut body = json!({"jsonrpc":"2.0","id":id,"method":"GetTask"});
+            body[field] = invalid;
+            let response = jsonrpc::parse_request(&serde_json::to_vec(&body).unwrap()).unwrap_err();
+            assert_eq!(serde_json::to_value(response.id).unwrap(), id);
+            assert_eq!(response.error.unwrap().code, -32600);
+        }
+    }
+    for id in [json!([]), json!({}), json!(false)] {
+        let body = json!({"jsonrpc":"2.0","id":id,"method":"GetTask"});
+        let response = jsonrpc::parse_request(&serde_json::to_vec(&body).unwrap()).unwrap_err();
+        assert_eq!(response.id, jsonrpc::JsonRpcId::Null);
+        assert_eq!(response.error.unwrap().code, -32600);
+    }
+    for code in [-32700, -32600] {
+        let response = json!({"jsonrpc":"2.0","id":null,"error":{"code":code,"message":"failure"}});
+        match stream::decode_jsonrpc(response, &47.into()) {
+            Err(stream::DecodeError::Remote(error)) => assert_eq!(error.code, code),
+            other => panic!("expected remote request error, got {other:?}"),
+        }
+    }
+    for (id, code) in [
+        (json!(null), -32001),
+        (json!(48), -32700),
+        (json!("47"), -32600),
+    ] {
+        let response = json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":"failure"}});
+        assert!(matches!(
+            stream::decode_jsonrpc(response, &47.into()),
+            Err(stream::DecodeError::Envelope(_))
+        ));
+    }
+    assert!(matches!(
+        stream::decode_jsonrpc(
+            json!({"jsonrpc":"2.0","id":null,"result":stream::encode_http(&event).unwrap()}),
+            &47.into()
+        ),
+        Err(stream::DecodeError::Envelope(_))
+    ));
     for params in [json!({"id":"t"}), json!(["t"])] {
         let body =
             serde_json::to_vec(&json!({"jsonrpc":"2.0","id":7,"method":"GetTask","params":params}))
@@ -568,7 +707,11 @@ async fn poem_sse_to_client_parser_preserves_both_bindings() {
     }
     let named = sse_stream::Sse {
         event: Some("error".into()),
-        data: Some("{}".into()),
+        data: Some(
+            http::encode_error(&A2AError::task_not_found("t"))
+                .unwrap()
+                .to_string(),
+        ),
         ..Default::default()
     };
     assert!(matches!(
