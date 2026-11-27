@@ -175,28 +175,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let mut reacquiring = false;
-        loop {
-            // Preparation retires a cached generation before the replacement constructor is
-            // reserved. Own that whole interval independently of the initiating RPC.
-            let preparation = tokio::spawn({
-                let deps = deps.clone();
-                let id = owned_agent_id.clone();
-                async move {
-                    deps.active_agents()
-                        .prepare_sealed_deletion(&deps, &id, expected_fingerprint)
-                        .await
-                }
-            });
-            let prepared = preparation.await.map_err(|error| {
-                WorkerExecutorError::runtime(format!("Deletion preparation task failed: {error}"))
-            })?;
-            let prepared = match prepared {
-                Err(WorkerExecutorError::AgentNotFound { .. }) if reacquiring => return Ok(()),
-                result => result?,
-            };
-            if let Some(outcome) = prepared {
-                return outcome.handle().wait().await;
-            }
+        for _ in 0..3 {
             let worker = deps
                 .active_agents()
                 .get_existing_for_purpose(
@@ -216,6 +195,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .is_some()
                 && !worker.deletion_owns_retirement().await
             {
+                drop(worker);
+                // Preparation evicts the frozen generation and reserves its replacement.
+                // Own that interval independently of the initiating RPC's cancellation.
+                let preparation = tokio::spawn({
+                    let deps = deps.clone();
+                    let id = owned_agent_id.clone();
+                    async move {
+                        deps.active_agents()
+                            .prepare_sealed_deletion(&deps, &id, expected_fingerprint)
+                            .await
+                    }
+                });
+                match preparation.await.map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "Deletion preparation task failed: {error}"
+                    ))
+                })? {
+                    Ok(Some(outcome)) => return outcome.handle().wait().await,
+                    Ok(None) => {}
+                    Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
+                    Err(error) => return Err(error),
+                }
+                reacquiring = true;
                 continue;
             }
             if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
@@ -223,6 +225,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             reacquiring = true;
         }
+        Err(WorkerExecutorError::ShardingNotReady)
     }
 
     pub async fn interrupt<T>(

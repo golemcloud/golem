@@ -804,6 +804,7 @@ async fn sealed_duplicate(
     });
     let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
     let kv = Arc::new(OnceLock::<Arc<dyn KeyValueStorage + Send + Sync>>::new());
+    let deletion_lists = Arc::new(SealWriteFault::default());
     let collect_stream_deletion = method == "identity"
         && matches!(
             deletion,
@@ -853,6 +854,15 @@ async fn sealed_duplicate(
             move |inner| {
                 assert!(kv.set(inner.clone()).is_ok());
                 inner
+            }
+        })),
+        wrap_blob_storage: Some(Arc::new({
+            let fault = deletion_lists.clone();
+            move |inner| {
+                Arc::new(FailingSealStorage {
+                    inner,
+                    fault: fault.clone(),
+                })
             }
         })),
         ..Default::default()
@@ -1437,6 +1447,7 @@ async fn sealed_duplicate(
                 | SealedDeletionCheck::UnresolvedAdmission
         )
     ) {
+        let list_start = deletion_lists.lists.lock().unwrap().len();
         if method == "identity" {
             if deletion == Some(SealedDeletionCheck::UnresolvedAdmission) {
                 delete_with_unresolved_admission(&executor, &owned, &history).await?;
@@ -1504,6 +1515,23 @@ async fn sealed_duplicate(
                 fences,
                 vec![(namespace.to_string(), key.clone(), i64::try_from(epoch.0)?)],
                 "no-stream deletion must retain exactly its owning fence until tombstone collection"
+            );
+        }
+        if mode == AgentMode::Ephemeral && deletion == Some(SealedDeletionCheck::Delete) {
+            let calls = deletion_lists.lists.lock().unwrap();
+            assert!(
+                calls[list_start..].iter().any(|(_, _, api, namespace, _)| {
+                    *api == "deletion"
+                        && matches!(
+                            namespace,
+                            BlobStorageNamespace::SealRecords {
+                                agent_mode: AgentMode::Ephemeral,
+                                ..
+                            }
+                        )
+                }),
+                "deleting the cached frozen duplicate must list its sealed history: {:?}",
+                &calls[list_start..]
             );
         }
         assert!(executor.get_worker_metadata_opt(&owned).await?.is_none());
@@ -3995,6 +4023,494 @@ async fn seal_declines_starting_generation(
         AgentStatus::Suspended
     );
     executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeletionRace {
+    Resident,
+    SealBeforeClaim,
+    ClaimBeforeSeal,
+    ActivationBeforePreparation,
+    ExhaustAcquisitions,
+}
+
+#[test]
+#[timeout("4m")]
+async fn resident_deletion_reaches_removal_without_listing_seal_records(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    deletion_race(
+        last_unique_id,
+        deps,
+        fixture,
+        AgentMode::Durable,
+        DeletionRace::Resident,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn deletion_reacquires_after_seal_wins_its_claim(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        deletion_race(
+            last_unique_id,
+            deps,
+            fixture,
+            mode,
+            DeletionRace::SealBeforeClaim,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn deletion_claim_refuses_seal_without_holding_preparation_locks(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    deletion_race(
+        last_unique_id,
+        deps,
+        fixture,
+        AgentMode::Durable,
+        DeletionRace::ClaimBeforeSeal,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn sealed_deletion_rechecks_activation_before_preparation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    deletion_race(
+        last_unique_id,
+        deps,
+        fixture,
+        AgentMode::Durable,
+        DeletionRace::ActivationBeforePreparation,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn deletion_stops_after_three_seal_activation_races_and_can_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    deletion_race(
+        last_unique_id,
+        deps,
+        fixture,
+        AgentMode::Durable,
+        DeletionRace::ExhaustAcquisitions,
+    )
+    .await
+}
+
+struct DeletionClaimPause {
+    target: OwnedAgentId,
+    enabled: AtomicBool,
+    calls: AtomicUsize,
+    started: AtomicUsize,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+#[async_trait::async_trait]
+impl WorkerDeletionHook for DeletionClaimPause {
+    async fn before_claim(&self, target: &OwnedAgentId) {
+        if target == &self.target && self.enabled.load(Ordering::SeqCst) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.entered.add_permits(1);
+            self.release.acquire().await.unwrap().forget();
+        }
+    }
+
+    fn claimed(&self, target: &OwnedAgentId, started: bool) {
+        if target == &self.target && started {
+            self.started.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    async fn before_stage(
+        &self,
+        _: &OwnedAgentId,
+        _: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+}
+
+async fn seal_deletion_race_generation(
+    executor: &TestWorkerExecutor,
+    indexed: &dyn IndexedStorage,
+    owned: &OwnedAgentId,
+    history: &[PublicOplogEntryWithIndex],
+) -> anyhow::Result<()> {
+    let old = executor.active_agents().try_get(owned).await.unwrap();
+    let oplog = old.oplog();
+    let last = oplog.current_oplog_index().await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match old
+                .worker_activator()
+                .archive_oplog(owned, last, ArchiveWait::Finished)
+                .await?
+            {
+                Some(true) => {}
+                Some(false) => break,
+                None => anyhow::bail!("the current generation refused archival"),
+            }
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let sealed = indexed
+        .observe_agent("test", "seal_claim_race", owned)
+        .await?;
+    assert!(
+        !sealed.has_data,
+        "seal declined: fence={:?}, status={:?}",
+        oplog.fence(),
+        old.get_last_known_status().await
+    );
+    assert_eq!(sealed.durable_marker, None);
+    assert_eq!(sealed.ephemeral_marker, None);
+    assert!(oplog.is_retired());
+    assert!(!executor.worker_is_cached(owned).await);
+    assert_eq!(
+        executor.get_oplog(owned, OplogIndex::INITIAL).await?,
+        history
+    );
+    Ok(())
+}
+
+async fn deletion_race(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    mode: AgentMode,
+    race: DeletionRace,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
+    let lists = Arc::new(SealWriteFault::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.indexed_storage_layers = 2;
+                config.oplog.blob_storage_layers = 1;
+                config.oplog.entry_count_limit = 1_000_000;
+                config.oplog.archive_interval = Duration::from_secs(3600);
+                config.oplog.shard_lease_max_ttl = Duration::from_secs(300);
+                config.oplog.skew_margin = Duration::from_secs(1);
+                config.scheduler.refresh_interval = Duration::from_secs(3600);
+            })),
+            wrap_shard_service: Some(Arc::new({
+                let shard = shard.clone();
+                move |inner| {
+                    assert!(shard.set(inner.clone()).is_ok());
+                    inner
+                }
+            })),
+            wrap_blob_storage: Some(Arc::new({
+                let lists = lists.clone();
+                move |inner| {
+                    Arc::new(FailingSealStorage {
+                        inner,
+                        fault: lists.clone(),
+                    })
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let constructor = if mode == AgentMode::Durable {
+        agent_key!("DurableStreamAgent", "deletion-race")
+    } else {
+        agent_key!("EphemeralStreamAgent")
+    };
+    let owned = if mode == AgentMode::Durable {
+        executor
+            .start_agent(&component.id, constructor.clone())
+            .await?
+    } else {
+        crate::agent::ephemeral_agent_id(
+            &executor,
+            component.environment_id,
+            &constructor,
+            &key,
+            "instance",
+        )
+    };
+    executor
+        .invoke_and_await_agent_with_key(&component, &constructor, &key, "instance", data_value!())
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_loaded(&owned).await {
+            executor.stop_worker_if_idle(&owned).await?;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    // An ephemeral retirement may have evicted its shell without sealing under the unexpiring grant.
+    executor.attached_agent_status(&owned.agent_id).await?;
+    let old = executor.active_agents().try_get(&owned).await.unwrap();
+    let fingerprint = old.get_initial_worker_metadata().fingerprint;
+    let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+    let indexed_config =
+        derive_disjoint_sqlite_config(&sqlite_storage_config(deps, &context), "indexed");
+    let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
+    assert!(
+        indexed
+            .observe_agent("test", "resident_delete_race", &owned)
+            .await?
+            .has_data
+    );
+    install_sealable_lease(shard.get().unwrap().as_ref())?;
+    if race == DeletionRace::ActivationBeforePreparation {
+        seal_deletion_race_generation(&executor, &indexed, &owned, &history).await?;
+    }
+    let claim = Arc::new(DeletionClaimPause {
+        target: owned.clone(),
+        enabled: AtomicBool::new(true),
+        calls: AtomicUsize::new(0),
+        started: AtomicUsize::new(0),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    let stages = Arc::new(SealedDeletionGate {
+        target: owned.clone(),
+        fail_preparation: false,
+        fail_cache_removal: AtomicBool::new(false),
+        preparation_calls: AtomicUsize::new(0),
+        removal_calls: AtomicUsize::new(0),
+        claims: tokio::sync::Semaphore::new(0),
+        started_claims: AtomicUsize::new(0),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    let pause_claim = matches!(
+        race,
+        DeletionRace::SealBeforeClaim | DeletionRace::ExhaustAcquisitions
+    );
+    if pause_claim {
+        executor.set_worker_deletion_hook(claim.clone());
+    } else {
+        executor.set_worker_deletion_hook(stages.clone());
+    }
+    let preparation = (race == DeletionRace::ActivationBeforePreparation)
+        .then(|| executor.gate_lifecycle_after_next_successful_open(&owned.agent_id));
+    let list_start = lists.lists.lock().unwrap().len();
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let owned = owned.clone();
+        async move {
+            use golem_api_grpc::proto::golem::workerexecutor::v1::{
+                DeleteWorkerRequest, delete_worker_response,
+            };
+            let response = executor
+                .client
+                .clone()
+                .delete_worker(DeleteWorkerRequest {
+                    agent_id: Some(owned.agent_id.into()),
+                    environment_id: Some(owned.environment_id.into()),
+                    auth_ctx: Some(executor.auth_ctx().into()),
+                    caller: Some(callers::anonymous().into()),
+                    expected_fingerprint: Some(fingerprint.0.into()),
+                })
+                .await?
+                .into_inner();
+            anyhow::Ok(match response.result {
+                Some(delete_worker_response::Result::Success(_)) => Ok(()),
+                Some(delete_worker_response::Result::Failure(error)) => {
+                    Err(WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?)
+                }
+                None => anyhow::bail!("deletion returned no result"),
+            })
+        }
+    });
+    let mut activated = None;
+    if let Some((entered, release)) = preparation {
+        tokio::time::timeout(Duration::from_secs(30), entered).await??;
+        assert!(
+            !indexed
+                .observe_agent("test", "frozen_delete_open", &owned)
+                .await?
+                .has_data
+        );
+        assert_eq!(stages.started_claims.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
+            history
+        );
+        assert!(!executor.worker_is_loaded(&owned).await);
+        let frozen = executor.active_agents().try_get(&owned).await.unwrap();
+        executor.retire_unloaded_worker(&owned).await?;
+        executor.attached_agent_status(&owned.agent_id).await?;
+        let replacement = executor.active_agents().try_get(&owned).await.unwrap();
+        assert!(!Arc::ptr_eq(&frozen, &replacement));
+        assert_eq!(
+            replacement.get_initial_worker_metadata().fingerprint,
+            fingerprint
+        );
+        assert!(
+            indexed
+                .observe_agent("test", "activated_delete", &owned)
+                .await?
+                .has_data
+        );
+        activated = Some(replacement);
+        release.send(()).unwrap();
+    }
+    if pause_claim {
+        let rounds = if race == DeletionRace::ExhaustAcquisitions {
+            3
+        } else {
+            1
+        };
+        for round in 1..=rounds {
+            tokio::time::timeout(Duration::from_secs(30), claim.entered.acquire())
+                .await??
+                .forget();
+            let acquired = executor.active_agents().try_get(&owned).await.unwrap();
+            seal_deletion_race_generation(&executor, &indexed, &owned, &history).await?;
+            if race == DeletionRace::ExhaustAcquisitions {
+                executor.attached_agent_status(&owned.agent_id).await?;
+                let replacement = executor.active_agents().try_get(&owned).await.unwrap();
+                assert!(!Arc::ptr_eq(&acquired, &replacement));
+                assert_eq!(
+                    replacement.get_initial_worker_metadata().fingerprint,
+                    fingerprint
+                );
+                assert!(
+                    indexed
+                        .observe_agent("test", "activation_claim_race", &owned)
+                        .await?
+                        .has_data
+                );
+                assert_eq!(
+                    executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
+                    history
+                );
+            }
+            assert_eq!(claim.calls.load(Ordering::SeqCst), round);
+            claim.release.add_permits(1);
+        }
+    } else {
+        tokio::time::timeout(Duration::from_secs(30), stages.entered.acquire())
+            .await??
+            .forget();
+        let owner = executor.active_agents().try_get(&owned).await.unwrap();
+        if let Some(activated) = activated {
+            assert!(Arc::ptr_eq(&owner, &activated));
+        }
+        assert_eq!(stages.started_claims.load(Ordering::SeqCst), 1);
+        if race == DeletionRace::ClaimBeforeSeal {
+            let last = owner.oplog().current_oplog_index().await;
+            assert_eq!(
+                owner
+                    .worker_activator()
+                    .archive_oplog(&owned, last, ArchiveWait::Finished)
+                    .await?,
+                None
+            );
+            assert!(
+                indexed
+                    .observe_agent("test", "claim_refuses_seal", &owned)
+                    .await?
+                    .has_data
+            );
+            assert!(Arc::ptr_eq(
+                &owner,
+                &executor.active_agents().try_get(&owned).await.unwrap()
+            ));
+        }
+        stages.release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(30), stages.entered.acquire())
+            .await??
+            .forget();
+        if race == DeletionRace::Resident {
+            let calls = lists.lists.lock().unwrap();
+            assert!(
+                calls[list_start..]
+                    .iter()
+                    .all(|(_, _, _, namespace, _)| !matches!(
+                        namespace,
+                        BlobStorageNamespace::SealRecords { .. }
+                    )),
+                "PG-present deletion must not list seal records before DurableStateRemoved: {:?}",
+                &calls[list_start..]
+            );
+        }
+        stages.release.add_permits(1);
+    }
+    let result = tokio::time::timeout(Duration::from_secs(30), deleting).await???;
+    if race == DeletionRace::ExhaustAcquisitions {
+        assert!(
+            matches!(result, Err(WorkerExecutorError::ShardingNotReady)),
+            "{result:?}"
+        );
+        assert_eq!(claim.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(claim.started.load(Ordering::SeqCst), 0);
+        assert!(
+            indexed
+                .observe_agent("test", "bounded_delete_retry", &owned)
+                .await?
+                .has_data
+        );
+        assert_eq!(
+            executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
+            history
+        );
+        claim.enabled.store(false, Ordering::SeqCst);
+        executor
+            .delete_worker_with_fingerprint(&owned, fingerprint)
+            .await?;
+    } else {
+        result?;
+        if pause_claim {
+            assert_eq!(claim.started.load(Ordering::SeqCst), 1);
+        }
+    }
+    assert!(executor.get_worker_metadata_opt(&owned).await?.is_none());
+    assert!(
+        !indexed
+            .observe_agent("test", "completed_delete_race", &owned)
+            .await?
+            .has_data
+    );
+    assert!(!executor.worker_is_cached(&owned).await);
     Ok(())
 }
 

@@ -72,6 +72,18 @@ impl Debug for OplogFixtureService {
 #[async_trait]
 impl OplogService for OplogFixtureService {
     async fn lock_lifecycle(&self, id: &AgentId) -> OplogLifecycleGuard {
+        let gate = {
+            let mut gates = self.deps.oplog_lifecycle_after_open_gates.lock().unwrap();
+            if gates.get(id).is_some_and(|(armed, _)| *armed) {
+                gates.remove(id).map(|(_, gate)| gate)
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
         self.inner.lock_lifecycle(id).await
     }
 
@@ -190,14 +202,22 @@ impl OplogService for OplogFixtureService {
         execution: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         epoch: Option<ShardEpoch>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
-        Ok(self.handle(
-            id,
-            self.inner
-                .open(
-                    lifecycle, id, mode, last, metadata, status, execution, epoch,
-                )
-                .await?,
-        ))
+        let oplog = self
+            .inner
+            .open(
+                lifecycle, id, mode, last, metadata, status, execution, epoch,
+            )
+            .await?;
+        if let Some((armed, _)) = self
+            .deps
+            .oplog_lifecycle_after_open_gates
+            .lock()
+            .unwrap()
+            .get_mut(&id.agent_id)
+        {
+            *armed = true;
+        }
+        Ok(self.handle(id, oplog))
     }
 
     async fn get_last_index(

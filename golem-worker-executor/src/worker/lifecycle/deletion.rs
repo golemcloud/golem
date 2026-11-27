@@ -22,7 +22,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         lifecycle: &mut OplogLifecycleGuard,
         record: &crate::services::oplog::seal::SealRecord,
         epoch: ShardEpoch,
-    ) -> Result<DeleteOutcome, WorkerExecutorError> {
+    ) -> Result<(DeleteOutcome, Option<DeletionSender>), WorkerExecutorError> {
         let metadata = Self::hydrate_existing_worker_metadata(
             &self.deps,
             lifecycle,
@@ -54,7 +54,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerExecutorError::runtime("Prepared deletion found no initialized runtime")
         })?;
         drop(instance);
-        Ok(self.spawn_deletion_attempt(outcome, sender, false))
+        Ok((outcome, sender))
     }
 
     /// For a caller that pinned this incarnation by its expected fingerprint, an error is
@@ -168,7 +168,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )))
     }
 
-    fn spawn_deletion_attempt(
+    pub(crate) fn spawn_deletion_attempt(
         self: &Arc<Self>,
         outcome: DeleteOutcome,
         sender: Option<DeletionSender>,

@@ -1764,6 +1764,34 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// After the next successful service open, pauses this agent's next lifecycle acquisition
+    /// before taking its guard. Dropping the release sender also unblocks it.
+    pub fn gate_lifecycle_after_next_successful_open(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .oplog_lifecycle_after_open_gates
+            .lock()
+            .unwrap()
+            .insert(
+                *agent_id,
+                (
+                    false,
+                    OplogReadGate {
+                        entered_tx,
+                        release_rx,
+                    },
+                ),
+            );
+        (entered_rx, release_tx)
+    }
+
     /// Holds one external-payload download in the oplog dependency wrapper. The receipt
     /// follows an actual Pending poll of the withheld delivery, not a native filesystem poll.
     pub fn gate_next_oplog_payload_read(
@@ -7229,6 +7257,8 @@ pub struct AdditionalTestDeps {
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     non_snapshot_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    oplog_lifecycle_after_open_gates:
+        Arc<std::sync::Mutex<HashMap<AgentId, (bool, OplogReadGate)>>>,
     oplog_payload_read_gates: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, Uuid), OplogReadGate>>>,
     oplog_delete_gates: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, AgentMode), OplogReadGate>>>,
     runtime_card_audit_gates:
@@ -7320,6 +7350,7 @@ impl AdditionalTestDeps {
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             non_snapshot_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_lifecycle_after_open_gates: Arc::default(),
             oplog_payload_read_gates: Arc::default(),
             oplog_delete_gates: Arc::default(),
             runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
