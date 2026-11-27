@@ -539,7 +539,7 @@ impl Rpc for RemoteInvocationRpc {
         caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), RpcAwaitError> {
         let owned_agent_id = &target.owned_agent_id;
         let caller = caller.clone();
         self.worker_proxy

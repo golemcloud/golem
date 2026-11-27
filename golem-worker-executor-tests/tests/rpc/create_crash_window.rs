@@ -190,7 +190,7 @@ impl Rpc for CreateThenHangRpc {
         callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
         self.inner
             .invoke(
                 agent,

@@ -432,7 +432,7 @@ impl Rpc for HoldReportAnswerRpc {
         caller: &Caller,
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
         self.inner
             .invoke(
                 target,

@@ -929,6 +929,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
         {
+            // A read of the owner's error history that failed for a time is no outcome.
+            if InvocationObservationFailure::is_stored_read(&error) {
+                return Err(error);
+            }
             return Ok(LookupResult::Complete(Err(error)));
         }
         Ok(result)

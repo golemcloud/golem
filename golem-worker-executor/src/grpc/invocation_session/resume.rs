@@ -325,6 +325,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }) {
             Ok(stream_mappings) => stream_mappings,
             Err(error) => {
+                cleanup.observe_error(&error);
                 send_protocol_failure(&responses, error).await;
                 drop(responses);
                 let _ = forwarder.await;

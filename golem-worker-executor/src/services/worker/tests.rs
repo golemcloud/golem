@@ -712,7 +712,7 @@ async fn unreadable_status_cache_is_refolded_and_replaced() {
                 OplogIndex::INITIAL,
                 test_create_entry(&owned_agent_id, AgentMode::Durable, fingerprint),
             ),
-            (OplogIndex::from_u64(2), OplogEntry::exited()),
+            (OplogIndex::from_u64(2), OplogEntry::exited().rounded()),
         ]))),
         Arc::new(IndexTestComponentService),
         Arc::new(GolemConfig::default()),

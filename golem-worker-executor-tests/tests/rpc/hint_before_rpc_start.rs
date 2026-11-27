@@ -200,7 +200,7 @@ impl Rpc for DispatchThenHangRpc {
         callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
         let hang = self.record(&method, &key);
         let result = self
             .inner

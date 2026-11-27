@@ -3635,7 +3635,7 @@ impl Rpc for AttachedProducerRpc {
         _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), crate::services::rpc::RpcAwaitError> {
         unreachable!("test RPC only serves attached stream segments")
     }
 }
@@ -3741,6 +3741,27 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
             })));
         assert!(
             matches!(read().await, Err(StreamStoreError::Oplog(message)) if message.contains("access revoked"))
+        );
+        assert_eq!(rpc.read_requests.lock().await.len(), 1);
+        rpc.read_requests.lock().await.clear();
+
+        // A producer history that does not read keeps its type, so the reader reports the failed
+        // read of that producer and not a failed request.
+        let unreadable = crate::services::oplog::UnreadableOplog {
+            agent_id: identity.agent_id,
+            error: crate::services::oplog::OplogReadError::Gap {
+                start: OplogIndex::from_u64(42),
+                end: OplogIndex::from_u64(43),
+            },
+        };
+        rpc.scripted_reads
+            .lock()
+            .await
+            .push_back(Err(DurableStreamRemoteError::Unreadable(
+                unreadable.clone(),
+            )));
+        assert!(
+            matches!(read().await, Err(StreamStoreError::Unreadable(read)) if read == unreadable)
         );
         assert_eq!(rpc.read_requests.lock().await.len(), 1);
         rpc.read_requests.lock().await.clear();

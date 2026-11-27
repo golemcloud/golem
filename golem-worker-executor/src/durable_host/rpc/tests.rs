@@ -434,7 +434,7 @@ impl Rpc for ActivatingRpc {
         _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
+    ) -> Result<(), crate::services::rpc::RpcAwaitError> {
         unreachable!("test only exercises invoke-and-await dispatch")
     }
 }
@@ -544,7 +544,7 @@ impl Rpc for RecordingScopeCardRpc {
         _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
+    ) -> Result<(), crate::services::rpc::RpcAwaitError> {
         unreachable!("test only exercises invoke-and-await dispatch")
     }
 }

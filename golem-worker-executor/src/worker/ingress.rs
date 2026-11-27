@@ -1594,9 +1594,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let schedule_id = ScheduleId::for_invocation(fingerprint, &key);
         // A same-key retry returns the original receipt, also from an ephemeral agent that has
         // already begun its execution and accepts nothing new.
-        let deadline = scheduled_invocation_deadline(scheduled_at)?;
-        if self.lookup_matching_invocation(&invocation).await? == LookupResult::New
-            && let EnqueueInvocationOutcome::Appended {
+        if self.lookup_matching_invocation(&invocation).await? == LookupResult::New {
+            let deadline = scheduled_invocation_deadline(scheduled_at)?;
+            if let EnqueueInvocationOutcome::Appended {
                 stored: StoredAppend::Unreported(error),
                 ..
             } = self
@@ -1606,10 +1606,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Some(deadline),
                 )
                 .await?
-        {
-            // This request's own commit stored this deadline even though its report failed.
-            self.register_invocation_wake(key, deadline).await?;
-            return Err(error.into());
+            {
+                // This request's own commit stored this deadline even though its report failed.
+                self.register_invocation_wake(key, deadline).await?;
+                return Err(error.into());
+            }
         }
         // A local caller holds no task-scope bind, so a deletion or a retirement may have stopped
         // the state actor after the enqueue. Failing here leaves the wake to a same-key retry,

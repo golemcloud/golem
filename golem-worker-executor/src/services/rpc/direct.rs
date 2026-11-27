@@ -1164,7 +1164,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), RpcAwaitError> {
         let owned_agent_id = &target.owned_agent_id;
 
         if freshness_disposition == InvocationFreshnessDisposition::KnownFresh
@@ -1172,7 +1172,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             return Err(RpcError::ProtocolError {
                 details: "KnownFresh requires an idempotency key".to_string(),
-            });
+            }
+            .into());
         }
 
         if self
@@ -1182,7 +1183,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke (fire-and-forget)");
 
-            self.authorize::<RpcError>(
+            self.authorize::<RpcAwaitError>(
                 self_created_by,
                 &target,
                 AgentVerb::Invoke,
@@ -1196,7 +1197,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(InvocationRequestKey::Internal)
                 .unwrap_or_else(|| InvocationRequestKey::external(None, None));
             let worker = self
-                .rpc_target_worker::<RpcError>(
+                .rpc_target_worker::<RpcAwaitError>(
                     &target,
                     expected_callee_fingerprint,
                     &method_name,
@@ -1222,7 +1223,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 allow_streams: false,
                 input: method_parameters
                     .try_into()
-                    .map_err(|details| RpcError::ProtocolError { details })?,
+                    .map_err(|details| RpcAwaitError::from(RpcError::ProtocolError { details }))?,
                 invocation_context: self_stack,
                 caller,
                 scope_card: None,

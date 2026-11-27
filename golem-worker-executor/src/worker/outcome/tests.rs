@@ -578,6 +578,18 @@ impl ResidentWorker {
 
     /// A resident worker of an executor whose configuration `configure` changes.
     async fn start_with(configure: impl FnOnce(&mut GolemConfig)) -> Self {
+        Self::start_owner(configure, None).await
+    }
+
+    /// A resident standalone tool owner of the invocation `key`.
+    async fn start_standalone(key: InvocationId) -> Self {
+        Self::start_owner(|_| {}, Some(key)).await
+    }
+
+    async fn start_owner(
+        configure: impl FnOnce(&mut GolemConfig),
+        standalone: Option<InvocationId>,
+    ) -> Self {
         use crate::services::HasShardService;
         use crate::services::golem_config::*;
         use crate::services::oplog::tests::{
@@ -687,6 +699,18 @@ impl ResidentWorker {
         };
         parameters.agent_type_name = metadata.agent_type_name.clone();
         parameters.constructor_parameters = metadata.constructor_parameters.clone();
+        if let Some(invocation_id) = standalone {
+            let tool = Box::new(golem_common::model::oplog::StandaloneToolInvocation {
+                tool_name: "standalone-owner".to_string().try_into().unwrap(),
+                command_path: vec![],
+                invocation_id,
+                caller: Caller::anonymous(),
+            });
+            parameters.owner_kind = golem_common::model::agent::OwnerKind::StandaloneTool;
+            parameters.standalone_tool = Some(tool.clone());
+            metadata.owner_kind = golem_common::model::agent::OwnerKind::StandaloneTool;
+            metadata.standalone_tool = Some(tool);
+        }
         let oplog = service
             .create_fresh(
                 &mut service.lock_lifecycle(&id.agent_id).await,
@@ -1327,6 +1351,87 @@ async fn a_failed_agent_with_an_unreadable_history_refuses_with_the_read_error()
         matches!(&refused, Err(WorkerExecutorError::RecoveryRequired { details, .. })
             if details.contains("error history unavailable")),
         "{refused:?}"
+    );
+    resident.stop().await;
+}
+
+/// A terminal standalone owner whose own invocation is still pending reports a read of its error
+/// history that failed for a time as the read error of the lookup, not as the completed result of
+/// that invocation.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_terminal_standalone_owner_with_an_unanswered_error_history_has_no_completed_result() {
+    use crate::model::LookupResult;
+    use crate::services::oplog::OplogOps;
+    use crate::storage::indexed::IndexedStorageError;
+    use golem_common::model::AgentInvocationPayload;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::schema::SchemaValue;
+
+    let key = InvocationId(uuid::Uuid::from_u128(0x1628_00f5));
+    let resident = ResidentWorker::start_standalone(key).await;
+    let worker = &resident.worker;
+    let (operation, payload) = resident
+        .oplog
+        .upload_request(AgentInvocationPayload::AgentMethod {
+            method_name: "run".into(),
+            allow_streams: false,
+            input: SchemaValue::Tuple { elements: vec![] }.try_into().unwrap(),
+            caller: Caller::anonymous(),
+            scope_card: None,
+        })
+        .await
+        .unwrap();
+    let context = InvocationContextStack::fresh_rounded();
+    resident
+        .oplog
+        .add(OplogEntry::pending_agent_invocation(
+            None,
+            key,
+            Box::new(operation),
+            payload,
+            context.trace_id.clone(),
+            context.trace_states.clone(),
+            context.to_oplog_data(),
+        ))
+        .await
+        .unwrap();
+    worker
+        .commit_oplog_and_update_state(crate::services::oplog::CommitLevel::Always)
+        .await
+        .unwrap();
+    worker
+        .record_recovery_failure(&WorkerExecutorError::invalid_request(
+            "the standalone owner does not start",
+        ))
+        .await;
+    let status = worker.get_last_known_status().await;
+    assert_eq!(status.status, AgentStatus::Failed);
+    assert!(
+        status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&key)),
+        "the owner's invocation stays pending"
+    );
+
+    resident
+        .indexed
+        .set_read_error(Some(IndexedStorageError::Transient(
+            "error history unavailable".into(),
+        )));
+    let unanswered = worker.try_lookup_invocation_result(&key).await;
+    resident.indexed.set_read_error(None);
+    let answered = worker.try_lookup_invocation_result(&key).await;
+
+    assert!(
+        matches!(&unanswered, Err(WorkerExecutorError::RecoveryRequired { details, .. })
+            if details.contains("error history unavailable")),
+        "a read that failed for a time is not a completed result: {unanswered:?}"
+    );
+    assert!(
+        matches!(&answered, Ok(LookupResult::Complete(Err(_)))),
+        "the readable error history completes the owner's invocation: {answered:?}"
     );
     resident.stop().await;
 }

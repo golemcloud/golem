@@ -9561,6 +9561,9 @@ impl BlobStoreService for FailingBlobStoreService {
 pub struct FailingRpc {
     inner: Arc<dyn Rpc>,
     remaining_failures: AtomicU32,
+    /// The failed history read that each fire-and-forget call returns, and the count of those
+    /// calls.
+    invoke_failure: Option<(WorkerExecutorError, Arc<AtomicUsize>)>,
 }
 
 pub struct RecordingRpc {
@@ -9594,6 +9597,21 @@ impl FailingRpc {
         Self {
             inner,
             remaining_failures: AtomicU32::new(failure_count),
+            invoke_failure: None,
+        }
+    }
+
+    /// Each fire-and-forget call fails with the failed history read `error` and adds one to
+    /// `calls`. Other calls pass.
+    pub fn failing_invoke(
+        inner: Arc<dyn Rpc>,
+        error: WorkerExecutorError,
+        calls: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            inner,
+            remaining_failures: AtomicU32::new(0),
+            invoke_failure: Some((error, calls)),
         }
     }
 }
@@ -9758,7 +9776,7 @@ impl Rpc for RecordingRpc {
         caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .invoke(
@@ -9943,7 +9961,15 @@ impl Rpc for FailingRpc {
         caller: &Caller,
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
+        if let Some((error, calls)) = &self.invoke_failure {
+            calls.fetch_add(1, Ordering::SeqCst);
+            return Err(
+                golem_worker_executor::services::rpc::RpcAwaitError::FailedRead(Box::new(
+                    error.clone(),
+                )),
+            );
+        }
         self.inner
             .invoke(
                 target,

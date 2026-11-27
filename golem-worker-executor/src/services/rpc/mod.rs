@@ -25,6 +25,7 @@ use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::events::Events;
+use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
@@ -265,7 +266,7 @@ pub trait Rpc: Send + Sync {
         caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), RpcError>;
+    ) -> Result<(), RpcAwaitError>;
 }
 
 pub struct DurableRpcInvocationResult {
@@ -279,6 +280,9 @@ pub struct DurableRpcInvocationResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DurableStreamRemoteError<E> {
     Unavailable,
+    /// The oplog of the producer does not read. It keeps its type, so a local reader of the
+    /// stream reports the failed read, not a failed request.
+    Unreadable(UnreadableOplog),
     Other(E),
 }
 
@@ -292,16 +296,17 @@ impl<E> DurableStreamRemoteError<E> {
     pub fn map_other<F>(self, map: impl FnOnce(E) -> F) -> DurableStreamRemoteError<F> {
         match self {
             Self::Unavailable => DurableStreamRemoteError::Unavailable,
+            Self::Unreadable(unreadable) => DurableStreamRemoteError::Unreadable(unreadable),
             Self::Other(error) => DurableStreamRemoteError::Other(map(error)),
         }
     }
 
     /// Runs `operation` until it succeeds or fails with anything but `Unavailable`, backing off
     /// from 100ms up to 1s between attempts. Callers bound the wait if the target may never
-    /// come back.
+    /// come back. The error is never `Unavailable`.
     pub(crate) async fn retry_while_unavailable<T, Fut>(
         mut operation: impl FnMut() -> Fut,
-    ) -> Result<T, E>
+    ) -> Result<T, Self>
     where
         Fut: Future<Output = Result<T, Self>>,
     {
@@ -309,12 +314,43 @@ impl<E> DurableStreamRemoteError<E> {
         loop {
             match operation().await {
                 Ok(value) => return Ok(value),
-                Err(Self::Other(error)) => return Err(error),
+                Err(error @ (Self::Other(_) | Self::Unreadable(_))) => return Err(error),
                 Err(Self::Unavailable) => {
                     tokio::time::sleep(delay).await;
                     delay = (delay * 2).min(std::time::Duration::from_secs(1));
                 }
             }
+        }
+    }
+
+    /// The error of a routed read or control for a local reader: an unreadable producer oplog
+    /// keeps its type; every other error is text.
+    pub(crate) fn into_stream_store_error(
+        self,
+    ) -> crate::durable_host::durable_stream::StreamStoreError
+    where
+        E: Display,
+    {
+        use crate::durable_host::durable_stream::StreamStoreError;
+        match self {
+            Self::Unreadable(unreadable) => StreamStoreError::Unreadable(unreadable),
+            Self::Unavailable => {
+                StreamStoreError::Oplog("durable stream producer is unavailable".to_string())
+            }
+            Self::Other(error) => StreamStoreError::Oplog(error.to_string()),
+        }
+    }
+
+    /// The error for a boundary that has no typed read, such as a gRPC answer: an unreadable
+    /// producer oplog becomes `E`, and an unavailable producer is `None`.
+    pub(crate) fn into_other(self) -> Option<E>
+    where
+        E: From<WorkerExecutorError>,
+    {
+        match self {
+            Self::Unavailable => None,
+            Self::Unreadable(unreadable) => Some(WorkerExecutorError::from(unreadable).into()),
+            Self::Other(error) => Some(error),
         }
     }
 
@@ -327,6 +363,9 @@ impl<E> DurableStreamRemoteError<E> {
             // with the shard's new owner.
             crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired
             | crate::durable_host::durable_stream::StreamStoreError::Fenced(_) => Self::Unavailable,
+            crate::durable_host::durable_stream::StreamStoreError::Unreadable(unreadable) => {
+                Self::Unreadable(unreadable)
+            }
             error => Self::Other(map(error.to_string())),
         }
     }

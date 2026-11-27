@@ -61,7 +61,7 @@ impl RoutedAttachedStreamSegmentSource {
             )
         })
         .await
-        .map_err(|error| StreamStoreError::Oplog(error.to_string()))
+        .map_err(DurableStreamRemoteError::into_stream_store_error)
     }
 }
 
@@ -160,6 +160,15 @@ impl RoutedStreamAttachmentControl {
             )
         })
         .await
+        .map_err(|error| match error {
+            DurableStreamRemoteError::Other(error) => error,
+            DurableStreamRemoteError::Unreadable(unreadable) => {
+                WorkerExecutorError::from(unreadable).into()
+            }
+            DurableStreamRemoteError::Unavailable => RpcError::RemoteInternalError {
+                details: "durable stream producer is unavailable".to_string(),
+            },
+        })
     }
 
     async fn execute(

@@ -32,16 +32,19 @@ use golem_common::model::oplog::{
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, RecordingRpc, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, sqlite_storage_config, start_with_overrides,
+    FailingRpc, LastUniqueId, PrecompiledComponent, RecordingRpc, TestContext,
+    TestExecutorOverrides, WorkerExecutorTestDependencies, sqlite_storage_config,
+    start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -444,6 +447,7 @@ async fn a_guest_read_of_an_unreadable_foreign_oplog_is_the_error_of_the_call(
 }
 
 const INVOKE_AND_AWAIT: &str = "golem::rpc::wasm-rpc::invoke_and_await";
+const INVOKE: &str = "golem::rpc::wasm-rpc::invoke";
 
 /// The case of `RpcCallOutcome::Ok` in the `agent_rpc_rust` component.
 const RPC_CALL_OK: u32 = 0;
@@ -704,6 +708,102 @@ async fn a_future_get_of_an_rpc_to_an_agent_whose_oplog_does_not_read_is_the_fai
             && end.contains(&format!("unknown serialization version: {UNKNOWN_VERSION}")),
         "the End must record the call failure that names {target_text}, entry 2 and version \
          {UNKNOWN_VERSION}: {end}"
+    );
+    Ok(())
+}
+
+/// Agent A starts a fire-and-forget RPC to agent B, and the read of B's stored history fails for
+/// good. That failure is the failure of the call, as for an awaited call: A dispatches the call one
+/// time and records one `End` with the failure that names B. The guest unwraps the result, so the
+/// invocation of A fails.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_fire_and_forget_rpc_to_an_agent_whose_oplog_does_not_read_is_the_failure_of_the_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let target_name = "unreadable-trigger-target";
+    let target_id = crate::agent::keyed_agent_id(
+        context.default_environment_id,
+        &agent_key!("RpcCounter", target_name),
+    );
+    let target_text = format!("The oplog of {} failed", target_id.agent_id);
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let overrides = TestExecutorOverrides {
+        wrap_rpc: Some(Arc::new({
+            let dispatches = dispatches.clone();
+            let error = WorkerExecutorError::oplog_failed(
+                target_id.agent_id,
+                format!("{target_text}: entry 2: unknown serialization version: {UNKNOWN_VERSION}"),
+            );
+            move |rpc| {
+                Arc::new(FailingRpc::failing_invoke(
+                    rpc,
+                    error.clone(),
+                    dispatches.clone(),
+                ))
+            }
+        })),
+        ..overrides()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let caller = agent_key!("CancelTester", "unreadable-trigger-caller");
+    let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+    let caller_end = OplogIndex::from_u64(executor.get_oplog_last_index(&caller_id).await?);
+
+    // A caller that retries the call or recovers and calls again does not finish in time.
+    let failed = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &caller,
+            "inc_after_stdout",
+            data_value!(target_name, "invoke"),
+        ),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "the caller did not finish the call: {} dispatches, {} loads",
+            dispatches.load(Ordering::SeqCst),
+            executor.instance_load_count(&caller_id.agent_id)
+        )
+    })?;
+
+    assert!(
+        failed.is_err(),
+        "the guest unwraps the failed call, so the invocation fails: {failed:?}"
+    );
+    assert_eq!(
+        dispatches.load(Ordering::SeqCst),
+        1,
+        "the failed call must be dispatched one time"
+    );
+    let oplog = executor.get_oplog(&caller_id, OplogIndex::INITIAL).await?;
+    let calls = host_calls(&oplog, INVOKE, caller_end);
+    assert!(
+        matches!(calls.as_slice(), [(_, true)]),
+        "the failed call must be one call with its End: {calls:?}"
+    );
+    let (start, _) = calls[0];
+    let end = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == start => Some(format!("{end:?}")),
+            _ => None,
+        })
+        .expect("the call has its End");
+    assert!(
+        end.contains(&as_debug_text(&target_text)),
+        "the End must record the call failure that names the target: {end}"
     );
     Ok(())
 }

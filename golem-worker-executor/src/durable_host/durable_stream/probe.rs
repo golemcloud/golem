@@ -702,7 +702,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             )
         })
         .await
-        .map_err(|error| StreamStoreError::Oplog(error.to_string()))?;
+        .map_err(DurableStreamRemoteError::into_stream_store_error)?;
         Ok(())
     }
 }

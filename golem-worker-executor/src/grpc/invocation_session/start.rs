@@ -447,6 +447,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }) {
                 Ok(stream_mappings) => stream_mappings,
                 Err(error) => {
+                    cleanup.observe_error(&error);
                     tracing::warn!(
                         target = ?start.target,
                         attempt_id = ?start.attempt_id,

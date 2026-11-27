@@ -395,6 +395,15 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
                     &auth_ctx,
                 )
                 .await;
+            // As for an awaited call: a target history that did not read for a time gives the call
+            // no result, and a target history that does not read for good is the failure of the
+            // call, which the call records without a retry.
+            let result = match rpc_await_outcome(ctx.agent_id(), result) {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(RpcCallFailure::Outcome(error))) => Err(error),
+                Ok(Err(RpcCallFailure::UnreadableTarget(error))) => break Err(error),
+                Err(error) => return Err(handle.trap(error)),
+            };
             match handle
                 .try_trigger_retry_or_loop_with_properties(
                     ctx,
