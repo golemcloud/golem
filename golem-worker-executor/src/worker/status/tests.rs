@@ -192,7 +192,6 @@ async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
     let before = super::skipped_regions_at(
         &test_case,
         &test_case.owned_agent_id,
-        OplogRetention::FULL,
         OplogIndex::from_u64(3),
     )
     .await
@@ -200,7 +199,6 @@ async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
     let after = super::skipped_regions_at(
         &test_case,
         &test_case.owned_agent_id,
-        OplogRetention::FULL,
         OplogIndex::from_u64(4),
     )
     .await
@@ -10028,14 +10026,10 @@ mod region_fold {
             .collect::<BTreeMap<_, _>>();
         let horizon = *list.keys().next_back().unwrap();
 
-        let regions = super::super::skipped_regions_at(
-            &test_case,
-            &test_case.owned_agent_id,
-            OplogRetention::FULL,
-            horizon,
-        )
-        .await
-        .unwrap();
+        let regions =
+            super::super::skipped_regions_at(&test_case, &test_case.owned_agent_id, horizon)
+                .await
+                .unwrap();
 
         assert_eq!(regions, fold_status(list).skipped_regions);
         assert!(regions.is_overridden());
@@ -10069,14 +10063,10 @@ mod region_fold {
             .collect::<BTreeMap<_, _>>();
         let horizon = *list.keys().next_back().unwrap();
 
-        let regions = super::super::skipped_regions_at(
-            &test_case,
-            &test_case.owned_agent_id,
-            OplogRetention::FULL,
-            horizon,
-        )
-        .await
-        .unwrap();
+        let regions =
+            super::super::skipped_regions_at(&test_case, &test_case.owned_agent_id, horizon)
+                .await
+                .unwrap();
 
         assert_eq!(regions, fold_status(list).skipped_regions);
         assert!(regions.is_overridden());
@@ -11462,51 +11452,6 @@ async fn a_fold_from_the_cached_status_that_fails_for_another_reason_gives_its_e
     assert!(!checkpoint_read.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-/// The skipped regions of a fork source read from the start of the retention that the caller
-/// passes, and keep the regions after it.
-#[test]
-async fn skipped_regions_at_reads_from_the_retained_start() {
-    let case = retained_test_case();
-    let owned_agent_id = case.owned_agent_id.clone();
-    let horizon = OplogIndex::from_u64(case.entries.len() as u64);
-    let retained = RetainedTestCase::new(case.clone(), 3).await;
-    case.read_starts.lock().unwrap().clear();
-    let regions = super::skipped_regions_at(
-        &retained,
-        &owned_agent_id,
-        crate::services::oplog::retention::test_oplog::at(3),
-        horizon,
-    )
-    .await
-    .unwrap();
-    assert_eq!(case.read_starts.lock().unwrap().first(), Some(&3));
-    assert!(
-        case.read_starts
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|start| *start >= 3),
-        "{:?}",
-        case.read_starts.lock().unwrap()
-    );
-    assert!(regions.is_in_deleted_region(OplogIndex::from_u64(4)));
-
-    let error =
-        super::skipped_regions_at(&retained, &owned_agent_id, OplogRetention::FULL, horizon)
-            .await
-            .unwrap_err();
-    assert!(
-        matches!(
-            &error,
-            super::StatusError::Unreadable(UnreadableOplog {
-                error: crate::services::oplog::OplogReadError::Expired { .. },
-                ..
-            })
-        ),
-        "a read from index 1 is expired: {error:?}"
-    );
-}
-
 /// A source that gives fewer entries than the horizon asks for leaves the history incomplete: the
 /// region read reports it as missing, and the skipped regions of a fork source fail, instead of
 /// giving the regions of the part that the source gave.
@@ -11526,7 +11471,7 @@ async fn a_region_read_that_ends_before_the_horizon_is_missing_history() {
         None
     );
 
-    let error = super::skipped_regions_at(&case, &owned_agent_id, OplogRetention::FULL, horizon)
+    let error = super::skipped_regions_at(&case, &owned_agent_id, horizon)
         .await
         .unwrap_err();
     assert!(

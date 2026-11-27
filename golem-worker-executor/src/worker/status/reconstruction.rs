@@ -725,18 +725,16 @@ pub(super) async fn hydrate_initial_pending_evidence(
     }
     Ok(())
 }
-/// Resolve replay exclusions from a fixed committed horizon, independent of later reverts. The
-/// read starts at the start of `retention`, the retention of the oplog that the caller holds.
+/// Resolve replay exclusions from a fixed committed horizon, independent of later reverts.
 pub(crate) async fn skipped_regions_at(
     this: &(impl HasOplogService + Sync),
     owned_agent_id: &OwnedAgentId,
-    retention: OplogRetention,
     horizon: OplogIndex,
 ) -> Result<DeletedRegions, StatusError> {
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
     // A manual update invocation changes only the manual admissions, which no skipped region
     // depends on, so the read leaves them out.
-    let entries = read_region_entries(&reader, retention.start(), 1024, false)
+    let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
         .await?
         .ok_or("Missing fork source history")?;
     Ok(skipped_regions(&entries))

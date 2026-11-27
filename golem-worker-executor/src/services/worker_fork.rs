@@ -765,7 +765,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let source_skipped_regions = crate::worker::status::skipped_regions_at(
             self,
             &owned_source_agent_id,
-            source_oplog.retention(),
             source_oplog_end,
         )
         .await?;
