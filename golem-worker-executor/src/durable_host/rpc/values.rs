@@ -14,7 +14,9 @@
 
 use super::{PreparedRpcInvocation, WasmRpcEntry};
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::{CompletionDelivery, finish_span_in_memory};
 use crate::durable_host::durable_session::strip_streams;
+use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
@@ -23,6 +25,7 @@ use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
+use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::schema::agent::AgentMethodSchema;
@@ -41,7 +44,7 @@ use golem_schema::schema::wit::encode_value_with_streams;
 use golem_schema::schema::wit::reject_quota_handles_in_value_tree;
 use golem_schema::schema::wit::wire as core_wire;
 use std::collections::BTreeMap;
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, HasSelf, Resource};
 
 pub(super) fn discard_owned_rpc_input<D>(input: core_wire::SchemaValueTree, dropper: &mut D)
 where
@@ -343,6 +346,47 @@ pub(super) fn invoke_and_await_response_to_wire<Ctx: WorkerCtx>(
         Err(error) => {
             let rpc_error: InternalRpcError = error.into();
             Ok(Err(rpc_error.into()))
+        }
+    }
+}
+
+/// Returns a recorded RPC result to the guest at the call's delivery boundary. A completion that
+/// the recorded run discarded parks instead, so the deterministic guest drops the call at the
+/// same point again. The call's span, when it has one, is finished first in both cases.
+pub(super) async fn deliver_rpc_result<U, Ctx, T>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    delivery: CompletionDelivery,
+    span_id: Option<&SpanId>,
+    to_guest: impl FnOnce(&mut DurableWorkerCtx<Ctx>) -> anyhow::Result<T>,
+) -> anyhow::Result<T>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    if delivery.is_replay_discarded() {
+        if let Some(span_id) = span_id {
+            with_import_access(accessor, |mut access| {
+                finish_span_in_memory(access.get(), span_id)
+            })?;
+        }
+        std::future::pending::<()>().await;
+        unreachable!("std::future::pending never completes");
+    }
+    let value = with_import_access(accessor, |mut access| {
+        let ctx = access.get();
+        if let Some(span_id) = span_id {
+            finish_span_in_memory(ctx, span_id)?;
+        }
+        to_guest(ctx)
+    });
+    match value {
+        Ok(value) => {
+            delivery.deliver_at_accessor_terminal(accessor).await?;
+            Ok(value)
+        }
+        Err(error) => {
+            delivery.suppress();
+            Err(error)
         }
     }
 }

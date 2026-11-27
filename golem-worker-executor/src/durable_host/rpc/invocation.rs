@@ -21,7 +21,7 @@
 use super::InvocationEntry;
 use super::admit_rpc_result_secret_holds;
 use super::suspendable;
-use super::values::invoke_and_await_response_to_wire;
+use super::values::{deliver_rpc_result, invoke_and_await_response_to_wire};
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::CallReplayOutcome;
@@ -165,25 +165,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostInvocationWithStore<U>
                 .await?
             {
                 DeferredCallReplayOutcome::Replayed(response, delivery) => {
-                    if delivery.is_replay_discarded() {
-                        // The recorded run dropped this call after its `End`: park where the
-                        // deterministic guest drops it again.
-                        std::future::pending::<()>().await;
-                        unreachable!("std::future::pending never completes");
-                    }
-                    let wire = accessor.with(|mut access| {
-                        invoke_and_await_response_to_wire(response.result, access.get())
-                    });
-                    return match wire {
-                        Ok(wire) => {
-                            delivery.deliver_at_accessor_terminal(accessor).await?;
-                            Ok(wire)
-                        }
-                        Err(error) => {
-                            delivery.suppress();
-                            Err(error)
-                        }
-                    };
+                    return deliver_rpc_result(accessor, delivery, None, |ctx| {
+                        invoke_and_await_response_to_wire(response.result, ctx)
+                    })
+                    .await;
                 }
                 DeferredCallReplayOutcome::Incomplete(live) => handle = live,
             }
@@ -214,18 +199,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostInvocationWithStore<U>
                 },
             )
             .await?;
-        let wire = accessor
-            .with(|mut access| invoke_and_await_response_to_wire(response.result, access.get()));
-        match wire {
-            Ok(wire) => {
-                delivery.deliver_at_accessor_terminal(accessor).await?;
-                Ok(wire)
-            }
-            Err(error) => {
-                delivery.suppress();
-                Err(error)
-            }
-        }
+        deliver_rpc_result(accessor, delivery, None, |ctx| {
+            invoke_and_await_response_to_wire(response.result, ctx)
+        })
+        .await
     }
 
     async fn cancel(

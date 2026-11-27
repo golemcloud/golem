@@ -23,17 +23,19 @@ use super::denial::denied_rpc_request;
 use super::{
     CallerStreamsContext, DurableStreamingTaskParams, PreparedRpcInvocation, RpcCallTarget,
     WasmRpcEntry, admit_rpc_result_secret_holds, caller_durable_rpc_streams,
-    claim_completed_preparation, current_streaming_origin, discard_owned_rpc_input,
-    dispatch_target, embedded_invocation_span_builder, invocation_metadata,
-    invoke_and_await_response_to_wire, known_fresh_dispatch_allowed, preparation_request,
-    prepare_ephemeral_identity, prepare_rpc_invocation, recorded_target_fingerprint,
-    restore_embedded_span, retry_after_backoff, rpc_input_root, rpc_output_root, rpc_span_finished,
-    spawn_invoke_and_await_task, spawn_streaming_invoke_and_await_task, suspendable,
+    claim_completed_preparation, current_streaming_origin, deliver_rpc_result,
+    discard_owned_rpc_input, dispatch_target, embedded_invocation_span_builder,
+    invocation_metadata, invoke_and_await_response_to_wire, known_fresh_dispatch_allowed,
+    preparation_request, prepare_ephemeral_identity, prepare_rpc_invocation,
+    recorded_target_fingerprint, restore_embedded_span, retry_after_backoff, rpc_input_root,
+    rpc_output_root, rpc_span_finished, spawn_invoke_and_await_task,
+    spawn_streaming_invoke_and_await_task, suspendable,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, AccessPermissionCheck, Cancellable, DeferredCallReplayOutcome,
-    DurableCallSession, TeardownProbe, finish_span_in_memory, reserve_invocation_id_before_await,
+    AccessClaimOptions, AccessPermissionCheck, Cancellable, CompletionDelivery,
+    DeferredCallReplayOutcome, DurableCallSession, TeardownProbe,
+    reserve_invocation_id_before_await,
 };
 use crate::durable_host::durable_session::{StreamSession, strip_streams};
 use crate::durable_host::durable_stream::SessionError;
@@ -528,50 +530,31 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
     deliver(accessor, response, Some(&final_id), delivery, &span_id).await
 }
 
-/// Finishes the call's span and returns the recorded result to the guest. A completion that
-/// the recorded run discarded parks, so the deterministic guest drops the call at the same
-/// point again.
+/// Finishes the call's span and returns the recorded result to the guest.
 async fn deliver<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     response: HostResponseGolemRpcInvokeAndAwait,
     final_id: Option<&OwnedInvocationId>,
-    delivery: crate::durable_host::concurrent::CompletionDelivery,
+    delivery: CompletionDelivery,
     span_id: &SpanId,
 ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
-    if delivery.is_replay_discarded() {
-        with_import_access(accessor, |mut access| {
-            finish_span_in_memory(access.get(), span_id)
-        })?;
-        std::future::pending::<()>().await;
-        unreachable!("std::future::pending never completes");
-    }
-    let wire = with_import_access(accessor, |mut access| {
-        let ctx = access.get();
-        finish_span_in_memory(ctx, span_id)?;
-        let wire = invoke_and_await_response_to_wire(response.result, ctx)?;
-        Ok::<_, anyhow::Error>(match wire {
-            Ok(result) => match final_id {
-                Some(final_id) => Ok(InvocationResultWithMetadata {
-                    metadata: invocation_metadata(final_id)?,
-                    result,
-                }),
-                None => Err(anyhow::anyhow!(
-                    "a successful RPC result has no final invocation identity"
-                ))?,
+    deliver_rpc_result(accessor, delivery, Some(span_id), |ctx| {
+        Ok(
+            match invoke_and_await_response_to_wire(response.result, ctx)? {
+                Ok(result) => {
+                    let final_id = final_id.ok_or_else(|| {
+                        anyhow::anyhow!("a successful RPC result has no final invocation identity")
+                    })?;
+                    Ok(InvocationResultWithMetadata {
+                        metadata: invocation_metadata(final_id)?,
+                        result,
+                    })
+                }
+                Err(error) => Err(error),
             },
-            Err(error) => Err(error),
-        })
-    });
-    match wire {
-        Ok(wire) => {
-            delivery.deliver_at_accessor_terminal(accessor).await?;
-            Ok(wire)
-        }
-        Err(error) => {
-            delivery.suppress();
-            Err(error)
-        }
-    }
+        )
+    })
+    .await
 }
 
 /// Opens the caller's stream session of a completed streaming call, whose `Start` recorded the
