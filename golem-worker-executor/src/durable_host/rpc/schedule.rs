@@ -275,7 +275,8 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
         let freshness = if known_fresh_dispatch_allowed(first_live_dispatch, true) {
             worker
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                .await?;
+                .await
+                .map_err(|error| handle.trap(error))?;
             InvocationFreshnessDisposition::KnownFresh
         } else {
             InvocationFreshnessDisposition::MayExist

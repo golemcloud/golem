@@ -136,7 +136,8 @@ pub(super) async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
 
     let started = handle
         .recorded_span_started_access(accessor, accessor.getter())
-        .await?
+        .await
+        .map_err(|error| handle.trap(error))?
         .ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
                 handle.start_index(),
@@ -146,8 +147,11 @@ pub(super) async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
                     handle.start_index()
                 ),
             )
-        })?;
-    let span = accessor.with(|mut access| restore_embedded_span(access.get(), &started))?;
+        })
+        .map_err(|error| handle.trap(error))?;
+    let span = accessor
+        .with(|mut access| restore_embedded_span(access.get(), &started))
+        .map_err(|error| handle.trap(error))?;
     let span_id = span.span_id().clone();
     handle.close_span_on_cancellation(span_id.clone());
 
@@ -167,23 +171,25 @@ pub(super) async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
 
     if !started_live {
         // A completed trigger repeats no preparation; its replay claims the recorded one.
-        let recorded_preparation =
-            if prepared.is_ephemeral() && !start_records_denial(accessor, &handle).await? {
-                let (idempotency_key, remote_agent_id) = call_target
-                    .at(handle.start_index())
-                    .map_err(|error| handle.trap(error))?;
-                Some((
-                    handle.host_internal_owner(),
-                    preparation_request(
-                        handle.start_index(),
-                        &prepared,
-                        &remote_agent_id,
-                        &idempotency_key,
-                    ),
-                ))
-            } else {
-                None
-            };
+        let denied = start_records_denial(accessor, &handle)
+            .await
+            .map_err(|error| handle.trap(error))?;
+        let recorded_preparation = if prepared.is_ephemeral() && !denied {
+            let (idempotency_key, remote_agent_id) = call_target
+                .at(handle.start_index())
+                .map_err(|error| handle.trap(error))?;
+            Some((
+                handle.host_internal_owner(),
+                preparation_request(
+                    handle.start_index(),
+                    &prepared,
+                    &remote_agent_id,
+                    &idempotency_key,
+                ),
+            ))
+        } else {
+            None
+        };
         match handle.replay_access(accessor, accessor.getter()).await? {
             CallReplayOutcome::Replayed(response) => {
                 if let Some((owner, request)) = recorded_preparation {
@@ -203,22 +209,23 @@ pub(super) async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
     } else {
         InvocationFreshnessDisposition::MayExist
     };
-    let fingerprint = match recorded_target_fingerprint(accessor, &this)? {
-        Some(fingerprint) => Ok(fingerprint),
-        None => {
-            prepare_ephemeral_identity(
-                accessor,
-                &mut handle,
-                &prepared,
-                &remote_agent_id,
-                &idempotency_key,
-                &span_id,
-                freshness,
-                "trigger",
-            )
-            .await?
-        }
-    };
+    let fingerprint =
+        match recorded_target_fingerprint(accessor, &this).map_err(|error| handle.trap(error))? {
+            Some(fingerprint) => Ok(fingerprint),
+            None => {
+                prepare_ephemeral_identity(
+                    accessor,
+                    &mut handle,
+                    &prepared,
+                    &remote_agent_id,
+                    &idempotency_key,
+                    &span_id,
+                    freshness,
+                    "trigger",
+                )
+                .await?
+            }
+        };
     let result = match fingerprint {
         Ok(fingerprint) => {
             dispatch(
