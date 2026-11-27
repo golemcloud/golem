@@ -70,6 +70,7 @@ import {
   type RemoteAgent,
 } from "../Client.js"
 import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../Config.js"
+import { ConfigOwner } from "./compiledConfig.js"
 import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
 import { withCustomScopes } from "./customScope.js"
@@ -127,9 +128,14 @@ const userRuntime = ManagedRuntime.make(userRuntimeLayer)
  * `withInvocationParent` reads the host's invocation context via the
  * `TracingHost` service.
  */
-const runUserPromise = <A, E, R>(eff: Effect.Effect<A, E, R>): Promise<A> =>
+const runUserPromise = <A, E, R>(
+  eff: Effect.Effect<A, E, R>,
+  owner: object | undefined = activeAgent?.configOwner,
+): Promise<A> =>
   userRuntime.runPromise(
-    withCustomScopes(GolemTracing.withInvocationParent(eff)) as Effect.Effect<A, E, never>,
+    withCustomScopes(
+      GolemTracing.withInvocationParent(Effect.provideService(eff, ConfigOwner, owner)),
+    ) as Effect.Effect<A, E, never>,
   )
 
 type AnyMethodSpec = MethodSpec<any, any, any>
@@ -1002,6 +1008,7 @@ const collectBindableParams = (
 /** The currently-initialised agent in this container, if any. */
 interface ActiveAgent {
   readonly name: string
+  readonly configOwner: object
   readonly scope: Scope.Closeable
   readonly handlers: Readonly<Record<string, Handler<AnyMethodSpec>>>
   /**
@@ -1067,9 +1074,11 @@ const initAgentInstance = async (
   handlers: Record<string, Handler<AnyMethodSpec>>
   snapshot: BoundSnapshot | null
   configShape: unknown
+  configOwner: object
   state: unknown
 }> => {
   let snapshot: BoundSnapshot | null = null
+  const configOwner = {}
 
   const scope = await Effect.runPromise(Scope.make())
   let handlers: Record<string, Handler<AnyMethodSpec>>
@@ -1077,7 +1086,7 @@ const initAgentInstance = async (
   let configShape: unknown = undefined
   try {
     if (compiled.compiledConfig !== null) {
-      configShape = await runUserPromise(compiled.compiledConfig.buildShape())
+      configShape = await runUserPromise(compiled.compiledConfig.buildShape(), configOwner)
     }
     const stateProgram =
       restoration === undefined
@@ -1086,7 +1095,7 @@ const initAgentInstance = async (
           ? Effect.succeed(restoration.saved)
           : compiled.impl.snapshot.restore(restoration.saved as never, {
               id: constructorInput,
-              agentId: await runUserPromise(SelfAgentId),
+              agentId: await runUserPromise(SelfAgentId, configOwner),
               config: configShape as never,
             })
     let program = Effect.gen(function* () {
@@ -1118,7 +1127,7 @@ const initAgentInstance = async (
     // the scope when `program` finishes, which would tear down any
     // resources `impl` opened (e.g. SqliteClient handles) before the
     // agent's first method invocation.
-    const built = await runUserPromise(Scope.provide(program, scope))
+    const built = await runUserPromise(Scope.provide(program, scope), configOwner)
     handlers = built.handlers as Record<string, Handler<AnyMethodSpec>>
     state = built.state
   } catch (e) {
@@ -1128,7 +1137,7 @@ const initAgentInstance = async (
     throw e
   }
 
-  return { scope, handlers, snapshot, configShape, state: state! }
+  return { scope, handlers, snapshot, configShape, configOwner, state: state! }
 }
 
 /**
@@ -1152,13 +1161,13 @@ export const dispatchInitialize = async (
   }
 
   const constructorInput = await decodeConstructorInput(compiled, input)
-  const { scope, handlers, snapshot, state } = await initAgentInstance(
+  const { scope, handlers, snapshot, state, configOwner } = await initAgentInstance(
     agentTypeName,
     compiled,
     constructorInput,
   )
 
-  activeAgent = { name: agentTypeName, scope, handlers, snapshot, state }
+  activeAgent = { name: agentTypeName, scope, handlers, snapshot, state, configOwner }
 }
 
 /**
@@ -1632,6 +1641,7 @@ export const dispatchLoadSnapshot = async (
     handlers,
     snapshot: bound,
     state,
+    configOwner,
   } = await initAgentInstance(agentTypeName, compiled, constructorInput, {
     saved,
     restoreDatabases,
@@ -1642,5 +1652,6 @@ export const dispatchLoadSnapshot = async (
     handlers,
     snapshot: bound,
     state,
+    configOwner,
   }
 }

@@ -1,4 +1,4 @@
-import { Effect, Redacted, Schema } from "effect"
+import { Context, Effect, Redacted, Schema } from "effect"
 import type * as Core from "golem:core/types@2.0.0"
 import type * as Common from "golem:agent/common@2.0.0"
 import { ConfigError } from "../Config.js"
@@ -7,9 +7,16 @@ import { SecretsClient } from "../host/SecretsClient.js"
 import { createGuestSecretHandle } from "./schema-model/secretHandle.js"
 import { SECRET_INTERNAL } from "./schema-model/secretInternal.js"
 
+/** Identity of the owner whose static values are currently being used. */
+export const ConfigOwner = Context.Reference<object | undefined>("effect-golem/ConfigOwner", {
+  defaultValue: () => undefined,
+})
+
 export interface WireConfigLeaf {
   readonly source: Common.AgentConfigSource
   readonly path: ReadonlyArray<string>
+  readonly propertyPath: ReadonlyArray<string>
+  readonly static?: boolean
   readonly codec: {
     readonly schemaGraph: Core.SchemaGraph
     readonly encode: (
@@ -30,11 +37,10 @@ export function compiledConfigRuntime(
     return cursor
   }
   return {
-    leavesByPath: new Map(leaves.map((leaf) => [leaf.path.join("/"), leaf])),
-    branches,
     buildShape: () =>
       Effect.gen(function* () {
         const config = yield* ConfigClient
+        const owner = yield* ConfigOwner
         const secrets = leaves.some((leaf) => leaf.source === "secret")
           ? yield* SecretsClient
           : undefined
@@ -69,25 +75,41 @@ export function compiledConfigRuntime(
           const borrow = borrowRaw.pipe(
             Effect.map((raw) => createGuestSecretHandle(SECRET_INTERNAL, raw)),
           )
-          const value =
-            leaf.source === "secret"
-              ? {
-                  borrow,
-                  get: Effect.gen(function* () {
-                    const raw = yield* borrowRaw
-                    const revealed = yield* Effect.try({
-                      try: () => secrets!.reveal(raw, leaf.codec.schemaGraph),
-                      catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
-                    })
-                    const decoded = yield* Effect.mapError(
-                      leaf.codec.decode(revealed),
-                      (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
-                    )
-                    return Redacted.make(decoded)
+          let value: unknown
+          if (leaf.static) {
+            value = Effect.gen(function* () {
+              const current = yield* ConfigOwner
+              if (owner === undefined || current !== owner) {
+                return yield* Effect.fail(
+                  new ConfigError(leaf.path, {
+                    _tag: "Unsupported",
+                    reason: "static config capture belongs to a different owner",
                   }),
-                }
-              : yield* Effect.cached(read)
-          ensure(root, leaf.path.slice(0, -1))[leaf.path.at(-1)!] = value
+                )
+              }
+              return yield* read
+            })
+          } else {
+            value =
+              leaf.source === "secret"
+                ? {
+                    borrow,
+                    get: Effect.gen(function* () {
+                      const raw = yield* borrowRaw
+                      const revealed = yield* Effect.try({
+                        try: () => secrets!.reveal(raw, leaf.codec.schemaGraph),
+                        catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
+                      })
+                      const decoded = yield* Effect.mapError(
+                        leaf.codec.decode(revealed),
+                        (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
+                      )
+                      return Redacted.make(decoded)
+                    }),
+                  }
+                : yield* Effect.cached(read)
+          }
+          ensure(root, leaf.propertyPath.slice(0, -1))[leaf.propertyPath.at(-1)!] = value
         }
         return root
       }),

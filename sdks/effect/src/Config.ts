@@ -1,4 +1,4 @@
-import { Context, Effect, type Redacted, Schema, SchemaAST } from "effect"
+import { Context, Effect, Layer, type Redacted, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { Secret } from "./Capability.js"
@@ -8,6 +8,8 @@ import { t, type SchemaGraph } from "./internal/schema-model/model.js"
 import { schemaGraphToWit } from "./internal/schema-model/wit.js"
 import { compile, UnsupportedSchemaError, type CompiledWitCodec } from "./WitCodec.js"
 import { compiledConfigRuntime, type WireConfigLeaf } from "./internal/compiledConfig.js"
+import { configGraph, configName } from "./internal/configSchema.js"
+import { SchemaRef } from "./SchemaRef.js"
 
 export class ConfigError {
   readonly _tag = "ConfigError"
@@ -20,28 +22,51 @@ export class ConfigError {
   ) {}
 }
 
-export type ConfigField = Schema.Top
+/** A whole static value captured by the host for its owner. @since 1.6.0 @category models */
+export interface Static<S extends Schema.Top> {
+  readonly _tag: "Static"
+  readonly schema: S
+  readonly defaultValue?: S["Type"]
+}
+
+/** Declare static data and an optional portable code default, never a read fallback.
+ * @since 1.6.0 @category constructors
+ */
+const staticField = <S extends Schema.Top>(
+  schema: S,
+  options?: { readonly defaultValue: S["Type"] },
+): Static<S> => ({ _tag: "Static", schema, ...options })
+
+export { staticField as static }
+
+export type ConfigField = Schema.Top | Static<Schema.Top>
 export type ConfigFields = Readonly<Record<string, ConfigField>>
 type OptionalValue<A, Optional extends boolean> = Optional extends true ? A | undefined : A
-type ConfigShapeField<S extends Schema.Top, Optional extends boolean = false> =
-  S extends Schema.optional<infer Inner>
-    ? Inner extends Schema.Top
-      ? ConfigShapeField<Inner, true>
-      : never
-    : S extends Schema.Redacted<infer Inner>
-      ? {
-          /** Fresh opaque capability without revealing its value. @since 1.6.0 @category secrets */
-          readonly borrow: Effect.Effect<Secret, ConfigError>
-          readonly get: Effect.Effect<
-            Redacted.Redacted<OptionalValue<Inner["Type"], Optional>>,
-            ConfigError
-          >
-        }
-      : S extends Schema.Struct<infer SF>
-        ? SF extends ConfigFields
-          ? ConfigShape<SF, Optional>
-          : Effect.Effect<OptionalValue<S["Type"], Optional>, ConfigError>
-        : Effect.Effect<OptionalValue<S["Type"], Optional>, ConfigError>
+type ConfigShapeField<S extends ConfigField, Optional extends boolean = false> =
+  S extends Static<infer Inner>
+    ? Effect.Effect<Inner["Type"], ConfigError>
+    : S extends Schema.optional<infer Inner>
+      ? Inner extends Schema.Top
+        ? ConfigShapeField<Inner, true>
+        : never
+      : S extends Schema.Redacted<infer Inner>
+        ? {
+            /** Fresh opaque capability without revealing its value. @since 1.6.0 @category secrets */
+            readonly borrow: Effect.Effect<Secret, ConfigError>
+            readonly get: Effect.Effect<
+              Redacted.Redacted<OptionalValue<Inner["Type"], Optional>>,
+              ConfigError
+            >
+          }
+        : S extends Schema.Struct<infer SF>
+          ? SF extends ConfigFields
+            ? ConfigShape<SF, Optional>
+            : S extends Schema.Top
+              ? Effect.Effect<OptionalValue<S["Type"], Optional>, ConfigError>
+              : never
+          : S extends Schema.Top
+            ? Effect.Effect<OptionalValue<S["Type"], Optional>, ConfigError>
+            : never
 export type ConfigShape<F extends ConfigFields, Optional extends boolean = false> = {
   readonly [K in keyof F]: ConfigShapeField<F[K], Optional>
 }
@@ -55,14 +80,18 @@ type ConfigFieldsOf<S extends Schema.Top> =
     : never
 type IsRedacted<S extends Schema.Top> =
   UnwrapOptional<S> extends { readonly value: Schema.Top } ? true : false
-type OverrideField<S extends Schema.Top> =
-  IsRedacted<S> extends true
-    ? never
-    : [ConfigFieldsOf<S>] extends [never]
-      ? S["Type"]
-      : ConfigFieldsOf<S> extends ConfigFields
-        ? NonSecretOverride<ConfigFieldsOf<S>>
-        : never
+type OverrideField<S extends ConfigField> =
+  S extends Static<infer Inner>
+    ? Inner["Type"]
+    : S extends Schema.Top
+      ? IsRedacted<S> extends true
+        ? never
+        : [ConfigFieldsOf<S>] extends [never]
+          ? S["Type"]
+          : ConfigFieldsOf<S> extends ConfigFields
+            ? NonSecretOverride<ConfigFieldsOf<S>>
+            : never
+      : never
 type OverrideKey<F extends ConfigFields> = {
   readonly [K in keyof F]: OverrideField<F[K]> extends never ? never : K
 }[keyof F]
@@ -75,10 +104,13 @@ export type NonSecretOverride<F extends ConfigFields> = [OverrideKey<F>] extends
 export interface ConfigLeaf {
   readonly source: AgentCommon.AgentConfigSource
   readonly path: ReadonlyArray<string>
+  readonly propertyPath: ReadonlyArray<string>
   readonly schema: Schema.Top
   readonly codec: CompiledWitCodec<Schema.Top>
   readonly declarationGraph: SchemaGraph
   readonly required: boolean
+  readonly static?: boolean
+  readonly defaultValue?: CoreTypes.SchemaValueTree
 }
 
 export interface CompiledConfig {
@@ -116,6 +148,43 @@ const objectAst = (
   return undefined
 }
 
+const validateStaticSchema = (root: SchemaAST.AST, context: string): void => {
+  const seen = new Set<SchemaAST.AST>()
+  const visit = (ast: SchemaAST.AST): void => {
+    if (seen.has(ast)) return
+    seen.add(ast)
+    if (ast.context?.constructorDefault !== undefined || ast.encoding !== undefined) {
+      throw new UnsupportedSchemaError(
+        `${context}: use Config.static(schema, { defaultValue }) for portable defaults, not schema factories or transformations`,
+      )
+    }
+    switch (ast._tag) {
+      case "Objects":
+        for (const property of ast.propertySignatures) {
+          if (typeof property.name === "string" && property.name.startsWith("$")) {
+            throw new UnsupportedSchemaError(`${context}: reserved field '${property.name}'`)
+          }
+          visit(property.type)
+        }
+        for (const index of ast.indexSignatures) visit(index.type)
+        break
+      case "Arrays":
+        for (const child of [...ast.elements, ...ast.rest]) visit(child)
+        break
+      case "Union":
+        for (const child of ast.types) visit(child)
+        break
+      case "Declaration":
+        for (const child of ast.typeParameters) visit(child)
+        break
+      case "Suspend":
+        visit(ast.thunk())
+        break
+    }
+  }
+  visit(root)
+}
+
 export const compileConfig = (
   fields: ConfigFields,
   contextLabel: string,
@@ -123,21 +192,94 @@ export const compileConfig = (
   Effect.gen(function* () {
     const leaves: ConfigLeaf[] = []
     const branches = new Set<string>()
+    const paths = new Set<string>()
+    const compileField = (schema: Schema.Top, path: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const nativeCodec = (yield* compile(schema)) as CompiledWitCodec<Schema.Top>
+        const graph = yield* Effect.try({
+          try: () => configGraph(nativeCodec.graph, `${contextLabel}:${JSON.stringify(path)}`),
+          catch: (cause) => new UnsupportedSchemaError(`${contextLabel}: ${String(cause)}`),
+        })
+        return { ...nativeCodec, graph, schemaGraph: schemaGraphToWit(graph) }
+      })
     const visit = (
-      schema: Schema.Top,
-      path: string[],
+      field: ConfigField,
+      propertyPath: string[],
       underOptional: boolean,
       required: boolean,
     ): Effect.Effect<void, UnsupportedSchemaError> =>
       Effect.gen(function* () {
+        const path = yield* Effect.try({
+          try: () => {
+            const path = propertyPath.map(configName)
+            const key = path.join("/")
+            if (paths.has(key))
+              throw new Error(`duplicate canonical config path '${path.join(".")}'`)
+            paths.add(key)
+            return path
+          },
+          catch: (cause) => new UnsupportedSchemaError(`${contextLabel}: ${String(cause)}`),
+        })
+        if (!Schema.isSchema(field)) {
+          yield* Effect.try({
+            try: () => validateStaticSchema(field.schema.ast, `${contextLabel}: ${path.join(".")}`),
+            catch: (cause) =>
+              cause instanceof UnsupportedSchemaError
+                ? cause
+                : new UnsupportedSchemaError(`${contextLabel}: cannot inspect static schema`),
+          })
+          const codec = yield* compileField(field.schema, path)
+          const ref = new SchemaRef(codec.schemaGraph)
+          const eligible = ref.jsonEligibility()
+          if (!eligible.success) {
+            return yield* Effect.fail(
+              new UnsupportedSchemaError(
+                `${contextLabel}: static config '${path.join(".")}' must contain data only: ${eligible.issues[0]?.message}`,
+              ),
+            )
+          }
+          const defaultValue =
+            "defaultValue" in field
+              ? yield* Effect.try({
+                  try: () => {
+                    const value = Effect.runSync(
+                      codec.encode(field.defaultValue) as Effect.Effect<
+                        CoreTypes.SchemaValueTree,
+                        Schema.SchemaError
+                      >,
+                    )
+                    ref.unpackJson(value)
+                    return value
+                  },
+                  catch: (cause) =>
+                    new UnsupportedSchemaError(
+                      `${contextLabel}: cannot export static code default at '${path.join(".")}'; use a schema-valid data value with no services or callbacks: ${String(cause)}`,
+                    ),
+                })
+              : undefined
+          leaves.push({
+            source: "local",
+            path,
+            propertyPath,
+            schema: field.schema,
+            codec,
+            declarationGraph: codec.graph,
+            required: true,
+            static: true,
+            defaultValue,
+          })
+          return
+        }
+        const schema = field as Schema.Top
         const inner = redactedInner(schema)
         if (inner !== undefined) {
           const valueSchema = underOptional ? Schema.UndefinedOr(inner) : inner
-          const codec = (yield* compile(valueSchema)) as CompiledWitCodec<Schema.Top>
+          const codec = yield* compileField(valueSchema, path)
           const declarationGraph = { defs: codec.graph.defs, root: t.secret(codec.graph.root) }
           leaves.push({
             source: "secret",
             path,
+            propertyPath,
             schema: valueSchema,
             codec,
             declarationGraph,
@@ -147,7 +289,7 @@ export const compileConfig = (
         }
         const object = objectAst(schema.ast)
         if (object !== undefined) {
-          branches.add(path.join("/"))
+          branches.add(propertyPath.join("/"))
           for (const property of object.ast.propertySignatures) {
             if (typeof property.name !== "string") {
               return yield* Effect.fail(
@@ -156,24 +298,25 @@ export const compileConfig = (
             }
             const optional = property.type.context?.isOptional === true
             yield* visit(
-              Schema.make(property.type),
-              [...path, property.name],
+              Schema.make(property.type) as Schema.Top,
+              [...propertyPath, property.name],
               underOptional || object.optional,
               !optional,
             )
           }
           return
         }
-        let codec = (yield* compile(schema)) as CompiledWitCodec<Schema.Top>
+        let codec = yield* compileField(schema, path)
         let valueSchema = schema
         if (underOptional && codec.graph.root.body.tag !== "option") {
           const optionalSchema = Schema.UndefinedOr(schema)
           valueSchema = optionalSchema
-          codec = (yield* compile(optionalSchema)) as unknown as CompiledWitCodec<Schema.Top>
+          codec = yield* compileField(optionalSchema, path)
         }
         leaves.push({
           source: "local",
           path,
+          propertyPath,
           schema: valueSchema,
           codec,
           declarationGraph: codec.graph,
@@ -181,7 +324,7 @@ export const compileConfig = (
         })
       })
     for (const [name, schema] of Object.entries(fields)) yield* visit(schema, [name], false, true)
-    const leavesByPath = new Map(leaves.map((leaf) => [leaf.path.join("/"), leaf]))
+    const leavesByPath = new Map(leaves.map((leaf) => [leaf.propertyPath.join("/"), leaf]))
     return {
       graphs: leaves.map((leaf) => leaf.declarationGraph),
       leaves,
@@ -194,7 +337,7 @@ export const compileConfig = (
           source: leaf.source,
           path: [...leaf.path],
           valueType: indices[i]!,
-          defaultValue: undefined,
+          defaultValue: leaf.defaultValue,
         }))
       },
       buildShape: compiledConfigRuntime(
@@ -209,6 +352,8 @@ export const compileConfig = (
 
 export interface ConfigStatics<F extends ConfigFields> {
   readonly fields: F
+  /** Construct the service in the current owner context. @since 1.6.0 @category layers */
+  readonly layer: Layer.Layer<ConfigShape<F>, UnsupportedSchemaError, ConfigClient | SecretsClient>
   readonly __compile: () => Effect.Effect<CompiledConfig, UnsupportedSchemaError>
   readonly __cfgTag: ConfigShape<F>
   readonly __fields: F
@@ -226,6 +371,18 @@ export const defineConfig = <const F extends ConfigFields>(
 ): ConfigClass<F> => {
   class Base extends Context.Service<ConfigShape<F>, ConfigShape<F>>()(name) {
     static readonly fields = fields
+    static readonly layer = Layer.effect(
+      Base,
+      Effect.flatMap(
+        Effect.suspend(() => Base.__compile()),
+        (compiled) =>
+          compiled.buildShape() as Effect.Effect<
+            ConfigShape<F>,
+            never,
+            ConfigClient | SecretsClient
+          >,
+      ),
+    )
     static readonly __cfgTag: ConfigShape<F> = undefined as never
     static readonly __fields = fields
     private static cached: CompiledConfig | null = null
@@ -279,7 +436,7 @@ export const encodeOverrides = (
           )
         }
         out.push({
-          path: [...path],
+          path: [...leaf.path],
           value: {
             graph: leaf.codec.schemaGraph,
             value: yield* leaf.codec.encode(value) as Effect.Effect<
