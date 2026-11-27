@@ -28,6 +28,7 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{AgentId, AgentStatus, InvocationId, OwnedAgentId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::oplog::OplogServiceOps;
@@ -324,8 +325,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
 
     let cut = OplogIndex::from_u64(completed.len() as u64);
     assert!(cut >= OplogIndex::INITIAL.next());
-    // A processor ID carries the reserved tag, so no component-agent ID of any type can be
-    // its fork target.
+    // Processor owners cannot be forked, regardless of the target's agent type.
     let fork_target = OwnedAgentId::new(
         context.default_environment_id,
         &AgentId::random(source_id.agent_id.type_id().unwrap()),
@@ -349,11 +349,9 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     let Some(fork_worker_response::Result::Failure(error)) = fork.result else {
         panic!("oplog-processor owners must not be forked: {fork:?}")
     };
-    let error = format!("{error:?}");
-    assert!(error.contains("InvalidRequest"), "{error}");
-    assert!(
-        error.contains("Source and target must have the same agent type"),
-        "{error}"
+    assert_eq!(
+        WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?,
+        WorkerExecutorError::invalid_request("Only component-agent owners can be forked")
     );
     assert!(executor.get_worker_metadata(&fork_target).await.is_err());
     assert!(
