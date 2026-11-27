@@ -177,9 +177,16 @@ object AgentDefinitionMacro {
           readonly
         )
     }
-    def config(tpe: TypeRepr, path: List[String]): List[AgentConfigDeclaration] = tpe.dealias.asType match {
+    val defaultChecks = List.newBuilder[Expr[Unit]]
+    def config(
+      tpe: TypeRepr,
+      path: List[String],
+      root: Boolean = false,
+      default: Option[String] = None
+    ): List[AgentConfigDeclaration] = tpe.dealias.asType match {
       case '[Secret[a]] =>
-        val inner = graph(TypeRepr.of[a])
+        if (default.nonEmpty) report.errorAndAbort(s"Code default on managed config ${path.mkString(".")}")
+        val inner = ConfigSchema.canonicalGraph(graph(TypeRepr.of[a]))
         List(
           AgentConfigDeclaration(
             AgentConfigSource.Secret,
@@ -189,9 +196,41 @@ object AgentDefinitionMacro {
             )
           )
         )
-      case _ if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr.of[Tuple]) =>
-        tpe.typeSymbol.caseFields.flatMap(f => config(tpe.memberType(f), path :+ f.name))
-      case _ => List(AgentConfigDeclaration(AgentConfigSource.Local, path, graph(tpe)))
+      case _
+          if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr
+            .of[Tuple]) && (root || ConfigMacro.containsSecret(tpe)) =>
+        if (default.nonEmpty)
+          report.errorAndAbort(s"Code default on config group ${path.mkString(".")}; default its static fields")
+        val names = tpe.typeSymbol.caseFields.map(f => ConfigSchema.canonicalName(f.name))
+        if (names.distinct.size != names.size) report.errorAndAbort("Duplicate canonical config fields")
+        tpe.typeSymbol.caseFields.flatMap { f =>
+          if (f.name.startsWith("$") || f.name.contains(".")) report.errorAndAbort(s"Invalid config field ${f.name}")
+          config(tpe.memberType(f), path :+ ConfigSchema.canonicalName(f.name), default = ConfigMacro.default(tpe, f))
+        }
+      case _ =>
+        ConfigMacro.checkStaticFields(tpe, path)
+        val schema = ConfigSchema.canonicalGraph(graph(tpe))
+        val value  = default.map { json =>
+          try ConfigSchema.defaultValue(schema, json)
+          catch {
+            case error: IllegalArgumentException => report.errorAndAbort(s"${path.mkString(".")}: ${error.getMessage}")
+          }
+        }
+        value.foreach { value =>
+          val wireValue = compiled.literal(golem.schema.wire.SchemaWire.schemaValueToWit(value))
+          val message   = Expr(s"Invalid config default at ${path.mkString(".")}")
+          tpe.asType match {
+            case '[a] =>
+              defaultChecks += '{
+                try {
+                  val _ = golem.schema.wire.ConcreteCodec.derived[a].decode($wireValue)
+                } catch {
+                  case scala.util.control.NonFatal(error) => throw new IllegalArgumentException($message, error)
+                }
+              }
+          }
+        }
+        List(AgentConfigDeclaration(AgentConfigSource.Local, path, schema, value))
     }
     val configTypes = traitType.baseClasses.filter(_.fullName == "golem.config.AgentConfig").flatMap { base =>
       traitType.baseType(base).typeArgs
@@ -211,7 +250,7 @@ object AgentDefinitionMacro {
       methods,
       constructor,
       mount,
-      configTypes.flatMap(tpe => config(tpe, Nil)),
+      configTypes.flatMap(tpe => config(tpe, Nil, root = true)),
       snapshotting
     )
     mount.filter(_.agentIdBinding.isEmpty).foreach { m =>
@@ -227,7 +266,7 @@ object AgentDefinitionMacro {
     try HttpValidation.validateHttpMountFromMetadata(metadata)
     catch { case error: IllegalArgumentException => report.errorAndAbort(error.getMessage) }
     HttpAgentValidation.validate(metadata).left.foreach(error => report.errorAndAbort(error))
-    compiled.literal(WireAgentMetadata.fromModel(metadata))
+    Expr.block(defaultChecks.result(), compiled.literal(WireAgentMetadata.fromModel(metadata)))
   }
 
   private def impl[T: Type](using Quotes): Expr[AgentMetadata] = {

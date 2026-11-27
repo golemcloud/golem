@@ -1439,7 +1439,8 @@ object SourceDiscovery {
 
   /**
    * Extract non-secret config fields from a config type by looking up its case
-   * class definition. Recursively flattens nested case classes.
+   * class definition. Only required groups containing Secrets are expanded;
+   * static records remain whole creation-override values.
    */
   private def extractConfigFields(
     typeName: String,
@@ -1447,10 +1448,24 @@ object SourceDiscovery {
     caseClassIndex: Map[String, (String, Defn.Class)],
     path: List[String]
   ): Option[List[ConfigField]] = {
-    // Try FQN first, then simple name
-    val resolved = caseClassIndex
-      .get(typeName)
-      .orElse(caseClassIndex.get(if (currentPkg.isEmpty) typeName else s"$currentPkg.$typeName"))
+    def lookup(name: String, pkg: String): Option[(String, Defn.Class)] =
+      caseClassIndex.get(qualifiedName(pkg, name)).orElse(caseClassIndex.get(name))
+
+    val resolved = lookup(typeName, currentPkg)
+
+    def containsSecret(tpe: Type, pkg: String, seen: Set[String]): Boolean =
+      if (isSecretType(tpe)) true
+      else if (seen(tpe.syntax)) false
+      else {
+        val next   = seen + tpe.syntax
+        val nested = lookup(tpe.syntax, pkg)
+        nested.exists { case (p, c) =>
+          c.ctor.paramClauses.flatMap(_.values).exists(_.decltpe.exists(containsSecret(_, p, next)))
+        } || (tpe match {
+          case Type.Apply.After_4_6_0(_, args) => args.values.exists(containsSecret(_, pkg, next))
+          case _                               => false
+        })
+      }
 
     resolved.map { case (classPkg, cls) =>
       val params = cls.ctor.paramClauses.flatMap(_.values)
@@ -1463,12 +1478,12 @@ object SourceDiscovery {
           case Some(tpe) =>
             val typeStr = tpe.syntax
             // Try to resolve as a nested config case class
-            val nestedKey    = typeStr
-            val nestedFqnKey = if (classPkg.isEmpty) typeStr else s"$classPkg.$typeStr"
-            caseClassIndex.get(nestedKey).orElse(caseClassIndex.get(nestedFqnKey)) match {
-              case Some(_) =>
-                extractConfigFields(nestedKey, classPkg, caseClassIndex, fieldPath).getOrElse(Nil)
-              case None =>
+            lookup(typeStr, classPkg) match {
+              case Some(_) if containsSecret(tpe, classPkg, Set.empty) =>
+                extractConfigFields(typeStr, classPkg, caseClassIndex, fieldPath).getOrElse(Nil)
+              case Some((pkg, record)) =>
+                List(ConfigField(fieldPath, s"_root_.${qualifiedName(pkg, record.name.value)}"))
+              case _ =>
                 List(ConfigField(fieldPath, typeStr))
             }
           case None => Nil

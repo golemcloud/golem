@@ -25,10 +25,9 @@ import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 @agentImplementation()
 final class ConfigAgentImpl(input: String, config: Config[MyAppConfig]) extends ConfigAgent {
   override def greet(): Future[String] = {
-    val cfg     = config.value
-    val appName = cfg.appName
-    val host    = cfg.db.host
-    val port    = cfg.db.port
+    val appName = config.appName
+    val host    = config.db.host
+    val port    = config.db.port
     Future.successful(s"Hello from $appName! DB at $host:$port, input=$input")
   }
 }

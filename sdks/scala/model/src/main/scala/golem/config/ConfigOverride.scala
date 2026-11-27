@@ -16,7 +16,8 @@
 
 package golem.config
 
-import golem.schema.{IntoSchema, TypedSchemaValue}
+import golem.schema.TypedSchemaValue
+import golem.schema.wire.{ConcreteCodec, SchemaWire}
 
 /**
  * Internal — used by generated RPC client code to build config overrides. Not
@@ -34,6 +35,14 @@ final case class ConfigOverride(
  * Internal — used by generated RPC client code. Not intended for direct use.
  */
 object ConfigOverride {
-  def apply[A](path: List[String], value: A)(implicit into: IntoSchema[A]): ConfigOverride =
-    new ConfigOverride(path, into.toTyped(value))
+  inline def apply[A](path: List[String], value: A): ConfigOverride = {
+    val encoded = ConcreteCodec.derived[A].encode(value)
+    new ConfigOverride(
+      path.map(ConfigSchema.canonicalName),
+      TypedSchemaValue(
+        ConfigSchema.canonicalGraph(SchemaWire.schemaGraphFromWit(encoded.graph)),
+        SchemaWire.schemaValueFromWit(encoded.value)
+      )
+    )
+  }
 }

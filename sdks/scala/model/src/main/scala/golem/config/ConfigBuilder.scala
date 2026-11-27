@@ -30,7 +30,7 @@ object ConfigBuilder {
   implicit def fromSchema[A](implicit schema: Schema[A]): ConfigBuilder[A] =
     new ConfigBuilder[A] {
       override def build(path: List[String], loader: ConfigFieldLoader): A =
-        buildFromReflect(path, schema.reflect, loader)
+        buildFromReflect(path, schema.reflect, loader, root = true)
     }
 
   private val secretFullName: String =
@@ -48,7 +48,8 @@ object ConfigBuilder {
   private def buildFromReflect[A](
     path: List[String],
     reflect: Reflect.Bound[A],
-    loader: ConfigFieldLoader
+    loader: ConfigFieldLoader,
+    root: Boolean = false
   ): A =
     if (isSecret(reflect)) {
       val inner = reflect.asWrapperUnknown match {
@@ -58,13 +59,13 @@ object ConfigBuilder {
       buildSecret(path, inner, loader).asInstanceOf[A]
     } else {
       reflect.asRecord match {
-        case Some(record) if !isTupleRecord(record) =>
+        case Some(record) if !isTupleRecord(record) && (root || ConfigIntrospection.containsSecret(reflect)) =>
           buildRecord(path, record, loader)
         case _ =>
           reflect.asWrapperUnknown match {
-            case Some(u) =>
-              buildWrapper(path, u, loader).asInstanceOf[A]
-            case None =>
+            case Some(u) if root || ConfigIntrospection.containsSecret(reflect) =>
+              buildWrapper(path, u, loader, root).asInstanceOf[A]
+            case _ =>
               buildLeaf(path, reflect, loader)
           }
       }
@@ -81,7 +82,7 @@ object ConfigBuilder {
     while (idx < record.fields.length) {
       val field = record.fields(idx)
       val value = buildFromReflect(
-        path :+ field.name,
+        path :+ ConfigSchema.canonicalName(field.name),
         field.value.asInstanceOf[Reflect.Bound[Any]],
         loader
       )
@@ -112,11 +113,12 @@ object ConfigBuilder {
   private def buildWrapper(
     path: List[String],
     u: Reflect.Wrapper.Unknown[Binding],
-    loader: ConfigFieldLoader
+    loader: ConfigFieldLoader,
+    root: Boolean
   ): Any = {
     val wrapper = u.wrapper
     val wrapped = wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]]
-    val value   = buildFromReflect(path, wrapped, loader)
+    val value   = buildFromReflect(path, wrapped, loader, root)
     wrapper.binding.wrap(value.asInstanceOf[u.Wrapped])
   }
 }

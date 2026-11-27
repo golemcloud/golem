@@ -20,8 +20,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CreateWorkerRequest, create_worker_response,
 };
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::{AgentKey, AgentMode, ParsedAgentKey};
-use golem_common::model::component::{ComponentDto, ComponentRevision};
+use golem_common::model::agent::{AgentKey, AgentMode, AgentTypeName, ParsedAgentKey};
+use golem_common::model::component::{AgentTypeProvisionConfigUpdate, ComponentDto, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{
@@ -63,6 +63,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("agent_update_v1")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("static_config_scala")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -1222,6 +1226,147 @@ async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     check_static_config_reconstruction(last_unique_id, deps, agent_sdk_rust).await
+}
+
+#[test]
+#[timeout("120s")]
+async fn scala_static_config_defaults_and_creation_overrides_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("static_config_scala")] guest: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let entry = |path: &str, value: serde_json::Value| AgentConfigEntryDto {
+        path: vec![path.into()],
+        value: value.into(),
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let mut component = executor
+        .component_dep(&context.default_environment_id, guest)
+        .with_agent_config(
+            "StaticConfigAgent",
+            vec![entry(
+                "settings",
+                serde_json::json!({ "label": "deployment", "count": 43 }),
+            )],
+        )
+        .store()
+        .await?;
+    let agent_id = agent_key!("StaticConfigAgent", "creation");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::new(),
+            vec![
+                entry(
+                    "settings",
+                    serde_json::json!({ "label": "creation", "count": 59 }),
+                ),
+                entry("maxChars", serde_json::json!(0)),
+                entry("enabled", serde_json::json!(false)),
+            ],
+        )
+        .await?;
+    let deployed_agent_id = agent_key!("StaticConfigAgent", "deployment");
+    let deployed_worker_id = executor
+        .start_agent(&component.id, deployed_agent_id.clone())
+        .await?;
+    let workers = [&deployed_worker_id, &worker_id];
+    let mut reads = [
+        (
+            &deployed_agent_id,
+            "deployment|deployment|UInt(43)|(None,Some(7),retained)|4000|None|true",
+        ),
+        (
+            &agent_id,
+            "creation|creation|UInt(59)|(None,Some(7),retained)|0|None|false",
+        ),
+    ]
+    .map(|(id, expected)| (id, format!("{expected};{expected}")));
+    for (id, expected) in &reads {
+        let actual = executor
+            .invoke_and_await_agent(&component, id, "read", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(&actual, expected);
+    }
+    for (label, count, config) in [
+        (
+            "new-revision",
+            0,
+            Some(vec![entry(
+                "settings",
+                serde_json::json!({"label": "new-revision", "count": 0}),
+            )]),
+        ),
+        ("new-revision", 0, None),
+        ("code-default", 31, Some(vec![])),
+    ] {
+        component = executor
+            .update_component_with(
+                &component.id,
+                component.revision,
+                None,
+                Some(BTreeMap::from([(
+                    AgentTypeName("StaticConfigAgent".into()),
+                    AgentTypeProvisionConfigUpdate {
+                        config,
+                        ..Default::default()
+                    },
+                )])),
+                vec![],
+            )
+            .await?;
+        reads[0].1 = format!(
+            "deployment|deployment|UInt(43)|(None,Some(7),retained)|4000|None|true;deployment|{label}|UInt({count})|(None,Some(7),retained)|4000|None|true"
+        );
+        for ((id, expected), worker) in reads.iter().zip(workers) {
+            executor
+                .auto_update_worker(worker, component.revision, false)
+                .await?;
+            let actual = executor
+                .invoke_and_await_agent(&component, id, "read", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_eq!(&actual, expected);
+            assert_eq!(
+                executor
+                    .get_worker_metadata(worker)
+                    .await?
+                    .component_revision,
+                component.revision
+            );
+        }
+    }
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    for (id, expected) in &reads {
+        let actual = executor
+            .invoke_and_await_agent(&component, id, "read", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(&actual, expected);
+    }
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    for entry in &oplog {
+        if let PublicOplogEntry::Start(_) = &entry.entry {
+            assert!(oplog.iter().any(|terminal| matches!(
+                &terminal.entry,
+                PublicOplogEntry::End(end) if end.start_index == entry.oplog_index
+            )));
+        }
+    }
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        6,
+    );
+    Ok(())
 }
 
 async fn check_static_config_reconstruction(

@@ -74,7 +74,7 @@ private[golem] object ConfigLoader extends ConfigFieldLoader {
    * hint, then decodes it via `FromSchema[A]`.
    */
   def loadValue[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): A = {
-    val expectedGraph = SchemaPayload.graph[A]
+    val expectedGraph = SchemaPayload.graphFromModel(ConfigSchema.canonicalGraph(into.graph))
     val tree          = AgentHostApi.getConfigValue(path, expectedGraph)
     SchemaPayload.decode[A](tree) match {
       case Right(a)  => a
@@ -86,7 +86,7 @@ private[golem] object ConfigLoader extends ConfigFieldLoader {
   private[golem] def loadSecretHandle[A](
     path: List[String]
   )(implicit into: IntoSchema[A]): golem.schema.GuestSecretHandle = {
-    val expectedHandleGraph = SchemaPayload.graphFromModel(secretGraph(into.graph))
+    val expectedHandleGraph = SchemaPayload.graphFromModel(secretGraph(ConfigSchema.canonicalGraph(into.graph)))
     val handleTree          = AgentHostApi.getConfigValue(path, expectedHandleGraph)
     val handleValue         = SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(handleTree))
     handleValue match {
@@ -112,7 +112,7 @@ private[golem] object ConfigLoader extends ConfigFieldLoader {
 
   private def loadSecretValue[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): A = {
     val handle     = loadSecretHandle[A](path)
-    val innerGraph = SchemaPayload.graph[A]
+    val innerGraph = SchemaPayload.graphFromModel(ConfigSchema.canonicalGraph(into.graph))
     val revealed   = SecretApi.reveal(handle, innerGraph)
     if (handle.take().isEmpty)
       throw new RuntimeException(s"Secret handle at path ${path.mkString(".")} was already transferred")

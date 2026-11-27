@@ -139,9 +139,12 @@ lazy val model = crossProject(JVMPlatform, JSPlatform)
   .jvmSettings(
     Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
       "golem-service-base" / "tests" / "fixtures" / "http-handlers",
+    Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
+      "test-data" / "config-conformance",
     // The shared PrincipalRef text-form vectors.
     Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
       "test-data" / "caller-identity",
+    Test / unmanagedResources / excludeFilter := HiddenFileFilter || "README.md",
     Compile / unmanagedSourceDirectories ++= Seq(
       (ThisBuild / baseDirectory).value / "model" / ".jvm" / "src" / "main" / "scala"
     ),
@@ -275,6 +278,19 @@ lazy val emptyAutoRegisterFixture = project
     scalaJSLinkerConfig ~= {
       _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
     }
+  )
+
+lazy val staticConfigFixture = project
+  .in(file("test-static-config"))
+  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+  .dependsOn(core, macros)
+  .settings(commonSettings)
+  .settings(jsSettings)
+  .settings(
+    golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("staticconfig"),
+    publish / skip                                    := true,
+    scalaJSUseMainModuleInitializer                   := false,
+    scalaJSLinkerConfig ~= (_.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule))
   )
 
 // --- capability-sensitive guest export fixtures (JS, not published) -------

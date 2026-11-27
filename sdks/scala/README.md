@@ -18,6 +18,7 @@ automatically derive all the serialization, RPC bindings, and metadata generatio
 - **Tool reflection** - Discover caller-visible tools and invoke commands with their deployed schemas
 - **Transaction helpers** - Both fallible and infallible transaction patterns with automatic rollback
 - **Snapshot integration** - Simple hooks for state persistence across component instances
+- **[Static config](docs/config.md)** - Typed field access and validated code defaults shared by sbt and Mill
 
 ## Metadata permissions
 
