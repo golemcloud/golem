@@ -959,15 +959,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .on_invocation_failure(
                     full_function_name,
                     &trap_type,
-                    (self.uses_streams
-                        && (self.parent.agent_mode() == AgentMode::Ephemeral
-                            || !matches!(
-                                trap_type,
-                                TrapType::Interrupt(
-                                    InterruptKind::Suspend(_) | InterruptKind::Restart
-                                )
-                            )))
-                    .then_some((idempotency_key, details)),
+                    self.uses_streams.then_some((idempotency_key, details)),
                 )
                 .await
             {

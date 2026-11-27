@@ -48,6 +48,7 @@ use golem_common::{agent_key, data_value};
 use golem_schema::proto::golem::schema::{RecordValue, SchemaValueStreamReference, schema_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::{AgentResult, TestDsl};
+use golem_worker_executor::services::HasOplog;
 use golem_worker_executor::services::direct_invocation_auth::{
     DirectInvocationAuthService, EnvironmentOwnerAccountId,
 };
@@ -5655,6 +5656,7 @@ async fn session_failure_causes_survive_executor_restart(
         "protocol",
         "recovery-exit",
         "method",
+        "ephemeral-suspend",
     ] {
         let context = TestContext::new(last_unique_id);
         let overrides = TestExecutorOverrides {
@@ -5684,23 +5686,39 @@ async fn session_failure_causes_survive_executor_restart(
             )
             .store()
             .await?;
-        let target = executor
-            .start_agent_with(
-                &component.id,
-                if cause == "method" {
-                    agent_key!("RustMethodFailure", cause)
-                } else {
-                    agent_key!("StreamingRpcTarget", cause)
-                },
-                std::collections::HashMap::from([(
-                    "SESSION_FAILURE_RETRY_PORT".into(),
-                    port.to_string(),
-                )]),
-                Vec::new(),
-            )
-            .await?;
+        let key = IdempotencyKey::fresh();
+        let target = if cause == "ephemeral-suspend" {
+            let logical = agent_key!("EphemeralStreamingRpcTarget", cause);
+            let target = crate::agent::ephemeral_agent_id(
+                &executor,
+                component.environment_id,
+                &logical,
+                &key,
+                "produce_then_spin",
+            );
+            crate::agent::create_unkeyed_agent_at(&executor, &component, &logical, &target).await?;
+            target
+        } else {
+            executor
+                .start_agent_with(
+                    &component.id,
+                    if cause == "method" {
+                        agent_key!("RustMethodFailure", cause)
+                    } else {
+                        agent_key!("StreamingRpcTarget", cause)
+                    },
+                    std::collections::HashMap::from([(
+                        "SESSION_FAILURE_RETRY_PORT".into(),
+                        port.to_string(),
+                    )]),
+                    Vec::new(),
+                )
+                .await?
+        };
         let metadata = executor.get_worker_metadata(&target).await?;
-        let method = if cause == "method" {
+        let method = if cause == "ephemeral-suspend" {
+            "produce_then_spin"
+        } else if cause == "method" {
             "fail_input"
         } else if cause == "recovery-exit" {
             "exit_after_input"
@@ -5715,7 +5733,7 @@ async fn session_failure_causes_survive_executor_restart(
             &target,
             &target,
             metadata.fingerprint.0,
-            &IdempotencyKey::fresh(),
+            &key,
             method,
         );
         start.origin_invocation = None;
@@ -5753,9 +5771,34 @@ async fn session_failure_causes_survive_executor_restart(
                     caller: start.caller.clone(),
                 })),
             };
+        let mut ephemeral_worker = None;
         match cause {
             "invocation" => {} // The failed HTTP call exhausts its named retry policy.
             "method" => {}     // The export returns a method failure, not a guest trap.
+            "ephemeral-suspend" => {
+                loop {
+                    let response = responses.message().await?.expect("early stream result");
+                    if matches!(
+                        response.response,
+                        Some(invocation_response::Response::Result(_))
+                    ) {
+                        break;
+                    }
+                }
+                ephemeral_worker = Some(
+                    executor
+                        .active_agent(&target)
+                        .await
+                        .expect("the ephemeral invocation is active")
+                        .primary(),
+                );
+                executor
+                    .interrupt_loaded_worker(
+                        &target.agent_id,
+                        InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()),
+                    )
+                    .await?;
+            }
             "interrupt" => {
                 executor
                     .interrupt_loaded_worker(
@@ -5898,6 +5941,60 @@ async fn session_failure_causes_survive_executor_restart(
             .collect::<Vec<_>>();
         assert_eq!(finished.len(), 1, "{cause}");
         match (cause, &finished[0]) {
+            ("ephemeral-suspend", Err(SessionFailure::Invocation)) => {
+                use golem_api_grpc::proto::golem::worker::agent_error;
+                use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
+                use golem_service_base::error::worker_executor::WorkerExecutorError;
+                use golem_worker_executor::model::LookupResult;
+
+                let worker = ephemeral_worker.as_ref().unwrap();
+                let oplog = worker.oplog();
+                let entries = oplog
+                    .read_exact(
+                        OplogIndex::INITIAL,
+                        oplog.current_oplog_index().await.as_u64(),
+                    )
+                    .await?;
+                assert!(entries.values().any(|entry| matches!(
+                    entry,
+                    OplogEntry::Error {
+                        error: golem_common::model::oplog::AgentError::EphemeralCannotSuspend(_),
+                        ..
+                    }
+                )));
+                let invocation_id =
+                    golem_common::model::InvocationId(accepted.idempotency_key.unwrap().into());
+                let lookup = worker.lookup_invocation_result(&invocation_id).await;
+                assert!(
+                    matches!(
+                        &lookup,
+                        LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
+                            error: golem_common::model::oplog::AgentError::EphemeralCannotSuspend(error),
+                            ..
+                        })) if error.reason == "suspended while an invocation was active"
+                    ),
+                    "{lookup:?}"
+                );
+                assert_eq!(
+                    live_failure.message,
+                    "Component trapped: Ephemeral agent cannot suspend"
+                );
+                let Some(worker_execution_error::Error::InvocationFailed(failure)) = live_failure
+                    .worker_error
+                    .as_ref()
+                    .and_then(|error| error.error.as_ref())
+                else {
+                    anyhow::bail!("expected the recorded invocation failure: {live_failure:?}");
+                };
+                assert!(
+                    matches!(
+                        failure.error.as_ref().and_then(|error| error.error.as_ref()),
+                        Some(agent_error::Error::EphemeralCannotSuspend(error))
+                            if error.reason == "suspended while an invocation was active"
+                    ),
+                    "{failure:?}"
+                );
+            }
             ("method", Err(SessionFailure::Invocation)) => {
                 assert!(
                     live_failure
@@ -5979,6 +6076,7 @@ async fn session_failure_causes_survive_executor_restart(
         };
         drop(requests);
         drop(responses);
+        drop(ephemeral_worker);
         drop(executor);
         let executor = start_with_overrides(deps, &context, overrides).await?;
         let (requests, receiver) = mpsc::channel(1);
@@ -5991,6 +6089,21 @@ async fn session_failure_causes_survive_executor_restart(
             .invoke_agent_session(ReceiverStream::new(receiver))
             .await?
             .into_inner();
+        if cause == "ephemeral-suspend" {
+            let response = responses
+                .message()
+                .await?
+                .expect("ephemeral resume rejection");
+            let Some(invocation_response::Response::Rejected(rejection)) = response.response else {
+                anyhow::bail!("expected ephemeral resume rejection: {response:?}");
+            };
+            assert_eq!(
+                rejection.error,
+                "Invalid request: An ephemeral agent cannot accept another invocation or be resumed"
+            );
+            assert!(responses.message().await?.is_none());
+            continue;
+        }
         loop {
             let response = responses.message().await?.expect("resumed completion");
             if let Some(invocation_response::Response::Finished(finished)) = response.response {

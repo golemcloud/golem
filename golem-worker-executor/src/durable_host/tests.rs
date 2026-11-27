@@ -462,34 +462,75 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
 
 #[test]
 fn recovery_interrupt_selects_typed_session_failure() {
-    use super::invocation::stream_session_interruption;
+    use super::invocation::stream_session_failure;
     use golem_common::model::durable_stream::SessionFailure;
 
     let timestamp: Timestamp = "2026-11-26T19:23:41.123456789Z".parse().unwrap();
-    for kind in [
-        InterruptKind::Interrupt(timestamp),
-        InterruptKind::Suspend(timestamp),
-        InterruptKind::Restart,
-        InterruptKind::Jump,
-        InterruptKind::EntityCancellation,
-        InterruptKind::ShardLost,
-    ] {
-        assert_eq!(
-            stream_session_interruption(&TrapType::Interrupt(kind)),
-            Some(SessionFailure::Interrupted(kind))
-        );
-    }
+    let retry_from = OplogIndex::from_u64(37);
     for trap in [
+        TrapType::Interrupt(InterruptKind::Interrupt(timestamp)),
+        TrapType::Interrupt(InterruptKind::Suspend(timestamp)),
+        TrapType::Interrupt(InterruptKind::Restart),
+        TrapType::Interrupt(InterruptKind::Jump),
+        TrapType::Interrupt(InterruptKind::ShardLost),
         TrapType::Exit,
         TrapType::Error {
             error: AgentError::OutOfMemory,
-            retry_from: OplogIndex::from_u64(37),
+            retry_from,
             semantic_trap_retry_override: None,
             provenance: crate::model::FailureProvenance::Host,
         },
     ] {
-        assert_eq!(stream_session_interruption(&trap), None);
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let terminal = ephemeral_terminal_trap(mode, &trap, retry_from);
+            let final_trap = terminal.as_ref().unwrap_or(&trap);
+            let suspended = ephemeral_suspend_trap(mode, final_trap, retry_from);
+            let final_trap = suspended.as_ref().unwrap_or(final_trap);
+            for giving_up in [false, true] {
+                for authoritative in [false, true] {
+                    let expected = match &trap {
+                        TrapType::Interrupt(kind @ InterruptKind::Interrupt(_)) => {
+                            Some(SessionFailure::Interrupted(*kind))
+                        }
+                        TrapType::Interrupt(InterruptKind::ShardLost) => None,
+                        TrapType::Interrupt(
+                            InterruptKind::Suspend(_)
+                            | InterruptKind::Restart
+                            | InterruptKind::Jump,
+                        ) if mode == AgentMode::Durable => None,
+                        _ if giving_up && authoritative => Some(SessionFailure::Invocation),
+                        _ => None,
+                    };
+                    assert_eq!(
+                        stream_session_failure(final_trap, giving_up, authoritative),
+                        expected,
+                        "mode={mode:?}, trap={trap:?}, giving_up={giving_up}, authoritative={authoritative}"
+                    );
+                }
+            }
+        }
     }
+}
+
+#[test]
+fn ephemeral_suspend_selects_the_recorded_failure_not_the_original_interrupt() {
+    let trap = ephemeral_suspend_trap(
+        AgentMode::Ephemeral,
+        &TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc())),
+        OplogIndex::from_u64(37),
+    )
+    .unwrap();
+    assert!(matches!(
+        trap,
+        TrapType::Error {
+            error: AgentError::EphemeralCannotSuspend(_),
+            ..
+        }
+    ));
+    assert_eq!(
+        super::invocation::stream_session_failure(&trap, true, true),
+        Some(golem_common::model::durable_stream::SessionFailure::Invocation)
+    );
 }
 
 #[test]

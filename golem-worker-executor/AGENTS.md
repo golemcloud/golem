@@ -112,6 +112,7 @@ stays inline.
   A stop or capacity failure that lands before `AgentInvocationSettled` stops the agent even when
   no background work is left: a durable agent reconstructs to write `Settled`, and an ephemeral
   agent fails (`EphemeralCannotSuspend`) while keeping the recorded result.
+- **Session failure** is decided in `on_invocation_failure` after all trap conversions. Durable suspend and restart leave the session open, including failures while recording completion. Ephemeral suspend and restart become invocation errors; session observers read the recorded failure. A user interrupt finishes with its interrupt kind. Jump and shard loss write no session terminal. Retry teardown passes no session.
 - **Read-only strictness** of a read-only method lasts through its drain: background work that
   attempts a write side effect (`WriteLocal` or `WriteRemote`) traps with `ReadOnlyViolation`
   after the result, which fails the agent without replacing the recorded result.

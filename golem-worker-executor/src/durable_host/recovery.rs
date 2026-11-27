@@ -493,13 +493,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         }
                                     }
                                     Some(trap_type) => {
-                                        let streaming_session = (uses_streams
-                                            && (store.as_context().data().agent_mode() == AgentMode::Ephemeral
-                                                || !matches!(trap_type, TrapType::Interrupt(InterruptKind::Suspend(_) | InterruptKind::Restart)))
-                                            && (matches!(trap_type, TrapType::Interrupt(_))
-                                                || store.as_context().data().durable_ctx().is_live()
-                                                || store.as_context().data().durable_ctx().state.authoritative_replay_failure.load(Ordering::Acquire)))
-                                            .then_some((&idempotency_key, details));
+                                        let streaming_session = uses_streams.then_some((&idempotency_key, details));
                                         let decision = match store
                                             .as_context_mut()
                                             .data_mut()
