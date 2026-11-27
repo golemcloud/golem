@@ -169,6 +169,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
         config:
           local:
             label: "{{{{ STATIC_CONFIG_TEST_LABEL }}}}"
+            defaults: {{ global: true, otherAgentField: false }}
         components:
           app:main:
             templates: with-config
@@ -183,7 +184,14 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
     )
     .unwrap();
     let result = ctx
-        .cli(["config", "get", "BarAgent.settings", "--format", "json"])
+        .cli([
+            "config",
+            "get",
+            "BarAgent.settings",
+            "--show-secrets",
+            "--format",
+            "json",
+        ])
         .await;
     assert!(result.success_or_dump());
     let documents: Vec<JsonValue> = result.stdout_json();
@@ -208,6 +216,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
             "list",
             "--agent-type",
             "BarAgent",
+            "--show-secrets",
             "--format",
             "json",
         ])
@@ -224,6 +233,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
             "BarAgent.global",
             "--component",
             "app:main",
+            "--show-secrets",
             "--format",
             "json",
         ])
@@ -242,6 +252,44 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
         documents[0]["field"]["sources"][0]["origin"]["path"],
         serde_json::json!(["componentTemplates", "with-config", "config", "global"])
     );
+    for format in ["text", "json", "yaml"] {
+        for command in [
+            vec!["config", "get", "BarAgent.settings"],
+            vec!["config", "list", "--agent-type", "BarAgent"],
+        ] {
+            let mut args = command;
+            args.extend(["--format", format]);
+            let masked = ctx.cli(&args).await;
+            assert!(masked.success_or_dump());
+            let output = format!("{}{}", masked.stdout_text(), masked.stderr_text());
+            assert!(!output.contains("from-environment"), "{output}");
+            assert!(output.contains("***"), "{output}");
+            assert!(output.contains("settings"), "{output}");
+            if format == "json" {
+                let documents: Vec<JsonValue> = masked.stdout_json();
+                let masked_field = documents[0].get("field").unwrap_or_else(|| {
+                    documents[0]["fields"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|field| field["path"] == serde_json::json!(["settings"]))
+                        .unwrap()
+                });
+                assert_eq!(
+                    masked_field["fill"],
+                    serde_json::json!({"label":"***", "count":"***", "literal":"***"})
+                );
+                assert_eq!(masked_field["sources"], field["sources"]);
+            }
+            args.push("--show-secrets");
+            let revealed = ctx.cli(&args).await;
+            assert!(revealed.success_or_dump());
+            assert!(
+                format!("{}{}", revealed.stdout_text(), revealed.stderr_text())
+                    .contains("from-environment")
+            );
+        }
+    }
     let all = ctx.cli(["config", "list"]).await;
     assert!(!all.success());
     assert!(all.stderr_contains("Incomplete"));
@@ -312,6 +360,56 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
     assert!(fields.iter().all(|field| field["agentType"] == "BarAgent"));
 
     let manifest = ctx.cwd_path_join("golem.yaml");
+    let valid_manifest = fs::read_to_string(&manifest).unwrap();
+    fs::write_str(
+        &manifest,
+        valid_manifest.replace("count: 0", "count: 0\n      typo: false"),
+    )
+    .unwrap();
+    let typo = ctx.cli(["config", "get", "BarAgent.settings"]).await;
+    assert!(!typo.success());
+    assert!(typo.stderr_contains("unknown config field"));
+    fs::write_str(&manifest, &valid_manifest).unwrap();
+    for format in ["text", "json", "yaml"] {
+        let masked = ctx
+            .cli(["component", "manifest-trace", "--build", "--format", format])
+            .await;
+        assert!(masked.success_or_dump());
+        let output = format!("{}{}", masked.stdout_text(), masked.stderr_text());
+        assert!(!output.contains("from-environment"), "{output}");
+        assert!(output.contains("***"), "{output}");
+    }
+    let template = ctx.cwd_path_join("schema.yaml");
+    let original_template = fs::read_to_string(&template).unwrap();
+    fs::write_str(
+        &template,
+        original_template.replace("global: true", "$config: defaults"),
+    )
+    .unwrap();
+    fs::write_str(
+        &manifest,
+        valid_manifest.replace("count: 0", "count: 0\n        literal: complete-value"),
+    )
+    .unwrap();
+    let selected = ctx
+        .cli([
+            "config",
+            "get",
+            "BarAgent.global",
+            "--show-secrets",
+            "--format",
+            "json",
+        ])
+        .await;
+    assert!(selected.success_or_dump());
+    let selected_documents: Vec<JsonValue> = selected.stdout_json();
+    assert_eq!(selected_documents[0]["field"]["fill"], true);
+    assert_eq!(
+        selected_documents[0]["field"]["sources"][0]["origin"]["path"],
+        serde_json::json!(["config", "local", "defaults", "global"])
+    );
+    fs::write_str(&template, original_template).unwrap();
+    fs::write_str(&manifest, &valid_manifest).unwrap();
     fs::write_str(
         &manifest,
         fs::read_to_string(&manifest).unwrap().replace(
@@ -360,6 +458,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
     let missing = ctx.cli(["component", "manifest-trace", "--build"]).await;
     assert!(!missing.success());
     assert!(missing.stderr_contains("main.wasm"));
+    assert!(!missing.stderr_contains("run `golem build` or pass --build"));
 }
 
 #[test]

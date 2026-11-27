@@ -730,6 +730,12 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ConfigBindingOrigin> for C
             {
                 Location::ManifestFile(file) => ConfigOriginLocation::Manifest { file },
                 Location::ComponentMetadata(_) => ConfigOriginLocation::ComponentMetadata,
+                Location::Package(package) => ConfigOriginLocation::Package(
+                    crate::model::component_metadata::ConfigPackageOrigin {
+                        source: package.source,
+                        package_digest: package.package_digest,
+                    },
+                ),
             },
             source_path: origin.source_path,
             layer: origin.layer,
@@ -745,6 +751,12 @@ impl From<ConfigBindingOrigin> for golem_api_grpc::proto::golem::component::Conf
             location: Some(match origin.location {
                 ConfigOriginLocation::Manifest { file } => Location::ManifestFile(file),
                 ConfigOriginLocation::ComponentMetadata => Location::ComponentMetadata(true),
+                ConfigOriginLocation::Package(package) => Location::Package(
+                    golem_api_grpc::proto::golem::component::ConfigPackageOrigin {
+                        source: package.source,
+                        package_digest: package.package_digest,
+                    },
+                ),
             }),
             source_path: origin.source_path,
             layer: origin.layer,

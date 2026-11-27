@@ -132,6 +132,7 @@ fn origin(layer: &str) -> ConfigOrigin {
         file: format!("{layer}.yaml").into(),
         path: vec!["config".into(), "local".into()],
         layer: layer.into(),
+        package: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn resolve(schema: &ConfigSchema, inputs: &Inputs) -> Result<Value, String> {
         .map(|(index, value)| ConfigLayer {
             origin: origin(&format!("layer{index}")),
             value: value.clone(),
+            project_to_owner: false,
         })
         .collect::<Vec<_>>();
     let plan = schema
@@ -230,7 +232,9 @@ fn config_corpus() {
 fn provisioning_binding_preserves_nested_origins_and_portable_locations() {
     use super::{StaticConfigFieldView, StaticConfigSource};
     use golem_common::model::component::ComponentName;
-    use golem_common::model::component_metadata::{ConfigBindingOrigin, ConfigOriginLocation};
+    use golem_common::model::component_metadata::{
+        ConfigBindingOrigin, ConfigOriginLocation, ConfigPackageOrigin,
+    };
 
     let root = std::env::temp_dir().join("binding-origin-test");
     let app = root.join("app");
@@ -248,6 +252,10 @@ fn provisioning_binding_preserves_nested_origins_and_portable_locations() {
                     file: app.join("golem.yaml"),
                     path: vec!["config".into(), "local".into(), "timeout".into()],
                     layer: "application".into(),
+                    package: Some(ConfigPackageOrigin {
+                        source: "https://packages.example.com/settings.golem".into(),
+                        package_digest: "sha256:package-content".into(),
+                    }),
                 },
             },
             StaticConfigSource {
@@ -256,6 +264,7 @@ fn provisioning_binding_preserves_nested_origins_and_portable_locations() {
                     file: root.join("shared/golem.yaml"),
                     path: vec!["config".into(), "local".into(), "retryCount".into()],
                     layer: "code".into(),
+                    package: None,
                 },
             },
             StaticConfigSource {
@@ -264,6 +273,7 @@ fn provisioning_binding_preserves_nested_origins_and_portable_locations() {
                     file: wasm.clone(),
                     path: vec!["config".into(), "settings".into(), "batchSize".into()],
                     layer: "display label".into(),
+                    package: None,
                 },
             },
         ],
@@ -280,9 +290,10 @@ fn provisioning_binding_preserves_nested_origins_and_portable_locations() {
         vec![
             ConfigBindingOrigin {
                 value_path: vec!["timeout".into()],
-                location: ConfigOriginLocation::Manifest {
-                    file: "golem.yaml".into()
-                },
+                location: ConfigOriginLocation::Package(ConfigPackageOrigin {
+                    source: "https://packages.example.com/settings.golem".into(),
+                    package_digest: "sha256:package-content".into(),
+                }),
                 source_path: vec!["config".into(), "local".into(), "timeout".into()],
                 layer: "application".into()
             },

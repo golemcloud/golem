@@ -14553,6 +14553,27 @@ components:
             type: string
             enum:
             - componentMetadata
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - kind
+          properties:
+            kind:
+              type: string
+              enum:
+              - package
+        - $ref: '#/components/schemas/ConfigPackageOrigin'
+    ConfigPackageOrigin:
+      type: object
+      required:
+      - source
+      - packageDigest
+      properties:
+        source:
+          type: string
+        packageDigest:
+          type: string
     Constraint:
       type: object
       oneOf:

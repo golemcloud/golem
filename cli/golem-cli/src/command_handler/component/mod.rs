@@ -376,12 +376,13 @@ impl ComponentCommandHandler {
             .collect::<Vec<_>>();
         for component_name in component_names {
             let metadata = if resolved {
-                Some(extract_and_store_component_metadata(
-                    &BuildContext::new(app_ctx, &BuildConfig::new()),
-                    &component_name,
+                Some(
+                    extract_and_store_component_metadata(
+                        &BuildContext::new(app_ctx, &BuildConfig::new()),
+                        &component_name,
+                    )
+                    .await?,
                 )
-                .await
-                .context("Manifest agent traces require built component Wasm; run `golem build` or pass --build")?)
             } else {
                 None
             };

@@ -853,6 +853,12 @@ impl ResolvedLocalServer {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct PackageAgentDefaults {
+    pub agent: app_raw::Agent,
+    pub origin: golem_common::model::component_metadata::ConfigPackageOrigin,
+}
+
+#[derive(Clone, Debug)]
 pub struct Application {
     app_root_dir: PathBuf,
 
@@ -868,7 +874,7 @@ pub struct Application {
     all_sources: BTreeSet<PathBuf>,
     components: BTreeMap<ComponentName, WithSource<(ComponentProperties, ResolvedComponentLayers)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
-    pub(crate) package_agent_defaults: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
+    pub(crate) package_agent_defaults: BTreeMap<AgentTypeName, WithSource<PackageAgentDefaults>>,
     tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
     // Kept apart from `tool_declarations`: a build does not see the default tools.
     default_tools: BTreeMap<ToolName, DefaultTool>,
@@ -1066,16 +1072,47 @@ impl Application {
         self.components.keys()
     }
 
+    pub(crate) fn set_package_component_config_origins(
+        &mut self,
+        installed: &BTreeMap<ComponentName, golem_package::InstalledComponent>,
+    ) {
+        for (name, component) in &mut self.components {
+            if let Some(installed) = installed.get(name) {
+                for layer in &mut component.value.1.config_layers {
+                    if layer.origin.file == component.source {
+                        layer.origin.package = Some(
+                            golem_common::model::component_metadata::ConfigPackageOrigin {
+                                source: installed.package_metadata.source.clone(),
+                                package_digest: installed.package_metadata.package_digest.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     pub fn has_any_component(&self) -> bool {
         !self.components.is_empty()
     }
 
     pub fn agent_ids(&self) -> impl Iterator<Item = &AgentTypeName> {
-        self.agents.keys()
+        self.agents.keys().chain(
+            self.package_agent_defaults
+                .keys()
+                .filter(|name| !self.agents.contains_key(*name)),
+        )
     }
 
     pub fn agent_declaration_source(&self, name: &AgentTypeName) -> Option<&Path> {
-        self.agents.get(name).map(|agent| agent.source.as_path())
+        self.agents
+            .get(name)
+            .map(|agent| agent.source.as_path())
+            .or_else(|| {
+                self.package_agent_defaults
+                    .get(name)
+                    .map(|agent| agent.source.as_path())
+            })
     }
 
     pub fn tool_declarations(&self) -> &BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>> {
@@ -1483,9 +1520,10 @@ impl Application {
                     id: id.clone(),
                     parents: vec![base_component_id],
                     source: defaults.source.clone(),
-                    properties: AgentLayerPropertiesKind::Common(Box::new(
-                        defaults.value.agent_layer_properties(),
-                    )),
+                    properties: AgentLayerPropertiesKind::Package {
+                        properties: Box::new(defaults.value.agent.agent_layer_properties()),
+                        origin: defaults.value.origin.clone(),
+                    },
                 })
                 .map_err(|err| anyhow!(err.to_string()))?;
             id
@@ -2742,6 +2780,7 @@ impl Layer for ComponentLayer {
                         id,
                     ),
                     value: config.clone(),
+                    project_to_owner: true,
                 });
             }
             if properties.node_http_routers.value().is_some() {
@@ -3335,6 +3374,7 @@ impl ToolLayerInput {
             .map(|value| ConfigLayer {
                 origin: manifest_property_origin(source, path, None, CONFIG_FIELD, &""),
                 value: value.clone(),
+                project_to_owner: false,
             })
             .collect();
         Self {
@@ -3672,6 +3712,10 @@ enum AgentLayerPropertiesKind {
         files: Vec<ProvisionFile>,
     },
     Common(Box<app_raw::AgentLayerProperties>),
+    Package {
+        properties: Box<app_raw::AgentLayerProperties>,
+        origin: golem_common::model::component_metadata::ConfigPackageOrigin,
+    },
     Presets {
         presets: IndexMap<String, app_raw::AgentLayerProperties>,
         default_preset: String,
@@ -3726,7 +3770,8 @@ impl Layer for AgentLayer {
                 (vec![(properties.as_ref(), None)], None)
             }
             AgentLayerPropertiesKind::Empty => (vec![], None),
-            AgentLayerPropertiesKind::Common(properties) => {
+            AgentLayerPropertiesKind::Common(properties)
+            | AgentLayerPropertiesKind::Package { properties, .. } => {
                 (vec![(properties.as_ref(), None)], None)
             }
             AgentLayerPropertiesKind::Presets {
@@ -3796,15 +3841,23 @@ impl Layer for AgentLayer {
             | AgentLayerId::AgentCustomPresets(name) = id
                 && let Some(config) = &properties.config
             {
+                let mut origin = manifest_property_origin(
+                    &self.source,
+                    &["agents".into(), name.0.clone()],
+                    preset.as_deref(),
+                    CONFIG_FIELD,
+                    id,
+                );
+                if let AgentLayerPropertiesKind::Package {
+                    origin: package, ..
+                } = &self.properties
+                {
+                    origin.package = Some(package.clone());
+                }
                 resolved_config_layers.push(ConfigLayer {
-                    origin: manifest_property_origin(
-                        &self.source,
-                        &["agents".into(), name.0.clone()],
-                        preset.as_deref(),
-                        CONFIG_FIELD,
-                        id,
-                    ),
+                    origin,
                     value: config.clone(),
+                    project_to_owner: false,
                 });
             }
             match &self.properties {
@@ -5445,6 +5498,7 @@ mod app_builder {
                             file: app.source.clone(),
                             path: vec!["config".into(), environment.0.clone()],
                             layer: "catalog".into(),
+                            package: None,
                         };
                         if let Err(error) = self.config_catalogs.entry(environment).or_default().add(&catalog, &origin) {
                             validation.add_error(error.to_string());
@@ -6728,14 +6782,20 @@ mod test {
             parse_agent_type_name("test-agent"),
             super::WithSource::new(
                 package_source.clone(),
-                serde_json::from_value(json!({
-                    "config": {"settings": {
-                        "packageOnly": "package",
-                        "required": "package-required",
-                        "templated": "package"
-                    }}
-                }))
-                .unwrap(),
+                super::PackageAgentDefaults {
+                    agent: serde_json::from_value(json!({
+                        "config": {"settings": {
+                            "packageOnly": "package",
+                            "required": "package-required",
+                            "templated": "package"
+                        }}
+                    }))
+                    .unwrap(),
+                    origin: golem_common::model::component_metadata::ConfigPackageOrigin {
+                        source: "utilities.golem".into(),
+                        package_digest: "sha256:package-content".into(),
+                    },
+                },
             ),
         );
         let schema = ConfigSchema {
@@ -6767,6 +6827,7 @@ mod test {
             file: "metadata.wasm".into(),
             path: vec![],
             layer: "code".into(),
+            package: None,
         };
         with_resolved_agent(&app, "app:main", "test-agent", |agent| {
             let plan = app
@@ -6791,6 +6852,11 @@ mod test {
                 let origin = &plan[0].origins[&vec!["settings".into(), field.into()]];
                 assert_eq!(origin.file, package_source);
                 assert_eq!(origin.layer, "agent:test-agent:package");
+                assert_eq!(origin.package.as_ref().unwrap().source, "utilities.golem");
+                assert_eq!(
+                    origin.package.as_ref().unwrap().package_digest,
+                    "sha256:package-content"
+                );
                 assert_eq!(
                     agent.config_source_at(&["settings".into(), field.into()]),
                     Some(package_source.as_path())
@@ -6808,6 +6874,9 @@ mod test {
             }
             let origin = |field: &str| &plan[0].origins[&vec!["settings".into(), field.into()]];
             assert_eq!(origin("componentOnly").layer, "component:app:main:common");
+            assert!(origin("componentOnly").package.is_none());
+            assert!(origin("templated").package.is_none());
+            assert!(origin("localOnly").package.is_none());
             assert_eq!(
                 origin("templated").path,
                 vec![
@@ -6819,6 +6888,38 @@ mod test {
                 ]
             );
             assert_eq!(origin("localOnly").layer, "agent:test-agent:common");
+        });
+        app.agents.remove(&parse_agent_type_name("test-agent"));
+        assert!(app.agent_ids().any(|name| name.0 == "test-agent"));
+        assert_eq!(
+            app.agent_declaration_source(&parse_agent_type_name("test-agent")),
+            Some(package_source.as_path())
+        );
+        let mut schema = schema;
+        if let SchemaType::Record { fields, .. } = &mut schema.fields[0].value_type {
+            fields.retain(|field| field.name != "localOnly");
+        }
+        with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+            let plan = app
+                .resolve_config(&schema, agent.config_layers(), &code)
+                .unwrap();
+            assert_eq!(
+                plan[0].source,
+                ConfigSourcePlan::Static(SchemaValue::Record {
+                    fields: ["component", "package", "package-required", "package"]
+                        .into_iter()
+                        .map(|value| SchemaValue::String(value.into()))
+                        .collect(),
+                })
+            );
+            assert_eq!(
+                plan[0].origins[&vec!["settings".into(), "templated".into()]]
+                    .package
+                    .as_ref()
+                    .unwrap()
+                    .source,
+                "utilities.golem"
+            );
         });
     }
 
@@ -6894,6 +6995,7 @@ mod test {
                 file: "metadata.wasm".into(),
                 path: vec![],
                 layer: "code".into(),
+                package: None,
             };
             with_resolved_agent(&app, "app:main", "test-agent", |agent| {
                 let result = app.resolve_config(&schema, agent.config_layers(), &code);
@@ -7027,6 +7129,7 @@ mod test {
                     file: "metadata.wasm".into(),
                     path: vec![],
                     layer: "code".into(),
+                    package: None,
                 };
                 let component_name = parse_component_name("app:main");
                 let component = app.component(&component_name);

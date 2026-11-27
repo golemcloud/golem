@@ -419,6 +419,143 @@ fn write_install_fixture(path: &Path, name: &str, wasm: Vec<u8>) -> String {
 }
 
 #[test]
+#[timeout("45s")]
+async fn installed_component_config_keeps_package_origins_without_agent_provisions() {
+    use golem_common::model::agent::{AgentConfigSource, extraction::ExtractedComponentMetadata};
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
+    use golem_common::schema::{AgentTypeSchema, NamedFieldType, SchemaType};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let manifest = format!(
+        "manifestVersion: {}\napp: installer\nenvironments:\n  local: {{ server: local }}\n",
+        versions::sdk::MANIFEST
+    );
+    fs::write(root.join("golem.yaml"), &manifest).unwrap();
+    let mut agents: Vec<AgentTypeSchema> = serde_json::from_slice(
+        &fs::read(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    agents.retain(|agent| agent.type_name.0 == "BarAgent");
+    agents[0].config = vec![AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: vec!["settings".into()],
+        value_type: SchemaType::record(
+            ["packageValue", "overridden"]
+                .into_iter()
+                .map(|name| NamedFieldType {
+                    name: name.into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                })
+                .collect(),
+        ),
+        default_value: None,
+    }];
+    let mut blobs = BTreeMap::new();
+    let wasm = package::add_blob(
+        &mut blobs,
+        package::WASM,
+        wat::parse_str("(component)").unwrap(),
+    );
+    let config = package::PackageConfig {
+        application: "remote".into(),
+        package: package::PackageIdentity {
+            name: "remote".into(),
+            version: "1.2.3".into(),
+            calls: Default::default(),
+        },
+        components: BTreeMap::from([(
+            "pkg:remote".parse().unwrap(),
+            package::PackageComponent {
+                wasm: wasm.digest,
+                metadata: ExtractedComponentMetadata {
+                    agent_types: agents,
+                    tools: vec![],
+                    tool_middlewares: vec![],
+                },
+                provision: package::PackageProvision {
+                    config: json!({"settings": {
+                        "packageValue": "package-value", "overridden": "package-default"
+                    }}),
+                    ..Default::default()
+                },
+                agents: Default::default(),
+                tools: Default::default(),
+                tool_middlewares: Default::default(),
+            },
+        )]),
+    };
+    let (digest, archive) = package::pack(&config, &blobs).unwrap();
+    fs::write(root.join("remote.tar"), archive).unwrap();
+    let installed = run_cli(root, &["install", "./remote.tar"]).await;
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let field = cli(
+        root,
+        &["config", "get", "BarAgent.settings", "--show-secrets"],
+    )
+    .await;
+    assert_eq!(
+        field["field"]["fill"],
+        json!({"packageValue": "package-value", "overridden": "package-default"})
+    );
+    for source in field["field"]["sources"].as_array().unwrap() {
+        assert_eq!(
+            source["origin"]["package"],
+            json!({
+                "source": "remote.tar", "packageDigest": digest
+            })
+        );
+    }
+
+    let manifest = fs::read_to_string(root.join("golem.yaml")).unwrap();
+    fs::write(root.join("golem.yaml"), format!(
+        "{manifest}\nagents:\n  BarAgent:\n    package: remote\n    config:\n      settings:\n        overridden: local-value\n"
+    )).unwrap();
+    let field = cli(
+        root,
+        &["config", "get", "BarAgent.settings", "--show-secrets"],
+    )
+    .await;
+    assert_eq!(
+        field["field"]["fill"],
+        json!({
+            "packageValue": "package-value", "overridden": "local-value"
+        })
+    );
+    let sources = field["field"]["sources"].as_array().unwrap();
+    let inherited = sources
+        .iter()
+        .find(|source| source["path"] == json!(["settings", "packageValue"]))
+        .unwrap();
+    assert_eq!(
+        inherited["origin"]["package"],
+        json!({
+            "source": "remote.tar", "packageDigest": digest
+        })
+    );
+    let local = sources
+        .iter()
+        .find(|source| source["path"] == json!(["settings", "overridden"]))
+        .unwrap();
+    assert!(local["origin"]["package"].is_null());
+    assert_eq!(
+        local["origin"]["path"],
+        json!(["agents", "BarAgent", "config", "settings", "overridden"])
+    );
+}
+
+#[test]
 #[timeout("2m")]
 async fn package_cli_is_reproducible_and_publish_dry_run_is_offline() {
     let endpoint = TcpListener::bind(("127.0.0.1", 0)).unwrap();

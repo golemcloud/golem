@@ -222,6 +222,7 @@ impl<'de> Deserialize<'de> for ConfigCatalog {
                 file: "<manifest>".into(),
                 path: vec!["config".into()],
                 layer: "catalog".into(),
+                package: None,
             })
             .map_err(serde::de::Error::custom)?;
         Ok(catalog)

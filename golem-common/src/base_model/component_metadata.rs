@@ -394,6 +394,18 @@ pub struct ConfigBindingOrigin {
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigPackageOrigin {
+    pub source: String,
+    pub package_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConfigOriginLocation {
     Manifest {
@@ -402,6 +414,7 @@ pub enum ConfigOriginLocation {
     },
     /// Identified by the component revision that contains the binding.
     ComponentMetadata,
+    Package(ConfigPackageOrigin),
 }
 
 impl From<TypedAgentConfigEntry> for ConfigBinding {

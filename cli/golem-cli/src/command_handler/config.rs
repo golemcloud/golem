@@ -19,7 +19,9 @@ use crate::command_handler::Handlers;
 use crate::command_handler::template::EnvVarRenderer;
 use crate::context::Context;
 use crate::model::app::{Application, ApplicationComponentSelectMode, BuildConfig};
-use crate::model::config::resolver::{ConfigLayer, ConfigSchemaResolution, ConfigSourcePlan};
+use crate::model::config::resolver::{
+    ConfigLayer, ConfigSchemaResolution, ConfigSourcePlan, validate_fills,
+};
 use crate::model::config::{
     ConfigGetView, ConfigListView, StaticConfigFieldView, StaticConfigSource,
 };
@@ -29,10 +31,9 @@ use golem_common::model::component::ComponentName;
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, typed_schema_value_with_projected_defs,
 };
-use golem_common::schema::config::{ConfigError, ConfigFieldSchema, ConfigOrigin, ConfigSchema};
+use golem_common::schema::config::{ConfigError, ConfigOrigin, ConfigSchema};
 use golem_common::schema::render::to_json_value;
 use golem_common::schema::{AgentTypeSchema, SchemaGraph};
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -156,8 +157,19 @@ pub(crate) fn prepare_static_config(
             file: component.wasm(),
             path: vec!["config".into()],
             layer: "code".into(),
+            package: None,
         };
         let mut schema = ConfigSchema::from_declarations(graph, declarations, &code_origin)?;
+        for layer in layers {
+            validate_fills(
+                &layer.value,
+                &[],
+                &schema.fields,
+                &layer.origin,
+                catalog,
+                layer.project_to_owner,
+            )?;
+        }
         schema.fields.retain(|field| {
             declarations.iter().any(|declaration| {
                 declaration.path == field.path && declaration.source == AgentConfigSource::Local
@@ -170,7 +182,9 @@ pub(crate) fn prepare_static_config(
             .iter()
             .map(|layer| ConfigLayer {
                 origin: layer.origin.clone(),
-                value: project_owner_layer(&layer.value, &[], &schema.fields),
+                value: layer.value.clone(),
+                // Declared non-static fields are handled by their own provisioning path.
+                project_to_owner: true,
             })
             .collect::<Vec<_>>();
         let plans = schema.resolve_with(catalog, &layers, &code_origin, &|value, origin| {
@@ -222,28 +236,4 @@ pub(crate) fn prepare_static_config(
         .with_context(|| format!("Invalid static config for agent {}", agent.type_name))?;
     }
     Ok(fields)
-}
-
-// Component/template fills are shared by several agent schemas. Project literal
-// paths, but leave selectors and malformed groups intact for schema validation.
-fn project_owner_layer(value: &Value, path: &[String], fields: &[ConfigFieldSchema]) -> Value {
-    if fields.iter().any(|field| field.path == path) || value.get("$config").is_some() {
-        return value.clone();
-    }
-    match value.as_object() {
-        Some(object) => Value::Object(
-            object
-                .iter()
-                .filter_map(|(name, value)| {
-                    let mut child = path.to_vec();
-                    child.push(name.clone());
-                    fields
-                        .iter()
-                        .any(|field| field.path.starts_with(&child))
-                        .then(|| (name.clone(), project_owner_layer(value, &child, fields)))
-                })
-                .collect(),
-        ),
-        None => value.clone(),
-    }
 }

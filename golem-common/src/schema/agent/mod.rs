@@ -625,6 +625,7 @@ impl AgentTypeSchema {
                 file: format!("<{}>", self.type_name).into(),
                 path: vec!["config".into()],
                 layer: "code".into(),
+                package: None,
             },
         )
         .map_err(|error| error.to_string())?;

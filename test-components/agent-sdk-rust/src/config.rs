@@ -2,20 +2,20 @@ use golem_rust::agentic::{Config, Secret};
 use golem_rust::bindings::golem::secrets::{reveal, types};
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
-    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, agent_definition,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, Schema, WireSchema, agent_definition,
     agent_implementation, decode_schema_value, encode_schema_graph,
 };
 use golem_rust::{PromiseId, blocking_await_promise, create_promise};
 use serde::Serialize;
 use serde_json::json;
 
-#[derive(Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema, Serialize)]
+#[derive(Clone, Schema, Serialize)]
 pub struct StaticDefaultSettings {
     pub label: String,
     pub count: u32,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema, Serialize)]
+#[derive(Clone, Schema, Serialize)]
 #[schema(union)]
 pub enum StaticDefaultChoice {
     #[schema(prefix = "selected:")]

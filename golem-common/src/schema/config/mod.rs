@@ -74,6 +74,7 @@ pub struct ConfigOrigin {
     pub file: PathBuf,
     pub path: Vec<String>,
     pub layer: String,
+    pub package: Option<crate::base_model::component_metadata::ConfigPackageOrigin>,
 }
 
 impl ConfigOrigin {

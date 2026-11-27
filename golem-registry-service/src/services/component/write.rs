@@ -1867,6 +1867,7 @@ fn apply_config_defaults(
             file: owner.into(),
             path: vec!["config".into()],
             layer: "code".into(),
+            package: None,
         },
     )
     .map_err(|error| ComponentError::InvalidComponentConfig(error.to_string()))?;

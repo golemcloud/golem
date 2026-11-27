@@ -4493,11 +4493,21 @@
     },
     "ConfigOrigin": {
       "type": "object",
-      "required": ["file", "path", "layer"],
+      "required": ["file", "path", "layer", "package"],
       "properties": {
         "file": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
-        "layer": { "type": "string" }
+        "layer": { "type": "string" },
+        "package": { "oneOf": [{ "$ref": "#/definitions/ConfigPackageOrigin" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "ConfigPackageOrigin": {
+      "type": "object",
+      "required": ["source", "packageDigest"],
+      "properties": {
+        "source": { "type": "string" },
+        "packageDigest": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -7314,6 +7324,16 @@
           "type": "object",
           "required": ["kind"],
           "properties": { "kind": { "const": "componentMetadata" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "source", "packageDigest"],
+          "properties": {
+            "kind": { "const": "package" },
+            "source": { "type": "string" },
+            "packageDigest": { "type": "string" }
+          },
           "additionalProperties": false
         }
       ]

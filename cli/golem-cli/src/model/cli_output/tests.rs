@@ -7349,6 +7349,16 @@ fn arb_agent_type_provision_config()
                         layer: "prod".into(),
                     },
                 );
+                binding.origins.push(golem_common::model::component_metadata::ConfigBindingOrigin {
+                    value_path: vec![],
+                    location: golem_common::model::component_metadata::ConfigOriginLocation::Package(
+                        golem_common::model::component_metadata::ConfigPackageOrigin {
+                            source: "utilities.golem".into(),
+                            package_digest: "sha256:package-content".into(),
+                        }),
+                    source_path: vec!["agents".into(), "Main".into(), "config".into()],
+                    layer: "package".into(),
+                });
             }
             golem_common::model::component_metadata::AgentTypeProvisionConfig {
                 env,
@@ -7500,6 +7510,12 @@ fn arb_static_config_field() -> BoxedStrategy<crate::model::config::StaticConfig
                 file: "golem.yaml".into(),
                 path: vec!["config".into(), "local".into(), "label".into()],
                 layer: "environment".into(),
+                package: selected.then(|| {
+                    golem_common::model::component_metadata::ConfigPackageOrigin {
+                        source: "utilities.golem".into(),
+                        package_digest: "sha256:package-content".into(),
+                    }
+                }),
             };
             StaticConfigFieldView {
                 component: golem_common::model::component::ComponentName("app:main".into()),

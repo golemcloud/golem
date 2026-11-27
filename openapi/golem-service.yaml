@@ -26866,6 +26866,27 @@ components:
             - componentMetadata
         required:
         - kind
+      - type: object
+        allOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+              - package
+          required:
+          - kind
+        - $ref: '#/components/schemas/ConfigPackageOrigin'
+    ConfigPackageOrigin:
+      type: object
+      properties:
+        source:
+          type: string
+        packageDigest:
+          type: string
+      required:
+      - source
+      - packageDigest
     CorsOptions:
       title: CorsOptions
       type: object

@@ -27,8 +27,8 @@ use crate::log::{LogColorize, LogIndent, LogOutput, Output, log_action, logln};
 use crate::model::app::{
     AppBuildStep, Application, ApplicationComponentSelectMode, ApplicationConfig,
     ApplicationPreload, ApplicationSourceMode, BuildConfig, CleanMode, ComponentPresetSelector,
-    CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps, ResolvedLocalServer, WithSource,
-    includes_from_yaml_file,
+    CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps, PackageAgentDefaults,
+    ResolvedLocalServer, WithSource, includes_from_yaml_file,
 };
 use crate::model::app_raw;
 use crate::model::cli_config::server::ToFormattedServerContext;
@@ -510,18 +510,39 @@ impl ApplicationContext {
                         }
                     }
                     let mut package_app = package_manifest(dir.path(), &expanded.declarations)?;
-                    for app in &loaded.raw_apps {
-                        for (name, agent) in &app.application.agents {
-                            if agent.package.is_some()
-                                && let Some(defaults) =
-                                    package_app.application.agents.shift_remove(name)
-                            {
-                                package_agent_defaults.insert(
-                                    name.clone(),
-                                    WithSource::new(package_app.source.clone(), defaults),
+                    for (name, defaults) in std::mem::take(&mut package_app.application.agents) {
+                        for app in &loaded.raw_apps {
+                            if let Some(agent) = app.application.agents.get(&name) {
+                                anyhow::ensure!(
+                                    agent.package.is_some(),
+                                    "Agent type {name} in {} duplicates an installed package agent; specify its package to override it",
+                                    app.source.display()
                                 );
                             }
                         }
+                        let installed = expanded
+                            .components
+                            .values()
+                            .find(|component| {
+                                component
+                                    .metadata
+                                    .agent_types
+                                    .iter()
+                                    .any(|agent| agent.type_name == name)
+                            })
+                            .ok_or_else(|| {
+                                anyhow!("Missing installed component for package agent {name}")
+                            })?;
+                        package_agent_defaults.insert(
+                            name,
+                            WithSource::new(package_app.source.clone(), PackageAgentDefaults {
+                                agent: defaults,
+                                origin: golem_common::model::component_metadata::ConfigPackageOrigin {
+                                    source: installed.package_metadata.source.clone(),
+                                    package_digest: installed.package_metadata.package_digest.clone(),
+                                },
+                            }),
+                        );
                     }
                     loaded.raw_apps.push(package_app);
                     (publisher_package, expanded, Some(dir))
@@ -553,6 +574,8 @@ impl ApplicationContext {
         ctx.publisher_package = publisher_package;
         ctx.installed_components = expanded.components;
         ctx.installed_package_calls = expanded.calls;
+        ctx.application
+            .set_package_component_config_origins(&ctx.installed_components);
         ctx.application.package_agent_defaults = package_agent_defaults;
         ctx._package_dir = package_dir;
         ctx.js_compilation_cache_dir = config_dir.join("js-compilation-cache");

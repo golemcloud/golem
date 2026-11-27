@@ -29,6 +29,7 @@ fn origin(layer: &str) -> ConfigOrigin {
         file: format!("{layer}.yaml").into(),
         path: vec!["config".into(), "prod".into()],
         layer: layer.into(),
+        package: None,
     }
 }
 
@@ -60,6 +61,7 @@ fn layers(values: Vec<Value>) -> Vec<ConfigLayer> {
         .map(|(index, value)| ConfigLayer {
             origin: origin(&format!("layer{index}")),
             value,
+            project_to_owner: false,
         })
         .collect()
 }
@@ -786,6 +788,48 @@ fn catalog_static_omission_and_layer_provenance() {
         )
         .unwrap_err();
     assert_eq!(error.origin.file, PathBuf::from("layer0.yaml"));
+}
+
+#[test]
+fn catalog_shared_layers_project_groups_but_owner_layers_reject_unknown_fields() {
+    let schema = schema(
+        ConfigFieldKind::Static,
+        record(vec![("count", SchemaType::u32())]),
+    );
+    let sources = catalog(json!({"defaults": {"setting": {"count": 17}, "other": false}}));
+    for value in [
+        json!({"setting": {"count": 17}, "other": false}),
+        json!({"$config": "defaults"}),
+    ] {
+        let mut inputs = layers(vec![value]);
+        assert!(
+            schema
+                .resolve(&sources, &inputs, &origin("code"))
+                .unwrap_err()
+                .message
+                .contains("unknown config field")
+        );
+        inputs[0].project_to_owner = true;
+        let plan = schema.resolve(&sources, &inputs, &origin("code")).unwrap();
+        assert_eq!(
+            plan[0].source,
+            ConfigSourcePlan::Static(SchemaValue::Record {
+                fields: vec![SchemaValue::U32(17)]
+            })
+        );
+        let source = &plan[0].origins[&vec!["setting".into(), "count".into()]];
+        assert_eq!(
+            source.layer,
+            if inputs[0].value.get("$config").is_some() {
+                "catalog"
+            } else {
+                "layer0"
+            }
+        );
+    }
+    let mut invalid = layers(vec![json!({"setting": {"count": 17, "typo": false}})]);
+    invalid[0].project_to_owner = true;
+    assert!(schema.resolve(&sources, &invalid, &origin("code")).is_err());
 }
 
 #[test]

@@ -121,6 +121,7 @@ impl DeploymentContext {
                     file: component.component_name.to_string().into(),
                     path: vec!["config".into()],
                     layer: "code".into(),
+                    package: None,
                 };
                 let declarations = declarations
                     .iter()

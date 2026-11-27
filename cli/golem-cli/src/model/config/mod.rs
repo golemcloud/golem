@@ -17,6 +17,8 @@ mod conformance;
 pub mod resolver;
 
 use crate::model::cli_output::StructuredOutput;
+use crate::model::component::mask_json_leaf_values;
+use crate::model::masking::{Masked, MaskingConfig};
 use crate::model::text_format::{TextOutput, logln};
 use anyhow::Context;
 use golem_common::model::agent::AgentTypeName;
@@ -26,6 +28,7 @@ use golem_common::model::json::NormalizedJsonValue;
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::config::ConfigOrigin;
 use serde::Serialize;
+use serde::Serializer;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
@@ -48,6 +51,7 @@ pub(crate) fn manifest_property_origin(
         file: file.to_path_buf(),
         path,
         layer: layer.to_string(),
+        package: None,
     }
 }
 
@@ -80,8 +84,9 @@ impl StaticConfigFieldView {
             .sources
             .iter()
             .map(|source| {
-                let location = if crate::fs::path_eq_normalized(&source.origin.file, component_wasm)
-                {
+                let location = if let Some(package) = &source.origin.package {
+                    ConfigOriginLocation::Package(package.clone())
+                } else if crate::fs::path_eq_normalized(&source.origin.file, component_wasm) {
                     ConfigOriginLocation::ComponentMetadata
                 } else {
                     let file = crate::fs::absolute_lexical_path_from_base_dir(
@@ -163,10 +168,35 @@ impl TextOutput for ConfigListView {
             field.log();
         }
     }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        self.masked(config)?.log();
+        Ok(())
+    }
 }
 
 impl StructuredOutput for ConfigListView {
     const KIND: &'static str = "config.list";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl Masked for ConfigListView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        if !config.show_secrets {
+            for field in &mut self.fields {
+                mask_json_leaf_values(&mut field.fill.0);
+            }
+        }
+        Ok(self)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -178,10 +208,33 @@ impl TextOutput for ConfigGetView {
     fn log(&self) {
         self.field.log();
     }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        self.masked(config)?.log();
+        Ok(())
+    }
 }
 
 impl StructuredOutput for ConfigGetView {
     const KIND: &'static str = "config.get";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl Masked for ConfigGetView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        if !config.show_secrets {
+            mask_json_leaf_values(&mut self.field.fill.0);
+        }
+        Ok(self)
+    }
 }
 
 pub fn value_at_path<'a>(

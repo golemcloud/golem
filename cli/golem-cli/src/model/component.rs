@@ -1638,7 +1638,7 @@ fn log_manifest_trace_rendered(rendered: anyhow::Result<String>) {
     }
 }
 
-fn mask_json_leaf_values(value: &mut Value) {
+pub(crate) fn mask_json_leaf_values(value: &mut Value) {
     match value {
         Value::Null => {}
         Value::Array(values) => {

@@ -149,8 +149,31 @@ fn config_bindings_preserve_static_values_and_origins() {
         source_path: vec!["config".into(), "limits".into(), "maximum".into()],
         layer: "prod".into(),
     });
+    binding.origins.push(ConfigBindingOrigin {
+        value_path: vec![],
+        location: ConfigOriginLocation::Package(ConfigPackageOrigin {
+            source: "https://packages.example.com/settings.golem".into(),
+            package_digest: "sha256:package-content".into(),
+        }),
+        source_path: vec![
+            "agents".into(),
+            "Main".into(),
+            "config".into(),
+            "limits".into(),
+            "maximum".into(),
+        ],
+        layer: "package".into(),
+    });
     let json = serde_json::to_value(&binding).unwrap();
     assert_eq!(json["valueSource"]["kind"], "static");
+    assert_eq!(
+        json["origins"][1]["location"],
+        serde_json::json!({
+            "kind": "package",
+            "source": "https://packages.example.com/settings.golem",
+            "packageDigest": "sha256:package-content"
+        })
+    );
     assert_eq!(json, binding.to_json().unwrap());
     assert_eq!(
         ConfigBinding::parse_from_json(Some(json.clone())).unwrap(),

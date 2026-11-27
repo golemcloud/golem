@@ -17,7 +17,13 @@ message ConfigBindingOrigin {
   oneof location {
     string manifest_file = 2;
     bool component_metadata = 3;
+    ConfigPackageOrigin package = 6;
   }
   repeated string source_path = 4;
   string layer = 5;
+}
+
+message ConfigPackageOrigin {
+  string source = 1;
+  string package_digest = 2;
 }

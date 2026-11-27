@@ -646,6 +646,7 @@ fn with_default_agent_provision_configs(
                     file: agent_type.type_name.0.clone().into(),
                     path: vec!["config".into()],
                     layer: "code".into(),
+                    package: None,
                 },
             )?;
             let mut config = Vec::new();

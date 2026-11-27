@@ -1849,6 +1849,7 @@ fn parse_provision_config_from_agent_type_schema(
             file: agent_type_name.0.clone().into(),
             path: vec!["config".into()],
             layer: "code".into(),
+            package: None,
         },
     )?;
     schema.apply_missing_defaults(&mut entries);

@@ -55,6 +55,8 @@ pub struct ConfigFieldPlan {
 pub struct ConfigLayer {
     pub origin: ConfigOrigin,
     pub value: Value,
+    /// Component/template inputs can supply fields for several owners.
+    pub project_to_owner: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -253,7 +255,14 @@ impl ConfigSchemaResolution for ConfigSchema {
         schema.validate(code_origin)?;
         catalogs.validate()?;
         for layer in layers {
-            validate_fills(&layer.value, &[], &schema.fields, &layer.origin, catalogs)?;
+            validate_fills(
+                &layer.value,
+                &[],
+                &schema.fields,
+                &layer.origin,
+                catalogs,
+                layer.project_to_owner,
+            )?;
         }
         for field in &schema.fields {
             for length in 1..field.path.len() {
@@ -498,12 +507,13 @@ fn field_fill(
     }
 }
 
-fn validate_fills(
+pub(crate) fn validate_fills(
     value: &Value,
     path: &[String],
     fields: &[ConfigFieldSchema],
     origin: &ConfigOrigin,
     catalogs: &ConfigCatalogSources,
+    project_to_owner: bool,
 ) -> Result<(), ConfigError> {
     if fields.iter().any(|field| field.path == path) {
         return Ok(());
@@ -513,7 +523,7 @@ fn validate_fills(
         if catalog_kind(&value) != ConfigCatalogKind::Static {
             return Err(origin.error("a whole-group selection must refer to an ordinary group"));
         }
-        return validate_fills(&value, path, fields, &source, catalogs);
+        return validate_fills(&value, path, fields, &source, catalogs, project_to_owner);
     }
     let object = value
         .as_object()
@@ -525,9 +535,19 @@ fn validate_fills(
             .iter()
             .any(|field| field.path.starts_with(&child_path))
         {
+            if project_to_owner {
+                continue;
+            }
             return Err(origin.child(key).error("unknown config field"));
         }
-        validate_fills(child, &child_path, fields, &origin.child(key), catalogs)?;
+        validate_fills(
+            child,
+            &child_path,
+            fields,
+            &origin.child(key),
+            catalogs,
+            project_to_owner,
+        )?;
     }
     Ok(())
 }
