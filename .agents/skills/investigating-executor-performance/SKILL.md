@@ -62,7 +62,7 @@ The test `lib.rs` at `golem-worker-executor-tests/tests/lib.rs` initializes trac
 TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overrides()
 ```
 
-The `.with_env_overrides()` call uses Figment to merge `GOLEM__*` env vars into the `TracingConfig`, which includes `OtlpConfig` (defined in `golem-common/src/tracing.rs`). Since worker-executor tests run in-process (not spawned as child processes), the OTLP config applies to the single test process directly.
+The `.with_env_overrides()` call uses Figment to merge `GOLEM__*` env vars into the `TracingConfig`, which includes `OtlpConfig` (defined in `golem-common/src/tracing/mod.rs`). Since worker-executor tests run in-process (not spawned as child processes), the OTLP config applies to the single test process directly.
 
 ### Choosing what to export
 

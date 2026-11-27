@@ -717,6 +717,206 @@ fn server_tracing_does_not_overwrite_the_retained_repository_key() {
         });
 }
 
+#[test]
+fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
+    [
+        ("registry_service.db", Some("REGISTRY_SERVICE__DB")),
+        ("registry.db", None),
+        ("shard_manager.db", None),
+        ("gateway-sessions.db", None),
+        ("scheduler.db", None),
+        ("kv-store/kv-running_workers", None),
+        ("kv-store/epochs.db", None),
+        ("custom.db", Some("REGISTRY_SERVICE__DB")),
+        ("custom.db", Some("SHARD_MANAGER__PERSISTENCE")),
+        ("custom.db", Some("WORKER_SERVICE__GATEWAY_SESSION_STORAGE")),
+        ("custom.db", Some("WORKER_EXECUTOR__SCHEDULER_STORAGE")),
+        ("custom.db", Some("WORKER_EXECUTOR__KEY_VALUE_STORAGE")),
+        ("custom.db", Some("WORKER_EXECUTOR__INDEXED_STORAGE")),
+        (
+            "custom-indexed.db",
+            Some("WORKER_EXECUTOR__KEY_VALUE_STORAGE"),
+        ),
+        (
+            "other-kv/kv-running_workers",
+            Some("WORKER_EXECUTOR__KEY_VALUE_STORAGE"),
+        ),
+        (
+            "other-index/epochs.db",
+            Some("WORKER_EXECUTOR__INDEXED_STORAGE"),
+        ),
+        (
+            "custom.db",
+            Some("WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__CACHE"),
+        ),
+        (
+            "custom.db",
+            Some("WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__PERSISTENT"),
+        ),
+        ("custom.db", Some("REGISTRY_SERVICE__BLOB_STORAGE")),
+        ("custom.db", Some("WORKER_SERVICE__BLOB_STORAGE")),
+        ("custom.db", Some("WORKER_EXECUTOR__BLOB_STORAGE")),
+        (
+            "custom.db",
+            Some("COMPONENT_COMPILATION_SERVICE__BLOB_STORAGE"),
+        ),
+    ]
+    .into_iter()
+    .flat_map(|database| {
+        [
+            "direct",
+            "hard-link",
+            "noncolliding",
+            #[cfg(unix)]
+            "symlink",
+        ]
+        .into_iter()
+        .flat_map(move |alias| [false, true].map(|retained_key| (database, alias, retained_key)))
+    })
+    .for_each(|((database, selected_store), alias, retained_key)| {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("HOME", jail.directory().display().to_string());
+            let data_dir = jail.directory().join("data");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            let database_path = if selected_store.is_some() {
+                jail.directory().join("external").join(database)
+            } else {
+                data_dir.join(database)
+            };
+            std::fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+            std::fs::write(&database_path, b"preserve selected SQLite state").unwrap();
+            let key_path = data_dir.join(crate::filesystem_config::KEY_FILE);
+            if retained_key {
+                std::fs::write(&key_path, "2a".repeat(64)).unwrap();
+            }
+            if let Some(store) = selected_store {
+                if store.contains("__CONFIG__") {
+                    jail.set_env(
+                        "GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE",
+                        "NamespaceRouted",
+                    );
+                    let other = if store.ends_with("__CACHE") {
+                        "PERSISTENT"
+                    } else {
+                        "CACHE"
+                    };
+                    let prefix = format!(
+                        "GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__{other}"
+                    );
+                    jail.set_env(format!("{prefix}__TYPE"), "Sqlite");
+                    jail.set_env(
+                        format!("{prefix}__CONFIG__DATABASE"),
+                        data_dir.join("unused.db").display().to_string(),
+                    );
+                    jail.set_env(format!("{prefix}__CONFIG__MAX_CONNECTIONS"), 4);
+                    jail.set_env(format!("{prefix}__CONFIG__FOREIGN_KEYS"), false);
+                }
+                jail.set_env(
+                    format!("GOLEM_ADVANCED__{store}__CONFIG__MAX_CONNECTIONS"),
+                    4,
+                );
+                jail.set_env(
+                    format!("GOLEM_ADVANCED__{store}__CONFIG__FOREIGN_KEYS"),
+                    false,
+                );
+                if database.starts_with("other-") {
+                    jail.set_env(format!("GOLEM_ADVANCED__{store}__TYPE"), "MultiSqlite");
+                    jail.set_env(
+                        format!("GOLEM_ADVANCED__{store}__CONFIG__ROOT_DIR"),
+                        database_path.parent().unwrap().display().to_string(),
+                    );
+                } else {
+                    jail.set_env(format!("GOLEM_ADVANCED__{store}__TYPE"), "Sqlite");
+                    let selected_database = if database == "custom-indexed.db" {
+                        jail.set_env(
+                            "GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE",
+                            "KVStoreSqlite",
+                        );
+                        database_path.with_file_name("custom.db")
+                    } else {
+                        database_path.clone()
+                    };
+                    jail.set_env(
+                        format!("GOLEM_ADVANCED__{store}__CONFIG__DATABASE"),
+                        selected_database.display().to_string(),
+                    );
+                }
+            }
+            let log_path = if alias == "direct" {
+                database_path.clone()
+            } else {
+                data_dir.join("server.log")
+            };
+            match alias {
+                "hard-link" => std::fs::hard_link(&database_path, &log_path).unwrap(),
+                #[cfg(unix)]
+                "symlink" => std::os::unix::fs::symlink(&database_path, &log_path).unwrap(),
+                _ => {}
+            }
+            jail.set_env("GOLEM__LOGGING__FILE_NAME", log_path.display().to_string());
+            jail.create_file(
+                "settings.toml",
+                "[logging.file]\nenabled = true\n[filesystem_snapshots]\nenabled = false",
+            )?;
+            let called = std::cell::Cell::new(false);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                runtime.block_on(async {
+                    let mut flags = golem_cli::command::GolemCliGlobalFlags::default();
+                    flags.local = true;
+                    flags.disable_app_manifest_discovery = true;
+                    flags.server_no_limit_change = true;
+                    let ctx = Arc::new(Context::new(flags, None).await.unwrap());
+                    ServerCommandHandler
+                        .handle_with_tracing(
+                            ctx,
+                            ServerSubcommand::Run {
+                                args: RunArgs {
+                                    config: Some("settings.toml".into()),
+                                    data_dir: Some(data_dir),
+                                    router_addr: Some("127.0.0.1".into()),
+                                    ..Default::default()
+                                },
+                            },
+                            Verbosity::new(0, 0),
+                            |logging, _| {
+                                called.set(true);
+                                assert!(logging.file_truncate);
+                                std::fs::write(&log_path, b"log would replace state").unwrap();
+                                std::panic::panic_any(TracingInitialized);
+                            },
+                        )
+                        .await
+                })
+            }));
+            if alias == "noncolliding" {
+                assert!(result.unwrap_err().is::<TracingInitialized>());
+                assert!(called.get());
+            } else {
+                let refusal = result.unwrap_or_else(|_| {
+                    panic!("tracing opened {database}, {alias}, retained_key={retained_key}")
+                });
+                let message = format!("{:#}", refusal.unwrap_err());
+                assert!(message.contains("selected SQLite database"), "{message}");
+                assert!(
+                    !called.get(),
+                    "{database}, {alias}, retained_key={retained_key}"
+                );
+            }
+            assert_eq!(
+                std::fs::read(&database_path).unwrap(),
+                b"preserve selected SQLite state"
+            );
+            assert_eq!(key_path.exists(), retained_key);
+            Ok(())
+        });
+    });
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[test_r::timeout("30s")]

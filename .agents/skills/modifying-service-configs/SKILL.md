@@ -14,7 +14,7 @@ Each service has a configuration struct that implements:
 - `Serialize` / `Deserialize` — for TOML and env-var serialization
 - `SafeDisplay` — for logging without exposing secrets
 
-The server settings module in `golem-common/src/config/server_settings.rs` maps supported settings onto each service. Within the supported and advanced channels, environment variables override TOML values. The advanced channel overrides supported settings, even when the advanced value comes from the file and the supported value comes from the environment. Applicable command-line flags have the highest priority. The launcher also applies platform defaults and the manifest's `localServer` section below both channels.
+The server settings module in `golem-common/src/config/server_settings/mod.rs` maps supported settings onto each service. Within the supported and advanced channels, environment variables override TOML values. The advanced channel overrides supported settings, even when the advanced value comes from the file and the supported value comes from the environment. Applicable command-line flags have the highest priority. The launcher also applies platform defaults and the manifest's `localServer` section below both channels.
 
 ## Service Config Locations
 
@@ -26,7 +26,7 @@ The server settings module in `golem-common/src/config/server_settings.rs` maps 
 | Shard Manager | `ShardManagerConfig` | `golem-shard-manager/src/config.rs` |
 | Compilation Service | `ServerConfig` | `golem-component-compilation-service/src/config.rs` |
 
-The `golem` launcher's `GolemServerConfig` in `cli/golem/src/config.rs` composes these service types.
+The `golem` launcher's `GolemServerConfig` in `cli/golem/src/config/mod.rs` composes these service types.
 Change owning service structs for service fields; change the launcher defaults and layering there
 when changing the embedded server configuration. Regenerate its reference configs with the services.
 

@@ -3498,7 +3498,7 @@ defaults disable them. Set `filesystem_snapshots.enabled = true` or
 `--agent-filesystem-root` option changes the default root. The filesystem settings are part of
 the server configuration, as `advanced.worker_executor.filesystem_storage` and
 `filesystem_snapshots` in the `--config` file or in the
-`GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__*` and `GOLEM__FILESYSTEM_SNAPSHOTS__*` environment variables, and `cli/golem/src/config.rs` applies the platform
+`GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__*` and `GOLEM__FILESYSTEM_SNAPSHOTS__*` environment variables, and `cli/golem/src/config/mod.rs` applies the platform
 defaults as the lowest layer above the defaults. To choose `Directory` or `Temporary`, explicitly set
 `filesystem_snapshots.enabled = false`. An agent still needs a snapshotting
 policy. With snapshots enabled and no configured `repository_key`, the local server generates a 64-byte repository key

@@ -209,6 +209,15 @@ impl ServerCommandHandler {
 }
 
 fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
+    use golem_common::config::{DbConfig, DbSqliteConfig};
+    use golem_service_base::config::BlobStorageConfig;
+    use golem_shard_manager::config::PersistenceConfig;
+    use golem_worker_executor::services::golem_config::{
+        IndexedStorageConfig, KeyValueStorageConfig, KeyValueStorageInnerConfig,
+        SchedulerStorageConfig,
+    };
+    use golem_worker_service::config::SessionStoreConfig;
+
     let Some(file_name) = config
         .logging
         .file_name
@@ -223,44 +232,126 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).context("Failed to create the server log directory")?;
     }
-    let key_path = config
-        .data_dir
-        .join(crate::filesystem_config::KEY_FILE)
-        .into_boxed_path();
-    let key_metadata = match std::fs::metadata(&key_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error).context("Failed to inspect the retained repository key"),
-    };
     let log_metadata = match std::fs::metadata(&log_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).context("Failed to inspect the server log"),
     };
-    #[cfg(unix)]
-    let same_file = {
-        use std::os::unix::fs::MetadataExt;
-        key_metadata.dev() == log_metadata.dev() && key_metadata.ino() == log_metadata.ino()
-    };
-    #[cfg(windows)]
-    let same_file = {
-        use std::os::windows::fs::OpenOptionsExt;
-        if key_metadata.is_file() && log_metadata.is_file() {
-            let handle = |path: &Path| {
-                std::fs::OpenOptions::new()
-                    .access_mode(0)
-                    .open(path)
-                    .and_then(same_file::Handle::from_file)
-            };
-            handle(&key_path)? == handle(&log_path)?
-        } else {
-            false
+    let check_path = |path: &Path, description: &str| -> anyhow::Result<()> {
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| format!("Failed to inspect the {description}"));
+            }
+        };
+        #[cfg(unix)]
+        let same_file = {
+            use std::os::unix::fs::MetadataExt;
+            metadata.dev() == log_metadata.dev() && metadata.ino() == log_metadata.ino()
+        };
+        #[cfg(windows)]
+        let same_file = {
+            use std::os::windows::fs::OpenOptionsExt;
+            if metadata.is_file() && log_metadata.is_file() {
+                let handle = |path: &Path| {
+                    std::fs::OpenOptions::new()
+                        .access_mode(0)
+                        .open(path)
+                        .and_then(same_file::Handle::from_file)
+                };
+                handle(path)? == handle(&log_path)?
+            } else {
+                false
+            }
+        };
+        if same_file {
+            bail!("The server log must not overwrite the {description}");
         }
+        Ok(())
     };
-    if same_file {
-        bail!("The server log must not overwrite the retained repository key");
+    check_path(
+        &config.data_dir.join(crate::filesystem_config::KEY_FILE),
+        "retained repository key",
+    )?;
+    let check_sqlite = |sqlite: &DbSqliteConfig| {
+        check_path(Path::new(&sqlite.database), "selected SQLite database")
+    };
+    let check_multi_sqlite = |root: &Path| -> anyhow::Result<()> {
+        let entries = match std::fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error).context("Failed to inspect selected SQLite databases"),
+        };
+        entries.into_iter().try_for_each(|entry| {
+            let path = entry?.path();
+            if path.extension().is_some_and(|extension| extension == "db")
+                || path
+                    .file_name()
+                    .is_some_and(|name| name == "kv-running_workers")
+            {
+                check_path(&path, "selected SQLite database")?;
+            }
+            Ok(())
+        })
+    };
+    [
+        match &config.registry_service.db {
+            DbConfig::Sqlite(sqlite) => Some(sqlite),
+            _ => None,
+        },
+        match &config.shard_manager.persistence {
+            PersistenceConfig::Sqlite(sqlite) => Some(sqlite),
+            _ => None,
+        },
+        match &config.worker_service.gateway_session_storage {
+            SessionStoreConfig::Sqlite(sqlite) => Some(&sqlite.sqlite_config),
+            _ => None,
+        },
+        match &config.worker_executor.scheduler_storage {
+            SchedulerStorageConfig::Sqlite(sqlite) => Some(sqlite),
+            _ => None,
+        },
+    ]
+    .into_iter()
+    .flatten()
+    .try_for_each(check_sqlite)?;
+    [
+        &config.registry_service.blob_storage,
+        &config.worker_service.blob_storage,
+        &config.worker_executor.blob_storage,
+        &config.component_compilation_service.blob_storage,
+    ]
+    .into_iter()
+    .try_for_each(|blob| match blob {
+        BlobStorageConfig::Sqlite(sqlite) => check_sqlite(sqlite),
+        _ => Ok(()),
+    })?;
+    match &config.worker_executor.key_value_storage {
+        KeyValueStorageConfig::Sqlite(sqlite) => check_sqlite(sqlite)?,
+        KeyValueStorageConfig::MultiSqlite(sqlite) => check_multi_sqlite(&sqlite.root_dir)?,
+        KeyValueStorageConfig::NamespaceRouted(routed) => [&routed.cache, &routed.persistent]
+            .into_iter()
+            .try_for_each(|inner| match inner {
+                KeyValueStorageInnerConfig::Sqlite(sqlite) => check_sqlite(sqlite),
+                KeyValueStorageInnerConfig::MultiSqlite(sqlite) => {
+                    check_multi_sqlite(&sqlite.root_dir)
+                }
+                _ => Ok(()),
+            })?,
+        _ => {}
     }
-    Ok(())
+    match &config.worker_executor.indexed_storage {
+        IndexedStorageConfig::Sqlite(sqlite) => check_sqlite(sqlite),
+        IndexedStorageConfig::MultiSqlite(sqlite) => check_multi_sqlite(&sqlite.root_dir),
+        IndexedStorageConfig::KVStoreSqlite(_) => match &config.worker_executor.key_value_storage {
+            KeyValueStorageConfig::Sqlite(sqlite) => check_sqlite(
+                &golem_worker_executor::derive_disjoint_sqlite_config(sqlite, "indexed"),
+            ),
+            _ => Ok(()),
+        },
+        _ => Ok(()),
+    }
 }
 
 impl CommandHandlerHooks for ServerCommandHandler {
