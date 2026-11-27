@@ -67,8 +67,9 @@ use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironment
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::id_target;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestCardService, TestContext,
+    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
+    start_with_overrides,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -156,22 +157,15 @@ struct EffectRecorder {
     effects: Arc<Mutex<Vec<String>>>,
 }
 
-async fn start_effect_server() -> anyhow::Result<(
-    u16,
-    tokio_util::task::AbortOnDropHandle<()>,
-    Arc<Mutex<Vec<String>>>,
-)> {
+async fn start_effect_server() -> anyhow::Result<(u16, LocalHttpServer, Arc<Mutex<Vec<String>>>)> {
     let effects = Arc::new(Mutex::new(Vec::new()));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
     let app = Router::new()
         .route("/{*path}", post(record_effect))
         .with_state(EffectRecorder {
             effects: effects.clone(),
         });
-    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    }));
+    let server = LocalHttpServer::serve(app).await?;
+    let port = server.port();
     Ok((port, server, effects))
 }
 
@@ -193,7 +187,7 @@ struct PermissionFixture {
     probe: golem_common::schema::tool::Tool,
     effects: Arc<Mutex<Vec<String>>>,
     cards: Arc<PermissionCards>,
-    _effect_server: tokio_util::task::AbortOnDropHandle<()>,
+    _effect_server: LocalHttpServer,
 }
 
 /// Starts an owner whose initial card keeps every default grant except the Tool class, and adds

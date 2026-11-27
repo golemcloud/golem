@@ -25,15 +25,15 @@ use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
-use tracing::{Instrument, debug, instrument};
+use tracing::{debug, instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -50,7 +50,7 @@ inherit_test_dep!(Tracing);
 /// A peer that counts requests separately from keyed effects. The first selected
 /// compensation takes effect but loses its response when the owner is stopped.
 pub(crate) struct SagaPeer {
-    handle: JoinHandle<()>,
+    _http_server: LocalHttpServer,
     pub port: u16,
     pub attempts: Arc<Mutex<Vec<(String, String)>>>,
     pub effects: Arc<Mutex<Vec<(String, String)>>>,
@@ -134,13 +134,10 @@ impl SagaPeer {
                     },
                 ),
             );
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let handle = tokio::spawn(
-            async move { axum::serve(listener, route).await.unwrap() }.in_current_span(),
-        );
+        let http_server = LocalHttpServer::serve(route).await.unwrap();
+        let port = http_server.port();
         Self {
-            handle,
+            _http_server: http_server,
             port,
             attempts,
             effects,
@@ -205,7 +202,6 @@ impl SagaPeer {
 impl Drop for SagaPeer {
     fn drop(&mut self) {
         self.release.notify_waiters();
-        self.handle.abort();
     }
 }
 
@@ -324,7 +320,7 @@ async fn golem_rust_compensation_survives_executor_restart(
 }
 
 struct TestHttpServer {
-    handle: JoinHandle<()>,
+    handle: LocalHttpServer,
     events: Arc<Mutex<Vec<String>>>,
     port: u16,
 }
@@ -338,47 +334,40 @@ impl TestHttpServer {
         let events_clone = events.clone();
         let events_clone2 = events.clone();
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
+        let route = Router::new()
+            .route(
+                "/step/{step}",
+                get(move |step: Path<u64>| async move {
+                    let step = step.0;
+                    let mut steps = call_count_per_step.lock().unwrap();
+                    let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
 
-        let handle = tokio::spawn(
-            async move {
-                let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
-                let route = Router::new()
-                    .route(
-                        "/step/{step}",
-                        get(move |step: Path<u64>| async move {
-                            let step = step.0;
-                            let mut steps = call_count_per_step.lock().unwrap();
-                            let step_count = steps.entry(step).and_modify(|e| *e += 1).or_insert(0);
+                    debug!("step: {} occurrence {step_count}", step);
+                    if log_steps {
+                        events_clone.lock().unwrap().push(format!("=> {step}"));
+                    }
 
-                            debug!("step: {} occurrence {step_count}", step);
-                            if log_steps {
-                                events_clone.lock().unwrap().push(format!("=> {step}"));
-                            }
+                    match step_count {
+                        n if *n < fail_per_step(step) => "true",
+                        _ => "false",
+                    }
+                }),
+            )
+            .route(
+                "/step/{step}",
+                delete(move |step: Path<u64>| async move {
+                    let step = step.0;
+                    debug!("step: undo {step}");
+                    if log_steps {
+                        events_clone2.lock().unwrap().push(format!("<= {step}"));
+                    }
+                    "false"
+                }),
+            );
 
-                            match step_count {
-                                n if *n < fail_per_step(step) => "true",
-                                _ => "false",
-                            }
-                        }),
-                    )
-                    .route(
-                        "/step/{step}",
-                        delete(move |step: Path<u64>| async move {
-                            let step = step.0;
-                            debug!("step: undo {step}");
-                            if log_steps {
-                                events_clone2.lock().unwrap().push(format!("<= {step}"));
-                            }
-                            "false"
-                        }),
-                    );
-
-                axum::serve(listener, route).await.unwrap();
-            }
-            .in_current_span(),
-        );
+        let handle = LocalHttpServer::serve(route).await.unwrap();
+        let port = handle.port();
         Self {
             handle,
             events,
@@ -390,8 +379,8 @@ impl TestHttpServer {
         self.port
     }
 
-    pub fn abort(&self) {
-        self.handle.abort()
+    pub fn abort(self) {
+        drop(self.handle)
     }
 
     pub fn get_events(&self) -> Vec<String> {

@@ -26,7 +26,8 @@ use golem_common::model::oplog::{
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -59,7 +60,7 @@ struct GateServer {
     port: u16,
     history: Arc<Mutex<Vec<String>>>,
     events: Arc<watch::Sender<HashSet<String>>>,
-    handle: tokio::task::JoinHandle<()>,
+    _http_server: LocalHttpServer,
 }
 
 impl GateServer {
@@ -69,8 +70,6 @@ impl GateServer {
             payload: String,
         }
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-        let port = listener.local_addr()?.port();
         let history = Arc::new(Mutex::new(Vec::new()));
         let events = Arc::new(watch::channel(HashSet::new()).0);
         let holds: Arc<HashMap<String, String>> = Arc::new(
@@ -107,14 +106,13 @@ impl GateServer {
                 }
             }),
         );
-        let handle = tokio::spawn(
-            async move { axum::serve(listener, route).await.unwrap() }.in_current_span(),
-        );
+        let http_server = LocalHttpServer::serve(route).await?;
+        let port = http_server.port();
         Ok(Self {
             port,
             history,
             events,
-            handle,
+            _http_server: http_server,
         })
     }
 
@@ -141,12 +139,6 @@ impl GateServer {
 
     fn count(&self, payload: &str) -> usize {
         self.history().iter().filter(|p| *p == payload).count()
-    }
-}
-
-impl Drop for GateServer {
-    fn drop(&mut self) {
-        self.handle.abort();
     }
 }
 

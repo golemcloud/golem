@@ -22,7 +22,8 @@ use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start,
 };
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
@@ -63,24 +64,17 @@ async fn http_client(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/",
-                post(move |headers: HeaderMap, body: Bytes| async move {
-                    let header = headers.get("X-Test").unwrap().to_str().unwrap();
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    format!("response is {header} {body}")
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/",
+        post(move |headers: HeaderMap, body: Bytes| async move {
+            let header = headers.get("X-Test").unwrap().to_str().unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            format!("response is {header} {body}")
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -104,7 +98,7 @@ async fn http_client(
 
     drop(executor);
     drop(rx);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(
         result.into_typed::<String>()?,
@@ -127,33 +121,24 @@ async fn http_client_using_reqwest(
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap, body: Bytes| async move {
-                    let header = headers
-                        .get("X-Test")
-                        .map(|h| h.to_str().unwrap().to_string())
-                        .unwrap_or("no X-Test header".to_string());
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    {
-                        let mut capture = captured_body_clone.lock().unwrap();
-                        *capture = Some(body.clone());
-                    }
-                    format!(
-                        "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
-                    )
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/post-example",
+        post(move |headers: HeaderMap, body: Bytes| async move {
+            let header = headers
+                .get("X-Test")
+                .map(|h| h.to_str().unwrap().to_string())
+                .unwrap_or("no X-Test header".to_string());
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            {
+                let mut capture = captured_body_clone.lock().unwrap();
+                *capture = Some(body.clone());
+            }
+            format!("{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}")
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -176,7 +161,7 @@ async fn http_client_using_reqwest(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(
         result.into_typed::<String>()?,
@@ -203,33 +188,24 @@ async fn http_client_using_reqwest_async(
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap, body: Bytes| async move {
-                    let header = headers
-                        .get("X-Test")
-                        .map(|h| h.to_str().unwrap().to_string())
-                        .unwrap_or("no X-Test header".to_string());
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    {
-                        let mut capture = captured_body_clone.lock().unwrap();
-                        *capture = Some(body.clone());
-                    }
-                    format!(
-                        "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
-                    )
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/post-example",
+        post(move |headers: HeaderMap, body: Bytes| async move {
+            let header = headers
+                .get("X-Test")
+                .map(|h| h.to_str().unwrap().to_string())
+                .unwrap_or("no X-Test header".to_string());
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            {
+                let mut capture = captured_body_clone.lock().unwrap();
+                *capture = Some(body.clone());
+            }
+            format!("{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}")
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -251,7 +227,7 @@ async fn http_client_using_reqwest_async(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(
         result.into_typed::<String>()?,
@@ -278,33 +254,24 @@ async fn http_client_using_reqwest_async_parallel(
     let captured_body: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_body_clone = captured_body.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap, body: Bytes| async move {
-                    let header = headers
-                        .get("X-Test")
-                        .map(|h| h.to_str().unwrap().to_string())
-                        .unwrap_or("no X-Test header".to_string());
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    {
-                        let mut capture = captured_body_clone.lock().unwrap();
-                        capture.push(body.clone());
-                    }
-                    format!(
-                        "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
-                    )
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/post-example",
+        post(move |headers: HeaderMap, body: Bytes| async move {
+            let header = headers
+                .get("X-Test")
+                .map(|h| h.to_str().unwrap().to_string())
+                .unwrap_or("no X-Test header".to_string());
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            {
+                let mut capture = captured_body_clone.lock().unwrap();
+                capture.push(body.clone());
+            }
+            format!("{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}")
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -327,7 +294,7 @@ async fn http_client_using_reqwest_async_parallel(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     let return_value = result.into_return_value().expect("Expected a return value");
     let SchemaValue::List { elements: lst } = &return_value else {
@@ -417,53 +384,42 @@ async fn http_client_using_reqwest_async_parallel_replay(
     let holding = Arc::new(AtomicBool::new(true));
     let holding_in_server = holding.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap, body: Bytes| {
-                    let held = held_in_server.clone();
-                    let arrivals = arrivals_in_server.clone();
-                    let holding = holding_in_server.clone();
-                    let captured_body = captured_body_clone.clone();
-                    async move {
-                        let header = headers
-                            .get("X-Test")
-                            .map(|h| h.to_str().unwrap().to_string())
-                            .unwrap_or("no X-Test header".to_string());
-                        let body = String::from_utf8(body.to_vec()).unwrap();
-                        {
-                            let mut capture = captured_body.lock().unwrap();
-                            capture.push(body.clone());
-                        }
-                        if arrivals.fetch_add(1, Ordering::SeqCst) < 16
-                            && holding.load(Ordering::SeqCst)
-                        {
-                            let id: u16 = header
-                                .parse()
-                                .expect("the first invocation's requests carry numeric X-Test ids");
-                            let (release_tx, release_rx) = oneshot::channel();
-                            let previous = held.lock().unwrap().insert(id, release_tx);
-                            assert!(
-                                previous.is_none(),
-                                "request id {id} must arrive exactly once while responses are held"
-                            );
-                            let _ = release_rx.await;
-                        }
-                        format!(
-                            "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
-                        )
-                    }
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/post-example",
+        post(move |headers: HeaderMap, body: Bytes| {
+            let held = held_in_server.clone();
+            let arrivals = arrivals_in_server.clone();
+            let holding = holding_in_server.clone();
+            let captured_body = captured_body_clone.clone();
+            async move {
+                let header = headers
+                    .get("X-Test")
+                    .map(|h| h.to_str().unwrap().to_string())
+                    .unwrap_or("no X-Test header".to_string());
+                let body = String::from_utf8(body.to_vec()).unwrap();
+                {
+                    let mut capture = captured_body.lock().unwrap();
+                    capture.push(body.clone());
+                }
+                if arrivals.fetch_add(1, Ordering::SeqCst) < 16 && holding.load(Ordering::SeqCst) {
+                    let id: u16 = header
+                        .parse()
+                        .expect("the first invocation's requests carry numeric X-Test ids");
+                    let (release_tx, release_rx) = oneshot::channel();
+                    let previous = held.lock().unwrap().insert(id, release_tx);
+                    assert!(
+                        previous.is_none(),
+                        "request id {id} must arrive exactly once while responses are held"
+                    );
+                    let _ = release_rx.await;
+                }
+                format!("{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}")
+            }
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     // Releases the held responses once all 16 concurrent requests (ids 0..16)
     // are in flight, in reverse request-id order, pacing the releases so the
@@ -597,7 +553,7 @@ async fn http_client_using_reqwest_async_parallel_replay(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     Ok(())
 }
@@ -613,34 +569,27 @@ async fn outgoing_http_contains_trace_context_headers(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
     let traceparents = Arc::new(Mutex::new(Vec::new()));
     let traceparents_clone = traceparents.clone();
 
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap| async move {
-                    traceparents_clone.lock().unwrap().push(
-                        headers
-                            .get("traceparent")
-                            .map(|h| h.to_str().unwrap().to_string()),
-                    );
-                    json!({
-                        "percentage": 0.0,
-                        "message": null
-                    })
-                    .to_string()
-                }),
+    let route = Router::new().route(
+        "/post-example",
+        post(move |headers: HeaderMap| async move {
+            traceparents_clone.lock().unwrap().push(
+                headers
+                    .get("traceparent")
+                    .map(|h| h.to_str().unwrap().to_string()),
             );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+            json!({
+                "percentage": 0.0,
+                "message": null
+            })
+            .to_string()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -673,7 +622,7 @@ async fn outgoing_http_contains_trace_context_headers(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     let traceparents = traceparents.lock().unwrap();
     assert_eq!(traceparents.len(), 2);
@@ -711,16 +660,9 @@ async fn outgoing_http_response_dropped_without_consuming_body_replays(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route("/", axum::routing::get(|| async { "hello" }));
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
+    let route = Router::new().route("/", axum::routing::get(|| async { "hello" }));
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -766,7 +708,7 @@ async fn outgoing_http_response_dropped_without_consuming_body_replays(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     Ok(())
 }
@@ -1472,25 +1414,21 @@ async fn outgoing_http_opens_scope_after_primary_replay_tail(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let request_count = Arc::new(AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let host_http_port = listener.local_addr()?.port();
-    let http_server = spawn({
+    let route = {
         let request_count = request_count.clone();
-        async move {
-            let route = Router::new().route(
-                "/",
-                axum::routing::get(move || {
-                    let request_count = request_count.clone();
-                    async move {
-                        request_count.fetch_add(1, Ordering::SeqCst);
-                        RESPONSE
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span()
-    });
+        Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let request_count = request_count.clone();
+                async move {
+                    request_count.fetch_add(1, Ordering::SeqCst);
+                    RESPONSE
+                }
+            }),
+        )
+    };
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -1526,7 +1464,7 @@ async fn outgoing_http_opens_scope_after_primary_replay_tail(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -1547,25 +1485,21 @@ async fn outgoing_http_recovers_missing_consume_body_scope_start(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let request_count = Arc::new(AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let host_http_port = listener.local_addr()?.port();
-    let http_server = spawn({
+    let route = {
         let request_count = request_count.clone();
-        async move {
-            let route = Router::new().route(
-                "/",
-                axum::routing::get(move || {
-                    let request_count = request_count.clone();
-                    async move {
-                        request_count.fetch_add(1, Ordering::SeqCst);
-                        RESPONSE
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span()
-    });
+        Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let request_count = request_count.clone();
+                async move {
+                    request_count.fetch_add(1, Ordering::SeqCst);
+                    RESPONSE
+                }
+            }),
+        )
+    };
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -1634,7 +1568,7 @@ async fn outgoing_http_recovers_missing_consume_body_scope_start(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -1837,25 +1771,21 @@ async fn outgoing_http_missing_consume_scope_refuses_full_duplex_body_cycle(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let request_count = Arc::new(AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let host_http_port = listener.local_addr()?.port();
-    let http_server = spawn({
+    let route = {
         let request_count = request_count.clone();
-        async move {
-            let route = Router::new().route(
-                "/early-response",
-                axum::routing::put(move || {
-                    let request_count = request_count.clone();
-                    async move {
-                        request_count.fetch_add(1, Ordering::SeqCst);
-                        "early-body"
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span()
-    });
+        Router::new().route(
+            "/early-response",
+            axum::routing::put(move || {
+                let request_count = request_count.clone();
+                async move {
+                    request_count.fetch_add(1, Ordering::SeqCst);
+                    "early-body"
+                }
+            }),
+        )
+    };
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -1919,7 +1849,7 @@ async fn outgoing_http_missing_consume_scope_refuses_full_duplex_body_cycle(
     let _ = invocation.await;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -3245,18 +3175,11 @@ async fn outgoing_http_request_body_transmission_error_is_recorded_and_replayed(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            // Respond immediately without reading the request body, so the
-            // response head can arrive while the (short) upload is still open.
-            let route = Router::new().route("/", post(|| async { "ok" }));
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
+    // Respond immediately without reading the request body, so the
+    // response head can arrive while the (short) upload is still open.
+    let route = Router::new().route("/", post(|| async { "ok" }));
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -3312,7 +3235,7 @@ async fn outgoing_http_request_body_transmission_error_is_recorded_and_replayed(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     Ok(())
 }
@@ -3463,28 +3386,22 @@ async fn outgoing_http_full_response_is_replayed_without_network(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
     let requests = Arc::new(AtomicUsize::new(0));
     let requests_in_server = requests.clone();
 
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/full-response",
-                axum::routing::get(move || {
-                    let requests = requests_in_server.clone();
-                    let body = body.clone();
-                    async move {
-                        requests.fetch_add(1, Ordering::SeqCst);
-                        ([("x-resp-test", "distinctive-header-value")], body)
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/full-response",
+        axum::routing::get(move || {
+            let requests = requests_in_server.clone();
+            let body = body.clone();
+            async move {
+                requests.fetch_add(1, Ordering::SeqCst);
+                ([("x-resp-test", "distinctive-header-value")], body)
+            }
+        }),
     );
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -3543,7 +3460,7 @@ async fn outgoing_http_full_response_is_replayed_without_network(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     Ok(())
 }
@@ -3588,33 +3505,30 @@ async fn ignored_trailers_replay(
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
     let requests = Arc::new(AtomicUsize::new(0));
     let server_requests = requests.clone();
     let cancel_body = method == "get_and_cancel_body_ignoring_trailers";
-    let server = spawn(async move {
-        let route = Router::new().route(
-            "/full-response",
-            axum::routing::get(move || {
-                let requests = server_requests.clone();
-                async move {
-                    let first =
-                        Bytes::from(format!("{}-body", requests.fetch_add(1, Ordering::SeqCst)));
-                    if cancel_body {
-                        use futures::StreamExt;
-                        axum::body::Body::from_stream(
-                            futures::stream::once(async { Ok::<_, std::io::Error>(first) })
-                                .chain(futures::stream::pending()),
-                        )
-                    } else {
-                        axum::body::Body::from(first)
-                    }
+    let route = Router::new().route(
+        "/full-response",
+        axum::routing::get(move || {
+            let requests = server_requests.clone();
+            async move {
+                let first =
+                    Bytes::from(format!("{}-body", requests.fetch_add(1, Ordering::SeqCst)));
+                if cancel_body {
+                    use futures::StreamExt;
+                    axum::body::Body::from_stream(
+                        futures::stream::once(async { Ok::<_, std::io::Error>(first) })
+                            .chain(futures::stream::pending()),
+                    )
+                } else {
+                    axum::body::Body::from(first)
                 }
-            }),
-        );
-        axum::serve(listener, route).await.unwrap();
-    });
+            }
+        }),
+    );
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
         .store()
@@ -3756,7 +3670,7 @@ async fn ignored_trailers_replay(
         executor.check_oplog_is_queryable(&worker_id).await?;
         drop(executor);
     }
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -3773,36 +3687,30 @@ async fn outgoing_http_contains_idempotency_key(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
     let requests = Arc::new(AtomicUsize::new(0));
     let server_requests = requests.clone();
 
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap| {
-                    let requests = server_requests.clone();
-                    async move {
-                        requests.fetch_add(1, Ordering::SeqCst);
-                        let idempotency_key = headers
-                            .get("idempotency-key")
-                            .map(|h| h.to_str().unwrap().to_string());
-                        let idempotency_key_str = idempotency_key.map(|i| i.to_string());
-                        json!({
-                            "percentage": 0.0,
-                            "message": idempotency_key_str
-                        })
-                        .to_string()
-                    }
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/post-example",
+        post(move |headers: HeaderMap| {
+            let requests = server_requests.clone();
+            async move {
+                requests.fetch_add(1, Ordering::SeqCst);
+                let idempotency_key = headers
+                    .get("idempotency-key")
+                    .map(|h| h.to_str().unwrap().to_string());
+                let idempotency_key_str = idempotency_key.map(|i| i.to_string());
+                json!({
+                    "percentage": 0.0,
+                    "message": idempotency_key_str
+                })
+                .to_string()
+            }
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -3875,7 +3783,7 @@ async fn outgoing_http_contains_idempotency_key(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     Ok(())
 }
@@ -3901,37 +3809,33 @@ async fn outgoing_http_commits_random_key_before_dispatch(
             ..Default::default()
         };
         let executor = start_with_oplog_config(deps, &context, Some(config.clone())).await?;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
         let effects = Arc::new(Mutex::new(HashSet::new()));
         let (arrived, mut requests) = mpsc::unbounded_channel();
-        let server = tokio_util::task::AbortOnDropHandle::new(spawn({
+        let route = {
             let effects = effects.clone();
-            async move {
-                let first_attempt = Arc::new(AtomicBool::new(true));
-                let route = Router::new().route(
-                    "/reservations",
-                    post(move |headers: HeaderMap| {
-                        let effects = effects.clone();
-                        let arrived = arrived.clone();
-                        let first_attempt = first_attempt.clone();
-                        async move {
-                            let key = headers["idempotency-key"].to_str().unwrap().to_string();
-                            let reservation =
-                                headers["x-reservation-id"].to_str().unwrap().to_string();
-                            effects.lock().unwrap().insert(key.clone());
-                            arrived.send((key, reservation)).unwrap();
-                            if first_attempt.swap(false, Ordering::SeqCst) {
-                                // The receiver applied the effect, but the executor sees no response.
-                                std::future::pending::<()>().await;
-                            }
-                            http::StatusCode::NO_CONTENT
+            let first_attempt = Arc::new(AtomicBool::new(true));
+            Router::new().route(
+                "/reservations",
+                post(move |headers: HeaderMap| {
+                    let effects = effects.clone();
+                    let arrived = arrived.clone();
+                    let first_attempt = first_attempt.clone();
+                    async move {
+                        let key = headers["idempotency-key"].to_str().unwrap().to_string();
+                        let reservation = headers["x-reservation-id"].to_str().unwrap().to_string();
+                        effects.lock().unwrap().insert(key.clone());
+                        arrived.send((key, reservation)).unwrap();
+                        if first_attempt.swap(false, Ordering::SeqCst) {
+                            // The receiver applied the effect, but the executor sees no response.
+                            std::future::pending::<()>().await;
                         }
-                    }),
-                );
-                axum::serve(listener, route).await.unwrap();
-            }
-        }));
+                        http::StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+        };
+        let server = LocalHttpServer::serve(route).await?;
+        let port = server.port();
         let component = executor
             .component_dep(&context.default_environment_id, http_tests)
             .store()
@@ -4049,19 +3953,12 @@ async fn spawned_guest_task_durable_call_lands_before_invocation_settled(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/spawned",
-                axum::routing::get(|| async { "spawned-response" }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/spawned",
+        axum::routing::get(|| async { "spawned-response" }),
     );
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -4191,7 +4088,7 @@ async fn spawned_guest_task_durable_call_lands_before_invocation_settled(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     Ok(())
 }

@@ -63,10 +63,10 @@ use golem_worker_executor::worker::{
 };
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    EmulatedWorkerService, LastUniqueId, PrecompiledComponent, RecordedCardTransfer, TestContext,
-    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
-    WorkerServiceOptions, agent_oplog_length, fake_ownership, registry_test_card, start,
-    start_customized, start_with_overrides, start_with_redis_storage,
+    EmulatedWorkerService, LastUniqueId, LocalHttpServer, PrecompiledComponent,
+    RecordedCardTransfer, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, WorkerServiceOptions, agent_oplog_length, fake_ownership,
+    registry_test_card, start, start_customized, start_with_overrides, start_with_redis_storage,
     start_with_resource_limits_and_configure, take_agent_oplog_over_at_epoch,
 };
 use pretty_assertions::assert_eq;
@@ -6778,24 +6778,16 @@ async fn long_running_poll_loop_works_as_expected(
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || async move {
-                    let body = response_clone.lock().unwrap();
-                    body.clone()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/poll",
+        get(move || async move {
+            let body = response_clone.lock().unwrap();
+            body.clone()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -6831,7 +6823,7 @@ async fn long_running_poll_loop_works_as_expected(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -7132,24 +7124,16 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || async move {
-                    let body = response_clone.lock().unwrap();
-                    body.clone()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/poll",
+        get(move || async move {
+            let body = response_clone.lock().unwrap();
+            body.clone()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7185,7 +7169,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -7203,24 +7187,16 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || async move {
-                    let body = response_clone.lock().unwrap();
-                    body.clone()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/poll",
+        get(move || async move {
+            let body = response_clone.lock().unwrap();
+            body.clone()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7342,7 +7318,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert!(!values1.is_empty());
     // first running
@@ -7365,24 +7341,16 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || async move {
-                    let body = response_clone.lock().unwrap();
-                    body.clone()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/poll",
+        get(move || async move {
+            let body = response_clone.lock().unwrap();
+            body.clone()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7430,7 +7398,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -7448,24 +7416,16 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || async move {
-                    let body = response_clone.lock().unwrap();
-                    body.clone()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/poll",
+        get(move || async move {
+            let body = response_clone.lock().unwrap();
+            body.clone()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7531,7 +7491,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(status1.status, AgentStatus::Interrupted);
     assert_eq!(status2.status, AgentStatus::Interrupted);
@@ -7553,24 +7513,16 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || async move {
-                    let body = response_clone.lock().unwrap();
-                    body.clone()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/poll",
+        get(move || async move {
+            let body = response_clone.lock().unwrap();
+            body.clone()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7693,7 +7645,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(status2.status, AgentStatus::Interrupted);
     assert_eq!(status4.status, AgentStatus::Idle);
@@ -7714,24 +7666,16 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || async move {
-                    let body = response_clone.lock().unwrap();
-                    body.clone()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/poll",
+        get(move || async move {
+            let body = response_clone.lock().unwrap();
+            body.clone()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7791,7 +7735,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     let metadata = executor.get_worker_metadata(&worker_id).await;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert!(metadata.is_err());
     Ok(())
@@ -7926,33 +7870,25 @@ async fn invocation_queue_is_persistent(
     let (first_poll_entered_tx, first_poll_entered_rx) = tokio::sync::oneshot::channel();
     let first_poll_entered_tx = Arc::new(Mutex::new(Some(first_poll_entered_tx)));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || {
-                    let first_poll_release = first_poll_release_clone.clone();
-                    let first_poll_entered_tx = first_poll_entered_tx.clone();
-                    async move {
-                        let first_poll = first_poll_entered_tx.lock().unwrap().take();
-                        if let Some(entered) = first_poll {
-                            let _ = entered.send(());
-                            let permit = first_poll_release.acquire().await.unwrap();
-                            permit.forget();
-                        }
-                        response_clone.lock().unwrap().clone()
-                    }
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/poll",
+        get(move || {
+            let first_poll_release = first_poll_release_clone.clone();
+            let first_poll_entered_tx = first_poll_entered_tx.clone();
+            async move {
+                let first_poll = first_poll_entered_tx.lock().unwrap().take();
+                if let Some(entered) = first_poll {
+                    let _ = entered.send(());
+                    let permit = first_poll_release.acquire().await.unwrap();
+                    permit.forget();
+                }
+                response_clone.lock().unwrap().clone()
+            }
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -8022,7 +7958,7 @@ async fn invocation_queue_is_persistent(
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?;
 
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(result.into_typed::<u64>()?, 4u64);
 

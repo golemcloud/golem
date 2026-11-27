@@ -22,7 +22,8 @@ use golem_common::model::oplog::{
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -51,7 +52,7 @@ const WAIT_FOR: &str = "clocks::monotonic-clock::wait-for";
 /// taken when the response is produced. `slow` answers only after `fast` has answered, and
 /// `scoped` answers only after `outside` has arrived, so the custom body is still waiting while
 /// its sibling, or the outside-scope call, runs and completes first.
-async fn start_callback_server() -> (u16, Arc<Mutex<Vec<String>>>) {
+async fn start_callback_server() -> (LocalHttpServer, u16, Arc<Mutex<Vec<String>>>) {
     #[derive(Deserialize)]
     struct Params {
         payload: String,
@@ -61,8 +62,6 @@ async fn start_callback_server() -> (u16, Arc<Mutex<Vec<String>>>) {
     let counter = Arc::new(AtomicU32::new(0));
     let fast_answered = Arc::new(Notify::new());
     let outside_arrived = Arc::new(Notify::new());
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
 
     let route_history = history.clone();
     let route = Router::new().route(
@@ -92,13 +91,9 @@ async fn start_callback_server() -> (u16, Arc<Mutex<Vec<String>>>) {
             }
         }),
     );
-    tokio::spawn(
-        async move {
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
-    (port, history)
+    let http_server = LocalHttpServer::serve(route).await.unwrap();
+    let port = http_server.port();
+    (http_server, port, history)
 }
 
 /// The position of the `AgentInvocationStarted` of `method_name`. Its index is the anchor of the
@@ -235,7 +230,7 @@ async fn ts_custom_durability_scopes_stay_apart_under_concurrency(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let (port, history) = start_callback_server().await;
+    let (_http_server, port, history) = start_callback_server().await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -384,7 +379,7 @@ async fn ts_custom_durability_parents_wait_and_escaped_work_leaves_the_scope(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let (port, _history) = start_callback_server().await;
+    let (_http_server, port, _history) = start_callback_server().await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -504,8 +499,6 @@ async fn ts_custom_durability_recovers_one_completed_and_one_incomplete_sibling(
     let second_arrived = Arc::new(Notify::new());
     let checkpoint = Arc::new(Notify::new());
     let resume = Arc::new(Semaphore::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
 
     #[derive(Deserialize)]
     struct Params {
@@ -549,8 +542,8 @@ async fn ts_custom_durability_recovers_one_completed_and_one_incomplete_sibling(
                 }
             }),
         );
-    let server =
-        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -669,7 +662,7 @@ async fn ts_custom_durability_recovers_one_completed_and_one_incomplete_sibling(
             .all(|entry| !matches!(&entry.entry, PublicOplogEntry::Jump(_))),
         "recovery must not roll back sibling history"
     );
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -701,8 +694,6 @@ async fn ts_custom_durability_recovers_a_request_cancelled_inside_an_open_operat
     let hang_arrived = Arc::new(Notify::new());
     let checkpoint = Arc::new(Notify::new());
     let resume = Arc::new(Semaphore::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
 
     #[derive(Deserialize)]
     struct Params {
@@ -738,8 +729,8 @@ async fn ts_custom_durability_recovers_a_request_cancelled_inside_an_open_operat
             }
         }),
     );
-    let server =
-        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -869,7 +860,7 @@ async fn ts_custom_durability_recovers_a_request_cancelled_inside_an_open_operat
             .all(|entry| !matches!(&entry.entry, PublicOplogEntry::Jump(_))),
         "recovery must not roll back history"
     );
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -884,7 +875,7 @@ async fn ts_custom_durability_parent_admits_children_until_it_stops_waiting(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let (port, history) = start_callback_server().await;
+    let (_http_server, port, history) = start_callback_server().await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)

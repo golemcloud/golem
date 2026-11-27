@@ -27,6 +27,7 @@ use axum::routing::{get, post};
 use futures::StreamExt as _;
 use futures::stream;
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_worker_executor_test_utils::LocalHttpServer;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::test;
@@ -180,9 +181,7 @@ impl InferenceServer {
 
 async fn spawn_inference_server(
     mode: InferenceMode,
-) -> anyhow::Result<(Arc<InferenceServer>, u16, tokio::task::JoinHandle<()>)> {
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
+) -> anyhow::Result<(Arc<InferenceServer>, u16, LocalHttpServer)> {
     let server = Arc::new(InferenceServer {
         mode,
         post_count: AtomicUsize::new(0),
@@ -197,12 +196,8 @@ async fn spawn_inference_server(
         .route("/sibling", get(InferenceServer::sibling))
         .route("/allow-body-read", get(InferenceServer::allow_body_read))
         .with_state(server.clone());
-    let handle = spawn(
-        async move {
-            axum::serve(listener, router).await.unwrap();
-        }
-        .in_current_span(),
-    );
+    let handle = LocalHttpServer::serve(router).await?;
+    let port = handle.port();
     Ok((server, port, handle))
 }
 
@@ -504,7 +499,7 @@ async fn recover_concurrent_post(
         drop(executor);
         Err("replay verification was not requested".to_string())
     };
-    http_server.abort();
+    drop(http_server);
     Ok(RecoveredRun {
         result,
         oplog,
@@ -1456,34 +1451,31 @@ async fn incomplete_send_resumes_a_body_kept_open_until_response_read(
     let executor = start(deps, &context).await?;
     let requests = Arc::new(AtomicUsize::new(0));
     let (arrived, mut received) = watch::channel(false);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let server = tokio::spawn({
+    let route = {
         let requests = requests.clone();
-        async move {
-            let route = Router::new().route(
-                "/early-response",
-                axum::routing::put(move |request: axum::extract::Request| {
-                    let requests = requests.clone();
-                    let arrived = arrived.clone();
-                    async move {
-                        let mut body = request.into_body();
-                        let frame = http_body_util::BodyExt::frame(&mut body)
-                            .await
-                            .unwrap()
-                            .unwrap();
-                        assert_eq!(frame.into_data().unwrap(), Bytes::from_static(b"hello"));
-                        if requests.fetch_add(1, Ordering::SeqCst) == 0 {
-                            arrived.send_replace(true);
-                            std::future::pending::<()>().await;
-                        }
-                        "early-body"
+        Router::new().route(
+            "/early-response",
+            axum::routing::put(move |request: axum::extract::Request| {
+                let requests = requests.clone();
+                let arrived = arrived.clone();
+                async move {
+                    let mut body = request.into_body();
+                    let frame = http_body_util::BodyExt::frame(&mut body)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(frame.into_data().unwrap(), Bytes::from_static(b"hello"));
+                    if requests.fetch_add(1, Ordering::SeqCst) == 0 {
+                        arrived.send_replace(true);
+                        std::future::pending::<()>().await;
                     }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-    });
+                    "early-body"
+                }
+            }),
+        )
+    };
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
         .store()
@@ -1529,7 +1521,7 @@ async fn incomplete_send_resumes_a_body_kept_open_until_response_read(
     );
     assert_eq!(jump_count(&oplog), 0);
     drop(executor);
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -1557,37 +1549,34 @@ async fn parent_only_response_repair_reports_loss_after_delivered_eof(
     let posts = Arc::new(AtomicUsize::new(0));
     let gets = Arc::new(AtomicUsize::new(0));
     let release_headers = Arc::new(tokio::sync::Semaphore::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+    let router = {
         let posts = posts.clone();
         let gets = gets.clone();
         let release_headers = release_headers.clone();
-        async move {
-            let router = Router::new()
-                .route(
-                    "/inference",
-                    post(move |_: Bytes| {
-                        let posts = posts.clone();
-                        let release_headers = release_headers.clone();
-                        async move {
-                            if posts.fetch_add(1, Ordering::SeqCst) == 0 {
-                                release_headers.acquire().await.unwrap().forget();
-                            }
-                            INFERENCE_BODY
+        Router::new()
+            .route(
+                "/inference",
+                post(move |_: Bytes| {
+                    let posts = posts.clone();
+                    let release_headers = release_headers.clone();
+                    async move {
+                        if posts.fetch_add(1, Ordering::SeqCst) == 0 {
+                            release_headers.acquire().await.unwrap().forget();
                         }
-                    }),
-                )
-                .route(
-                    "/sibling",
-                    get(move || {
-                        gets.fetch_add(1, Ordering::SeqCst);
-                        async { SIBLING_BODY }
-                    }),
-                );
-            axum::serve(listener, router).await.unwrap();
-        }
-    }));
+                        INFERENCE_BODY
+                    }
+                }),
+            )
+            .route(
+                "/sibling",
+                get(move || {
+                    gets.fetch_add(1, Ordering::SeqCst);
+                    async { SIBLING_BODY }
+                }),
+            )
+    };
+    let server = LocalHttpServer::serve(router).await?;
+    let port = server.port();
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
         .store()

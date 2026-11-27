@@ -26,7 +26,8 @@ use golem_common::schema::TypedSchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -85,10 +86,8 @@ struct Params {
     payload: Option<String>,
 }
 
-async fn serve() -> anyhow::Result<(Arc<ServerState>, u16, tokio::task::JoinHandle<()>)> {
+async fn serve() -> anyhow::Result<(Arc<ServerState>, u16, LocalHttpServer)> {
     let state = Arc::new(ServerState::new());
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
     let route = Router::new()
         .route(
             "/echo",
@@ -150,8 +149,8 @@ async fn serve() -> anyhow::Result<(Arc<ServerState>, u16, tokio::task::JoinHand
             }),
         )
         .with_state(state.clone());
-    let handle =
-        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+    let handle = LocalHttpServer::serve(route).await?;
+    let port = handle.port();
     Ok((state, port, handle))
 }
 
@@ -352,7 +351,7 @@ async fn run_then(
     .map_err(|e| format!("{e:#}"));
     let history_after_replay = state.history();
     drop(executor);
-    server.abort();
+    drop(server);
     Ok(Outcome {
         live,
         calls,
@@ -747,7 +746,7 @@ async fn go_custom_durability_recovers_with_one_completed_and_one_incomplete_sib
         "call-local recovery does not roll back sibling history"
     );
     drop(executor);
-    server.abort();
+    drop(server);
     Ok(())
 }
 

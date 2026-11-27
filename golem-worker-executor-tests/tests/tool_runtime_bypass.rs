@@ -49,8 +49,8 @@ use golem_worker_executor::services::quota::{LeaseInterest, QuotaService, Unlimi
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -155,7 +155,7 @@ struct Fixture {
     definitions: BTreeMap<ToolName, golem_common::schema::tool::Tool>,
     effects: Arc<Mutex<Vec<String>>>,
     quota: Arc<RecordingQuotaService>,
-    _effect_server: tokio_util::task::AbortOnDropHandle<()>,
+    _effect_server: LocalHttpServer,
 }
 
 async fn fixture(
@@ -755,20 +755,13 @@ async fn invoke_tool_for(
     Ok(output.result)
 }
 
-async fn start_effect_server() -> anyhow::Result<(
-    u16,
-    tokio_util::task::AbortOnDropHandle<()>,
-    Arc<Mutex<Vec<String>>>,
-)> {
+async fn start_effect_server() -> anyhow::Result<(u16, LocalHttpServer, Arc<Mutex<Vec<String>>>)> {
     let effects = Arc::new(Mutex::new(Vec::new()));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
     let app = Router::new()
         .route("/{*path}", post(record_effect))
         .with_state(effects.clone());
-    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    }));
+    let server = LocalHttpServer::serve(app).await?;
+    let port = server.port();
     Ok((port, server, effects))
 }
 

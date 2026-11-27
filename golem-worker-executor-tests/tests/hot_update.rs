@@ -54,7 +54,7 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    BlobStorageDecorator, BlobStorageInner, EmulatedWorkerService, LastUniqueId,
+    BlobStorageDecorator, BlobStorageInner, EmulatedWorkerService, LastUniqueId, LocalHttpServer,
     PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, WorkerServiceOptions, WrappedBlobStorage, start,
     start_customized, start_with_overrides, start_with_snapshot_policy,
@@ -68,7 +68,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
-use tokio::task::JoinHandle;
 use tracing::{Instrument, debug};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -119,50 +118,44 @@ impl F1Control {
 }
 
 pub struct TestHttpServer {
-    handle: JoinHandle<()>,
+    handle: LocalHttpServer,
     f1_blocker: Arc<Mutex<Option<F1Blocker>>>,
     port: u16,
 }
 
 impl TestHttpServer {
     pub async fn start() -> Self {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-        let port = listener.local_addr().unwrap().port();
-
         let f1_blocker = Arc::new(Mutex::new(None::<F1Blocker>));
         let f1_blocker_clone = f1_blocker.clone();
 
-        let handle = spawn(async move {
-            let route = Router::new().route(
-                "/f1",
-                post(move |body: Bytes| {
-                    async move {
-                        let body: u64 = String::from_utf8(body.to_vec()).unwrap().parse().unwrap();
-                        debug!("f1: {}", body);
+        let route = Router::new().route(
+            "/f1",
+            post(move |body: Bytes| {
+                async move {
+                    let body: u64 = String::from_utf8(body.to_vec()).unwrap().parse().unwrap();
+                    debug!("f1: {}", body);
 
-                        let mut guard = f1_blocker_clone.lock().await;
-                        if let Some(blocker) = &*guard
-                            && blocker.value == body
-                        {
-                            let F1Blocker {
-                                reached, resume, ..
-                            } = guard.take().unwrap();
-                            debug!("Reached f1 blocking point");
-                            reached.send(()).unwrap();
-                            debug!("Awaiting resume at f1 blocking point");
-                            resume.await.unwrap();
-                            debug!("Resuming from f1 blocking point");
-                        }
-
-                        StatusCode::OK
+                    let mut guard = f1_blocker_clone.lock().await;
+                    if let Some(blocker) = &*guard
+                        && blocker.value == body
+                    {
+                        let F1Blocker {
+                            reached, resume, ..
+                        } = guard.take().unwrap();
+                        debug!("Reached f1 blocking point");
+                        reached.send(()).unwrap();
+                        debug!("Awaiting resume at f1 blocking point");
+                        resume.await.unwrap();
+                        debug!("Resuming from f1 blocking point");
                     }
-                    .in_current_span()
-                }),
-            );
 
-            axum::serve(listener, route).await.unwrap();
-        });
+                    StatusCode::OK
+                }
+                .in_current_span()
+            }),
+        );
+        let handle = LocalHttpServer::serve(route).await.unwrap();
+        let port = handle.port();
         Self {
             handle,
             f1_blocker,
@@ -174,8 +167,8 @@ impl TestHttpServer {
         self.port
     }
 
-    pub fn abort(&self) {
-        self.handle.abort()
+    pub fn abort(self) {
+        drop(self.handle)
     }
 
     pub async fn f1_control(&mut self, value: u64) -> F1Control {
@@ -544,8 +537,6 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
     use std::sync::atomic::{AtomicUsize, Ordering};
     let requests = Arc::new(AtomicUsize::new(0));
     let observed = requests.clone();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let url = format!("http://{}/message", listener.local_addr()?);
     let router = Router::new().route(
         "/message",
         post(move || {
@@ -556,9 +547,8 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
             }
         }),
     );
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    }));
+    let server = LocalHttpServer::serve(router).await?;
+    let url = server.url("/message");
     let context = TestContext::new(last_unique_id);
     let outage = Arc::new(Outage::default());
     let wrapper_outage = outage.clone();
@@ -5086,21 +5076,18 @@ async fn start_save_fault_agent(
     faults: &'static [&'static str],
 ) -> anyhow::Result<SaveFaultAgent> {
     let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let fault_server = spawn({
+    let route = {
         let saves = saves.clone();
-        async move {
-            let route = Router::new().route(
-                "/save-fault",
-                axum::routing::get(move || {
-                    let save = saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    async move { faults.get(save).copied().unwrap_or("ok") }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-    });
+        Router::new().route(
+            "/save-fault",
+            axum::routing::get(move || {
+                let save = saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move { faults.get(save).copied().unwrap_or("ok") }
+            }),
+        )
+    };
+    let fault_server = LocalHttpServer::serve(route).await?;
+    let port = fault_server.port();
 
     let executor = start_with_overrides(
         deps,
@@ -5157,7 +5144,7 @@ struct SaveFaultAgent {
     worker_id: OwnedAgentId,
     target_revision: ComponentRevision,
     saves: Arc<std::sync::atomic::AtomicUsize>,
-    fault_server: JoinHandle<()>,
+    fault_server: LocalHttpServer,
 }
 
 impl SaveFaultAgent {
@@ -5178,7 +5165,7 @@ impl SaveFaultAgent {
     }
 
     /// Requests the manual update again at once and checks that it succeeds with the second save.
-    async fn retried_update_succeeds(&self) -> anyhow::Result<()> {
+    async fn retried_update_succeeds(self) -> anyhow::Result<()> {
         self.executor
             .manual_update_worker(&self.worker_id, self.target_revision, false)
             .await?;
@@ -5218,7 +5205,7 @@ impl SaveFaultAgent {
         self.executor
             .check_oplog_is_queryable(&self.worker_id)
             .await?;
-        self.fault_server.abort();
+        drop(self.fault_server);
         Ok(())
     }
 }
@@ -5282,7 +5269,7 @@ async fn a_manual_update_whose_save_hook_threw_keeps_the_instance(
     let saves = agent.saves.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(saves, 1, "{:?}", settled.updates);
     assert_ne!(settled.component_revision, agent.target_revision);
-    agent.fault_server.abort();
+    drop(agent.fault_server);
     Ok(())
 }
 

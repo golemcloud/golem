@@ -33,30 +33,27 @@ async fn http_clock_recovery(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
     let (tx, mut requests) = tokio::sync::mpsc::unbounded_channel();
     let count = Arc::new(AtomicUsize::new(0));
-    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+    let route = {
         let count = count.clone();
-        async move {
-            let route = Router::new().route(
-                "/transition",
-                axum::routing::any(move || {
-                    let tx = tx.clone();
-                    let count = count.clone();
-                    async move {
-                        count.fetch_add(1, Ordering::SeqCst);
-                        let (release, wait) = tokio::sync::oneshot::channel();
-                        tx.send(release).unwrap();
-                        let _ = wait.await;
-                        http::StatusCode::NO_CONTENT
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-    }));
+        Router::new().route(
+            "/transition",
+            axum::routing::any(move || {
+                let tx = tx.clone();
+                let count = count.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let (release, wait) = tokio::sync::oneshot::channel();
+                    tx.send(release).unwrap();
+                    let _ = wait.await;
+                    http::StatusCode::NO_CONTENT
+                }
+            }),
+        )
+    };
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
     let agent = agent_key!("HttpClient4");
     let worker = executor
         .start_agent_with(
@@ -243,7 +240,7 @@ async fn http_clock_recovery(
         executor.invoke_and_await_agent(&component, &agent, "stored_send_error", data_value!()),
     )
     .await;
-    server.abort();
+    drop(server);
     let retained_clock = retained_clock.expect("a replayable clock Start survives recovery");
     assert_eq!(retained_clock, clock, "recovery adopts the old clock Start");
     assert!(repaired.iter().any(|entry| matches!(

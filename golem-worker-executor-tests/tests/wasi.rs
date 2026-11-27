@@ -36,8 +36,8 @@ use golem_test_framework::dsl::{
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::services::golem_config::{FilesystemStorageMode, SnapshotPolicy};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_with_overrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 
 use http::{HeaderMap, StatusCode};
@@ -49,7 +49,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{Instrument, debug, info};
@@ -2145,31 +2144,25 @@ async fn file_update_in_the_middle_of_exported_function(
     let executor = start(deps, &context).await?;
 
     let (sender, mut latch) = tokio::sync::mpsc::channel::<()>(1);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
 
-    let http_server = {
+    let route = {
         let sender = Arc::new(sender);
         let first_request = Arc::new(tokio::sync::Mutex::new(true));
-        let start_server = async {
-            let route = Router::new().route(
-                "/",
-                get(async move || {
-                    sender.send(()).await.unwrap();
-                    let mut first_request = first_request.lock().await;
-                    if *first_request {
-                        (*first_request) = false;
-                        tokio::time::sleep(Duration::from_secs(600)).await;
-                    }
-                    "Hello, World!".to_string()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        };
-
-        spawn(start_server.in_current_span())
+        Router::new().route(
+            "/",
+            get(async move || {
+                sender.send(()).await.unwrap();
+                let mut first_request = first_request.lock().await;
+                if *first_request {
+                    (*first_request) = false;
+                    tokio::time::sleep(Duration::from_secs(600)).await;
+                }
+                "Hello, World!".to_string()
+            }),
+        )
     };
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
@@ -2253,7 +2246,7 @@ async fn file_update_in_the_middle_of_exported_function(
         );
     }
 
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -2356,30 +2349,23 @@ async fn http_client_response_persisted_between_invocations(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
+    let call_count = Arc::new(AtomicU8::new(0));
 
-    let http_server = spawn(
-        async move {
-            let call_count = Arc::new(AtomicU8::new(0));
-
-            let route = Router::new().route(
-                "/",
-                post(move |headers: HeaderMap, body: Bytes| async move {
-                    let header = headers.get("X-Test").unwrap().to_str().unwrap();
-                    let body = String::from_utf8(body.to_vec()).unwrap();
-                    let old_count = call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    match old_count {
-                        0 => (StatusCode::OK, format!("response is {header} {body}")),
-                        _ => (StatusCode::NOT_FOUND, "".to_string()),
-                    }
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/",
+        post(move |headers: HeaderMap, body: Bytes| async move {
+            let header = headers.get("X-Test").unwrap().to_str().unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            let old_count = call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match old_count {
+                0 => (StatusCode::OK, format!("response is {header} {body}")),
+                _ => (StatusCode::NOT_FOUND, "".to_string()),
+            }
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -2409,7 +2395,7 @@ async fn http_client_response_persisted_between_invocations(
         .invoke_and_await_agent(&component, &agent_id, "process_response", data_value!())
         .await?;
 
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(
         result.into_typed::<String>()?,
@@ -2432,46 +2418,39 @@ async fn http_client_interrupting_response_stream(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
     let idempotency_keys = Arc::new(Mutex::new(Vec::new()));
     let idempotency_keys_clone = idempotency_keys.clone();
 
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/big-byte-array",
-                get(move |headers: HeaderMap| async move {
-                    let idempotency_key = headers
-                        .get("idempotency-key")
-                        .map(|h| h.to_str().unwrap().to_string());
-                    if let Some(key) = idempotency_key {
-                        let mut keys = idempotency_keys_clone.lock().unwrap();
-                        keys.push(key);
+    let route = Router::new().route(
+        "/big-byte-array",
+        get(move |headers: HeaderMap| async move {
+            let idempotency_key = headers
+                .get("idempotency-key")
+                .map(|h| h.to_str().unwrap().to_string());
+            if let Some(key) = idempotency_key {
+                let mut keys = idempotency_keys_clone.lock().unwrap();
+                keys.push(key);
+            }
+            let stream = stream::iter(0..100)
+                .throttle(Duration::from_millis(20))
+                .map(move |i| {
+                    if i == 50 {
+                        signal_tx.send(()).unwrap();
                     }
-                    let stream = stream::iter(0..100)
-                        .throttle(Duration::from_millis(20))
-                        .map(move |i| {
-                            if i == 50 {
-                                signal_tx.send(()).unwrap();
-                            }
-                            Ok::<Bytes, BoxError>(Bytes::from(vec![0; 1024]))
-                        });
+                    Ok::<Bytes, BoxError>(Bytes::from(vec![0; 1024]))
+                });
 
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "application/octet-stream")
-                        .body(axum::body::Body::from_stream(stream))
-                        .unwrap()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/octet-stream")
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -2534,7 +2513,7 @@ async fn http_client_interrupting_response_stream(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(result.into_typed::<u64>()?, 100u64 * 1024u64);
 
@@ -2558,46 +2537,39 @@ async fn http_client_interrupting_response_stream_async(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
     let idempotency_keys = Arc::new(Mutex::new(Vec::new()));
     let idempotency_keys_clone = idempotency_keys.clone();
 
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/big-byte-array",
-                get(move |headers: HeaderMap| async move {
-                    let idempotency_key = headers
-                        .get("idempotency-key")
-                        .map(|h| h.to_str().unwrap().to_string());
-                    if let Some(key) = idempotency_key {
-                        let mut keys = idempotency_keys_clone.lock().unwrap();
-                        keys.push(key);
+    let route = Router::new().route(
+        "/big-byte-array",
+        get(move |headers: HeaderMap| async move {
+            let idempotency_key = headers
+                .get("idempotency-key")
+                .map(|h| h.to_str().unwrap().to_string());
+            if let Some(key) = idempotency_key {
+                let mut keys = idempotency_keys_clone.lock().unwrap();
+                keys.push(key);
+            }
+            let stream = stream::iter(0..100)
+                .throttle(Duration::from_millis(20))
+                .map(move |i| {
+                    if i == 50 {
+                        signal_tx.send(()).unwrap();
                     }
-                    let stream = stream::iter(0..100)
-                        .throttle(Duration::from_millis(20))
-                        .map(move |i| {
-                            if i == 50 {
-                                signal_tx.send(()).unwrap();
-                            }
-                            Ok::<Bytes, BoxError>(Bytes::from(vec![0; 1024]))
-                        });
+                    Ok::<Bytes, BoxError>(Bytes::from(vec![0; 1024]))
+                });
 
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "application/octet-stream")
-                        .body(axum::body::Body::from_stream(stream))
-                        .unwrap()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/octet-stream")
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap()
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -2659,7 +2631,7 @@ async fn http_client_interrupting_response_stream_async(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(result.into_typed::<u64>()?, 100u64 * 1024u64);
 
@@ -4052,34 +4024,27 @@ async fn synchronous_clock_overlaps_http_and_replays_offline(
     Ok(())
 }
 
-async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>) {
+async fn simulated_slow_request_server(delay: Duration) -> (u16, LocalHttpServer) {
     let (port, server, _) = counting_slow_request_server(delay).await;
     (port, server)
 }
 
 /// Like [`simulated_slow_request_server`], but also returns a counter of how many requests the
 /// server has received.
-async fn counting_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
+async fn counting_slow_request_server(delay: Duration) -> (u16, LocalHttpServer, Arc<AtomicUsize>) {
     let request_count = Arc::new(AtomicUsize::new(0));
     let request_count_clone = request_count.clone();
 
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/simulated-slow-request",
-                get(move || async move {
-                    request_count_clone.fetch_add(1, Ordering::AcqRel);
-                    tokio::time::sleep(delay).await;
-                    "slow response".to_string()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/simulated-slow-request",
+        get(move || async move {
+            request_count_clone.fetch_add(1, Ordering::AcqRel);
+            tokio::time::sleep(delay).await;
+            "slow response".to_string()
+        }),
     );
+    let http_server = LocalHttpServer::serve(route).await.unwrap();
+    let host_http_port = http_server.port();
 
     (host_http_port, http_server, request_count)
 }
@@ -4090,43 +4055,33 @@ async fn counting_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>, 
 async fn streaming_chunk_server(
     chunk_count: usize,
     chunk_delay: Duration,
-) -> (u16, JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
+) -> (u16, LocalHttpServer) {
+    let route = Router::new()
+        .route(
+            "/streaming-chunks",
+            get(move || async move {
+                let stream = stream::iter(0..chunk_count)
+                    .throttle(chunk_delay)
+                    .map(move |i| Ok::<Bytes, BoxError>(Bytes::from(format!("chunk-{i}\n"))));
 
-    let http_server = spawn(
-        async move {
-            let route = Router::new()
-                .route(
-                    "/streaming-chunks",
-                    get(move || async move {
-                        let stream =
-                            stream::iter(0..chunk_count)
-                                .throttle(chunk_delay)
-                                .map(move |i| {
-                                    Ok::<Bytes, BoxError>(Bytes::from(format!("chunk-{i}\n")))
-                                });
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/plain")
+                    .header("Transfer-Encoding", "chunked")
+                    .body(axum::body::Body::from_stream(stream))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/simulated-slow-request",
+            get(move || async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                "slow response".to_string()
+            }),
+        );
 
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .header("Content-Type", "text/plain")
-                            .header("Transfer-Encoding", "chunked")
-                            .body(axum::body::Body::from_stream(stream))
-                            .unwrap()
-                    }),
-                )
-                .route(
-                    "/simulated-slow-request",
-                    get(move || async move {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        "slow response".to_string()
-                    }),
-                );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
+    let http_server = LocalHttpServer::serve(route).await.unwrap();
+    let host_http_port = http_server.port();
 
     (host_http_port, http_server)
 }
@@ -4169,7 +4124,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
 
     let duration = start.elapsed();
@@ -4219,7 +4174,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
 
     let duration = start.elapsed();
@@ -4269,7 +4224,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
 
     let duration = start.elapsed();
@@ -4364,7 +4319,7 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
          mixed invocation must not repeatedly suspend"
     );
 
-    server.abort();
+    drop(server);
     drop(executor);
 
     Ok(())
@@ -4431,7 +4386,7 @@ async fn p2_sleep_completes_while_p3_request_remains_pending(
             .into_typed::<bool>()?
     );
 
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -4565,7 +4520,7 @@ async fn sleep_and_awaiting_parallel_responses(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    server.abort();
+    drop(server);
 
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -4630,7 +4585,7 @@ async fn sleep_below_threshold_between_http_responses(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -4691,7 +4646,7 @@ async fn sleep_above_threshold_between_http_responses(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -6773,7 +6728,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
     Ok(())
 }
@@ -6871,7 +6826,7 @@ async fn oplog_replay_after_parallel_http_requests(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
     Ok(())
 }
@@ -6906,51 +6861,45 @@ async fn http_connection_pool_contention_between_agents(
     )
     .await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
     // Track when the slow stream starts being consumed
     let (slow_started_tx, mut slow_started_rx) = tokio::sync::mpsc::channel::<()>(1);
     let slow_started_tx = Arc::new(slow_started_tx);
 
-    let http_server = spawn({
+    let route = {
         let slow_started_tx = slow_started_tx.clone();
-        async move {
-            let request_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let route = Router::new().route(
-                "/big-byte-array",
-                get(move || {
-                    let slow_started_tx = slow_started_tx.clone();
-                    let request_count = request_count.clone();
-                    async move {
-                        let n = request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        if n == 0 {
-                            // First request: slow streaming body (~10s)
-                            let _ = slow_started_tx.send(()).await;
-                            let stream = stream::iter(0..100)
-                                .throttle(Duration::from_millis(100))
-                                .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
-                            Response::builder()
-                                .status(StatusCode::OK)
-                                .header("Content-Type", "application/octet-stream")
-                                .body(axum::body::Body::from_stream(stream))
-                                .unwrap()
-                        } else {
-                            // Subsequent requests: fast response
-                            Response::builder()
-                                .status(StatusCode::OK)
-                                .header("Content-Type", "application/octet-stream")
-                                .body(axum::body::Body::from(vec![0u8; 2048]))
-                                .unwrap()
-                        }
+        let request_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        Router::new().route(
+            "/big-byte-array",
+            get(move || {
+                let slow_started_tx = slow_started_tx.clone();
+                let request_count = request_count.clone();
+                async move {
+                    let n = request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if n == 0 {
+                        // First request: slow streaming body (~10s)
+                        let _ = slow_started_tx.send(()).await;
+                        let stream = stream::iter(0..100)
+                            .throttle(Duration::from_millis(100))
+                            .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "application/octet-stream")
+                            .body(axum::body::Body::from_stream(stream))
+                            .unwrap()
+                    } else {
+                        // Subsequent requests: fast response
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "application/octet-stream")
+                            .body(axum::body::Body::from(vec![0u8; 2048]))
+                            .unwrap()
                     }
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span()
-    });
+                }
+            }),
+        )
+    };
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7031,7 +6980,7 @@ async fn http_connection_pool_contention_between_agents(
     executor.check_oplog_is_queryable(&worker_id_slow).await?;
     executor.check_oplog_is_queryable(&worker_id_fast).await?;
 
-    http_server.abort();
+    drop(http_server);
     drop(executor);
     Ok(())
 }
@@ -7066,51 +7015,45 @@ async fn http_connection_pool_contention_with_restart(
     )
     .await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
     // Track when the slow stream starts being consumed
     let (slow_started_tx, mut slow_started_rx) = tokio::sync::mpsc::channel::<()>(1);
     let slow_started_tx = Arc::new(slow_started_tx);
 
-    let http_server = spawn({
+    let route = {
         let slow_started_tx = slow_started_tx.clone();
-        async move {
-            let request_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let route = Router::new().route(
-                "/big-byte-array",
-                get(move || {
-                    let slow_started_tx = slow_started_tx.clone();
-                    let request_count = request_count.clone();
-                    async move {
-                        let n = request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        if n == 0 {
-                            // First request: slow streaming body (~10s)
-                            let _ = slow_started_tx.send(()).await;
-                            let stream = stream::iter(0..100)
-                                .throttle(Duration::from_millis(100))
-                                .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
-                            Response::builder()
-                                .status(StatusCode::OK)
-                                .header("Content-Type", "application/octet-stream")
-                                .body(axum::body::Body::from_stream(stream))
-                                .unwrap()
-                        } else {
-                            // Subsequent requests: fast response
-                            Response::builder()
-                                .status(StatusCode::OK)
-                                .header("Content-Type", "application/octet-stream")
-                                .body(axum::body::Body::from(vec![0u8; 2048]))
-                                .unwrap()
-                        }
+        let request_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        Router::new().route(
+            "/big-byte-array",
+            get(move || {
+                let slow_started_tx = slow_started_tx.clone();
+                let request_count = request_count.clone();
+                async move {
+                    let n = request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if n == 0 {
+                        // First request: slow streaming body (~10s)
+                        let _ = slow_started_tx.send(()).await;
+                        let stream = stream::iter(0..100)
+                            .throttle(Duration::from_millis(100))
+                            .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "application/octet-stream")
+                            .body(axum::body::Body::from_stream(stream))
+                            .unwrap()
+                    } else {
+                        // Subsequent requests: fast response
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "application/octet-stream")
+                            .body(axum::body::Body::from(vec![0u8; 2048]))
+                            .unwrap()
                     }
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span()
-    });
+                }
+            }),
+        )
+    };
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7235,7 +7178,7 @@ async fn http_connection_pool_contention_with_restart(
     executor.check_oplog_is_queryable(&worker_id_slow).await?;
     executor.check_oplog_is_queryable(&worker_id_fast).await?;
 
-    http_server.abort();
+    drop(http_server);
     drop(executor);
     Ok(())
 }
@@ -7258,30 +7201,22 @@ async fn http_timeout_and_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn({
-        async move {
-            let route = Router::new().route(
-                "/big-byte-array",
-                get(move || async move {
-                    // Always return a slow streaming body (~10s)
-                    let stream = stream::iter(0..100)
-                        .throttle(Duration::from_millis(100))
-                        .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "application/octet-stream")
-                        .body(axum::body::Body::from_stream(stream))
-                        .unwrap()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span()
-    });
+    let route = Router::new().route(
+        "/big-byte-array",
+        get(move || async move {
+            // Always return a slow streaming body (~10s)
+            let stream = stream::iter(0..100)
+                .throttle(Duration::from_millis(100))
+                .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/octet-stream")
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap()
+        }),
+    );
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7341,7 +7276,7 @@ async fn http_timeout_and_restart(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    http_server.abort();
+    drop(http_server);
     drop(executor);
     Ok(())
 }
@@ -7435,7 +7370,7 @@ async fn oplog_replay_after_streaming_http_read(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
     Ok(())
 }
@@ -7463,40 +7398,33 @@ async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-
     let attempts = Arc::new(AtomicU8::new(0));
     let attempts_clone = attempts.clone();
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/streaming-chunks",
-                get(move || {
-                    let attempts = attempts_clone.clone();
-                    async move {
-                        let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        let stream = stream::iter(0..20).map(move |i| {
-                            if attempt == 0 && i == 5 {
-                                Err::<Bytes, BoxError>("injected mid-body failure".into())
-                            } else {
-                                Ok(Bytes::from(format!("chunk-{i}\n")))
-                            }
-                        });
-
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .header("Content-Type", "text/plain")
-                            .body(axum::body::Body::from_stream(stream))
-                            .unwrap()
+    let route = Router::new().route(
+        "/streaming-chunks",
+        get(move || {
+            let attempts = attempts_clone.clone();
+            async move {
+                let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let stream = stream::iter(0..20).map(move |i| {
+                    if attempt == 0 && i == 5 {
+                        Err::<Bytes, BoxError>("injected mid-body failure".into())
+                    } else {
+                        Ok(Bytes::from(format!("chunk-{i}\n")))
                     }
-                }),
-            );
+                });
 
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/plain")
+                    .body(axum::body::Body::from_stream(stream))
+                    .unwrap()
+            }
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7531,7 +7459,7 @@ async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    http_server.abort();
+    drop(http_server);
     drop(executor);
     Ok(())
 }
@@ -7553,48 +7481,41 @@ async fn http_client_interrupted_mid_response_reissues_recorded_post_body(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
     let request_bodies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
     let request_bodies_clone = request_bodies.clone();
 
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/",
-                post(move |body: Bytes| {
-                    let request_bodies = request_bodies_clone.clone();
-                    let signal_tx = signal_tx.clone();
-                    async move {
-                        let is_first = {
-                            let mut bodies = request_bodies.lock().unwrap();
-                            bodies.push(body.to_vec());
-                            bodies.len() == 1
-                        };
-                        let stream = stream::iter(0..100)
-                            .throttle(Duration::from_millis(20))
-                            .map(move |i| {
-                                if is_first && i == 50 {
-                                    let _ = signal_tx.send(());
-                                }
-                                Ok::<Bytes, BoxError>(Bytes::from(vec![b'x'; 1024]))
-                            });
+    let route = Router::new().route(
+        "/",
+        post(move |body: Bytes| {
+            let request_bodies = request_bodies_clone.clone();
+            let signal_tx = signal_tx.clone();
+            async move {
+                let is_first = {
+                    let mut bodies = request_bodies.lock().unwrap();
+                    bodies.push(body.to_vec());
+                    bodies.len() == 1
+                };
+                let stream = stream::iter(0..100)
+                    .throttle(Duration::from_millis(20))
+                    .map(move |i| {
+                        if is_first && i == 50 {
+                            let _ = signal_tx.send(());
+                        }
+                        Ok::<Bytes, BoxError>(Bytes::from(vec![b'x'; 1024]))
+                    });
 
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .header("Content-Type", "application/octet-stream")
-                            .body(axum::body::Body::from_stream(stream))
-                            .unwrap()
-                    }
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/octet-stream")
+                    .body(axum::body::Body::from_stream(stream))
+                    .unwrap()
+            }
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -7655,7 +7576,7 @@ async fn http_client_interrupted_mid_response_reissues_recorded_post_body(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     let result_value = result.into_typed::<String>()?;
     assert!(
@@ -7786,7 +7707,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
         result2_str
     );
 
-    server.abort();
+    drop(server);
     drop(executor);
     Ok(())
 }
@@ -7877,7 +7798,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
     Ok(())
 }
@@ -7980,7 +7901,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
     Ok(())
 }
@@ -8076,7 +7997,7 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
+    drop(server);
     drop(executor);
     Ok(())
 }

@@ -15,10 +15,9 @@
 use axum::Router;
 use axum::extract::State;
 use axum::routing::{get, post};
+use golem_worker_executor_test_utils::LocalHttpServer;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::net::TcpListener;
-use tracing::Instrument;
 
 #[derive(Clone)]
 struct AttemptCounterState {
@@ -41,7 +40,9 @@ async fn attempt_handler(State(state): State<AttemptCounterState>) -> axum::resp
     }
 }
 
-pub(crate) async fn start_attempt_counter_server(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
+pub(crate) async fn start_attempt_counter_server(
+    fail_count: usize,
+) -> (LocalHttpServer, u16, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let state = AttemptCounterState {
         counter: counter.clone(),
@@ -51,15 +52,9 @@ pub(crate) async fn start_attempt_counter_server(fail_count: usize) -> (u16, Arc
         .route("/attempt", get(attempt_handler))
         .route("/attempt-post", post(attempt_post_handler))
         .with_state(state);
-    let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tokio::spawn(
-        async move {
-            axum::serve(listener, app).await.unwrap();
-        }
-        .in_current_span(),
-    );
-    (port, counter)
+    let http_server = LocalHttpServer::serve(app).await.unwrap();
+    let port = http_server.port();
+    (http_server, port, counter)
 }
 
 /// POST counterpart of `attempt_handler` that mirrors the user's

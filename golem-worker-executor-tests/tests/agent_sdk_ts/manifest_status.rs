@@ -20,7 +20,7 @@ use golem_common::model::RetryConfig;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::collections::HashMap;
@@ -70,7 +70,7 @@ async fn run_manifest_status_retry_test(
     };
     let executor = start_with_overrides(deps, &context, overrides).await?;
 
-    let (port, counter) = start_attempt_counter_server(fail_count).await;
+    let (_http_server, port, counter) = start_attempt_counter_server(fail_count).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -524,7 +524,7 @@ async fn step_b_handler(State(state): State<StepCounterState>) -> axum::response
 async fn start_two_step_get_server(
     fail_count_a: usize,
     fail_count_b: usize,
-) -> (u16, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+) -> (LocalHttpServer, u16, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let counter_a = Arc::new(AtomicUsize::new(0));
     let counter_b = Arc::new(AtomicUsize::new(0));
     let state = StepCounterState {
@@ -537,15 +537,9 @@ async fn start_two_step_get_server(
         .route("/step-a", get(step_a_handler))
         .route("/step-b", get(step_b_handler))
         .with_state(state);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tokio::spawn(
-        async move {
-            axum::serve(listener, app).await.unwrap();
-        }
-        .in_current_span(),
-    );
-    (port, counter_a, counter_b)
+    let http_server = LocalHttpServer::serve(app).await.unwrap();
+    let port = http_server.port();
+    (http_server, port, counter_a, counter_b)
 }
 
 /// V2 reproducer #1: the host's inline status-code retry must re-arm for
@@ -587,7 +581,8 @@ async fn ts_manifest_status_retry_two_sequential_calls_are_both_re_armed(
     let executor = start_with_overrides(deps, &context, overrides).await?;
 
     let fail_count: usize = 3;
-    let (port, counter_a, counter_b) = start_two_step_get_server(fail_count, fail_count).await;
+    let (_http_server, port, counter_a, counter_b) =
+        start_two_step_get_server(fail_count, fail_count).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -791,7 +786,7 @@ async fn ts_manifest_status_retry_ok_then_crash_is_bounded(
 ///
 /// - `POST /ok-post` → returns 200.
 /// - `POST /perma-500` → always returns 500.
-async fn start_v2_post_server() -> (u16, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+async fn start_v2_post_server() -> (LocalHttpServer, u16, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let ok_counter = Arc::new(AtomicUsize::new(0));
     let bad_counter = Arc::new(AtomicUsize::new(0));
 
@@ -829,17 +824,10 @@ async fn start_v2_post_server() -> (u16, Arc<AtomicUsize>, Arc<AtomicUsize>) {
         )
         .with_state(state);
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let http_server = LocalHttpServer::serve(router).await.unwrap();
+    let port = http_server.port();
 
-    tokio::spawn(
-        async move {
-            let _ = axum::serve(listener, router).await;
-        }
-        .in_current_span(),
-    );
-
-    (port, ok_counter, bad_counter)
+    (http_server, port, ok_counter, bad_counter)
 }
 
 /// V2 reproducer (CheckoutAgentV2 / "ok then forever-500"): the agent does a
@@ -891,7 +879,7 @@ async fn ts_manifest_status_retry_v2_ok_then_forever_500_is_bounded(
     };
     let executor = start_with_overrides(deps, &context, overrides).await?;
 
-    let (port, ok_counter, bad_counter) = start_v2_post_server().await;
+    let (_http_server, port, ok_counter, bad_counter) = start_v2_post_server().await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)

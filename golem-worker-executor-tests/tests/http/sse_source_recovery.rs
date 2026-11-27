@@ -27,6 +27,7 @@ use axum::response::Response;
 use axum::routing::get;
 use futures::StreamExt as _;
 use futures::stream;
+use golem_worker_executor_test_utils::LocalHttpServer;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::test;
@@ -130,8 +131,6 @@ async fn recover_event_source(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
     let source = Arc::new(EventSource {
         requests: Mutex::new(Vec::new()),
         count: AtomicUsize::new(0),
@@ -140,12 +139,8 @@ async fn recover_event_source(
     let router = Router::new()
         .route("/events", get(EventSource::events))
         .with_state(source.clone());
-    let http_server = spawn(
-        async move {
-            axum::serve(listener, router).await.unwrap();
-        }
-        .in_current_span(),
-    );
+    let http_server = LocalHttpServer::serve(router).await?;
+    let port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -290,6 +285,6 @@ async fn recover_event_source(
     assert_eq!(requests[2].range, None);
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }

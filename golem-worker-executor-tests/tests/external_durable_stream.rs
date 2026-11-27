@@ -34,7 +34,7 @@ use golem_service_base::model::agent_secret::AgentSecret;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use std::collections::HashMap;
@@ -42,7 +42,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -74,13 +73,12 @@ struct Peer {
 struct Server {
     peer: Arc<Peer>,
     url: String,
-    task: JoinHandle<()>,
+    _http_server: LocalHttpServer,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         self.peer.release.notify_waiters();
-        self.task.abort();
     }
 }
 
@@ -95,15 +93,16 @@ impl Server {
             accepted: Notify::new(),
             release: Notify::new(),
         });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let url = format!("http://{}/stream", listener.local_addr()?);
         let router = Router::new()
             .route("/stream", get(read).post(append))
             .with_state(peer.clone());
-        let task = tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-        Ok(Self { peer, url, task })
+        let http_server = LocalHttpServer::serve(router).await?;
+        let url = http_server.url("/stream");
+        Ok(Self {
+            peer,
+            url,
+            _http_server: http_server,
+        })
     }
 }
 

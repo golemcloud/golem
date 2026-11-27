@@ -25,7 +25,8 @@ use golem_common::model::oplog::{LogLevel, OplogIndex, PublicOplogEntry};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -33,7 +34,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
-use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -157,30 +157,24 @@ async fn go_outgoing_http_replayed_without_network(
 
     let response = Arc::new(AtomicU32::new(0));
     let response_clone = response.clone();
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
 
     #[derive(Deserialize)]
     struct QueryParams {
         payload: String,
     }
 
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/callback",
-                get(move |query: Query<QueryParams>| async move {
-                    format!(
-                        "{}-{}",
-                        response_clone.fetch_add(1, Ordering::AcqRel),
-                        query.payload
-                    )
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/callback",
+        get(move |query: Query<QueryParams>| async move {
+            format!(
+                "{}-{}",
+                response_clone.fetch_add(1, Ordering::AcqRel),
+                query.payload
+            )
+        }),
     );
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_go)
@@ -208,7 +202,7 @@ async fn go_outgoing_http_replayed_without_network(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(result1.into_typed::<String>()?, "0-a");
     assert_eq!(result2.into_typed::<String>()?, "1-b");
@@ -235,30 +229,24 @@ async fn go_custom_durable_op_replayed_after_restart(
 
     let response = Arc::new(AtomicU32::new(0));
     let response_clone = response.clone();
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
 
     #[derive(Deserialize)]
     struct QueryParams {
         payload: String,
     }
 
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/callback",
-                get(move |query: Query<QueryParams>| async move {
-                    format!(
-                        "{}-{}",
-                        response_clone.fetch_add(1, Ordering::AcqRel),
-                        query.payload
-                    )
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/callback",
+        get(move |query: Query<QueryParams>| async move {
+            format!(
+                "{}-{}",
+                response_clone.fetch_add(1, Ordering::AcqRel),
+                query.payload
+            )
+        }),
     );
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_go)
@@ -287,7 +275,7 @@ async fn go_custom_durable_op_replayed_after_restart(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(result1.into_typed::<String>()?, "0-a");
     assert_eq!(result2.into_typed::<String>()?, "1-b");

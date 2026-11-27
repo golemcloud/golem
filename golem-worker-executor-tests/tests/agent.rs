@@ -40,7 +40,7 @@ use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::assert_worker_error;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, Teardown, TestContext, TestWorkerExecutor,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, Teardown, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, copy_create_entry_to, scheduler_sqlite_storage_config, start,
 };
 use golem_worker_executor_test_utils::{id_target, key_target};
@@ -307,34 +307,31 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
     let executor = start(deps, &context).await?;
     let requests = Arc::new(AtomicUsize::new(0));
     let release_body = Arc::new(tokio::sync::Notify::new());
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let url = format!("http://localhost:{}/", listener.local_addr()?.port());
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+    let route = {
         let requests = requests.clone();
         let release_body = release_body.clone();
-        async move {
-            let route = axum::Router::new().route(
-                "/",
-                axum::routing::post(move || {
-                    let requests = requests.clone();
-                    let release_body = release_body.clone();
-                    async move {
-                        requests.fetch_add(1, Ordering::SeqCst);
-                        axum::response::Response::builder()
-                            .header("content-length", "16")
-                            .body(axum::body::Body::from_stream(futures::stream::once(
-                                async move {
-                                    release_body.notified().await;
-                                    Ok::<_, std::convert::Infallible>("effect completed")
-                                },
-                            )))
-                            .unwrap()
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-    }));
+        axum::Router::new().route(
+            "/",
+            axum::routing::post(move || {
+                let requests = requests.clone();
+                let release_body = release_body.clone();
+                async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    axum::response::Response::builder()
+                        .header("content-length", "16")
+                        .body(axum::body::Body::from_stream(futures::stream::once(
+                            async move {
+                                release_body.notified().await;
+                                Ok::<_, std::convert::Infallible>("effect completed")
+                            },
+                        )))
+                        .unwrap()
+                }
+            }),
+        )
+    };
+    let server = LocalHttpServer::serve(route).await?;
+    let url = format!("http://localhost:{}/", server.port());
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .store()
@@ -508,24 +505,21 @@ async fn method_failure_repairs_an_incomplete_tail_without_repeating_completed_e
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let requests = Arc::new(AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let url = format!("http://localhost:{}/", listener.local_addr()?.port());
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+    let route = {
         let requests = requests.clone();
-        async move {
-            let route = axum::Router::new().route(
-                "/",
-                axum::routing::post(move || {
-                    let requests = requests.clone();
-                    async move {
-                        requests.fetch_add(1, Ordering::SeqCst);
-                        "effect completed"
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-    }));
+        axum::Router::new().route(
+            "/",
+            axum::routing::post(move || {
+                let requests = requests.clone();
+                async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    "effect completed"
+                }
+            }),
+        )
+    };
+    let server = LocalHttpServer::serve(route).await?;
+    let url = format!("http://localhost:{}/", server.port());
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .store()
@@ -656,24 +650,21 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
     };
     let mut executor = start_with_overrides(deps, &context, overrides).await?;
     let requests = Arc::new(AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let url = format!("http://localhost:{}/", listener.local_addr()?.port());
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+    let route = {
         let requests = requests.clone();
-        async move {
-            let route = axum::Router::new().route(
-                "/",
-                axum::routing::post(move || {
-                    let requests = requests.clone();
-                    async move {
-                        requests.fetch_add(1, Ordering::SeqCst);
-                        "effect completed"
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-    }));
+        axum::Router::new().route(
+            "/",
+            axum::routing::post(move || {
+                let requests = requests.clone();
+                async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    "effect completed"
+                }
+            }),
+        )
+    };
+    let server = LocalHttpServer::serve(route).await?;
+    let url = format!("http://localhost:{}/", server.port());
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .store()

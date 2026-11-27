@@ -54,8 +54,8 @@ use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    InvocationError, InvocationSession, InvocationSessionResultExt, SessionTerminal, id_target,
-    resume_attach, stream_reference,
+    InvocationError, InvocationSession, InvocationSessionResultExt, LocalHttpServer,
+    SessionTerminal, id_target, resume_attach, stream_reference,
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, RecordingRpc, RpcCheckpoint, TestContext,
@@ -8609,34 +8609,31 @@ async fn rpc_suspension_retries_after_concurrent_http_wait_finishes(
     let request_received = Arc::new(tokio::sync::Semaphore::new(0));
     let response_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let request_count = Arc::new(AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let server = {
+    let app = {
         let request_received = request_received.clone();
         let response_gate = response_gate.clone();
         let request_count = request_count.clone();
-        tokio::spawn(async move {
-            let app = Router::new().route(
-                "/gate",
-                post(move || {
-                    let request_received = request_received.clone();
-                    let response_gate = response_gate.clone();
-                    let request_count = request_count.clone();
-                    async move {
-                        request_count.fetch_add(1, Ordering::AcqRel);
-                        request_received.add_permits(1);
-                        response_gate
-                            .acquire()
-                            .await
-                            .expect("response gate closed")
-                            .forget();
-                        "released"
-                    }
-                }),
-            );
-            axum::serve(listener, app).await.unwrap();
-        })
+        Router::new().route(
+            "/gate",
+            post(move || {
+                let request_received = request_received.clone();
+                let response_gate = response_gate.clone();
+                let request_count = request_count.clone();
+                async move {
+                    request_count.fetch_add(1, Ordering::AcqRel);
+                    request_received.add_permits(1);
+                    response_gate
+                        .acquire()
+                        .await
+                        .expect("response gate closed")
+                        .forget();
+                    "released"
+                }
+            }),
+        )
     };
+    let server = LocalHttpServer::serve(app).await?;
+    let port = server.port();
 
     let invocation = {
         let executor = executor.clone();
@@ -8767,7 +8764,7 @@ async fn rpc_suspension_retries_after_concurrent_http_wait_finishes(
         .into_typed::<u64>()?;
     assert_eq!(second, 2);
 
-    server.abort();
+    drop(server);
     Ok(())
 }
 

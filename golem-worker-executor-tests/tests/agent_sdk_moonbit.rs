@@ -29,7 +29,7 @@ use golem_common::model::oplog::{
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::assert_eq;
@@ -71,7 +71,7 @@ struct Fixture {
     component: ComponentDto,
     agent_id: golem_common::model::agent::ParsedAgentKey,
     worker_id: OwnedAgentId,
-    server: tokio::task::JoinHandle<()>,
+    server: LocalHttpServer,
 }
 
 async fn fixture(
@@ -83,10 +83,8 @@ async fn fixture(
 ) -> anyhow::Result<Fixture> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let server =
-        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_moonbit)
         .store()
@@ -335,7 +333,7 @@ async fn moonbit_custom_scopes_stay_with_their_coroutines(
     assert_eq!(root(&oplog, CONSUME_BODY, anchor).len(), 1);
 
     assert_replay_repeats_nothing(&fixture, &history).await?;
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
 
@@ -388,7 +386,7 @@ async fn moonbit_nested_custom_scopes_keep_their_parent(
     assert_eq!(root(&oplog, SEND, anchor).len(), 1);
 
     assert_replay_repeats_nothing(&fixture, &history).await?;
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
 
@@ -533,7 +531,7 @@ async fn moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibl
         "the release request completes under its original Start"
     );
     assert_eq!(ends(&recovered, release[0]), 1);
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
 
@@ -608,7 +606,7 @@ async fn moonbit_custom_scopes_clean_up_after_failure_and_cancellation(
         2,
         "the failing sibling and the call after both scopes belong to no scope"
     );
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
 
@@ -657,7 +655,7 @@ async fn assert_outlived_scope_is_caught(
     assert_eq!(root(&oplog, SEND, anchor).len(), 1);
 
     assert_replay_repeats_nothing(&fixture, &history).await?;
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
 
@@ -745,7 +743,7 @@ async fn moonbit_failed_custom_scope_returns_before_its_future_producer(
     );
 
     assert_replay_repeats_nothing(&fixture, &history).await?;
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
 
@@ -802,7 +800,7 @@ async fn moonbit_custom_scope_owns_its_stream_producer(
         BTreeSet::new(),
         "the producer's effects stay in the scope"
     );
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
 
@@ -894,7 +892,7 @@ async fn moonbit_custom_scope_waits_for_its_future_producer(
     );
 
     assert_replay_repeats_nothing(&fixture, &history).await?;
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
 
@@ -949,6 +947,6 @@ async fn moonbit_custom_scope_cancelled_while_finishing(
         1,
         "recovery leaves the scope finished"
     );
-    fixture.server.abort();
+    drop(fixture.server);
     Ok(())
 }
