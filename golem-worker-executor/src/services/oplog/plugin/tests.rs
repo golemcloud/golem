@@ -1176,13 +1176,16 @@ async fn active_plugin_receives_buffered_entries() {
 /// not from index 1, which the oplog no longer keeps.
 #[test]
 async fn a_first_batch_starts_at_the_retained_start() {
-    use crate::services::oplog::retention::RetentionOplog;
-    use crate::services::oplog::retention::test_oplog::at;
+    use crate::services::oplog::retention::test_oplog::{at, idx, retained_handle};
     use futures::{StreamExt, TryStreamExt};
 
     let grant_id = EnvironmentPluginGrantId::new();
-    let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
+    let (metadata, status_lock, status_writer) =
+        test_worker_metadata_with_status_writer(HashSet::from([grant_id]));
     let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+    recording_plugin
+        .failed_sends_remaining
+        .store(2, Ordering::Relaxed);
     let components: Arc<dyn ComponentService> = Arc::new(
         FakeComponentService::with_one_oplog_processor_plugin(grant_id),
     );
@@ -1197,7 +1200,7 @@ async fn a_first_batch_starts_at_the_retained_start() {
         .try_collect::<Vec<_>>()
         .await
         .unwrap();
-    let inner: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(stored, metadata.agent_id, at(3)));
+    let inner = retained_handle(stored.clone(), metadata.agent_id, at(3));
 
     let mut state = ForwardingOplogState {
         forwarding_retired: CancellationToken::new(),
@@ -1208,7 +1211,7 @@ async fn a_first_batch_starts_at_the_retained_start() {
         commit_count: 0,
         last_send: Instant::now(),
         oplog_plugins: recording_plugin.clone(),
-        initial_worker_metadata: metadata,
+        initial_worker_metadata: metadata.clone(),
         last_known_status: status_lock,
         last_oplog_idx: OplogIndex::from_u64(5),
         last_committed_idx: OplogIndex::from_u64(5),
@@ -1217,7 +1220,7 @@ async fn a_first_batch_starts_at_the_retained_start() {
         plugin_state: HashMap::from([(
             grant_id,
             LivePluginState {
-                target_agent_id: None,
+                target_agent_id: Some(recording_plugin.target_agent_id),
                 confirmed_up_to: OplogIndex::NONE,
                 sending_up_to: OplogIndex::NONE,
                 send_in_progress: false,
@@ -1231,6 +1234,35 @@ async fn a_first_batch_starts_at_the_retained_start() {
     };
 
     state.try_flush().await;
+    // Move the committed tail so a retry of the first batch cannot use the new batch bounds.
+    stored.add(grow_memory(7)).await.unwrap();
+    state.last_oplog_idx = idx(7);
+    state.last_committed_idx = idx(7);
+    state.try_flush().await;
+
+    let checkpoint = stored.read_exact(idx(6), 1).await.unwrap();
+    let recovered_status = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        status_writer.load_full().as_ref().clone(),
+        checkpoint,
+        &golem_common::model::RetryConfig::default(),
+    )
+    .unwrap()
+    .unwrap();
+    status_writer.store(Arc::new(recovered_status));
+    let reopened = ForwardingOplog::new(
+        state.inner,
+        recording_plugin.clone(),
+        state.components,
+        metadata.clone(),
+        read_only_lock::arc_swap::ReadOnlyView::new(status_writer),
+        idx(7),
+        Box::new(|| {}),
+        usize::MAX,
+        Duration::from_secs(3600),
+    )
+    .await;
+    reopened.tick().await;
 
     let sends = recording_plugin.sends().await;
     assert_eq!(
@@ -1238,8 +1270,19 @@ async fn a_first_batch_starts_at_the_retained_start() {
             .iter()
             .map(|send| (send.initial_oplog_index, send.entry_count))
             .collect::<Vec<_>>(),
-        vec![(OplogIndex::from_u64(3), 3)]
+        vec![(idx(3), 3); 3]
     );
+    let key = |send: &RecordedSend| {
+        oplog_processor_idempotency_key(
+            send.metadata.environment_id,
+            &send.metadata.agent_id,
+            &send.plugin.environment_plugin_grant_id,
+            send.initial_oplog_index,
+            send.initial_oplog_index.range_end(send.entry_count as u64),
+        )
+    };
+    assert_eq!(key(&sends[0]), key(&sends[1]));
+    assert_eq!(key(&sends[0]), key(&sends[2]));
 }
 
 #[test]

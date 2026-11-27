@@ -409,22 +409,8 @@ mod tests {
     use golem_common::model::AgentId;
     use test_r::test;
 
-    #[test]
-    fn the_oplog_retention_uses_persistent_storage() {
-        let storage = NamespaceRoutedKeyValueStorage::new(
-            Arc::new(InMemoryKeyValueStorage::new()),
-            Arc::new(InMemoryKeyValueStorage::new()),
-        );
-        assert!(Arc::ptr_eq(
-            storage.backend_for_namespace(&KeyValueStorageNamespace::AgentOplogRetention {
-                owned_agent_id: golem_common::model::OwnedAgentId::new(
-                    golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
-                    &AgentId::from_parts(7, 2),
-                ),
-            }),
-            &storage.persistent,
-        ));
-    }
+    #[path = "retention/tests.rs"]
+    mod retention;
 
     #[test]
     fn snapshot_rejections_use_persistent_storage_not_status_cache() {

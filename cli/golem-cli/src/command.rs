@@ -1929,7 +1929,8 @@ pub mod worker {
             #[command(flatten)]
             agent_id: AgentIdArgs,
         },
-        /// Queries and streams an agent's oplog. An obfuscated export reads from index 1.
+        /// Queries and streams an agent's oplog. An obfuscated export first reads `Create` at index 1.
+        /// Its data pages honor `--from`.
         /// Structured formats emit one output document per oplog entry; with `--page`, one
         /// `agent.oplog-page` document with one page of entries and the cursor of the next page.
         /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.

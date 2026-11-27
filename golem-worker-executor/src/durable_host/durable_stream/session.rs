@@ -415,21 +415,6 @@ impl DurableStreamStore {
                         }
                         *metadata = metadata.for_fork(cut)?;
                     } else {
-                        // The rebuilt metadata starts at the retained start, so a reader that a
-                        // record below the start introduced has no binding in it: it is expired.
-                        if let Some(reader) = consumer_record_reader(&record)
-                            && crate::worker::stream_session_record_key(
-                                &record,
-                                self.environment_id,
-                                &self.producer,
-                                self.producer_fingerprint,
-                            )
-                            .as_ref()
-                                == Some(session_key)
-                        {
-                            retention
-                                .check_agent_from(&self.producer, reader.introducing_oplog_index)?;
-                        }
                         metadata.apply(
                             index,
                             session_key,
@@ -1368,107 +1353,5 @@ impl DurableStreamStore {
         );
         self.notify_session_records_changed(Some(context));
         Ok(())
-    }
-}
-
-/// The reader that a consumer record of a session names.
-fn consumer_record_reader(record: &StreamSessionRecord) -> Option<LocalStreamReaderId> {
-    match record {
-        StreamSessionRecord::ConsumerItemValue(record) => Some(record.reader_id),
-        StreamSessionRecord::ConsumerTerminal(record)
-        | StreamSessionRecord::ConsumerOutcome(record) => Some(record.reader_id),
-        StreamSessionRecord::SourceUnavailable(record) => Some(record.reader_id),
-        StreamSessionRecord::ReaderForwardIntent(record) => Some(record.reader_id),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod consumer_record_reader_tests {
-    use super::consumer_record_reader;
-    use golem_common::base_model::durable_stream::{
-        LocalStreamId, LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION,
-        SessionStreamRole, StreamBindingRecord, StreamConsumerObservation,
-        StreamConsumerTerminalRecord, StreamOffset, StreamReaderForwardDestination,
-        StreamReaderForwardIntentRecord, StreamReaderForwardPublication, StreamRecordReference,
-        StreamRegistrationInvocation, StreamSessionMappingUpdateRecord, StreamSessionRecord,
-        StreamSourceUnavailableRecord, StreamTerminal, StreamTerminalAuthor,
-    };
-    use golem_common::base_model::{InvocationId, OplogIndex};
-    use test_r::test;
-
-    /// The rebuild of the control metadata checks the introducing index of the reader of each
-    /// consumer record against the retained start, so each kind of consumer record names its
-    /// reader, and a record of another kind names none.
-    #[test]
-    fn each_consumer_record_names_its_reader() {
-        let session_key = StreamRegistrationInvocation::Local(InvocationId::default());
-        let reader = LocalStreamReaderId {
-            introducing_oplog_index: OplogIndex::from_u64(3),
-            binding_slot: 2,
-        };
-        let offset = StreamOffset::new(OplogIndex::from_u64(5), 0);
-        let binding = StreamBindingRecord {
-            transport_stream_id: 0,
-            source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
-            role: SessionStreamRole::Input,
-        };
-        let terminal = StreamConsumerTerminalRecord {
-            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
-            observation: StreamConsumerObservation::Host,
-            reobserves: None,
-            session_key: session_key.clone(),
-            reader_id: reader,
-            source_offset: offset,
-            consumer_read_ordinal: 0,
-            authored_by: StreamTerminalAuthor::Protocol,
-            terminal: StreamTerminal::Finished,
-        };
-        let records = [
-            crate::durable_host::durable_stream::tests::consumer_item_record(
-                session_key.clone(),
-                reader,
-                offset,
-                0,
-                vec![7],
-                true,
-            ),
-            StreamSessionRecord::ConsumerTerminal(terminal.clone()),
-            StreamSessionRecord::ConsumerOutcome(terminal),
-            StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
-                format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
-                session_key: session_key.clone(),
-                reader_id: reader,
-                source_offset: offset,
-                consumer_read_ordinal: 0,
-            }),
-            StreamSessionRecord::ReaderForwardIntent(StreamReaderForwardIntentRecord {
-                format_version: 1,
-                session_key: session_key.clone(),
-                reader_id: reader,
-                destination: StreamReaderForwardDestination::SessionBinding {
-                    session_key: session_key.clone(),
-                    binding: binding.clone(),
-                    publication: StreamReaderForwardPublication::InvocationInput,
-                },
-            }),
-        ];
-        assert_eq!(
-            records
-                .iter()
-                .map(consumer_record_reader)
-                .collect::<Vec<_>>(),
-            vec![Some(reader); 5]
-        );
-        assert_eq!(
-            consumer_record_reader(&StreamSessionRecord::Mapping(
-                StreamSessionMappingUpdateRecord {
-                    format_version: 1,
-                    session_key,
-                    mapping: binding,
-                }
-            )),
-            None
-        );
     }
 }

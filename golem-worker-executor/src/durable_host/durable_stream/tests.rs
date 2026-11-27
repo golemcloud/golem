@@ -10726,8 +10726,7 @@ async fn successful_session_finishes_agent_writers_but_abandons_tool_writers() {
 #[test]
 async fn the_stream_index_and_the_control_refresh_read_from_the_retained_start() {
     use crate::durable_host::durable_stream::session_state::SessionControlMetadata;
-    use crate::services::oplog::retention::RetentionOplog;
-    use crate::services::oplog::retention::test_oplog::{at, idx, jump};
+    use crate::services::oplog::retention::test_oplog::{at, idx, jump, retained_handle};
     use futures::{StreamExt, TryStreamExt};
 
     let identity = identity();
@@ -10752,11 +10751,7 @@ async fn the_stream_index_and_the_control_refresh_read_from_the_retained_start()
         let session_key = &session_key;
         async move {
             physical.take_read_ranges();
-            let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
-                physical.clone(),
-                identity.agent_id,
-                retention,
-            ));
+            let oplog = retained_handle(physical.clone(), identity.agent_id, retention);
             let store = DurableStreamStore::load(
                 oplog,
                 identity.environment_id,
@@ -10787,8 +10782,7 @@ async fn the_stream_index_and_the_control_refresh_read_from_the_retained_start()
 /// oplog. Each item keeps the offset that its write gave, which holds the original oplog index.
 #[test]
 async fn items_read_after_the_retained_start_keep_their_original_offsets() {
-    use crate::services::oplog::retention::RetentionOplog;
-    use crate::services::oplog::retention::test_oplog::{at, jump};
+    use crate::services::oplog::retention::test_oplog::{at, jump, retained_handle};
     use futures::{StreamExt, TryStreamExt};
     use golem_common::model::durable_stream::StreamHandleReadRequest;
 
@@ -10823,11 +10817,7 @@ async fn items_read_after_the_retained_start_keep_their_original_offsets() {
     );
     drop(live);
 
-    let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
-        physical.clone(),
-        identity.agent_id,
-        at(4),
-    ));
+    let oplog = retained_handle(physical, identity.agent_id, at(4));
     let retained = DurableStreamStore::load(
         oplog,
         identity.environment_id,
@@ -10862,8 +10852,7 @@ async fn items_read_after_the_retained_start_keep_their_original_offsets() {
 #[test]
 async fn an_attach_of_a_reader_introduced_below_the_retained_start_is_expired() {
     use crate::services::oplog::UnreadableOplog;
-    use crate::services::oplog::retention::RetentionOplog;
-    use crate::services::oplog::retention::test_oplog::{at, expired, jump};
+    use crate::services::oplog::retention::test_oplog::{at, expired, jump, retained_handle};
     use futures::{StreamExt, TryStreamExt};
 
     let source_identity = identity();
@@ -10924,11 +10913,7 @@ async fn an_attach_of_a_reader_introduced_below_the_retained_start_is_expired() 
         let consumer_identity = &consumer_identity;
         let key = key.clone();
         async move {
-            let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
-                physical,
-                consumer_identity.agent_id,
-                retention,
-            ));
+            let oplog = retained_handle(physical, consumer_identity.agent_id, retention);
             DurableStreamStore::load(
                 oplog,
                 consumer_identity.environment_id,
@@ -10952,45 +10937,6 @@ async fn an_attach_of_a_reader_introduced_below_the_retained_start_is_expired() 
     );
     assert_eq!(attach(at(3)).await, Ok(false), "the attach commits");
     assert_eq!(attach(at(3)).await, Ok(true), "the repeat finds the commit");
-
-    // The rebuild of the control metadata from the start reads the committed record of the
-    // reader. Below the start of the reader, the rebuild is expired, not malformed.
-    let refresh = |retention| {
-        let physical = physical.clone();
-        let consumer_identity = &consumer_identity;
-        let session_key = key.session_key.clone();
-        async move {
-            let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
-                physical,
-                consumer_identity.agent_id,
-                retention,
-            ));
-            DurableStreamStore::load(
-                oplog,
-                consumer_identity.environment_id,
-                consumer_identity.agent_id,
-                consumer_identity.fingerprint,
-                None,
-            )
-            .await
-            .unwrap()
-            .refresh_control_metadata(
-                &session_key,
-                &mut crate::durable_host::durable_stream::session_state::SessionControlMetadata::default(),
-            )
-            .await
-        }
-    };
-    assert_eq!(refresh(at(3)).await, Ok(()));
-    assert_eq!(
-        refresh(at(4)).await,
-        Err(
-            crate::durable_host::durable_stream::SessionError::Unreadable(UnreadableOplog::new(
-                &consumer_identity.agent_id,
-                expired(4)
-            ))
-        )
-    );
 }
 
 /// The store of `identity` over `physical`, with the start of the oplog at `retention`.
@@ -10999,11 +10945,11 @@ async fn store_at(
     identity: &TestIdentity,
     retention: crate::services::oplog::retention::OplogRetention,
 ) -> Result<Arc<DurableStreamStore>, StreamStoreError> {
-    let oplog: Arc<dyn Oplog> = Arc::new(crate::services::oplog::retention::RetentionOplog::new(
+    let oplog = crate::services::oplog::retention::test_oplog::retained_handle(
         physical,
         identity.agent_id,
         retention,
-    ));
+    );
     DurableStreamStore::load(
         oplog,
         identity.environment_id,

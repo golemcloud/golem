@@ -961,8 +961,7 @@ async fn the_consumer_probe_refuses_a_reader_introduced_below_the_retained_start
 /// and a worker service whose stream session index covers none of it, so that a walk after the
 /// indexed coverage reads the whole oplog.
 async fn hinted_oplog_from_start_3(owner: &OwnedAgentId) -> (DefaultWorkerService, Arc<dyn Oplog>) {
-    use crate::services::oplog::retention::RetentionOplog;
-    use crate::services::oplog::retention::test_oplog::at;
+    use crate::services::oplog::retention::test_oplog::{at, retained_handle};
 
     let (service, _) = service().await;
     let (_, _, primary) = service_with_oplog().await;
@@ -974,7 +973,7 @@ async fn hinted_oplog_from_start_3(owner: &OwnedAgentId) -> (DefaultWorkerServic
         OplogIndex::from_u64(4)
     );
     oplog.commit(CommitLevel::Always).await.unwrap();
-    let retained: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(oplog, owner.agent_id, at(3)));
+    let retained = retained_handle(oplog, owner.agent_id, at(3));
     (service, retained)
 }
 

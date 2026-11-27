@@ -1019,8 +1019,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// The retention of this oplog: where its retained entries start. A read below the start
     /// fails as expired, except an empty read and a read of the `Create` entry alone at index 1.
-    /// Only the retention layer knows it, so a wrapper answers from the oplog it wraps, and an
-    /// oplog without the layer keeps every entry.
     fn retention(&self) -> retention::OplogRetention {
         self.inner()
             .map_or(retention::OplogRetention::FULL, |inner| inner.retention())

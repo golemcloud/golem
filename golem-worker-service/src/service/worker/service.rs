@@ -1406,7 +1406,8 @@ impl WorkerService {
 
     /// Reads an oplog page. With `range`, the read is a range read: it reads no entry after
     /// `range.to`, and the response accounts its scan. `claims` asks for the users' verified
-    /// claims among the callers; it reaches the executor only after the oplog read check.
+    /// claims among the callers. With no start or cursor, the executor resolves the retained start.
+    /// The service checks permission for that window before it returns the page or its claims.
     pub async fn get_oplog(
         &self,
         agent_id: &OwnedAgentId,
@@ -1418,16 +1419,22 @@ impl WorkerService {
         claims: ClaimVisibility,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
-        let start = oplog_page_request_start(cursor.as_ref(), from_oplog_index);
+        let start = cursor
+            .as_ref()
+            .map(|cursor| cursor.next_oplog_index)
+            .or(from_oplog_index.map(|index| index.as_u64()));
         let to = range.as_ref().map(|range| range.to.into());
+        let requested = [AgentPermission::Oplog(oplog_page_window(
+            start.unwrap_or(1).max(1),
+            count,
+            to,
+        ))];
         let agent = self
-            .managed_agent(
-                agent_id,
-                expected_fingerprint,
-                &auth_ctx,
-                &[AgentPermission::Oplog(oplog_page_window(start, count, to))],
-            )
+            .read_agent(agent_id, expected_fingerprint, &auth_ctx, &requested)
             .await?;
+        if start.is_some() {
+            agent.authorize(&auth_ctx, &requested)?;
+        }
 
         let result = self
             .worker_client
@@ -1441,15 +1448,23 @@ impl WorkerService {
                 agent_id.environment_id,
                 auth_ctx.clone(),
             )
-            .await?;
+            .await;
 
-        if let Some(window) =
-            oplog_page_window_after_read(start, result.first_index_in_chunk, count, to)
-        {
-            agent.authorize(&auth_ctx, &[AgentPermission::Oplog(window)])?;
+        if start.is_none() {
+            match &result {
+                Ok(page) => agent.authorize(
+                    &auth_ctx,
+                    &[AgentPermission::Oplog(oplog_page_window(
+                        page.first_index_in_chunk.max(1),
+                        count,
+                        to,
+                    ))],
+                )?,
+                Err(_) => agent.authorize(&auth_ctx, &requested)?,
+            }
         }
 
-        Ok(result)
+        result
     }
 
     /// Reads one oplog entry in full. Oplog pages omit the entries that are too large for them;
@@ -4631,15 +4646,6 @@ fn native_tool_result(
     })
 }
 
-/// The index that an oplog page read asks permission from before the read: the cursor, else
-/// `from`, else index 1.
-fn oplog_page_request_start(cursor: Option<&OplogCursor>, from: Option<OplogIndex>) -> u64 {
-    cursor
-        .map(|cursor| cursor.next_oplog_index)
-        .or(from.map(Into::into))
-        .unwrap_or(OplogIndex::INITIAL.into())
-}
-
 /// The window of an oplog page read that a grant must cover: `count` indexes from `start`, cut at
 /// `to` for a range read. The window has no end when its end is after the last index that a
 /// `u64` holds.
@@ -4650,19 +4656,6 @@ fn oplog_page_window(start: u64, count: u64, to: Option<u64>) -> OplogResourcePa
             .checked_add(count.saturating_sub(1))
             .map(|end| to.map_or(end, |to| end.min(to))),
     )
-}
-
-/// The window that a grant must also cover after an oplog page read that began at
-/// `first_given`. A read without a start begins at the retained start of the oplog, which can be
-/// after the window that the check before the read covered. `None` when the read began at
-/// `requested_start`, so the check before the read covered the entries that it gave.
-fn oplog_page_window_after_read(
-    requested_start: u64,
-    first_given: u64,
-    count: u64,
-    to: Option<u64>,
-) -> Option<OplogResourcePattern> {
-    (first_given > requested_start).then(|| oplog_page_window(first_given, count, to))
 }
 
 mod invocations;
@@ -7273,153 +7266,8 @@ mod tests {
         );
     }
 
-    #[test]
-    async fn an_oplog_page_without_a_start_requires_permission_for_the_entries_it_gives() {
-        let harness = RestHarness::new(AgentMode::Durable);
-        harness
-            .worker_client
-            .set_metadata_component_revision(harness.component_revision);
-        let agent_id = harness.keyed_agent_id();
-        let owned = harness.owned(&agent_id);
-        let auth_ctx = auth_ctx_with_permissions(vec![oplog_target(
-            &agent_id,
-            OplogResourcePattern::range(Some(1), Some(3)),
-        )]);
-
-        harness
-            .worker_service
-            .get_oplog(
-                &owned,
-                None,
-                None,
-                3,
-                None,
-                None,
-                ClaimVisibility::Hidden,
-                auth_ctx.clone(),
-            )
-            .await
-            .unwrap();
-
-        *harness.worker_client.oplog_page_first_index.lock().unwrap() = 10;
-        assert!(
-            harness
-                .worker_service
-                .get_oplog(
-                    &owned,
-                    None,
-                    None,
-                    3,
-                    None,
-                    None,
-                    ClaimVisibility::Hidden,
-                    auth_ctx,
-                )
-                .await
-                .is_err(),
-            "the oplog starts at index 10, after the range of the permission"
-        );
-    }
-
-    /// A page read asks permission before the read from its cursor, else from `from`, else from
-    /// index 1.
-    #[test]
-    fn an_oplog_page_read_asks_from_its_cursor_then_from_its_start_then_from_index_1() {
-        let cursor = OplogCursor {
-            next_oplog_index: 7,
-            current_component_revision: 0,
-            query_hash: OplogCursor::query_hash(None),
-        };
-        assert_eq!(
-            super::oplog_page_request_start(Some(&cursor), Some(OplogIndex::from_u64(3))),
-            7
-        );
-        assert_eq!(
-            super::oplog_page_request_start(None, Some(OplogIndex::from_u64(3))),
-            3
-        );
-        assert_eq!(super::oplog_page_request_start(None, None), 1);
-    }
-
-    /// The window of a page read is `count` indexes from its start, cut at the `to` of a range
-    /// read. A window whose end does not fit in a `u64` has no end.
-    #[test]
-    fn an_oplog_page_window_is_count_indexes_from_its_start_cut_at_to() {
-        let range = |start: u64, end: Option<u64>| OplogResourcePattern::range(Some(start), end);
-        assert_eq!(super::oplog_page_window(1, 3, None), range(1, Some(3)));
-        assert_eq!(
-            super::oplog_page_window(10, 3, Some(11)),
-            range(10, Some(11))
-        );
-        assert_eq!(
-            super::oplog_page_window(10, 3, Some(12)),
-            range(10, Some(12))
-        );
-        assert_eq!(
-            super::oplog_page_window(10, 3, Some(13)),
-            range(10, Some(12))
-        );
-        assert_eq!(super::oplog_page_window(10, 0, None), range(10, Some(10)));
-        assert_eq!(
-            super::oplog_page_window(u64::MAX, 2, None),
-            range(u64::MAX, None)
-        );
-    }
-
-    /// A read that began after the start of its window asks permission for the window of the
-    /// entries that it gave. A read that began at the start of its window asks nothing more.
-    #[test]
-    fn only_a_page_that_began_after_its_window_asks_for_the_given_window() {
-        let range = |start: u64, end: Option<u64>| OplogResourcePattern::range(Some(start), end);
-        assert_eq!(
-            super::oplog_page_window_after_read(1, 10, 3, None),
-            Some(range(10, Some(12)))
-        );
-        assert_eq!(
-            super::oplog_page_window_after_read(1, 10, 3, Some(11)),
-            Some(range(10, Some(11)))
-        );
-        assert_eq!(
-            super::oplog_page_window_after_read(1, 2, 3, None),
-            Some(range(2, Some(4)))
-        );
-        assert_eq!(super::oplog_page_window_after_read(1, 1, 3, None), None);
-        assert_eq!(super::oplog_page_window_after_read(5, 5, 3, None), None);
-    }
-
-    /// A page without a start asks permission for `count` entries from index 1 before the read,
-    /// and for `count` entries from the first index that the page gives after the read. The test
-    /// grants both windows, one grant each, so the read is allowed.
-    #[test]
-    async fn an_oplog_page_without_a_start_is_allowed_with_a_grant_for_each_window() {
-        let harness = RestHarness::new(AgentMode::Durable);
-        harness
-            .worker_client
-            .set_metadata_component_revision(harness.component_revision);
-        let agent_id = harness.keyed_agent_id();
-        let owned = harness.owned(&agent_id);
-        let auth_ctx = auth_ctx_with_permissions(vec![
-            oplog_target(&agent_id, OplogResourcePattern::range(Some(1), Some(3))),
-            oplog_target(&agent_id, OplogResourcePattern::range(Some(10), Some(12))),
-        ]);
-
-        *harness.worker_client.oplog_page_first_index.lock().unwrap() = 10;
-        let page = harness
-            .worker_service
-            .get_oplog(
-                &owned,
-                None,
-                None,
-                3,
-                None,
-                None,
-                ClaimVisibility::Hidden,
-                auth_ctx,
-            )
-            .await
-            .unwrap();
-        assert_eq!(page.first_index_in_chunk, 10);
-    }
+    #[path = "retention/tests.rs"]
+    mod retention;
 
     #[test]
     async fn oplog_entry_reads_require_permission_for_the_exact_oplog_index() {

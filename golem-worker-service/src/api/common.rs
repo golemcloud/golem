@@ -787,23 +787,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_expired_oplog_read_maps_to_its_own_code() {
-        let api_error: ApiEndpointError =
-            WorkerServiceError::GolemError(WorkerExecutorError::oplog_expired(
-                golem_common::model::AgentId::from_parts(7, 1),
-                golem_common::model::OplogIndex::from_u64(42),
-            ))
-            .into();
-
-        match api_error {
-            ApiEndpointError::BadRequest(Json(body)) => {
-                assert_eq!(body.code, "OPLOG_EXPIRED");
-                assert!(body.errors.iter().any(|error| error.contains("42")));
-            }
-            other => panic!("expected BadRequest, got: {other:?}"),
-        }
-    }
+    #[path = "retention/tests.rs"]
+    mod retention;
 
     #[test]
     fn internal_worker_executor_error_still_maps_to_internal_error() {

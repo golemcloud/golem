@@ -16649,8 +16649,7 @@ async fn external_inline_demand_interrupt_preserves_ordinal_and_journal() {
 /// A stream session of `identity` over an oplog of jumps from index 1 to 4, behind the retention
 /// layer at start 3, with the oplog of jumps.
 async fn session_from_start_3(identity: &TestIdentity) -> (Arc<TestOplog>, StreamSession) {
-    use crate::services::oplog::retention::RetentionOplog;
-    use crate::services::oplog::retention::test_oplog::{at, jump};
+    use crate::services::oplog::retention::test_oplog::{at, jump, retained_handle};
     use futures::{StreamExt, TryStreamExt};
 
     let physical = Arc::new(TestOplog::default());
@@ -16659,11 +16658,7 @@ async fn session_from_start_3(identity: &TestIdentity) -> (Arc<TestOplog>, Strea
         .try_collect::<Vec<_>>()
         .await
         .unwrap();
-    let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
-        physical.clone(),
-        identity.agent_id,
-        at(3),
-    ));
+    let oplog = retained_handle(physical.clone(), identity.agent_id, at(3));
     let store = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,

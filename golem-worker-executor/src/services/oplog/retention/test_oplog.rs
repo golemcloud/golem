@@ -15,7 +15,7 @@
 //! An oplog stack with the retention layer over an in-memory primary oplog, for the tests of the
 //! layer and of the readers that go by the retained start.
 
-use super::{OplogRetention, RetentionOplogService, advance_oplog_retention};
+use super::{OplogRetention, RetentionOplog, RetentionOplogService, advance_oplog_retention};
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
@@ -63,6 +63,21 @@ pub(crate) struct RetainedOplog {
 
 pub(crate) fn idx(value: u64) -> OplogIndex {
     OplogIndex::from_u64(value)
+}
+
+pub(crate) fn retained_handle(
+    inner: Arc<dyn Oplog>,
+    agent_id: AgentId,
+    retention: OplogRetention,
+) -> Arc<dyn Oplog> {
+    let owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
+    Arc::new(RetentionOplog::new(
+        inner,
+        Arc::new(RecordingOplogService::new(owner.clone())),
+        owner,
+        AgentMode::Durable,
+        retention,
+    ))
 }
 
 /// An entry with a fixed timestamp, because the oplog stores timestamps in milliseconds. The jump

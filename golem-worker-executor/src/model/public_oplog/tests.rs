@@ -1870,7 +1870,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         OplogIndex::INITIAL,
         None,
         1,
-        "last-entity-attribution-needle",
+        &Query::parse("last-entity-attribution-needle").unwrap(),
         ScanBudget::default(),
         ClaimVisibility::Hidden,
     )
@@ -3039,6 +3039,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
     );
 
     // A guest search has the same limit, and still reads no entry after its pinned end.
+    let query = Query::parse("needle").unwrap();
     let guest = |from: OplogIndex| {
         search_public_oplog(
             Arc::new(PanicComponentService),
@@ -3053,7 +3054,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             from,
             Some(matching[2]),
             2,
-            "needle",
+            &query,
             ScanBudget::default(),
             ClaimVisibility::Hidden,
         )
@@ -4939,6 +4940,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
 /// An oplog service with the retention layer, and an open oplog of one agent in it.
 struct RetainedAttribution {
     key_value_storage: Arc<crate::storage::keyvalue::memory::InMemoryKeyValueStorage>,
+    indexed_storage: Arc<crate::services::oplog::tests::ReadCountingIndexedStorage>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
@@ -4948,8 +4950,10 @@ impl RetainedAttribution {
     async fn new() -> Self {
         let key_value_storage =
             Arc::new(crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new());
+        let indexed_storage =
+            Arc::new(crate::services::oplog::tests::ReadCountingIndexedStorage::new());
         let primary = PrimaryOplogService::new(
-            Arc::new(InMemoryIndexedStorage::new()),
+            indexed_storage.clone(),
             Arc::new(InMemoryBlobStorage::new()),
             1,
             1,
@@ -4982,6 +4986,7 @@ impl RetainedAttribution {
             .unwrap();
         Self {
             key_value_storage,
+            indexed_storage,
             oplog_service,
             owned_agent_id,
             oplog,
@@ -5302,6 +5307,63 @@ async fn a_read_from_index_0_of_a_full_oplog_starts_at_index_1() {
     );
 }
 
+#[test]
+async fn a_guest_search_validates_before_skipping_and_reads_only_revision_metadata_on_skip() {
+    use futures::{StreamExt, TryStreamExt};
+
+    let retained = RetainedAttribution::new().await;
+    let revision = ComponentRevision::new(3).unwrap();
+    retained
+        .oplog
+        .add(create_entry_with_revision(
+            &retained.owned_agent_id,
+            revision,
+        ))
+        .await
+        .unwrap();
+    futures::stream::iter(2..=6)
+        .then(|index| retained.oplog.add(log_entry(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    retained.oplog.commit(CommitLevel::Always).await.unwrap();
+    let start = OplogIndex::from_u64(5);
+    retained.advance(start).await;
+    retained.indexed_storage.reset();
+
+    let search = |query| {
+        search_guest_oplog(
+            Arc::new(PanicComponentService),
+            retained.oplog_service.clone(),
+            &retained.owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            OplogIndex::INITIAL,
+            None,
+            2,
+            None,
+            query,
+            ScanBudget::default(),
+            ClaimVisibility::Hidden,
+        )
+    };
+    let invalid = "field:(";
+    assert_eq!(
+        search(invalid).await.err(),
+        Some(Query::parse(invalid).unwrap_err())
+    );
+    assert_eq!(retained.indexed_storage.reads(), 0);
+
+    let skipped = search("context").await.unwrap();
+    assert!(skipped.entries.is_empty());
+    assert_eq!(skipped.next_oplog_index, start);
+    assert_eq!(skipped.current_component_revision, revision);
+    // Two tail lookups and the one Create read; no candidate batch reaches indexed storage.
+    assert_eq!(retained.indexed_storage.reads(), 3);
+}
+
 /// A guest search whose end is before its start reads no entry, also when the entry at the start
 /// matches the query.
 #[test]
@@ -5330,7 +5392,7 @@ async fn a_guest_search_that_ends_before_its_start_reads_nothing() {
         start,
         Some(OplogIndex::from_u64(4)),
         10,
-        "context",
+        &Query::parse("context").unwrap(),
         ScanBudget::default(),
         ClaimVisibility::Hidden,
     )

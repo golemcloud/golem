@@ -15,6 +15,7 @@
 use super::*;
 use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::retention::{OplogRange, OplogRetention};
+use crate::services::oplog::{OplogReadError, UnreadableOplog};
 use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
 use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::collections::BTreeMap;
@@ -277,7 +278,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await?;
+        .await
+        .map_err(public_oplog_read_error)?;
     let page = retention.page(
         &owned_agent_id.agent_id,
         initial_oplog_index,
@@ -327,11 +329,10 @@ async fn read_public_oplog_range<B: ChunkBuilder>(
     builder: &mut B,
 ) -> Result<(PublicOplogChunk<B::Entry>, bool), WorkerExecutorError> {
     let raw_entries = match range {
-        Some(range) => {
-            oplog_service
-                .read_exact(owned_agent_id, agent_mode, range.start, range.count)
-                .await?
-        }
+        Some(range) => oplog_service
+            .read_exact(owned_agent_id, agent_mode, range.start, range.count)
+            .await
+            .map_err(public_oplog_read_error)?,
         None => BTreeMap::new(),
     };
 
@@ -427,7 +428,7 @@ pub async fn search_public_oplog(
     initial_oplog_index: OplogIndex,
     last_oplog_index: Option<OplogIndex>,
     count: usize,
-    query: &str,
+    query: &Query,
     budget: ScanBudget,
     claims: ClaimVisibility,
 ) -> Result<PublicOplogSearchResult, WorkerExecutorError> {
@@ -474,6 +475,7 @@ pub async fn search_public_oplog_page(
     PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
     WorkerExecutorError,
 > {
+    let query = Query::parse(query).map_err(WorkerExecutorError::unknown)?;
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -487,7 +489,7 @@ pub async fn search_public_oplog_page(
         initial_oplog_index,
         None,
         limits.count,
-        query,
+        &query,
         budget,
         claims,
         RemotePage::new(limits),
@@ -515,7 +517,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     initial_oplog_index: OplogIndex,
     last_oplog_index: Option<OplogIndex>,
     count: usize,
-    query: &str,
+    query: &Query,
     budget: ScanBudget,
     claims: ClaimVisibility,
     mut builder: B,
@@ -526,8 +528,6 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     let mut last_index;
     let mut current_index = initial_oplog_index;
     let mut current_component_revision = initial_component_revision;
-
-    let query = Query::parse(query).map_err(WorkerExecutorError::unknown)?;
 
     loop {
         let to_last = last_oplog_index.map_or(u64::MAX, |last| {
@@ -548,7 +548,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
             current_component_revision,
             current_index,
             chunk_size,
-            Some(&query),
+            Some(query),
             claims,
             &mut builder,
         )
@@ -946,7 +946,7 @@ pub async fn guest_search_start(
 #[derive(Clone, Copy, Debug)]
 pub enum GuestSearchBatch {
     /// The start is after the window that the grant of the batch covers. The batch moves the
-    /// cursor to the start and reads no entry, so the next batch checks the grant for its own
+    /// cursor to the start and scans no candidates, so the next batch checks the grant for its own
     /// window.
     SkipTo(OplogIndex),
     /// The batch searches from `start` and scans at most `budget.entries` entries.
@@ -959,7 +959,7 @@ pub enum GuestSearchBatch {
 /// The guest search batch from `start`, the start that [`guest_search_start`] gives. The grant of
 /// the batch covers `page_size` indexes from `window_start`, the cursor of the search, not
 /// `page_size` matches. A new search starts at the retained start, which can be inside the window
-/// or after it. The batch reads only the indexes of the window at or after `start`: its budget is
+/// or after it. Candidates come only from the window at or after `start`: their budget is
 /// `configured` with the entries cut to that part of the window.
 pub fn guest_search_batch(
     window_start: OplogIndex,
@@ -1040,8 +1040,9 @@ pub async fn get_guest_oplog_chunk(
 /// batch reads the retention of the oplog. [`guest_search_start`] gives the start of the batch
 /// and the component revision to decode its first entry with, and [`guest_search_batch`] cuts
 /// the batch to the window of the grant from the cursor. `continued` is the revision of a search
-/// that already ran a batch. A batch whose start is after its window reads no entry and moves the
-/// cursor to the start. The error is the text that the guest gets in `internal-error`.
+/// that already ran a batch. A batch whose start is after its window scans no candidates and moves
+/// the cursor to the start. Revision lookup can still read `Create` and other metadata outside the
+/// candidate window. The error is the text that the guest gets in `internal-error`.
 #[allow(clippy::too_many_arguments)]
 pub async fn search_guest_oplog(
     components: Arc<dyn ComponentService>,
@@ -1059,6 +1060,7 @@ pub async fn search_guest_oplog(
     configured: ScanBudget,
     claims: ClaimVisibility,
 ) -> Result<PublicOplogSearchResult, String> {
+    let query = Query::parse(query)?;
     let retention = oplog_service
         .retention(owned_agent_id, agent_mode)
         .await
@@ -1105,12 +1107,20 @@ pub async fn search_guest_oplog(
             start,
             last_oplog_index,
             page_size,
-            query,
+            &query,
             budget,
             claims,
         )
         .await
         .map_err(guest_oplog_read_error),
+    }
+}
+
+/// A public entry read keeps typed expiry. Other storage failures keep their public error text.
+pub(super) fn public_oplog_read_error(error: UnreadableOplog) -> WorkerExecutorError {
+    match error.error {
+        OplogReadError::Expired { .. } => error.into(),
+        _ => WorkerExecutorError::unknown(error.to_string()),
     }
 }
 

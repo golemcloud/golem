@@ -1400,23 +1400,25 @@ so it reads with no error at a start of 2. A read below the start returns
 than the `Create` entry from index 1 is expired. This includes a page and a guest chunk, because a
 page has no fixed end. `range` and `chunk` do not refuse such a start: they move it to the retained
 start. A range page (a request with a `to`) is a page too, and without a `from` it starts at the
-retained start. A new guest search starts at the retained start too; its batch reads only the part
-of the authorized window at or after that start, and a start after the window moves the cursor
-with no read (`guest_search_batch`). The guest host functions only resolve the agent: the reads of
-the retention and of the oplog are in `get_guest_oplog_chunk` and `search_guest_oplog`. A search
-batch that failed or that the grant denied leaves the search as it was (`SearchOplogEntry::apply`),
+retained start. A new guest search starts at or after the retained start. The host parses the query
+before resolving the start. If the start is after the authorized window, the batch moves the cursor
+to the start without scanning candidates. The revision lookup can still read metadata such as
+`Create`. The search leaves its cursor unchanged if the query is invalid, the read fails or the grant
+denies the batch (`SearchOplogEntry::apply`),
 so its next batch still starts at the retained start. The count-based revert walk
 (`cut_point::cut_before_last_invocations`) takes the retention and ends at the retained start. The
 single entry read of the public oplog serves the `Create` entry. A `Gap` that ends below
 the start becomes the same error, and a gap that ends at or after the start stays a read error.
-`length` counts the retained entries, and the last index does not change. A range page checks its
+At full retention, `length` keeps the underlying count. After a cut it counts from the retained
+start through the committed tail and still returns an error if a layer cannot count its storage.
+The last index does not change. A range page checks its
 `to` and its cursor against the start before it checks the range, so a range without `from` whose
 `to` or cursor is below the start is expired. When the walk of the last error reaches the start
 with no invocation boundary and no error while the agent is failed or retrying, the last error is
 the expired error. The revert walk gives no cut when the last index is below the start. The stream readers keep
-the expired error typed: the consumer probe and the consumer journal check the record that
-introduced each reader, the rebuild of the session control metadata checks the reader of each
-consumer record, and the producer index uses `unknown_local_stream` to distinguish an expired
+the expired error typed: the consumer probe and attachment check the record that introduced the
+reader, the consumer journal scans the retained suffix, and the producer index uses
+`unknown_local_stream` to distinguish an expired
 local stream reference from corrupt history. A nested registration whose parent is below the
 start gives `CorruptHistory`. A handle of a stream that the index does not know is expired when
 the start is above 1, and a cursor below the start is expired. A producer request keeps only the
@@ -4484,8 +4486,9 @@ after `CardDerived` reuses the recorded child instead of creating it again. Test
 ### Card authorization decisions
 
 Guest `search-oplog.get-next` authorizes a 100-index window from the search cursor. The host caps
-the scan budget for that call to the window size before reading entries. A batch can advance the
-cursor without finding a match. The first batch pins the oplog end separately, and each new live
+the candidate budget to the window size, also at full retention. Revision lookup and the pinned
+oplog end are separate metadata reads. A batch can advance the cursor without finding a match,
+and each new live
 batch checks the grant for its own window. Completed calls replay their recorded results.
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card

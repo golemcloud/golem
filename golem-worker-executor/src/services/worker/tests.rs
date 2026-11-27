@@ -3432,6 +3432,49 @@ fn batch(cursor: &str, examined_keys: u64) -> ScanPage {
 }
 
 #[test]
+async fn invocation_result_index_catches_up_from_the_stored_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, jump};
+    use golem_common::model::ShardEpoch;
+
+    let oplog = RetainedOplog::new().await;
+    let _handle = oplog.create(oplog.create_entry(), ShardEpoch(1)).await;
+    let key = idempotency_key("retained");
+    let mut entries = BTreeMap::new();
+    invocation_pair(&mut entries, 4, &key);
+    oplog
+        .add([jump(2), jump(3)].into_iter().chain(entries.into_values()))
+        .await;
+    oplog.advance(4).await;
+
+    let service = DefaultWorkerService::new(
+        oplog.key_value_storage(),
+        Arc::new(ShardServiceDefault::new()),
+        oplog.service.clone(),
+        Arc::new(IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let status = invocation_status(5, 0, &[], 0, DeletedRegions::new());
+    let fingerprint = invocation_index_fingerprint();
+    service
+        .catch_up_invocation_result_index(
+            &oplog.owned_agent_id,
+            AgentMode::Durable,
+            fingerprint,
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .lookup_invocation_result_index(&oplog.owned_agent_id, fingerprint, &status, &key)
+            .await
+            .map(positions_only)
+            .unwrap(),
+        InvocationResultIndexLookup::Found(result_at(5))
+    );
+}
+
+#[test]
 async fn invocation_result_index_keeps_a_result_when_a_later_chunk_withdraws_its_duplicate() {
     let key = idempotency_key("duplicate");
     let mut entries = invocation_entries(&[key]);

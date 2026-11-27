@@ -302,8 +302,8 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         stdin_marker_args: &[],
         destructive: true,
     },
-    // `--html` writes a host file; the viewer flags serve or open it locally. The obfuscated
-    // export reads the oplog from index 1, and `--page` cannot be combined with `--obfuscate`.
+    // `--html` writes a host file; the viewer flags serve or open it locally. An obfuscated export
+    // first reads `Create` at index 1. Its data pages honor `--from`. It cannot use `--page`.
     CommandRow {
         path: &["agent", "oplog"],
         class: ManagementRead,

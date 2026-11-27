@@ -1777,34 +1777,8 @@ mod read_only_violation_trap_tests {
         }
     }
 
-    #[test]
-    fn an_expired_oplog_keeps_its_retained_start_through_grpc() {
-        let expected =
-            WorkerExecutorError::oplog_expired(AgentId::from_parts(7, 1), OplogIndex::from_u64(42));
-
-        let status: Status = expected.clone().into();
-
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert!(status.message().contains("starts at index 42"));
-        assert_eq!(
-            WorkerExecutorError::from_status_details(&status),
-            Some(expected)
-        );
-    }
-
-    #[test]
-    fn an_unreadable_oplog_still_crosses_grpc_as_its_text() {
-        let failed = WorkerExecutorError::oplog_failed(AgentId::from_parts(7, 1), "gap");
-
-        assert_eq!(
-            WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(
-                failed.clone()
-            )),
-            Ok(WorkerExecutorError::Runtime {
-                details: failed.to_string()
-            })
-        );
-    }
+    #[path = "retention/tests.rs"]
+    mod retention;
 
     #[test]
     fn trap_display_includes_method_and_host_function() {

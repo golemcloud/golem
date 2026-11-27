@@ -380,7 +380,8 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         let entry = self
             .oplog_service
             .read_exact(self.owned_agent_id, self.agent_mode, index, 1)
-            .await?
+            .await
+            .map_err(super::reading::public_oplog_read_error)?
             .remove(&index);
         let start = entry
             .as_ref()

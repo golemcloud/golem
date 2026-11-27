@@ -211,21 +211,9 @@ impl KeyValueStorage for RetryingKeyValueStorage {
         .await
     }
 
-    /// Retried like `set_if_not_exists`, and for the same kind of reason rather than because the
-    /// operation is idempotent. The returned flag means "this call won the compare", so a retry
-    /// after an attempt that applied but lost its response reports `false` where `true` was the
-    /// truth: the comparison row now holds what this call itself wrote, so it no longer matches
-    /// `expected`.
-    ///
-    /// Two callers tolerate a spurious `false`. The rejection of periodic snapshots
-    /// (`reject_periodic_snapshots`) reads the rejected indexes again, finds its own write and
-    /// stops. The advance of the retained start
-    /// (`advance_oplog_retention`) reads the record again and sees its own write, so it does not
-    /// write again. Refusing to retry instead would surface a brief backend outage as a hard
-    /// failure.
-    ///
-    /// If a caller ever branches on the flag in a way an incorrect `false` would break, this is the
-    /// line to change, and `NonIdempotent` still expresses it.
+    /// Compares and sets the fields, retrying after a transient storage error. The returned flag
+    /// is the result of the final attempt. `false` does not rule out a write by an earlier attempt
+    /// whose reply was lost: that write can make the final comparison fail.
     async fn compare_and_set_many(
         &self,
         svc_name: &'static str,

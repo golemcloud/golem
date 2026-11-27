@@ -462,10 +462,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let current = self.oplog.current_oplog_index().await;
         let mut deleting_recorded = false;
         let mut dependencies = HashMap::new();
-        if current.is_defined()
-            && let Some(range) = self.oplog.retention().range(OplogIndex::INITIAL, current)
-        {
-            for (_, entry) in self.oplog.read_exact(range.start, range.count).await? {
+        if current.is_defined() {
+            for (_, entry) in self
+                .oplog
+                .read_exact(OplogIndex::INITIAL, current.as_u64())
+                .await?
+            {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
                 };
