@@ -225,7 +225,7 @@ impl StreamSession {
                 // Streams handed to the callee guest are not bound to any transport attempt:
                 // the guest owns the consumer side for the whole invocation, so its cancellation
                 // targets whatever attachment epoch is currently authoritative.
-                None => self.authoritative_attachment_state().await?.epoch,
+                None => self.cancellation_epoch().await?,
             }
         } else {
             let has_intent = self

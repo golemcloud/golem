@@ -720,6 +720,7 @@ pub trait ToolStreamingCaller {
     async fn filesystem_policy_read(&self, path: String) -> Result<String, String>;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
+    async fn cancel_typed_input(&self) -> bool;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
     fn native_veto_gate(&self) -> golem_rust::PromiseId;
     async fn native_veto_with_long_clock(&self, gate: golem_rust::PromiseId) -> Vec<String>;
@@ -3586,6 +3587,31 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         )
         .expect("decode typed input evidence");
         Vec::<TypedInputEvidence>::from_value(value.value()).expect("typed input evidence shape")
+    }
+
+    async fn cancel_typed_input(&self) -> bool {
+        let (mut writer, input) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(TypedInputEvidence {
+                    label: "cancelled-input".to_string(),
+                    ordinal: 37,
+                })
+                .await
+                .unwrap();
+            writer.close().await.unwrap();
+        });
+        let input = RawDirectTypedInput { input }
+            .into_typed_schema_value()
+            .unwrap();
+        let input = golem_rust::encode_typed_schema_value_async(&input)
+            .await
+            .unwrap();
+        let rpc = ToolRpc::create("typed-input-stream").unwrap();
+        let result = rpc.async_invoke_and_await(&["consume".to_string()], input, None, None, None);
+        wait_at_promise_checkpoint("typed-input-before-cancel").await;
+        result.cancel();
+        matches!(raw_result(&result).await, Err(ToolRpcError::Cancelled))
     }
 
     fn native_veto_gate(&self) -> golem_rust::PromiseId {
