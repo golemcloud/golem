@@ -5631,6 +5631,7 @@ async fn session_failure_causes_survive_executor_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::InterruptKind;
@@ -5648,7 +5649,13 @@ async fn session_failure_causes_survive_executor_restart(
         }
     }));
 
-    for cause in ["invocation", "interrupt", "protocol", "recovery-exit"] {
+    for cause in [
+        "invocation",
+        "interrupt",
+        "protocol",
+        "recovery-exit",
+        "method",
+    ] {
         let context = TestContext::new(last_unique_id);
         let overrides = TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
@@ -5667,13 +5674,24 @@ async fn session_failure_causes_survive_executor_restart(
         };
         let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
         let component = executor
-            .component_dep(&context.default_environment_id, agent_rpc_rust)
+            .component_dep(
+                &context.default_environment_id,
+                if cause == "method" {
+                    agent_sdk_rust
+                } else {
+                    agent_rpc_rust
+                },
+            )
             .store()
             .await?;
         let target = executor
             .start_agent_with(
                 &component.id,
-                agent_key!("StreamingRpcTarget", cause),
+                if cause == "method" {
+                    agent_key!("RustMethodFailure", cause)
+                } else {
+                    agent_key!("StreamingRpcTarget", cause)
+                },
                 std::collections::HashMap::from([(
                     "SESSION_FAILURE_RETRY_PORT".into(),
                     port.to_string(),
@@ -5682,7 +5700,9 @@ async fn session_failure_causes_survive_executor_restart(
             )
             .await?;
         let metadata = executor.get_worker_metadata(&target).await?;
-        let method = if cause == "recovery-exit" {
+        let method = if cause == "method" {
+            "fail_input"
+        } else if cause == "recovery-exit" {
             "exit_after_input"
         } else if cause == "invocation" {
             "fail_with_retries"
@@ -5735,6 +5755,7 @@ async fn session_failure_causes_survive_executor_restart(
             };
         match cause {
             "invocation" => {} // The failed HTTP call exhausts its named retry policy.
+            "method" => {}     // The export returns a method failure, not a guest trap.
             "interrupt" => {
                 executor
                     .interrupt_loaded_worker(
@@ -5828,6 +5849,24 @@ async fn session_failure_causes_survive_executor_restart(
                 break failure;
             }
         };
+        if cause == "method" {
+            executor
+                .wait_for_status(&target, AgentStatus::Idle, Duration::from_secs(30))
+                .await?;
+            assert!(
+                executor
+                    .stored_oplog(&target.agent_id)
+                    .await
+                    .iter()
+                    .any(|entry| matches!(
+                        entry,
+                        OplogEntry::AgentInvocationFailed {
+                            awaits_settlement: true,
+                            ..
+                        }
+                    ))
+            );
+        }
         let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
         if let Some((entered, _)) = &mut failure_gate {
             let details = tokio::time::timeout(Duration::from_secs(10), entered).await??;
@@ -5859,6 +5898,33 @@ async fn session_failure_causes_survive_executor_restart(
             .collect::<Vec<_>>();
         assert_eq!(finished.len(), 1, "{cause}");
         match (cause, &finished[0]) {
+            ("method", Err(SessionFailure::Invocation)) => {
+                assert!(
+                    live_failure
+                        .message
+                        .contains("method gave up with an input stream"),
+                    "{live_failure:?}"
+                );
+                assert_eq!(
+                    oplog
+                        .iter()
+                        .filter(|entry| matches!(
+                            entry.entry,
+                            PublicOplogEntry::AgentInvocationFailed(_)
+                        ))
+                        .count(),
+                    1
+                );
+                assert!(oplog.iter().any(|entry| matches!(
+                    entry.entry,
+                    PublicOplogEntry::AgentInvocationSettled(_)
+                )));
+                assert!(
+                    !oplog
+                        .iter()
+                        .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                );
+            }
             ("invocation", Err(SessionFailure::Invocation)) => {
                 assert!(
                     oplog
