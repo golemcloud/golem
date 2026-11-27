@@ -12,36 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Standard-Schema config surface for the TypeScript SDK (issue #3449). A `config`
-// spec on `defineAgent` is a single record of named fields, each a Standard
-// Schema value. A field marked with `s.secret(inner)` — at ANY depth — is a
-// SECRET field; every other leaf is a plain LOCAL field. We flatten each field
-// recursively (descending into object schemas — including OPTIONAL object
-// groups) to a flat list of LEAF declarations, each carrying its full
-// multi-segment `path`:
-//   - local leaves declare their inner type directly,
-//   - secret leaves declare `secret<inner>` (a capability node) so the host
-//     knows the value is a secret and returns an opaque handle.
-//
-// OPTIONAL object groups (`z.object({...}).optional()`) get special treatment,
-// mirroring the base/decorator SDK:
-//   - Every leaf UNDER an optional ancestor is declared to the host as
-//     `option<leaf>` (lifted). This matters because the host TRAPS the guest
-//     when `get-config-value` is called for an unset leaf whose expected type is
-//     NOT an option, but returns an `option none` when the expected type IS an
-//     option. Declaring under-optional leaves as options means an unset leaf
-//     reads back as `undefined` instead of trapping — so a group can be probed
-//     for presence without crashing.
-//   - At runtime a group is PRESENT iff every REQUIRED (non-`.optional()`) child
-//     — leaf or nested subgroup — resolves to a defined value; otherwise the
-//     whole group reads as `undefined` (absent). An all-optional group is
-//     therefore always present (`{}` when nothing is configured). Within a
-//     present group an unset optional leaf reads as `undefined` (so it is
-//     omitted by `JSON.stringify`).
-//
-// Only object schemas are recursed; unions, arrays, tuples, maps, and primitives
-// are read whole as a single leaf. A secret nested directly inside an
-// array/union is out of scope — it is read whole with its enclosing leaf.
+// Static config fields retain their complete schema graph, including records,
+// recursive references, unions and tuple positions. Defaults are canonical JSON
+// metadata for the host resolver, never a fallback in the accessor.
+// Objects containing explicit secret fields remain namespaces of declarations;
+// their optional ancestors lift local leaves so the host can return absence.
+// Capabilities inside static collections or unions are rejected.
 
 import { getConfigValue } from 'golem:agent/host@2.0.0';
 import { AgentConfigSource } from 'golem:agent/common@2.0.0';
@@ -56,7 +32,9 @@ import {
 } from './internal/schema-model';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import { compileSchema } from './schema/adapter';
-import { SchemaCodec } from './schema/codec';
+import { SchemaCodec, graphMayContainCapability } from './schema/codec';
+import { canonicalConfigGraph, canonicalConfigName } from './schema/config';
+import { SchemaRef } from './schema/ref';
 import { Secret } from './secret';
 import { reveal } from 'golem:secrets/reveal@0.1.0';
 import { SECRET_INTERNAL } from './internal/schema-model/secretInternal';
@@ -69,6 +47,23 @@ import { releaseGuestSecretHandle } from './internal/schema-model/secretHandle';
  * `secret<inner>`); any other leaf is a plain local field.
  */
 export type ConfigSpec = Record<string, StandardSchemaV1>;
+
+/** Recover a vendor object's fields through wrappers, without unwrapping array elements. */
+export type ConfigObjectShapeOf<S> = unknown extends S
+  ? never
+  : S extends StandardSchemaV1<unknown, readonly unknown[] | null | undefined>
+    ? never
+    : S extends { readonly shape: infer Shape }
+      ? Shape
+      : S extends { readonly entries: infer Shape }
+        ? Shape
+        : S extends { readonly fields: infer Shape }
+          ? Shape
+          : S extends { unwrap(): infer Inner }
+            ? ConfigObjectShapeOf<Inner>
+            : S extends { readonly wrapped: infer Inner }
+              ? ConfigObjectShapeOf<Inner>
+              : never;
 
 /**
  * A single compiled config field. `graph` is the *declaration* graph the host
@@ -132,6 +127,7 @@ function liftCodecToOption(inner: SchemaCodec): SchemaCodec {
   return {
     graph: { defs: inner.graph.defs, root: t.option(inner.graph.root) },
     optionKind: 'optional',
+    optionInner: inner,
     toValue: (value) =>
       value === undefined ? v.option(undefined) : v.option(inner.toValue(value)),
     fromValue: (sv) => {
@@ -143,7 +139,12 @@ function liftCodecToOption(inner: SchemaCodec): SchemaCodec {
 
 /** A codec is a descendable object group when it exposes `fields` and is not a secret. */
 function isObjectGroup(codec: SchemaCodec): boolean {
-  return codec.secretInner === undefined && codec.fields !== undefined && codec.fields.length > 0;
+  return (
+    codec.secretInner === undefined &&
+    codec.fields !== undefined &&
+    codec.fields.length > 0 &&
+    graphMayContainCapability(codec.graph)
+  );
 }
 
 /** Whether a compiled leaf codec is itself an option (declared/derived as `option<...>`). */
@@ -154,11 +155,13 @@ function isOptionCodec(codec: SchemaCodec): boolean {
 /** Build a single leaf declaration, lifting to `option<...>` when under an optional ancestor. */
 function buildLeafDeclaration(
   codec: SchemaCodec,
+  name: string,
   path: string[],
   underOptional: boolean,
 ): ConfigDeclaration {
-  const name = path[path.length - 1];
   if (codec.secretInner !== undefined) {
+    if (codec.configDefault !== undefined)
+      throw new TypeError('Secret config cannot have a code default');
     // Secret leaf: the marker's own `graph` is `secret<inner>` (declared to the
     // host); its inner codec decodes the revealed plaintext. Secrets are read
     // via their opaque handle (never option-lifted here); a required secret is
@@ -172,18 +175,60 @@ function buildLeafDeclaration(
       required: true,
     };
   }
+  if (underOptional && codec.optionKind === 'nullable') {
+    throw new TypeError(
+      `Nullable static config at '${path.join('.')}' cannot be nested under an optional group`,
+    );
+  }
   const leafIsOptional = isOptionCodec(codec) && codec.optionKind !== 'nullable';
   // Lift a non-option leaf that sits under an optional group so an unset value
   // reads as `option none` (=> undefined) instead of trapping the guest.
   const declCodec = underOptional && !leafIsOptional ? liftCodecToOption(codec) : codec;
+  const graph = canonicalConfigGraph(declCodec.graph);
+  let defaultValue: SchemaValue | undefined;
+  if (codec.configDefault !== undefined) {
+    const ref = new SchemaRef(graph);
+    const innerDefault = new SchemaRef(canonicalConfigGraph(codec.graph)).packJson(
+      codec.configDefault,
+    );
+    const packed = declCodec === codec ? innerDefault : v.option(innerDefault);
+    const decoded = declCodec.fromValue(packed);
+    validateConfigDefault(declCodec, packed);
+    const json = ref.unpackJson(packed);
+    if (JSON.stringify(ref.unpackJson(declCodec.toValue(decoded))) !== JSON.stringify(json)) {
+      throw new TypeError(`Static config default changes during encoding at '${path.join('.')}'`);
+    }
+    defaultValue = packed;
+  }
   return {
     name,
     source: 'local',
     path: [...path],
     codec: declCodec,
-    graph: declCodec.graph,
+    graph,
+    defaultValue,
     required: !leafIsOptional,
   };
+}
+
+function validateConfigDefault(codec: SchemaCodec, value: SchemaValue): void {
+  if (value.tag === 'option' && codec.optionInner) {
+    if (value.value) validateConfigDefault(codec.optionInner, value.value);
+  } else if (value.tag === 'record' && codec.fields) {
+    codec.fields.forEach((field, index) => validateConfigDefault(field.codec, value.fields[index]));
+  } else if (value.tag === 'tuple' && codec.tupleItems) {
+    codec.tupleItems.forEach((item, index) => validateConfigDefault(item, value.elements[index]));
+  } else if (value.tag === 'list' && codec.listItem) {
+    value.elements.forEach((item) => validateConfigDefault(codec.listItem!, item));
+  } else if (value.tag === 'union' && codec.unionBranches) {
+    const branch = codec.unionBranches.find((branch) => branch.tag === value.unionTag)!;
+    validateConfigDefault(branch.codec, value.body);
+  } else {
+    const result = codec.sourceSchema?.['~standard'].validate(codec.fromValue(value));
+    if (result instanceof Promise || result?.issues)
+      throw new TypeError('Invalid static config default');
+  }
+  codec.validateConfigContainer?.(codec.fromValue(value));
 }
 
 /** Build a presence-tree node (leaf or group) for a compiled field `codec` at `path`. */
@@ -194,18 +239,25 @@ function buildConfigNode(
   underOptional: boolean,
 ): ConfigNode {
   if (isObjectGroup(codec)) {
+    if (codec.configDefault !== undefined)
+      throw new TypeError('Config containing managed fields cannot have a code default');
     const optional = codec.optionalGroup === true;
     const childUnderOptional = underOptional || optional;
     const children: ConfigNode[] = [];
     const requiredKeys: string[] = [];
+    const names = new Set<string>();
     for (const f of codec.fields!) {
-      const child = buildConfigNode(f.codec, f.name, [...path, f.name], childUnderOptional);
+      const canonical = canonicalConfigName(f.name);
+      if (names.has(canonical))
+        throw new TypeError(`Duplicate canonical config field '${canonical}'`);
+      names.add(canonical);
+      const child = buildConfigNode(f.codec, f.name, [...path, canonical], childUnderOptional);
       children.push(child);
       if (isRequiredChild(child)) requiredKeys.push(f.name);
     }
     return { kind: 'group', name, optional, children, requiredKeys };
   }
-  return { kind: 'leaf', decl: buildLeafDeclaration(codec, path, underOptional) };
+  return { kind: 'leaf', decl: buildLeafDeclaration(codec, name, path, underOptional) };
 }
 
 /** Whether a child node counts toward its parent group's presence. */
@@ -223,8 +275,18 @@ export function compileConfigTree(spec: ConfigSpec | undefined): ConfigGroupNode
   const children: ConfigNode[] = [];
   const requiredKeys: string[] = [];
   if (spec !== undefined) {
+    const names = new Set<string>();
     for (const [name, schema] of Object.entries(spec)) {
-      const node = buildConfigNode(compileSchema(schema), name, [name], false);
+      const canonical = canonicalConfigName(name);
+      if (names.has(canonical))
+        throw new TypeError(`Duplicate canonical config field '${canonical}'`);
+      names.add(canonical);
+      const node = buildConfigNode(
+        compileSchema(schema, { config: true }),
+        name,
+        [canonical],
+        false,
+      );
       children.push(node);
       if (isRequiredChild(node)) requiredKeys.push(name);
     }

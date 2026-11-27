@@ -90,6 +90,10 @@ export interface SchemaCodec {
   readonly invocationDirect?: DirectSchemaCodec;
   /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
   readonly sourceSchema?: StandardSchemaV1;
+  /** Native container checks, without parsing structural children that may be SDK markers. */
+  readonly validateConfigContainer?: (value: unknown) => void;
+  /** Portable canonical JSON default, exported as metadata, never applied by the codec. */
+  readonly configDefault?: import('./ref').JsonValue;
   /**
    * True for the unit/void type: the method's `returns` maps to WIT
    * `output-schema.unit`, so `graph` is a placeholder and is never encoded.
@@ -129,6 +133,8 @@ export interface SchemaCodec {
   readonly mapValue?: SchemaCodec;
   readonly mapKind?: 'record' | 'map';
   readonly tupleItems?: readonly SchemaCodec[];
+  /** Selected branch codecs for canonical config unions. */
+  readonly unionBranches?: ReadonlyArray<{ readonly tag: string; readonly codec: SchemaCodec }>;
   /** Arms for a WIT result. */
   readonly resultOk?: SchemaCodec;
   readonly resultErr?: SchemaCodec;
@@ -743,6 +749,13 @@ function freezeCodec(
     });
     Object.freeze(codec.fields);
   }
+  if (codec.unionBranches) {
+    codec.unionBranches.forEach((entry) => {
+      freezeCodec(entry.codec, seenCodecs, seenGraphValues);
+      Object.freeze(entry);
+    });
+    Object.freeze(codec.unionBranches);
+  }
   [codec.optionInner, codec.listItem, codec.mapKey, codec.mapValue, codec.secretInner].forEach(
     (child) => {
       if (child) freezeCodec(child, seenCodecs, seenGraphValues);
@@ -759,6 +772,7 @@ function freezeCodec(
 export type SchemaWalker = (
   schema: unknown,
   recurse: (child: unknown) => SchemaCodec,
+  options?: { readonly config?: boolean },
 ) => SchemaCodec;
 
 /**
@@ -827,7 +841,7 @@ function peekCapabilityHandle(value: unknown): unknown {
   return undefined;
 }
 
-function graphMayContainCapability(graph: SchemaGraph): boolean {
+export function graphMayContainCapability(graph: SchemaGraph): boolean {
   const cached = capabilityGraphCache.get(graph);
   if (cached !== undefined) return cached;
 

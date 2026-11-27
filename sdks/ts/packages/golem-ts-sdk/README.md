@@ -30,6 +30,60 @@ configuration accessor and identity/principal helpers. The SDK rejects these fie
 initialization or restoration, even if their value is `undefined`. Rename them or nest them
 inside another state field; nested fields may use these names.
 
+## Static configuration
+
+Declare static config with Zod, Valibot or ArkType schemas. Data-only records,
+recursive values, lists and tuples remain whole config fields. `s.default` takes
+canonical JSON data and exports it in the agent metadata:
+
+```ts
+import { defineAgent, s } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+
+const Settings = defineAgent({
+  name: 'Settings',
+  id: {},
+  config: {
+    settings: s.default(z.object({ label: z.string(), count: s.u32() }), {
+      label: 'code-default',
+      count: 31,
+    }),
+    omitted: z.string().optional(),
+  },
+  methods: {},
+});
+```
+
+The host applies code defaults only to absent static values, below deployment and
+creation values. The accessor reads the host result; it does not apply defaults.
+An explicit null differs from an omitted default. Optional tuple positions use
+null in canonical JSON and retain their positions.
+Nullable fields below optional managed groups are rejected because the host
+schema cannot represent nested options.
+
+Config field names use lowerCamelCase in metadata, including record fields and
+discriminator field names. TypeScript property names remain as declared. Catalog
+selectors are exact values: the SDK never recases them or resolves them locally.
+
+Valibot literal optional defaults and ArkType literal property defaults are
+exported when portable. Opaque native defaults, including Zod's accessor-backed
+defaults and native factory callbacks, fail with a diagnostic. Use
+`s.default(schemaWithoutNativeDefault, data)` instead. A complete record default
+can also be assembled from its literal field defaults. Partial nested defaults
+that cannot describe a complete value fail instead of being dropped. Transforms
+and catch/fallback schemas are not static defaults.
+Static config rejects Zod string transforms such as `trim`, `toLowerCase` and
+`toUpperCase`, and Zod overwrites, before executing their checks.
+
+Native string-discriminated record unions retain their discriminator and tags.
+Use `s.union([{ tag, schema, discriminator }, ...])` for explicit canonical named
+branches, such as string prefixes. Numeric widths use the existing `s.u32()`,
+`s.s32()` and other numeric markers. Use `s.tuple([schema, ...])` to combine
+numeric markers or other Standard Schemas in fixed positional tuples.
+Defaults cannot contain capabilities or
+apply to Secret or other managed fields. Secrets inside collections and unions
+are not static data.
+
 ## Who called
 
 Every method handler receives an `InvocationContext` as its second argument (a method with no

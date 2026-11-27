@@ -35,6 +35,8 @@ import { SchemaCodec, SchemaWalker } from './codec';
 import { StandardSchemaV1 } from './standardSchema';
 import { buildUnionVariantCodec, matchesStandard } from './union';
 import { registerSchemaWalker } from './adapter';
+import { nativeConfigDefault } from './configDefault';
+import { buildConfigUnionCodec } from './union';
 
 interface NormalizedDef {
   kind: string;
@@ -120,7 +122,49 @@ function leaf(
   return { graph: { defs: new Map(), root }, toValue, fromValue };
 }
 
-const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
+function validateConfigContainer(schema: any, value: unknown): void {
+  const pipelines: any[][] = [];
+  let current = schema;
+  while (Array.isArray(current.pipe) && current.pipe.length > 0 && current.pipe[0] !== current) {
+    pipelines.unshift(current.pipe.slice(1));
+    current = current.pipe[0];
+  }
+  let dataset: any = { typed: true, value };
+  for (const actions of pipelines) {
+    for (const action of actions) {
+      if (action.kind === 'metadata' || action.type === 'brand' || action.type === 'readonly')
+        continue;
+      if (action.async || action.kind !== 'validation')
+        throw new TypeError('Static config defaults require synchronous Valibot validation');
+      dataset = action['~run'](dataset, {});
+      if (dataset.issues) throw new TypeError('Invalid static config default');
+    }
+  }
+}
+
+const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
+  const validateContainer = context?.config
+    ? (value: unknown) => validateConfigContainer(schema, value)
+    : undefined;
+  if (context?.config) {
+    let current: any = schema;
+    while (current) {
+      if ('fallback' in current) throw new TypeError('Static config cannot use a Valibot fallback');
+      if (
+        current.pipe?.some(
+          (action: any) =>
+            action.kind === 'transformation' &&
+            action.type !== 'brand' &&
+            action.type !== 'readonly',
+        )
+      ) {
+        throw new TypeError('Static config cannot use a Valibot transformation');
+      }
+      const base = current.pipe?.[0];
+      if (!base || base === current) break;
+      current = base;
+    }
+  }
   const {
     kind,
     inner,
@@ -158,6 +202,7 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
               innerCodec.graph.root.body.tag !== 'option');
     const optionCodec: SchemaCodec = {
       graph: { defs: innerCodec.graph.defs, root },
+      validateConfigContainer: validateContainer,
       optionKind: kind as 'optional' | 'nullable' | 'nullish',
       optionInner: innerCodec,
       toValue: (value) =>
@@ -167,13 +212,19 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
         return opt === undefined ? noneValue : innerCodec.fromValue(opt);
       },
     };
+    const codec = {
+      ...optionCodec,
+      configDefault: context?.config
+        ? nativeConfigDefault(unwrapPipe(schema), 'default', optionCodec)
+        : undefined,
+    };
     // An OPTIONAL object group: expose the inner object's per-field codecs (so the
     // config surface can descend it) and flag it optional (so descended leaves are
     // declared as `option<leaf>` with required-child presence). See zod.ts.
     if (kind !== 'nullable' && innerCodec.fields !== undefined) {
-      return { ...optionCodec, fields: innerCodec.fields, optionalGroup: true };
+      return { ...codec, fields: innerCodec.fields, optionalGroup: true };
     }
-    return optionCodec;
+    return codec;
   }
 
   switch (kind) {
@@ -214,6 +265,7 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       const elemCodec = recurse(element);
       return {
         graph: { defs: elemCodec.graph.defs, root: t.list(elemCodec.graph.root) },
+        validateConfigContainer: validateContainer,
         listItem: elemCodec,
         toValue: (value) => v.list((value as unknown[]).map((e) => elemCodec.toValue(e))),
         fromValue: (sv) =>
@@ -230,6 +282,7 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       const defs = mergeGraphDefs(fieldCodecs.map((f) => f.codec.graph));
       return {
         graph: { defs, root: t.record(fields) },
+        validateConfigContainer: validateContainer,
         toValue: (value) =>
           v.record(
             fieldCodecs.map((f) => f.codec.toValue((value as Record<string, unknown>)[f.name])),
@@ -253,6 +306,8 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       const defs = mergeGraphDefs(itemCodecs.map((c) => c.graph));
       return {
         graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
+        validateConfigContainer: validateContainer,
+        tupleItems: itemCodecs,
         toValue: (value) => v.tuple((value as unknown[]).map((e, i) => itemCodecs[i].toValue(e))),
         fromValue: (sv) =>
           (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) =>
@@ -380,6 +435,11 @@ const valibotWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
         const lit = litSchema ? normalize(litSchema).literalValues?.[0] : undefined;
         if (lit !== undefined) discToIndex.set(lit, i);
       });
+      if (context?.config)
+        return {
+          ...buildConfigUnionCodec(optCodecs, disc, [...discToIndex.keys()]),
+          validateConfigContainer: validateContainer,
+        };
       return {
         graph: { defs, root: t.variant(cases) },
         toValue: (value) => {

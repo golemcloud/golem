@@ -20,6 +20,7 @@ import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import { s } from '../src/schema/markers';
 import { Secret } from '../src/secret';
+import type { ConfigOverrides } from '../src/client';
 
 // ---------------------------------------------------------------------------
 // Typed config: local field → decoded value; secret field → Secret<Inner>
@@ -84,6 +85,9 @@ const nestedDef = defineAgent({
   config: {
     top: z.string(),
     tags: z.array(z.string()),
+    rows: z.array(z.object({ label: z.string() })),
+    optionalRows: z.array(z.object({ label: z.string() })).optional(),
+    readonlyRows: z.array(z.object({ label: z.string() })).readonly(),
     nested: z.object({
       a: z.string(),
       b: z.number(),
@@ -106,6 +110,15 @@ void nestedDef.implement({
       // Top-level primitive + array read whole.
       const top: string = this.config.top;
       const tags: string[] = this.config.tags;
+      const row: string = this.config.rows[0].label;
+      const optionalRow: string | undefined = this.config.optionalRows?.[0].label;
+      const readonlyRow: string = this.config.readonlyRows[0].label;
+      // @ts-expect-error an array does not expose its element's fields directly
+      void this.config.rows.label;
+      // @ts-expect-error optional arrays retain their array shape
+      void this.config.optionalRows?.label;
+      // @ts-expect-error readonly arrays retain their array shape
+      void this.config.readonlyRows.label;
       // @ts-expect-error 'typo' is not a field of the nested object
       void this.config.nested.typo;
       void a;
@@ -114,6 +127,9 @@ void nestedDef.implement({
       void cv;
       void top;
       void tags;
+      void row;
+      void optionalRow;
+      void readonlyRow;
       return 'ok';
     },
   },
@@ -156,3 +172,90 @@ void noCfgDef.implement({
     },
   },
 });
+
+const staticDef = defineAgent({
+  name: 'TypedStaticConfig',
+  id: {},
+  config: {
+    settings: s.default(z.object({ label: z.string(), count: s.u32() }), {
+      label: 'default',
+      count: 31,
+    }),
+    slots: s.default(s.tuple([s.option(s.s32()), s.option(s.s32()), z.string()]), [
+      null,
+      7,
+      'retained',
+    ]),
+    choice: s.union([
+      {
+        tag: 'mail',
+        schema: z.object({ kind: z.literal('mail'), address: z.string() }),
+        discriminator: { tag: 'field-equals', val: { fieldName: 'kind', literal: 'mail' } },
+      },
+      {
+        tag: 'queue',
+        schema: z.object({ kind: z.literal('queue'), queue: z.string() }),
+        discriminator: { tag: 'field-equals', val: { fieldName: 'kind', literal: 'queue' } },
+      },
+    ]),
+  },
+  methods: { read: method({ input: {}, returns: z.string() }) },
+});
+void staticDef.implement({
+  init: () => ({}),
+  methods: {
+    read() {
+      const count: number = this.config.settings.count;
+      const retained: string = this.config.slots[2];
+      const optional: number | undefined = this.config.slots[0];
+      void retained;
+      void optional;
+      // @ts-expect-error defaults do not erase the declared output type
+      const invalid: boolean = this.config.settings.label;
+      void invalid;
+      return this.config.choice.kind === 'mail'
+        ? this.config.choice.address
+        : this.config.choice.queue + count;
+    },
+  },
+});
+
+const overrideConfig = {
+  settings: z.object({ label: z.string(), count: s.u32() }),
+  service: z.object({ timeout: z.number(), apiKey: s.secret(z.string()) }),
+  optionalService: z.object({ timeout: z.number(), apiKey: s.secret(z.string()) }).optional(),
+};
+const wholeRecord: ConfigOverrides<typeof overrideConfig> = {
+  settings: { label: 'whole', count: 7 },
+  service: { timeout: 13 },
+  optionalService: { timeout: 19 },
+};
+void wholeRecord;
+void defineAgent({
+  name: 'OptionalManagedConfig',
+  id: {},
+  config: overrideConfig,
+  methods: {},
+}).implement({
+  init: ({ config }) => {
+    const timeout: number | undefined = config.optionalService?.timeout;
+    const key: string | undefined = config.optionalService?.apiKey.get();
+    // @ts-expect-error an optional managed group may be absent
+    const required: number = config.optionalService.timeout;
+    void timeout;
+    void key;
+    void required;
+    return {};
+  },
+  methods: {},
+});
+const partialRecord: ConfigOverrides<typeof overrideConfig> = {
+  // @ts-expect-error a static record is one declaration, not a partial namespace
+  settings: { label: 'incomplete' },
+};
+void partialRecord;
+const secretOverride: ConfigOverrides<typeof overrideConfig> = {
+  // @ts-expect-error a namespace cannot supply a managed Secret
+  service: { apiKey: 'secret' },
+};
+void secretOverride;

@@ -317,6 +317,18 @@ async fn static_config_reference_exports_corpus_metadata() -> anyhow::Result<()>
     .await
 }
 
+#[test]
+async fn ts_static_config_exports_corpus_metadata() -> anyhow::Result<()> {
+    check_reference_metadata(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-components/golem_it_agent_sdk_ts.wasm"
+        ),
+        "StaticDefaultsAgent",
+    )
+    .await
+}
+
 async fn check_reference_metadata(component: &str, agent_type: &str) -> anyhow::Result<()> {
     let corpus: Corpus = serde_json::from_str(CORPUS)?;
     let agents = extract_agent_type_schemas(Path::new(component), true, false).await?;

@@ -38,9 +38,12 @@ import {
   v,
 } from '../internal/schema-model';
 import { SchemaCodec, SchemaWalker } from './codec';
+import type { StandardSchemaV1 } from './standardSchema';
 import { buildUnionVariantCodec, matchesSchemaType } from './union';
 import { registerSchemaWalker } from './adapter';
 import { RecursionRegistry } from './recursion';
+import { collectConfigDefault, nativeConfigDefault } from './configDefault';
+import { buildConfigUnionCodec } from './union';
 
 type Node = any;
 
@@ -159,7 +162,18 @@ function walkNode(node: Node, reg: RecursionRegistry): SchemaCodec {
     }
     n = resolved;
   }
-  return reg.compile(n, () => walkNodeBody(n, reg));
+  return reg.compile(n, () => {
+    const codec = walkNodeBody(n, reg);
+    return reg.config
+      ? collectConfigDefault(codec, [
+          ...(codec.fields?.map((field) => field.codec) ?? []),
+          ...(codec.tupleItems ?? []),
+          ...[codec.optionInner, codec.listItem, codec.mapKey, codec.mapValue].filter(
+            (child): child is SchemaCodec => child !== undefined,
+          ),
+        ])
+      : codec;
+  });
 }
 
 /** Structural dispatch for an (already alias-resolved) ArkType internal node. */
@@ -244,6 +258,27 @@ function walkUnion(node: Node, reg: RecursionRegistry): SchemaCodec {
   // Standard Schema values).
   if (branches.length === 0) throw new Error('ArkType union has no branches');
   const memberCodecs = branches.map((b) => walkNode(b, reg));
+  if (reg.config) {
+    if (memberCodecs.some((codec) => codec.configDefault !== undefined)) {
+      throw new TypeError(
+        'Nested config defaults cannot be exported in a union; use s.default on the whole static field',
+      );
+    }
+    const first = branches[0].inner?.structure?.inner?.required ?? [];
+    for (const property of first) {
+      const literals = branches.map((branch) => {
+        const properties = branch.inner?.structure?.inner?.required ?? [];
+        const candidate = properties.find((entry: Node) => entry.key === property.key);
+        return candidate?.value?.kind === 'unit' ? unitValueOf(candidate.value) : undefined;
+      });
+      if (
+        literals.every((literal) => typeof literal === 'string') &&
+        new Set(literals).size === branches.length
+      ) {
+        return buildConfigUnionCodec(memberCodecs, property.key, literals);
+      }
+    }
+  }
   return buildUnionVariantCodec(
     memberCodecs,
     (value) => memberCodecs.findIndex((c) => matchesSchemaType(c.graph.defs, c.graph.root, value)),
@@ -320,11 +355,20 @@ function walkStructure(node: Node, reg: RecursionRegistry): SchemaCodec {
       codec: walkNode(nodeOf(r.value), reg),
       optional: false,
     })),
-    ...optional.map((o) => ({
-      name: o.key as string,
-      codec: optionCodec(walkNode(nodeOf(o.value), reg)),
-      optional: true,
-    })),
+    ...optional.map((o) => {
+      const inner = walkNode(nodeOf(o.value), reg);
+      const codec = optionCodec(inner);
+      const configDefault = reg.config ? nativeConfigDefault(o.inner, 'default', codec) : undefined;
+      if (reg.config && configDefault === undefined) collectConfigDefault(codec, [inner]);
+      return {
+        name: o.key as string,
+        codec: {
+          ...codec,
+          configDefault,
+        },
+        optional: true,
+      };
+    }),
   ];
   const fields: NamedFieldType[] = fieldCodecs.map((f) => field(f.name, f.codec.graph.root));
   const defs = mergeGraphDefs(fieldCodecs.map((f) => f.codec.graph));
@@ -381,6 +425,9 @@ function walkSequence(node: Node, reg: RecursionRegistry): SchemaCodec {
   const inner = node.inner ?? node;
 
   if (inner.variadic) {
+    if (reg.config && (inner.prefix?.length || inner.postfix?.length || inner.optionals?.length)) {
+      throw new TypeError('Static config cannot export a tuple with a variadic segment');
+    }
     const elemCodec = walkNode(nodeOf(inner.variadic), reg);
     return {
       graph: { defs: elemCodec.graph.defs, root: t.list(elemCodec.graph.root) },
@@ -391,12 +438,26 @@ function walkSequence(node: Node, reg: RecursionRegistry): SchemaCodec {
     };
   }
 
-  if (Array.isArray(inner.prefix) && inner.prefix.length > 0) {
-    const itemCodecs = (inner.prefix as Node[]).map((p) => walkNode(nodeOf(p), reg));
+  if (
+    Array.isArray(inner.prefix) ||
+    Array.isArray(inner.optionals) ||
+    Array.isArray(inner.postfix)
+  ) {
+    const itemCodecs = [
+      ...(inner.prefix ?? []).map((item: Node) => walkNode(nodeOf(item), reg)),
+      ...(inner.optionals ?? []).map((item: Node) => {
+        const child = walkNode(nodeOf(item), reg);
+        const wrapped = optionCodec(child);
+        return reg.config ? collectConfigDefault(wrapped, [child]) : wrapped;
+      }),
+      ...(inner.postfix ?? []).map((item: Node) => walkNode(nodeOf(item), reg)),
+    ] as SchemaCodec[];
     const defs = mergeGraphDefs(itemCodecs.map((c) => c.graph));
     return {
       graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
-      toValue: (value) => v.tuple((value as unknown[]).map((e, i) => itemCodecs[i].toValue(e))),
+      tupleItems: itemCodecs,
+      toValue: (value) =>
+        v.tuple(itemCodecs.map((codec, index) => codec.toValue((value as unknown[])[index]))),
       fromValue: (sv) =>
         (sv as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((e, i) =>
           itemCodecs[i].fromValue(e),
@@ -409,11 +470,21 @@ function walkSequence(node: Node, reg: RecursionRegistry): SchemaCodec {
   );
 }
 
-const arktypeWalker: SchemaWalker = (schema): SchemaCodec => {
+const arktypeWalker: SchemaWalker = (schema, _recurse, context): SchemaCodec => {
   // One registry per top-level compile: ArkType recurses over its node tree
   // internally, so it drives its own cycle detection rather than the adapter's
   // `recurse`.
-  return walkNode(nodeOf(schema), new RecursionRegistry());
+  const codec = walkNode(nodeOf(schema), new RecursionRegistry(context?.config));
+  return context?.config
+    ? {
+        ...codec,
+        validateConfigContainer: (value) => {
+          const result = (schema as StandardSchemaV1)['~standard'].validate(value);
+          if (result instanceof Promise || result.issues)
+            throw new TypeError('Invalid static config default');
+        },
+      }
+    : codec;
 };
 
 registerSchemaWalker('arktype', arktypeWalker);

@@ -76,6 +76,10 @@ import type {
   QuotaToken as RawQuotaToken,
 } from 'golem:core/types@2.0.0';
 import { SchemaCodec } from './codec';
+import { portableDefault } from './configDefault';
+import type { JsonValue } from './ref';
+import { discriminatorMatches, toCanonicalJson } from './render';
+import type { DiscriminatorRule } from '../internal/schema-model';
 import { buildResultCodec } from './result';
 import { StandardSchemaV1 } from './standardSchema';
 import { Result } from '../host/result';
@@ -96,7 +100,10 @@ export const WIT_MARKER: unique symbol = Symbol('golem.witMarker');
  * Standard Schema (the same `compileSchema` callback the vendor walkers use), so
  * capability wrappers (e.g. `s.secret(inner)`) can descend into their payload.
  */
-export type MarkerDescriptor = (recurse: (child: unknown) => SchemaCodec) => SchemaCodec;
+export type MarkerDescriptor = (
+  recurse: (child: unknown) => SchemaCodec,
+  context?: { readonly config?: boolean },
+) => SchemaCodec;
 
 /**
  * Type-level wire classification used by HTTP binding checks. Scalars bind
@@ -143,6 +150,17 @@ export interface MarkerSchema<
  * Zod / Valibot / ArkType schema).
  */
 export type MarkerKindOf<V> = V extends MarkerSchema<any, infer K> ? K : undefined;
+
+declare const DEFAULT_INNER: unique symbol;
+
+/** Retain structural config inference through a data-only default wrapper. */
+export interface DefaultMarkerSchema<S extends StandardSchemaV1> extends MarkerSchema<
+  StandardSchemaV1.InferOutput<S>
+> {
+  readonly [DEFAULT_INNER]: S;
+}
+
+export type DefaultInnerOf<S> = S extends DefaultMarkerSchema<infer Inner> ? Inner : never;
 
 /**
  * Runtime brand key carried by every secret marker; its value is the marker's
@@ -1246,6 +1264,119 @@ export const processExitStatusSchema: StandardSchemaV1<ProcessExitStatus> =
  * is restricted to agent method inputs and outputs by the agent schema validator.
  */
 export const s = {
+  /** A fixed tuple that accepts vendor-neutral schemas, including numeric pins. */
+  tuple: <const Items extends readonly StandardSchemaV1[]>(
+    items: Items,
+  ): MarkerSchema<{
+    -readonly [K in keyof Items]: StandardSchemaV1.InferOutput<Items[K]>;
+  }> =>
+    marker(
+      (input) => {
+        if (!Array.isArray(input) || input.length !== items.length) {
+          return { issues: [{ message: 'Expected a fixed-length tuple' }] };
+        }
+        const values: unknown[] = [];
+        for (const [index, schema] of items.entries()) {
+          const result = schema['~standard'].validate(input[index]);
+          if (result instanceof Promise)
+            return { issues: [{ message: 'Tuple validation must be synchronous' }] };
+          if (result.issues) return result;
+          values.push(result.value);
+        }
+        return {
+          value: values as { -readonly [K in keyof Items]: StandardSchemaV1.InferOutput<Items[K]> },
+        };
+      },
+      (recurse) => {
+        const codecs = items.map(recurse);
+        return {
+          graph: {
+            defs: mergeGraphDefs(codecs.map((codec) => codec.graph)),
+            root: t.tuple(codecs.map((codec) => codec.graph.root)),
+          },
+          tupleItems: codecs,
+          toValue: (value) =>
+            v.tuple(codecs.map((codec, index) => codec.toValue((value as unknown[])[index]))),
+          fromValue: (value) =>
+            (value as Extract<SchemaValue, { tag: 'tuple' }>).elements.map((item, index) =>
+              codecs[index].fromValue(item),
+            ),
+        };
+      },
+    ),
+
+  /** A canonical JSON code default. The host applies it only when static config is absent. */
+  default: <Schema extends StandardSchemaV1>(
+    schema: Schema,
+    value: JsonValue,
+  ): DefaultMarkerSchema<Schema> => {
+    const data = portableDefault(value);
+    return marker(
+      (input) => schema['~standard'].validate(input),
+      (recurse) => ({ ...recurse(schema), configDefault: data }),
+    ) as DefaultMarkerSchema<Schema>;
+  },
+
+  /** Explicit named branches when a vendor cannot retain canonical union discriminators. */
+  union: <
+    const Branches extends readonly {
+      tag: string;
+      schema: StandardSchemaV1;
+      discriminator: DiscriminatorRule;
+    }[],
+  >(
+    branches: Branches,
+  ): MarkerSchema<StandardSchemaV1.InferOutput<Branches[number]['schema']>> =>
+    marker(
+      (input) => {
+        for (const branch of branches) {
+          const result = branch.schema['~standard'].validate(input);
+          if (!(result instanceof Promise) && !result.issues) return result;
+        }
+        return { issues: [{ message: 'No union branch accepts the value' }] };
+      },
+      (recurse, context) => {
+        const codecs = branches.map((branch) => recurse(branch.schema));
+        const graph = {
+          defs: mergeGraphDefs(codecs.map((codec) => codec.graph)),
+          root: schemaType({
+            tag: 'union',
+            branches: branches.map((branch, index) => ({
+              tag: branch.tag,
+              body: codecs[index].graph.root,
+              discriminator: branch.discriminator,
+              metadata: emptyMetadata(),
+            })),
+          }),
+        };
+        return {
+          graph,
+          unionBranches: codecs.map((codec, index) => ({ tag: branches[index].tag, codec })),
+          toValue: (value) => {
+            for (const [index, branch] of branches.entries()) {
+              if (context?.config) {
+                if (!discriminatorMatches(branch.discriminator, value as JsonValue)) continue;
+              } else {
+                const validation = branch.schema['~standard'].validate(value);
+                if (validation instanceof Promise || validation.issues) continue;
+              }
+              const encoded = codecs[index].toValue(value);
+              const json = toCanonicalJson(codecs[index].graph, codecs[index].graph.root, encoded);
+              if (discriminatorMatches(branch.discriminator, json))
+                return v.union(branch.tag, encoded);
+            }
+            throw new TypeError('No canonical union branch accepts the value');
+          },
+          fromValue: (value) => {
+            if (value.tag !== 'union') throw new TypeError('Expected a union value');
+            const index = branches.findIndex((branch) => branch.tag === value.unionTag);
+            if (index < 0) throw new TypeError(`Unknown union tag '${value.unionTag}'`);
+            return codecs[index].fromValue(value.body);
+          },
+        };
+      },
+    ) as MarkerSchema<StandardSchemaV1.InferOutput<Branches[number]['schema']>>,
+
   // Numeric pins (f64 is the default `number`, so it is intentionally absent).
   u8: (opts?: NumericOpts) => intMarker({ tag: 'u8', min: 0n, max: 255n, big: false }, opts),
   u16: (opts?: NumericOpts) => intMarker({ tag: 'u16', min: 0n, max: 65535n, big: false }, opts),

@@ -26,6 +26,7 @@ import { SchemaCodec, freezeSchemaCodec, SchemaWalker, withDirectCodec } from '.
 import { isStandardSchema, type StandardSchemaV1 } from './standardSchema';
 import { isMarkerSchema, WIT_MARKER } from './markers';
 import { RecursionRegistry } from './recursion';
+import { collectConfigDefault } from './configDefault';
 import {
   isolateCapabilityRoot,
   withCapabilityAdoptionTransaction,
@@ -48,8 +49,11 @@ export function registeredVendors(): string[] {
  * schemas (e.g. a `Tree`) close to a named `ref` def instead of infinite-looping;
  * the registry is threaded through the recursive walk (see {@link compileSchemaWith}).
  */
-export function compileSchema(schema: unknown): SchemaCodec {
-  const codec = compileSchemaWith(schema, new RecursionRegistry());
+export function compileSchema(
+  schema: unknown,
+  options?: { readonly config?: boolean },
+): SchemaCodec {
+  const codec = compileSchemaWith(schema, new RecursionRegistry(options?.config), options);
   return freezeSchemaCodec(
     withDirectCodec({ ...codec, toValue: isolateCapabilityRoot(codec.toValue) }),
   );
@@ -60,14 +64,25 @@ export function compileSchema(schema: unknown): SchemaCodec {
  * carries the shared {@link RecursionRegistry} so a recursive back-reference
  * (which resolves to the same schema OBJECT) is detected by identity.
  */
-function compileSchemaWith(schema: unknown, registry: RecursionRegistry): SchemaCodec {
-  const recurse = (child: unknown): SchemaCodec => compileSchemaWith(child, registry);
+function compileSchemaWith(
+  schema: unknown,
+  registry: RecursionRegistry,
+  options?: { readonly config?: boolean },
+): SchemaCodec {
+  const children: SchemaCodec[] = [];
+  const recurse = (child: unknown): SchemaCodec => {
+    const codec = compileSchemaWith(child, registry, options);
+    children.push(codec);
+    return codec;
+  };
+  const finish = (codec: SchemaCodec): SchemaCodec =>
+    options?.config ? collectConfigDefault(codec, children) : codec;
 
   // Markers carry a hidden `WIT_MARKER` brand (a `SchemaCodec`-builder) so users
   // can express WIT kinds Standard Schema can't. Intercept them BEFORE the
   // vendor dispatch; non-markers fall through to the per-vendor walker path.
   if (isMarkerSchema(schema)) {
-    return withSourceSchema(schema[WIT_MARKER](recurse), schema);
+    return withSourceSchema(finish(schema[WIT_MARKER](recurse, options)), schema);
   }
   if (!isStandardSchema(schema)) {
     throw new Error(
@@ -88,7 +103,7 @@ function compileSchemaWith(schema: unknown, registry: RecursionRegistry): Schema
   // re-entry short-circuits to a `ref`, and only genuinely recursive schemas are
   // promoted to a named def (non-recursive ones pass through inline).
   return withSourceSchema(
-    registry.compile(schema as object, () => walker(schema, recurse)),
+    registry.compile(schema as object, () => finish(walker(schema, recurse, options))),
     schema,
   );
 }

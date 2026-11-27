@@ -24,6 +24,7 @@ use crate::Tracing;
 pub mod attempt_server;
 pub mod background_work;
 pub mod checkout_v2_regressions;
+pub mod config;
 pub mod custom_durability;
 pub mod manifest_status;
 pub mod permissions;

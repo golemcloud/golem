@@ -40,8 +40,54 @@ import {
   v,
   variantCase,
   VariantCaseType,
+  schemaType,
+  emptyMetadata,
 } from '../internal/schema-model';
 import { StandardSchemaV1 } from './standardSchema';
+
+/** Retain a native string discriminator as a canonical union, not positional case names. */
+export function buildConfigUnionCodec(
+  codecs: SchemaCodec[],
+  fieldName: string,
+  literals: unknown[],
+): SchemaCodec {
+  if (
+    literals.length !== codecs.length ||
+    literals.some((literal) => typeof literal !== 'string') ||
+    new Set(literals).size !== literals.length
+  ) {
+    throw new TypeError(
+      'Static config unions require distinct string discriminators; use s.union for explicit branches',
+    );
+  }
+  const tags = literals as string[];
+  return {
+    unionBranches: codecs.map((codec, index) => ({ tag: tags[index], codec })),
+    graph: {
+      defs: mergeGraphDefs(codecs.map((codec) => codec.graph)),
+      root: schemaType({
+        tag: 'union',
+        branches: codecs.map((codec, index) => ({
+          tag: tags[index],
+          body: codec.graph.root,
+          metadata: emptyMetadata(),
+          discriminator: { tag: 'field-equals', val: { fieldName, literal: tags[index] } },
+        })),
+      }),
+    },
+    toValue: (value) => {
+      const index = tags.indexOf((value as Record<string, string>)[fieldName]);
+      if (index < 0) throw new TypeError(`Unknown config union discriminator '${fieldName}'`);
+      return v.union(tags[index], codecs[index].toValue(value));
+    },
+    fromValue: (value) => {
+      if (value.tag !== 'union') throw new TypeError('Expected config union value');
+      const index = tags.indexOf(value.unionTag);
+      if (index < 0) throw new TypeError(`Unknown config union tag '${value.unionTag}'`);
+      return codecs[index].fromValue(value.body);
+    },
+  };
+}
 
 /**
  * Structural acceptance via a member's Standard Schema: runs
