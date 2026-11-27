@@ -339,6 +339,12 @@ impl ToolInputModel {
         let _ = cache.set(Rc::clone(&model));
         Ok(model)
     }
+
+    /// Returns the aliases of each field in canonical record order.
+    #[doc(hidden)]
+    pub fn field_aliases(&self) -> impl Iterator<Item = &[String]> + '_ {
+        self.fields.iter().map(|field| field.aliases.as_slice())
+    }
 }
 
 impl DescriptorInputField {
