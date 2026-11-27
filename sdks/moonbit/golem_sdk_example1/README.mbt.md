@@ -9,6 +9,33 @@ Example agents and tool middleware built with MoonBit Golem SDK 0.5.x, targeting
 - **VisionAgent** — Multimodal agent accepting text or image input
 - **RpcExampleAgent** — Demonstrates agent-to-agent RPC using generated client stubs
 
+## Static configuration
+
+`config_agent.mbt` derives `AppConfig` and its nested `DatabaseConfig`. The generated
+constructor loads `@config.Config[AppConfig]` once. The agent keeps it and reads
+`config.value`; `ConfiguredAgent.settings` returns the captured application name
+and database address.
+
+Use a field annotation such as `#derive.config(default="5432")` for a numeric
+default or `#derive.config(default="\"localhost\"")` for a string default. The
+generator emits the literal canonical schema JSON as declaration metadata. Golem
+fills missing static settings from it below deployment and creation values. A
+supplied invalid value still fails. Reading config never applies an SDK fallback.
+
+Config fields, including fields inside static data records, use lowerCamelCase:
+`app_name` becomes `appName`. Ordinary method schemas keep their native names.
+`#derive.config(name="exactName")` sets an explicit config path segment. Catalog
+paths inside JSON selectors are data and remain exact. Named data records use
+`#derive.golem_schema`; tuples retain optional positions and recursive records
+retain their shared schema definitions. Existing custom schema traits can describe
+discriminated unions without changing their branch tags or discriminators.
+
+An omitted default differs from `default="null"` on an optional field. Defaults
+must be literal JSON strings, not functions or MoonBit default expressions. A
+nested config group declares defaults on its leaves; a data record can have a
+record default. Secret fields cannot declare static defaults. Shared bindings,
+capabilities and special-field construction are not static defaults.
+
 ## Agent tools
 
 `golem_moonbit_examples/canonical_tools.mbt` contains the canonical `grep` and `git` agent-tool

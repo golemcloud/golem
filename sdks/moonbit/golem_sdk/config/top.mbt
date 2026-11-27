@@ -3,9 +3,10 @@
 
 ///|
 /// A loaded configuration value of type `T`. Generated constructor glue
-/// materializes `Config[T]` parameters via `load_config`.
-pub(all) struct Config[T] {
-  value : T
+/// materializes `Config[T]` parameters via `load_config`. Constructor-held
+/// handles refresh before each method with the host's captured configuration.
+pub struct Config[T] {
+  mut value : T
 }
 
 ///|
@@ -46,8 +47,8 @@ fn[T : @schema.IntoSchema] secret_schema_graph_of(
 pub fn[T : @schema.WireSchema + @schema.FromWire] load_config_value(
   key : Array[String],
 ) -> T raise @common.AgentError {
-  let wire_graph = @schema.wire_schema(
-    (@schema.type_tag() : @schema.TypeTag[T]),
+  let wire_graph = @schema.canonical_config_graph(
+    @schema.wire_schema((@schema.type_tag() : @schema.TypeTag[T])),
   )
   let wire_value = match @host.get_config_value(key, wire_graph) {
     Ok(value) => value
@@ -144,7 +145,9 @@ pub fn[T : @schema.WireSchema + @schema.FromWire] Secret::get(
 pub fn[T : ConfigField] load_config(
   _tag : @schema.TypeTag[T],
 ) -> Config[T] raise @common.AgentError {
-  { value: T::load([]), }
+  let config = Config::{ value: T::load([]), }
+  @agents.register_config_refresh(() => config.value = T::load([]))
+  config
 }
 
 ///|
@@ -186,16 +189,32 @@ pub(open) trait ConfigField {
 
 ///|
 /// Single `LOCAL` config declaration whose value type is `T`'s schema graph.
-fn[T : @schema.IntoSchema] local_entry(
+/// Source defaults are decoded once into native data, never read fallbacks.
+pub fn[T : @schema.IntoSchema] local_entry(
   tag : @schema.TypeTag[T],
   path : Array[String],
+  default_value? : String,
 ) -> Array[@agents.AgentConfigDef] raise @common.AgentError {
+  let graph = @model.schema_graph_from_wit(
+    @schema.canonical_config_graph(
+      @model.schema_graph_to_wit(schema_graph_of(tag)),
+    ),
+  ) catch {
+    e => raise @common.AgentError::InvalidInput(repr(e))
+  }
   [
     {
       source: @common.AgentConfigSource::LOCAL,
       path,
-      value_type: schema_graph_of(tag),
-      default_value: None,
+      value_type: graph,
+      default_value: default_value.map(json => {
+        @reflection.SchemaRef::new(graph).pack_json(@json.parse(json)) catch {
+          error =>
+            raise @common.AgentError::InvalidInput(
+              "invalid config default: " + repr(error),
+            )
+        }
+      }),
     },
   ]
 }

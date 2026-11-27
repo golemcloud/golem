@@ -7,7 +7,7 @@ rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" 
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe" "fault-matrix-ts")
 effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect" "http-update-effect" "custom-durability-effect" "fault-matrix-effect")
 scala_test_apps=("tool-streaming-scala" "fault-matrix-scala")
-moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40" "agent-sdk-moonbit" "fault-matrix-moonbit")
+moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40" "agent-sdk-moonbit" "agent-config-moonbit" "fault-matrix-moonbit")
 go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go" "fault-matrix-go")
 benchmark_apps=("benchmarks")
 
@@ -74,7 +74,7 @@ print_groups_json() {
   done
   printf '%s{"name":"effect","needs-node":true,"needs-effect":true}' "$sep"
   printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifacts":"golem_it_tool_streaming_scala.wasm golem_it_fault_matrix_scala.wasm"}' "$sep"
-  printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true}'
+  printf ',{"name":"moonbit","needs-node":true,"needs-moonbit":true}'
   for ((i=1; i<=GO_CHUNKS; i++)); do
     printf ',{"name":"go-%d","needs-node":false,"needs-go":true}' "$i"
   done
@@ -433,6 +433,9 @@ build_sdk_apps() {
           "$GOLEM_CLI" --preset release-gc build --yes --skip-check
           "$GOLEM_CLI" --preset release-gc exec copy
           test -s ../golem_it_agent_sdk_moonbit_gc.wasm
+          ;;
+        agent-config-moonbit)
+          test -s ../agent_config_moonbit.wasm
           ;;
         fault-matrix-moonbit)
           test -s ../golem_it_fault_matrix_moonbit.wasm

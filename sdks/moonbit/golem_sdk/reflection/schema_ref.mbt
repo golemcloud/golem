@@ -12,7 +12,7 @@ pub struct SchemaRef {
 } derive(Debug, Eq)
 
 ///|
-fn SchemaRef::new(
+pub fn SchemaRef::new(
   graph : @model.SchemaGraph,
   root_defaults~ : Map[String, @model.SchemaValue] = Map([]),
 ) -> SchemaRef {

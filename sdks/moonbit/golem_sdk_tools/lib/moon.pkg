@@ -2,6 +2,7 @@ import {
   "moonbitlang/core/debug",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/list",
+  "moonbitlang/core/json",
   "moonbitlang/parser",
   "moonbitlang/parser/attribute",
   "moonbitlang/parser/syntax",
@@ -10,6 +11,5 @@ import {
 }
 
 import {
-  "moonbitlang/core/json",
   "moonbitlang/parser/fmt" @formatter,
 } for "test"

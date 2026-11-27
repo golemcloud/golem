@@ -4,6 +4,7 @@ pub(all) struct ConfigTypeInfo {
   name : String
   package_path : String
   fields : Array[(String, ParamType)]
+  field_metadata : Map[String, (String, String?)]
 } derive(Debug, Eq)
 
 ///|
@@ -24,8 +25,18 @@ pub fn parse_config_types(
           let mut is_config = false
           let attr_arr = type_decl.attrs.to_array()
           for attr in attr_arr {
-            if attr.raw == "#derive.config" {
-              is_config = true
+            match derive_props(attr, "config") {
+              Some([]) => is_config = true
+              Some(_) =>
+                raise AgentParseError(
+                  "#derive.config properties belong on fields, not on '\{type_decl.tycon}'",
+                )
+              None =>
+                if attr.raw.has_prefix("#derive.config(") {
+                  raise AgentParseError(
+                    "Malformed #derive.config on '\{type_decl.tycon}'",
+                  )
+                }
             }
           }
           if is_config {
@@ -38,13 +49,103 @@ pub fn parse_config_types(
             match type_decl.components {
               Record(fields~) => {
                 let result : Array[(String, ParamType)] = []
+                let field_metadata : Map[String, (String, String?)] = {}
+                let names : Map[String, Unit] = {}
                 let field_arr = fields.to_array()
                 for field in field_arr {
                   let field_name = field.name.label
                   let field_type = syntax_type_to_param_type(field.ty)
+                  let canonical_name = Ref(config_field_name(field_name))
+                  let default_value : Ref[String?] = Ref(None)
+                  let seen : Map[String, Unit] = {}
+                  for attr in field.attrs {
+                    match derive_props(attr, "config") {
+                      Some([]) =>
+                        raise AgentParseError(
+                          "Expected config name or default on '\{name}.\{field_name}'",
+                        )
+                      Some(props) =>
+                        for prop in props {
+                          match prop_string(prop) {
+                            Some((Some(key), raw_value)) if key == "name" ||
+                              key == "default" => {
+                              if seen.contains(key) {
+                                raise AgentParseError(
+                                  "Duplicate config \{key} on '\{name}.\{field_name}'",
+                                )
+                              }
+                              seen[key] = ()
+                              // Parser string tokens retain escape sequences. Decode the
+                              // literal, not the JSON data it contains, before emitting it.
+                              let decoded = @json.parse("\"" + raw_value + "\"") catch {
+                                _ =>
+                                  raise AgentParseError(
+                                    "Config \{key} on '\{name}.\{field_name}' requires a JSON-compatible string literal",
+                                  )
+                              }
+                              let value = match decoded {
+                                String(value) => value
+                                _ =>
+                                  abort(
+                                    "JSON string literal did not decode to a string",
+                                  )
+                              }
+                              if key == "name" {
+                                canonical_name.val = value
+                              } else {
+                                // Only literal JSON data is portable. Never evaluate a callback.
+                                let _ = @json.parse(value) catch {
+                                  _ =>
+                                    raise AgentParseError(
+                                      "Invalid canonical JSON default on '\{name}.\{field_name}'",
+                                    )
+                                }
+                                default_value.val = Some(value)
+                              }
+                            }
+                            _ =>
+                              raise AgentParseError(
+                                "Expected #derive.config(name=\"...\", default=\"canonical JSON\") on '\{name}.\{field_name}'; defaults must be literal JSON strings",
+                              )
+                          }
+                        }
+                      None =>
+                        if attr.raw.has_prefix("#derive.config(") {
+                          raise AgentParseError(
+                            "Malformed #derive.config on '\{name}.\{field_name}'; defaults must be literal JSON strings",
+                          )
+                        }
+                    }
+                  }
+                  if canonical_name.val.is_empty() ||
+                    canonical_name.val.has_prefix("$") {
+                    raise AgentParseError(
+                      "Invalid config field name '\{canonical_name.val}' on '\{name}.\{field_name}'",
+                    )
+                  }
+                  if names.contains(canonical_name.val) {
+                    raise AgentParseError(
+                      "Duplicate canonical config field '\{canonical_name.val}' on '\{name}'",
+                    )
+                  }
+                  names[canonical_name.val] = ()
+                  if is_secret_type(field_type) && default_value.val is Some(_) {
+                    raise AgentParseError(
+                      "Secret field '\{name}.\{field_name}' cannot have a static default",
+                    )
+                  }
+                  field_metadata[field_name] = (
+                    canonical_name.val,
+                    default_value.val,
+                  )
                   result.push((field_name, field_type))
                 }
-                results.push({ name, package_path, fields: result, })
+                results.push({
+                  name,
+                  package_path,
+                  fields: result,
+                  field_metadata,
+                })
               }
               _ =>
                 raise AgentParseError(
@@ -118,8 +219,39 @@ pub fn validate_config_types(
     config_type_names[ct.name] = ct
   }
   for ct in config_types {
+    for (field_name, pt) in ct.fields {
+      if pt is Simple(name) &&
+        config_type_names.contains(name) &&
+        ct.field_metadata.get(field_name) is Some((_, Some(_))) {
+        raise AgentParseError(
+          "Nested #derive.config field '\{ct.name}.\{field_name}' cannot have a default; put defaults on its leaves or use a #derive.golem_schema data record",
+        )
+      }
+    }
     validate_no_config_cycles(ct.name, ct, config_type_names, [])
   }
+}
+
+///|
+/// Manifest field names use lowerCamelCase; catalog paths are never recased.
+fn config_field_name(name : String) -> String {
+  let buf = StringBuilder()
+  let mut upper = false
+  for ch in name {
+    if ch == '_' {
+      upper = true
+    } else {
+      buf.write_char(
+        if upper && ch >= 'a' && ch <= 'z' {
+          (ch.to_int() - 32).unsafe_to_char()
+        } else {
+          ch
+        },
+      )
+      upper = false
+    }
+  }
+  buf.to_string()
 }
 
 ///|

@@ -1,0 +1,33 @@
+manifestVersion: 2.0.0
+
+app: agent-config-moonbit
+
+componentTemplates:
+  moonbit-config-component:
+    guestLanguage: moonbit
+    presets:
+      release:
+        default: true
+        build:
+        - command: moon run cmd -- reexports "{{ appRootDir }}/../../sdks/moonbit/golem_sdk" "{{ componentDir }}"
+          dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
+        - command: moon run cmd -- agents "{{ appRootDir }}" --component-dir "{{ componentDir }}"
+          dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
+        - command: moon -C "{{ appRootDir }}" build --target wasm --release component
+        - command: node "{{ appRootDir }}/check-core.mjs" "{{ appRootDir }}/_build/wasm/release/build/golemcloud/agent_config_moonbit/component/component.wasm"
+        - command: wasm-tools component embed "{{ appRootDir }}/../../sdks/moonbit/golem_sdk/wit" "{{ appRootDir }}/_build/wasm/release/build/golemcloud/agent_config_moonbit/component/component.wasm" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/release/agent_config_moonbit.embed.wasm"
+        - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/release/agent_config_moonbit.embed.wasm" --output "{{ appRootDir }}/_build/wasm/release/agent_config_moonbit.agent.wasm"
+        componentWasm: "{{ appRootDir }}/_build/wasm/release/agent_config_moonbit.agent.wasm"
+        customCommands:
+          copy:
+          - command: cp "{{ appRootDir }}/_build/wasm/release/agent_config_moonbit.agent.wasm" "{{ appRootDir }}/../agent_config_moonbit.wasm"
+
+components:
+  golem-it:agent-config-moonbit:
+    dir: component
+    templates: moonbit-config-component
+
+environments:
+  local:
+    server: local
+    componentPresets: release

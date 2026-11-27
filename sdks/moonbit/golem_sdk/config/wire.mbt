@@ -16,17 +16,31 @@ pub fn[T : WireConfigField] append_wire_entries_with(
 }
 
 ///|
-fn[T : @schema.WireSchema] wire_local_entry(
+/// Append a static data declaration to the owner's shared schema pool.
+pub fn[T : @schema.WireSchema] wire_local_entry(
   encoder : @schema.WireTypeEncoder,
   tag : @schema.TypeTag[T],
   path : Array[String],
+  default_value? : String,
 ) -> Array[@common.AgentConfigDeclaration] {
+  let graph = @schema.canonical_config_graph(@schema.wire_schema(tag))
+  let value = default_value.map(json => {
+    let model = @model.schema_graph_from_wit(graph) catch {
+      error => abort("invalid config schema: " + repr(error))
+    }
+    let value = @reflection.SchemaRef::new(model).pack_json(@json.parse(json)) catch {
+      error => abort("invalid config default: " + repr(error))
+    }
+    @model.schema_value_to_wit(value) catch {
+      error => abort("invalid config default: " + repr(error))
+    }
+  })
   [
     {
       source: @common.AgentConfigSource::LOCAL,
       path,
-      value_type: @schema.append_wire_type_with(encoder, tag),
-      default_value: None,
+      value_type: append_config_type(encoder, graph, graph.root),
+      default_value: value,
     },
   ]
 }

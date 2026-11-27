@@ -5,6 +5,10 @@ pub fn generate_config_field_impls(
   config_types : Array[ConfigTypeInfo],
 ) -> @list.List[@syntax.Impl] {
   let buf = StringBuilder()
+  let config_names : Map[String, Unit] = {}
+  for ct in config_types {
+    config_names[ct.name] = ()
+  }
   for ct in config_types {
     let name = ct.name
     // Generate collect_entries impl. Returns the pre-encoding declaration form
@@ -18,12 +22,27 @@ pub fn generate_config_field_impls(
     buf.write_string("  let entries : Array[@agents.AgentConfigDef] = []\n")
     for i, field in ct.fields {
       let (field_name, pt) = field
+      let (canonical_name, default_value) = ct.field_metadata
+        .get(field_name)
+        .unwrap_or((config_field_name(field_name), None))
       let type_str = param_type_to_type_string(pt)
       buf.write_string("  let fp\{i} = path.copy()\n")
-      buf.write_string("  fp\{i}.push(\"\{escape_string_lit(field_name)}\")\n")
       buf.write_string(
-        "  entries.append(@config.collect_entries_of((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}))\n",
+        "  fp\{i}.push(\"\{escape_string_lit(canonical_name)}\")\n",
       )
+      if is_secret_type(pt) || (pt is Simple(n) && config_names.contains(n)) {
+        buf.write_string(
+          "  entries.append(@config.collect_entries_of((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}))\n",
+        )
+      } else {
+        let default_arg = match default_value {
+          Some(value) => ", default_value=\"\{escape_string_lit(value)}\""
+          None => ""
+        }
+        buf.write_string(
+          "  entries.append(@config.local_entry((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}\{default_arg}))\n",
+        )
+      }
     }
     buf.write_string("  entries\n")
     buf.write_string("}\n\n")
@@ -35,12 +54,27 @@ pub fn generate_config_field_impls(
     )
     for i, field in ct.fields {
       let (field_name, pt) = field
+      let (canonical_name, default_value) = ct.field_metadata
+        .get(field_name)
+        .unwrap_or((config_field_name(field_name), None))
       let type_str = param_type_to_type_string(pt)
       buf.write_string("  let fp\{i} = path.copy()\n")
-      buf.write_string("  fp\{i}.push(\"\{escape_string_lit(field_name)}\")\n")
       buf.write_string(
-        "  entries.append(@config.append_wire_entries_with(encoder, (@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}))\n",
+        "  fp\{i}.push(\"\{escape_string_lit(canonical_name)}\")\n",
       )
+      if is_secret_type(pt) || (pt is Simple(n) && config_names.contains(n)) {
+        buf.write_string(
+          "  entries.append(@config.append_wire_entries_with(encoder, (@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}))\n",
+        )
+      } else {
+        let default_arg = match default_value {
+          Some(value) => ", default_value=\"\{escape_string_lit(value)}\""
+          None => ""
+        }
+        buf.write_string(
+          "  entries.append(@config.wire_local_entry(encoder, (@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}\{default_arg}))\n",
+        )
+      }
     }
     buf.write_string("  entries\n}\n\n")
     // Generate load impl
@@ -48,12 +82,24 @@ pub fn generate_config_field_impls(
     buf.write_string("impl @config.ConfigField for \{name} with load(path) {\n")
     for i, field in ct.fields {
       let (field_name, pt) = field
+      let canonical_name = ct.field_metadata
+        .get(field_name)
+        .map(fn(m) { m.0 })
+        .unwrap_or(config_field_name(field_name))
       let type_str = param_type_to_type_string(pt)
       buf.write_string("  let fp\{i} = path.copy()\n")
-      buf.write_string("  fp\{i}.push(\"\{escape_string_lit(field_name)}\")\n")
       buf.write_string(
-        "  let \{field_name} : \{type_str} = @config.load_field((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i})\n",
+        "  fp\{i}.push(\"\{escape_string_lit(canonical_name)}\")\n",
       )
+      if is_secret_type(pt) || (pt is Simple(n) && config_names.contains(n)) {
+        buf.write_string(
+          "  let \{field_name} : \{type_str} = @config.load_field((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i})\n",
+        )
+      } else {
+        buf.write_string(
+          "  let \{field_name} : \{type_str} = @config.load_config_value(fp\{i})\n",
+        )
+      }
     }
     // Build the struct literal with all field names
     let field_names = ct.fields.map(fn(f) { f.0 })
@@ -194,7 +240,13 @@ pub fn generate_config_override_walkers(
       buf.write_string("  match config.\{field_name} {\n")
       buf.write_string("    Some(v) => {\n")
       buf.write_string("      let p = path.copy()\n")
-      buf.write_string("      p.push(\"\{escape_string_lit(field_name)}\")\n")
+      let canonical_name = ct.field_metadata
+        .get(field_name)
+        .map(fn(m) { m.0 })
+        .unwrap_or(config_field_name(field_name))
+      buf.write_string(
+        "      p.push(\"\{escape_string_lit(canonical_name)}\")\n",
+      )
       match nested_fn {
         Some(f) => buf.write_string("      result.append(\{f}(v, p))\n")
         None =>
