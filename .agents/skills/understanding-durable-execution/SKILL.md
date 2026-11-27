@@ -1677,7 +1677,7 @@ agents retain their clean fail-stop lifecycle and never append it.
 
 ### Resharding, revocation and the oplog epoch fence
 
-Registration, lease renewal, assignment pushes and revokes carry the number of executors with a stored lease, including executors with no shards. `ShardService::executor_count` reads the last accepted count without copying the assignment, for cluster-wide resource budgets. The count and shard set share the revision and manager-incarnation check. An accepted revoke updates the count and revision without changing lease expiry. An older renewal can extend the lease but cannot replace the count. Wire receipts reject a zero count before changing the assignment. The `executor_count` metric reports the accepted count. The single-shard adapter reports one. The single-binary `golem` uses an embedded shard manager and receives its count. Registration does not remove elapsed leases first, so the count can stay high until housekeeping removes them and a newer snapshot reaches the executor. That reduces a divided budget; it does not grant ownership or change the epoch fence.
+Registration, lease renewal, assignment pushes and revokes carry the number of executors with a stored lease, including executors with no shards. `ShardService::executor_count` reads the last accepted count without copying the assignment, for cluster-wide resource budgets. The count and shard set share the revision and manager-incarnation check. An accepted revoke updates the count and revision without changing lease expiry. An older renewal can extend the lease but cannot replace the count. Wire receipts reject a zero count before changing the assignment. The `golem_executor_count` metric reports the accepted count. The single-shard adapter reports one. The single-binary `golem` uses an embedded shard manager and receives its count. Registration does not remove elapsed leases first, so the count can stay high until housekeeping removes them and a newer snapshot reaches the executor. That reduces a divided budget; it does not grant ownership or change the epoch fence.
 
 Two triggers retire an agent for its lost shard rather than reconstructing it here, and both go
 through `Worker::interrupt_and_retire(InterruptKind::ShardLost)`, the one stop-and-drop path an
@@ -3631,8 +3631,8 @@ run at the same time: a save call starts a run only while it holds the save mark
 save call whose periodic job an admission replaced while the call only waited for its late writes
 runs on as a tail that starts no run and no write, and the next save of the agent runs beside
 it. The metrics are
-`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds`,
-`filesystem_snapshot_delete_seconds` and `filesystem_snapshot_prune_seconds`. `upload_now` answers `Stopped` after a lost
+`golem_filesystem_snapshot_cleanups_pending`, `golem_filesystem_snapshot_copy_seconds`,
+`golem_filesystem_snapshot_delete_seconds` and `golem_filesystem_snapshot_prune_seconds`. `upload_now` answers `Stopped` after a lost
 shard, a shutdown or `delete_all_snapshots`, unless the save had already finished; ephemeral
 agents make no store call.
 

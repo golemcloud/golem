@@ -30,29 +30,29 @@ impl ProvidedWorkerExecutorCluster {
     /// reported cluster size matches reality.
     pub fn new(host: String, grpc_port: u16) -> Self {
         info!("Using an already running cluster of golem-worker-executors of size 1");
-        Self::from_endpoints(vec![(host, grpc_port)])
+        Self::from_endpoints(vec![(host, grpc_port, None)])
     }
 
     /// Build a worker-side cluster handle that attaches to a
     /// parent-owned set of worker executors. Each entry of `endpoints`
-    /// is a `(host, grpc_port)` pair pointing at one already-running
-    /// worker executor in the parent's cluster.
+    /// is a `(host, grpc_port, http_port)` triple pointing at one
+    /// already-running worker executor in the parent's cluster.
     ///
     /// Used by `EnvBasedTestDependencies::from_descriptor` (Hosted
     /// reconstruction) so the worker side reports the correct cluster
     /// `size()` / `to_vec()` for tests that walk the cluster (the
     /// previous `size() == 1` hardcoding silently broke tests that
     /// expected the configured cluster size).
-    pub fn from_endpoints(endpoints: Vec<(String, u16)>) -> Self {
+    pub fn from_endpoints(endpoints: Vec<(String, u16, Option<u16>)>) -> Self {
         info!(
             "Attaching to an already-running cluster of {} golem-worker-executors",
             endpoints.len()
         );
         let workers = endpoints
             .into_iter()
-            .map(|(host, port)| {
+            .map(|(host, grpc_port, http_port)| {
                 let exec: Arc<dyn WorkerExecutor> =
-                    Arc::new(ProvidedWorkerExecutor::new(host, port));
+                    Arc::new(ProvidedWorkerExecutor::new(host, grpc_port, http_port));
                 exec
             })
             .collect();
@@ -133,9 +133,9 @@ mod tests {
 
     fn cluster() -> ProvidedWorkerExecutorCluster {
         ProvidedWorkerExecutorCluster::from_endpoints(vec![
-            ("h1".to_string(), 9091),
-            ("h2".to_string(), 9092),
-            ("h3".to_string(), 9093),
+            ("h1".to_string(), 9091, None),
+            ("h2".to_string(), 9092, None),
+            ("h3".to_string(), 9093, None),
         ])
     }
 

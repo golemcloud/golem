@@ -49,7 +49,6 @@ impl UploadWorker {
         let CompiledComponent {
             component_and_revision,
             component,
-            environment_id,
             wasm_hash,
             upload_finished,
         } = compiled_component;
@@ -57,7 +56,6 @@ impl UploadWorker {
         let upload_result = self
             .compiled_component_service
             .put(
-                environment_id,
                 wasm_hash,
                 component_and_revision.id,
                 component_and_revision.revision,

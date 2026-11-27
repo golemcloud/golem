@@ -118,8 +118,12 @@ impl RateLimitedOplog {
         environment_id: &EnvironmentId,
     ) {
         if limiter.check().is_err() {
-            debug!("RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)");
-            record_oplog_rate_limited(&account_id.to_string(), &environment_id.to_string());
+            debug!(
+                %account_id,
+                %environment_id,
+                "RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)"
+            );
+            record_oplog_rate_limited();
         }
         limiter.until_ready().await;
     }

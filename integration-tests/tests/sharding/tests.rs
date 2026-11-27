@@ -82,14 +82,14 @@ fn batch_matches(expected: usize, metrics: &[String]) -> anyhow::Result<Option<(
     let ready = metrics.iter().try_fold(true, |ready, metrics| {
         let count = metrics
             .lines()
-            .find_map(|line| line.strip_prefix("executor_count "))
-            .context("missing required metric executor_count")?
+            .find_map(|line| line.strip_prefix("golem_executor_count "))
+            .context("missing required metric golem_executor_count")?
             .parse::<usize>()
-            .context("invalid metric executor_count")?;
+            .context("invalid metric golem_executor_count")?;
         let missing_leases = metrics
             .lines()
             .find_map(|line| {
-                line.strip_prefix("shard_lease_renewals_total{outcome=\"lease_not_found\"} ")
+                line.strip_prefix("golem_shard_lease_renewals_total{outcome=\"lease_not_found\"} ")
             })
             .context("missing required metric for lease_not_found renewals")?
             .parse::<u64>()
@@ -2033,7 +2033,7 @@ mod unix {
         // because the survivor recorded a higher epoch first, which the epoch check below asserts.
         // The refusal itself is pinned deterministically by golem-worker-executor's oplog and
         // indexed-storage tests; in a live cluster it is visible as
-        // `oplog_epoch_fence_total{op="append",outcome="refused"}`.
+        // `golem_oplog_epoch_fence_total{op="append",outcome="refused"}`.
         info!("Resuming worker executors {frozen:?}");
         for idx in frozen {
             cluster_control.resume(*idx).await;

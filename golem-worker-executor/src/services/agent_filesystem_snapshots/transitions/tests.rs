@@ -282,13 +282,13 @@ fn an_admission_checks_room_then_a_delete_of_all_snapshots_then_a_running_job() 
 
     assert_eq!(
         deleting_without_room,
-        Some((SnapshotSkip::VolumeUnderPressure, None))
+        Some((SnapshotSkip::DiskUnderPressure, None))
     );
     assert_eq!(deleting, Some((SnapshotSkip::DeletingAllSnapshots, None)));
     assert_eq!(running, Some((SnapshotSkip::UploadInFlight, Some(first))));
     assert_eq!(
         running_without_room,
-        Some((SnapshotSkip::VolumeUnderPressure, Some(first)))
+        Some((SnapshotSkip::DiskUnderPressure, Some(first)))
     );
 }
 

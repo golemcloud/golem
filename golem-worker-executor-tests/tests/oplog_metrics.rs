@@ -49,14 +49,11 @@ async fn worker_invocation_increments_oplog_bytes_written_metric(
     let agent_id = agent_key!("BlobStore", "oplog-metrics-test-1");
     let container_name = format!("{}-oplog-metrics-container", component.id);
 
-    let account_id = context.account_id.to_string();
-    let environment_id = context.default_environment_id.to_string();
-
     let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_OPLOG, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_OPLOG])
         .get();
     let objects_before = STORAGE_OBJECTS_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_OPLOG, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_OPLOG])
         .get();
 
     // Invoke a worker — each invocation writes oplog entries (Create + invocation entries)
@@ -72,10 +69,10 @@ async fn worker_invocation_increments_oplog_bytes_written_metric(
     drop(executor);
 
     let bytes_after = STORAGE_BYTES_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_OPLOG, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_OPLOG])
         .get();
     let objects_after = STORAGE_OBJECTS_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_OPLOG, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_OPLOG])
         .get();
 
     assert!(

@@ -12,124 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{SNAPSHOT_AGE_BUCKETS, SNAPSHOT_STORE_BUCKETS};
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 use std::time::Duration;
 
 lazy_static! {
-    static ref CAPTURE_SECONDS: HistogramVec = register_histogram_vec!(
-        "filesystem_snapshot_capture_seconds",
-        "Time that a capture of an agent filesystem, or a check of its initial files on an executor \
-         without filesystem snapshots, stops the file calls, by outcome",
-        &["outcome"],
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref UPLOAD_SECONDS: HistogramVec = register_histogram_vec!(
-        "filesystem_snapshot_upload_seconds",
-        "Time of an upload of a filesystem snapshot, with its retries, by kind and outcome",
-        &["kind", "outcome"],
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref UPLOADED_BYTES: CounterVec = register_counter_vec!(
-        "filesystem_snapshot_uploaded_bytes_total",
-        "Bytes of the trees of the uploaded filesystem snapshots, by kind",
-        &["kind"]
-    )
-    .unwrap();
-    static ref UPLOADS_IN_PROGRESS: Gauge = register_gauge!(
-        "filesystem_snapshot_uploads_in_progress",
-        "Number of store attempts of uploads of filesystem snapshots that hold a slot now"
-    )
-    .unwrap();
-    static ref RESTORE_SECONDS: HistogramVec = register_histogram_vec!(
-        "filesystem_snapshot_restore_seconds",
-        "Time of a restore of a filesystem snapshot, with the waits for a restore slot and the retries, by outcome",
-        &["outcome"],
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref DROPPED_CONFIRMATIONS: CounterVec = register_counter_vec!(
-        "filesystem_snapshot_dropped_confirmations_total",
-        "Uploaded filesystem snapshots that no confirmation record names, by reason",
-        &["reason"]
-    )
-    .unwrap();
-    static ref LEAKED_CLEANUPS: CounterVec = register_counter_vec!(
-        "filesystem_snapshot_leaked_cleanups_total",
-        "Clean-ups of filesystem snapshots that left snapshots in blob storage, by operation",
-        &["operation"]
-    )
-    .unwrap();
-    static ref CLEANUPS_PENDING: Gauge = register_gauge!(
-        "filesystem_snapshot_cleanups_pending",
-        "Number of agents with pending or running clean-up work of filesystem snapshots"
-    )
-    .unwrap();
-    static ref COPY_SECONDS: HistogramVec = register_histogram_vec!(
-        "filesystem_snapshot_copy_seconds",
-        "Time of a copy of the filesystem snapshots of a fork source, by outcome",
-        &["outcome"],
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref STORED_BYTES: IntCounterVec = register_int_counter_vec!(
-        "filesystem_snapshot_stored_bytes_total",
-        "Bytes of the repository files that the filesystem snapshot store wrote to blob storage, by source",
-        &["source"]
-    )
-    .unwrap();
-    static ref REMOVED_BYTES: IntCounterVec = register_int_counter_vec!(
-        "filesystem_snapshot_removed_bytes_total",
-        "Bytes that the filesystem snapshot store deleted from blob storage, by source",
-        &["source"]
-    )
-    .unwrap();
-    static ref RELEASED_BYTES: IntCounter = register_int_counter!(
-        "filesystem_snapshot_released_bytes_total",
-        "Packed bytes of the deleted filesystem snapshots, which a later prune can remove when no other snapshot uses them"
-    )
-    .unwrap();
-    static ref RESTORED_AGE_SECONDS: Histogram = register_histogram!(
-        "filesystem_snapshot_restored_age_seconds",
-        "Time from the save of a filesystem snapshot to its successful restore",
-        SNAPSHOT_AGE_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref SKIPPED: IntCounterVec = register_int_counter_vec!(
-        "filesystem_snapshot_skipped_total",
-        "Filesystem snapshots that the admission skipped, by kind and reason",
-        &["kind", "reason"]
-    )
-    .unwrap();
-    static ref DELETE_SECONDS: HistogramVec = register_histogram_vec!(
-        "filesystem_snapshot_delete_seconds",
-        "Time of a delete of filesystem snapshots, with its prune, by operation and outcome",
-        &["operation", "outcome"],
-        SNAPSHOT_STORE_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref PRUNE_SECONDS: HistogramVec = register_histogram_vec!(
-        "filesystem_snapshot_prune_seconds",
-        "Time of a prune of a filesystem snapshot repository after a delete, with its check, by outcome",
-        &["outcome"],
-        SNAPSHOT_STORE_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref PRUNE_SKIPPED: IntCounterVec = register_int_counter_vec!(
-        "filesystem_snapshot_prune_skipped_total",
-        "Deletes of filesystem snapshots after which no prune ran, by reason",
-        &["reason"]
-    )
-    .unwrap();
-    static ref RETENTION_RUNS: IntCounterVec = register_int_counter_vec!(
-        "filesystem_snapshot_retention_runs_total",
-        "Retention runs after a confirmed or committed filesystem snapshot, by outcome",
-        &["outcome"]
-    )
-    .unwrap();
+    static ref CAPTURE_SECONDS: HistogramVec =
+        catalog::FILESYSTEM_SNAPSHOT_CAPTURE_SECONDS.register();
+    static ref UPLOAD_SECONDS: HistogramVec =
+        catalog::FILESYSTEM_SNAPSHOT_UPLOAD_SECONDS.register();
+    static ref UPLOADED_BYTES: CounterVec =
+        catalog::FILESYSTEM_SNAPSHOT_UPLOADED_BYTES_TOTAL.register();
+    static ref UPLOADS_IN_PROGRESS: Gauge =
+        catalog::FILESYSTEM_SNAPSHOT_UPLOADS_IN_PROGRESS.register();
+    static ref RESTORE_SECONDS: HistogramVec =
+        catalog::FILESYSTEM_SNAPSHOT_RESTORE_SECONDS.register();
+    static ref DROPPED_CONFIRMATIONS: CounterVec =
+        catalog::FILESYSTEM_SNAPSHOT_DROPPED_CONFIRMATIONS_TOTAL.register();
+    static ref LEAKED_CLEANUPS: CounterVec =
+        catalog::FILESYSTEM_SNAPSHOT_LEAKED_CLEANUPS_TOTAL.register();
+    static ref CLEANUPS_PENDING: Gauge = catalog::FILESYSTEM_SNAPSHOT_CLEANUPS_PENDING.register();
+    static ref COPY_SECONDS: HistogramVec = catalog::FILESYSTEM_SNAPSHOT_COPY_SECONDS.register();
+    static ref STORED_BYTES: IntCounterVec =
+        catalog::FILESYSTEM_SNAPSHOT_STORED_BYTES_TOTAL.register();
+    static ref REMOVED_BYTES: IntCounterVec =
+        catalog::FILESYSTEM_SNAPSHOT_REMOVED_BYTES_TOTAL.register();
+    static ref RELEASED_BYTES: IntCounter =
+        catalog::FILESYSTEM_SNAPSHOT_RELEASED_BYTES_TOTAL.register();
+    static ref RESTORED_AGE_SECONDS: Histogram =
+        catalog::FILESYSTEM_SNAPSHOT_RESTORED_AGE_SECONDS.register();
+    static ref SKIPPED: IntCounterVec = catalog::FILESYSTEM_SNAPSHOT_SKIPPED_TOTAL.register();
+    static ref DELETE_SECONDS: HistogramVec =
+        catalog::FILESYSTEM_SNAPSHOT_DELETE_SECONDS.register();
+    static ref PRUNE_SECONDS: HistogramVec = catalog::FILESYSTEM_SNAPSHOT_PRUNE_SECONDS.register();
+    static ref PRUNE_SKIPPED: IntCounterVec =
+        catalog::FILESYSTEM_SNAPSHOT_PRUNE_SKIPPED_TOTAL.register();
+    static ref RETENTION_RUNS: IntCounterVec =
+        catalog::FILESYSTEM_SNAPSHOT_RETENTION_RUNS_TOTAL.register();
 }
 
 label_values! {
@@ -159,8 +79,8 @@ label_values! {
     SkipReason {
         /// An upload of the agent runs now.
         UploadInFlight => "upload_in_flight",
-        /// The volume of the agent filesystems has less free space than the pressure target.
-        VolumeUnderPressure => "volume_under_pressure",
+        /// The disk of the agent filesystems has less free space than the pressure target.
+        DiskUnderPressure => "disk_under_pressure",
         /// A delete of all snapshots of the agent is queued or runs.
         DeletingAllSnapshots => "deleting_all_snapshots",
     }

@@ -318,12 +318,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                let account_id = self.created_by().to_string();
-                let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(
                     STORAGE_TYPE_BLOB_STORE,
-                    &account_id,
-                    &environment_id_str,
                     result
                         .as_ref()
                         .map_or(0, |mutation| mutation.objects_deleted),

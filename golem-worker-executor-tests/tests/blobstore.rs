@@ -485,14 +485,12 @@ async fn blobstore_write_increments_storage_bytes_written_metric(
 
     let container_name = format!("{}-metrics-write-container", component.id);
     let data: Vec<u8> = vec![1u8; 128];
-    let account_id = context.account_id.to_string();
-    let environment_id = context.default_environment_id.to_string();
 
     let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_BLOB_STORE])
         .get();
     let objects_before = STORAGE_OBJECTS_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_BLOB_STORE])
         .get();
 
     executor
@@ -524,19 +522,19 @@ async fn blobstore_write_increments_storage_bytes_written_metric(
 
     drop(executor);
 
-    assert_eq!(
+    assert!(
         STORAGE_BYTES_WRITTEN_TOTAL
-            .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
-            .get(),
-        bytes_before + 256.0,
-        "bytes_written should increase by 128 + 128 = 256"
+            .with_label_values(&[STORAGE_TYPE_BLOB_STORE])
+            .get()
+            >= bytes_before + 256.0,
+        "bytes_written should increase by at least 128 + 128 = 256"
     );
-    assert_eq!(
+    assert!(
         STORAGE_OBJECTS_WRITTEN_TOTAL
-            .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
-            .get(),
-        objects_before + 2.0,
-        "objects_written should increase by 2"
+            .with_label_values(&[STORAGE_TYPE_BLOB_STORE])
+            .get()
+            >= objects_before + 2.0,
+        "objects_written should increase by at least 2"
     );
 
     Ok(())
@@ -561,8 +559,6 @@ async fn blobstore_delete_increments_storage_objects_deleted_metric(
 
     let container_name = format!("{}-metrics-delete-container", component.id);
     let data: Vec<u8> = vec![42u8; 64];
-    let account_id = context.account_id.to_string();
-    let environment_id = context.default_environment_id.to_string();
 
     executor
         .invoke_and_await_agent(
@@ -587,7 +583,7 @@ async fn blobstore_delete_increments_storage_objects_deleted_metric(
         .await?;
 
     let objects_deleted_before = STORAGE_OBJECTS_DELETED_TOTAL
-        .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+        .with_label_values(&[STORAGE_TYPE_BLOB_STORE])
         .get();
 
     executor
@@ -601,12 +597,12 @@ async fn blobstore_delete_increments_storage_objects_deleted_metric(
 
     drop(executor);
 
-    assert_eq!(
+    assert!(
         STORAGE_OBJECTS_DELETED_TOTAL
-            .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
-            .get(),
-        objects_deleted_before + 1.0,
-        "objects_deleted should increase by 1 after delete_object"
+            .with_label_values(&[STORAGE_TYPE_BLOB_STORE])
+            .get()
+            >= objects_deleted_before + 1.0,
+        "objects_deleted should increase by at least 1 after delete_object"
     );
 
     Ok(())

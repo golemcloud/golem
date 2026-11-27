@@ -110,7 +110,7 @@ impl CompileGrpcService {
             .component_revision
             .try_into()
             .map_err(|e| bad_request_error(format!("missing component version: {e}")))?;
-        let environment_id = make_environment_id(request.environment_id)?;
+        make_environment_id(request.environment_id)?;
         let wasm_hash = Hash::try_from(
             request
                 .wasm_hash
@@ -118,13 +118,7 @@ impl CompileGrpcService {
         )
         .map_err(bad_request_error)?;
         self.service
-            .enqueue_compilation(
-                component_id,
-                component_revision,
-                environment_id,
-                wasm_hash,
-                sender,
-            )
+            .enqueue_compilation(component_id, component_revision, wasm_hash, sender)
             .await?;
         Ok(())
     }

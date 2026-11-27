@@ -42,6 +42,10 @@ impl ShardManager for UnavailableShardManager {
         );
     }
 
+    fn http_port(&self) -> u16 {
+        panic!("shard_manager() has no reachable HTTP port in cloud mode");
+    }
+
     async fn kill(&self) {}
 
     async fn restart(&self, _number_of_shards_override: Option<usize>) {}

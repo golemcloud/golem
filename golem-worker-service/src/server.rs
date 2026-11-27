@@ -17,8 +17,6 @@ use golem_common::config::LoadOrDump;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{WorkerServiceConfig, make_worker_service_config_loader};
-use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use opentelemetry_sdk::trace::SdkTracer;
 use prometheus::Registry;
 use tracing::info;
@@ -49,17 +47,6 @@ fn main() -> anyhow::Result<()> {
     info!("Using configuration:\n{}", config.to_safe_string_indented());
 
     let prometheus_registry = golem_worker_service::metrics::register_all();
-
-    let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
-        .without_counter_suffixes()
-        .without_units()
-        .build();
-
-    global::set_meter_provider(
-        MeterProviderBuilder::default()
-            .with_reader(exporter)
-            .build(),
-    );
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

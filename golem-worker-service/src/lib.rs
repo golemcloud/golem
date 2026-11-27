@@ -34,8 +34,7 @@ use crate::public_endpoint::PublicEndpoint;
 use crate::service::registry_event_subscriber::WorkerServiceRegistryInvalidationHandler;
 use anyhow::{Context, anyhow};
 use golem_common::poem::{
-    CliClientInfoMiddleware, LazyEndpointExt, OpenTelemetryMetrics, OpenTelemetryTracing,
-    PrometheusExporter,
+    CliClientInfoMiddleware, HttpMetrics, LazyEndpointExt, OpenTelemetryTracing, PrometheusExporter,
 };
 use golem_service_base::body_limit::RequestBodyLimit;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
@@ -315,7 +314,7 @@ impl WorkerService {
         );
         let route: Arc<BoxEndpoint<'static>> = Arc::new(
             public_endpoint
-                .with(OpenTelemetryMetrics::new())
+                .with(HttpMetrics)
                 .with_if_lazy(tracer.is_some(), || {
                     OpenTelemetryTracing::new(tracer.unwrap())
                 })
@@ -363,7 +362,7 @@ impl WorkerService {
             self.services.mcp_capability_lookup.clone(),
             self.mcp_endpoint(),
         )
-        .with(OpenTelemetryMetrics::new())
+        .with(HttpMetrics)
         .with_if_lazy(tracer.is_some(), || {
             OpenTelemetryTracing::new(tracer.unwrap())
         });

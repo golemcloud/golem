@@ -6,27 +6,27 @@ Use the worker executor's metrics and logs to check filesystem snapshot captures
 
 ### Snapshots are skipped or manual updates fail
 
-- **Busy captures:** Check `filesystem_snapshot_capture_seconds_count{outcome="busy"}` and the capture log's `error` field. A guest that returns with an unflushed write to a WASI output stream keeps a file call open. The capture stops after `capture_wait`.
-- **Changed files without filesystem snapshots:** `filesystem_snapshot_capture_seconds_count{outcome="changed"}` counts skipped snapshots or failed manual updates because the agent's files are not its initial files.
-- **Volume pressure:** Check `filesystem_snapshot_skipped_total{reason="volume_under_pressure"}`. While it grows, affected agents get no new restore points. Admission also refuses captures when free filesystem objects are below the pressure target or the executor cannot read the volume's free capacity. Check the pressure targets in [Configuration](/next/operate/filesystem_snapshots/configuration) and the free-space log below.
-- **Other admission refusals:** Check the `reason` label of `filesystem_snapshot_skipped_total` for an upload in flight or a delete of all snapshots that waits or runs. A skipped `update` snapshot fails the manual update.
+- **Busy captures:** Check `golem_filesystem_snapshot_capture_seconds_count{outcome="busy"}` and the capture log's `error` field. A guest that returns with an unflushed write to a WASI output stream keeps a file call open. The capture stops after `capture_wait`.
+- **Changed files without filesystem snapshots:** `golem_filesystem_snapshot_capture_seconds_count{outcome="changed"}` counts skipped snapshots or failed manual updates because the agent's files are not its initial files.
+- **Disk pressure:** Check `golem_filesystem_snapshot_skipped_total{reason="disk_under_pressure"}`. While it grows, affected agents get no new restore points. Admission also refuses captures when free filesystem objects are below the pressure target or the executor cannot read the free capacity of the disk. Check the pressure targets in [Configuration](/next/operate/filesystem_snapshots/configuration) and the free-space log below.
+- **Other admission refusals:** Check the `reason` label of `golem_filesystem_snapshot_skipped_total` for an upload in flight or a delete of all snapshots that waits or runs. A skipped `update` snapshot fails the manual update.
 
 For a pending update that fails at start, inspect the `entry` field of `Pending update failed at the start`. It contains the failed update's details; the agent stays on its revision.
 
 ### A start uses an older snapshot or takes longer
 
-- **Failed uploads:** `filesystem_snapshot_upload_seconds_count{outcome="failed"}` counts uploads that exhausted their retries. Check the upload error in the logs. A failed automatic upload leaves the start to use an older snapshot; a failed manual upload fails the update.
-- **Deferred uploads:** `filesystem_snapshot_upload_seconds_count{outcome="deferred"}` means the instance that captured the snapshot could not confirm it, for example after an agent stop, restart, or shard move. This is normal for agents that stop soon after a snapshot. A later start confirms the snapshot when blob storage holds the whole snapshot. An upload still running when the agent moves to another executor is lost for that start, which uses an older snapshot.
-- **Dropped confirmations:** `filesystem_snapshot_dropped_confirmations_total` counts uploads made useless by an update or revert, not upload failures.
+- **Failed uploads:** `golem_filesystem_snapshot_upload_seconds_count{outcome="failed"}` counts uploads that exhausted their retries. Check the upload error in the logs. A failed automatic upload leaves the start to use an older snapshot; a failed manual upload fails the update.
+- **Deferred uploads:** `golem_filesystem_snapshot_upload_seconds_count{outcome="deferred"}` means the instance that captured the snapshot could not confirm it, for example after an agent stop, restart, or shard move. This is normal for agents that stop soon after a snapshot. A later start confirms the snapshot when blob storage holds the whole snapshot. An upload still running when the agent moves to another executor is lost for that start, which uses an older snapshot.
+- **Dropped confirmations:** `golem_filesystem_snapshot_dropped_confirmations_total` counts uploads made useless by an update or revert, not upload failures.
 - **Restore failures:** Check the restore and store-check warnings below for fallback to an older usable record.
-- **Restore time and age:** `filesystem_snapshot_restore_seconds` includes the wait for a restore slot and retries. A restore downloads the whole tree, so a large tree slows the start. `filesystem_snapshot_restored_age_seconds` shows how much work an agent can lose when it restarts from the snapshot.
+- **Restore time and age:** `golem_filesystem_snapshot_restore_seconds` includes the wait for a restore slot and retries. A restore downloads the whole tree, so a large tree slows the start. `golem_filesystem_snapshot_restored_age_seconds` shows how much work an agent can lose when it restarts from the snapshot.
 
 ### Snapshot storage keeps growing
 
-- Check `filesystem_snapshot_cleanups_pending`. Continuous growth means clean-ups do not keep up. A growing `filesystem_snapshot_leaked_cleanups_total{operation="overflow"}` means deletes arrive faster than clean-ups run. The `shutdown` operation counts clean-ups cut off by shutdown; after a crash, nothing counts the lost clean-ups.
-- Check `filesystem_snapshot_retention_runs_total{outcome=~"list_failed|leaked"}` for retention that left old snapshots. The next retention tries again.
-- Check `filesystem_snapshot_prune_seconds_count{outcome="failed"}` for storage not yet returned by a prune. The next delete of the agent prunes again.
-- Compare `filesystem_snapshot_stored_bytes_total` with `filesystem_snapshot_removed_bytes_total` to track storage growth. Their difference is not the bucket's size, and an agent whose repository nobody deleted is not in them. Released packed bytes are not necessarily removed bytes: other snapshots can still use them.
+- Check `golem_filesystem_snapshot_cleanups_pending`. Continuous growth means clean-ups do not keep up. A growing `golem_filesystem_snapshot_leaked_cleanups_total{operation="overflow"}` means deletes arrive faster than clean-ups run. The `shutdown` operation counts clean-ups cut off by shutdown; after a crash, nothing counts the lost clean-ups.
+- Check `golem_filesystem_snapshot_retention_runs_total{outcome=~"list_failed|leaked"}` for retention that left old snapshots. The next retention tries again.
+- Check `golem_filesystem_snapshot_prune_seconds_count{outcome="failed"}` for storage not yet returned by a prune. The next delete of the agent prunes again.
+- Compare `golem_filesystem_snapshot_stored_bytes_total` with `golem_filesystem_snapshot_removed_bytes_total` to track storage growth. Their difference is not the bucket's size, and an agent whose repository nobody deleted is not in them. Released packed bytes are not necessarily removed bytes: other snapshots can still use them.
 
 Leaked snapshots use storage but do not make a start wrong. To find them, list the locations in [Where the snapshots are](/next/operate/filesystem_snapshots/recovery#where-the-snapshots-are). An incarnation whose agent no longer exists holds only snapshots that no agent uses.
 
@@ -40,35 +40,35 @@ The worker executor exports the metrics below. Labels have fixed values and cont
 
 ### Capture and upload
 
-- **`filesystem_snapshot_capture_seconds`** (histogram, `outcome`): Time a capture stops the agent's file calls. Outcomes: `captured`, `unchanged`, `initial_files`, `busy`, `invalidated`, `failed`. An executor without filesystem snapshots records its file check here with `initial_files`, `changed`, `busy`, `invalidated`, or `failed`.
-- **`filesystem_snapshot_upload_seconds`** (histogram, `kind`, `outcome`): Upload time including retries, until confirmation for `kind="periodic"` (automatic snapshots) or the end of the save for `kind="update"` (manual updates). Periodic outcomes: `confirmed`, `superseded`, `deferred`, `replaced`, `failed`. Update outcomes: `saved`, `failed`.
-- **`filesystem_snapshot_uploaded_bytes_total`** (counter, `kind`): Sum of file sizes in uploaded snapshot trees, not bytes sent to blob storage. `kind` is `periodic` or `update`.
-- **`filesystem_snapshot_uploads_in_progress`** (gauge, no labels): Upload runs that currently hold a slot.
-- **`filesystem_snapshot_dropped_confirmations_total`** (counter, `reason`): Uploaded snapshots that no confirmation record names. The reason is `superseded`.
-- **`filesystem_snapshot_skipped_total`** (counter, `kind`, `reason`): Admission skips. `kind` is `periodic` or `update`. Reasons: `upload_in_flight` (an upload of the agent runs), `volume_under_pressure` (the agent filesystem volume has less free space than the pressure target), `deleting_all_snapshots` (a delete of all snapshots of the agent waits or runs). A skipped `update` fails the manual update.
+- **`golem_filesystem_snapshot_capture_seconds`** (histogram, `outcome`): Time a capture stops the agent's file calls. Outcomes: `captured`, `unchanged`, `initial_files`, `busy`, `invalidated`, `failed`. An executor without filesystem snapshots records its file check here with `initial_files`, `changed`, `busy`, `invalidated`, or `failed`.
+- **`golem_filesystem_snapshot_upload_seconds`** (histogram, `kind`, `outcome`): Upload time including retries, until confirmation for `kind="periodic"` (automatic snapshots) or the end of the save for `kind="update"` (manual updates). Periodic outcomes: `confirmed`, `superseded`, `deferred`, `replaced`, `failed`. Update outcomes: `saved`, `failed`.
+- **`golem_filesystem_snapshot_uploaded_bytes_total`** (counter, `kind`): Sum of file sizes in uploaded snapshot trees, not bytes sent to blob storage. `kind` is `periodic` or `update`.
+- **`golem_filesystem_snapshot_uploads_in_progress`** (gauge, no labels): Upload runs that currently hold a slot.
+- **`golem_filesystem_snapshot_dropped_confirmations_total`** (counter, `reason`): Uploaded snapshots that no confirmation record names. The reason is `superseded`.
+- **`golem_filesystem_snapshot_skipped_total`** (counter, `kind`, `reason`): Admission skips. `kind` is `periodic` or `update`. Reasons: `upload_in_flight` (an upload of the agent runs), `disk_under_pressure` (the disk of the agent filesystems has less free space than the pressure target), `deleting_all_snapshots` (a delete of all snapshots of the agent waits or runs). A skipped `update` fails the manual update.
 
 ### Restore and fork
 
-- **`filesystem_snapshot_restore_seconds`** (histogram, `outcome`): Restore time including the wait for a restore slot and retries. Outcomes: `restored`, `failed`.
-- **`filesystem_snapshot_restored_age_seconds`** (histogram, no labels): Time from snapshot save to successful restore. This is the work an agent can lose when it restarts from that snapshot.
-- **`filesystem_snapshot_copy_seconds`** (histogram, `outcome`): Time to copy the snapshots of a fork source. Outcomes: `copied`, `stopped`, `failed`.
+- **`golem_filesystem_snapshot_restore_seconds`** (histogram, `outcome`): Restore time including the wait for a restore slot and retries. Outcomes: `restored`, `failed`.
+- **`golem_filesystem_snapshot_restored_age_seconds`** (histogram, no labels): Time from snapshot save to successful restore. This is the work an agent can lose when it restarts from that snapshot.
+- **`golem_filesystem_snapshot_copy_seconds`** (histogram, `outcome`): Time to copy the snapshots of a fork source. Outcomes: `copied`, `stopped`, `failed`.
 
 ### Clean-up and storage
 
-- **`filesystem_snapshot_cleanups_pending`** (gauge, no labels): Agents with clean-up work waiting or running.
-- **`filesystem_snapshot_leaked_cleanups_total`** (counter, `operation`): Clean-ups that left snapshots in blob storage. Operations:
+- **`golem_filesystem_snapshot_cleanups_pending`** (gauge, no labels): Agents with clean-up work waiting or running.
+- **`golem_filesystem_snapshot_leaked_cleanups_total`** (counter, `operation`): Clean-ups that left snapshots in blob storage. Operations:
   - `delete`: A delete of some snapshots failed.
   - `delete_all`: A delete of all snapshots of an agent failed.
   - `overflow`: A full queue refused a request or removed another agent's waiting revert deletes to make room.
   - `shutdown`: The executor shut down before clean-up ended.
   - `fork_stage`: The outcome of a fork attempt is unknown.
-- **`filesystem_snapshot_delete_seconds`** (histogram, `operation`, `outcome`): Delete time including its prune. Operations: `delete` (named snapshots from retention, a superseded snapshot, or queued clean-up), `delete_all` (all snapshots of an agent). Outcomes: `deleted`, `stopped`, `leaked`.
-- **`filesystem_snapshot_prune_seconds`** (histogram, `outcome`): Prune time including its check. Outcomes: `pruned`, `failed`. After failure, the next delete of the agent prunes again.
-- **`filesystem_snapshot_prune_skipped_total`** (counter, `reason`): Deletes after which no prune ran. Reasons: `not_due` (too few freed bytes or the last prune is too recent), `claimed_elsewhere` (another delete holds the prune claim or pruned since the check).
-- **`filesystem_snapshot_retention_runs_total`** (counter, `outcome`): Retention runs. Outcomes: `list_failed`, `nothing_to_delete`, `deleted`, `stopped`, `leaked`.
-- **`filesystem_snapshot_stored_bytes_total`** (counter, `source`): Repository file bytes written to blob storage. Sources: `save` (packs, index files, snapshot files, and a new repository's config), `prune` (repacked packs and new index files), `copy` (a fork-source copy on the storage side). A retry that writes a file again counts it again.
-- **`filesystem_snapshot_removed_bytes_total`** (counter, `source`): Bytes deleted from blob storage. Sources: `prune` (marked packs whose time to stay is over), `delete_all` (an agent's whole repository).
-- **`filesystem_snapshot_released_bytes_total`** (counter, no labels): Packed bytes of deleted snapshots. A later prune can remove them when no other snapshot uses them.
+- **`golem_filesystem_snapshot_delete_seconds`** (histogram, `operation`, `outcome`): Delete time including its prune. Operations: `delete` (named snapshots from retention, a superseded snapshot, or queued clean-up), `delete_all` (all snapshots of an agent). Outcomes: `deleted`, `stopped`, `leaked`.
+- **`golem_filesystem_snapshot_prune_seconds`** (histogram, `outcome`): Prune time including its check. Outcomes: `pruned`, `failed`. After failure, the next delete of the agent prunes again.
+- **`golem_filesystem_snapshot_prune_skipped_total`** (counter, `reason`): Deletes after which no prune ran. Reasons: `not_due` (too few freed bytes or the last prune is too recent), `claimed_elsewhere` (another delete holds the prune claim or pruned since the check).
+- **`golem_filesystem_snapshot_retention_runs_total`** (counter, `outcome`): Retention runs. Outcomes: `list_failed`, `nothing_to_delete`, `deleted`, `stopped`, `leaked`.
+- **`golem_filesystem_snapshot_stored_bytes_total`** (counter, `source`): Repository file bytes written to blob storage. Sources: `save` (packs, index files, snapshot files, and a new repository's config), `prune` (repacked packs and new index files), `copy` (a fork-source copy on the storage side). A retry that writes a file again counts it again.
+- **`golem_filesystem_snapshot_removed_bytes_total`** (counter, `source`): Bytes deleted from blob storage. Sources: `prune` (marked packs whose time to stay is over), `delete_all` (an agent's whole repository).
+- **`golem_filesystem_snapshot_released_bytes_total`** (counter, no labels): Packed bytes of deleted snapshots. A later prune can remove them when no other snapshot uses them.
 
 ## Logs
 

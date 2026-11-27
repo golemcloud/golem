@@ -128,7 +128,7 @@ Closing the input over HTTP also ends input from an attached WebSocket. Frames a
 
 Follow the [session creation rules](#start-and-drive-a-session) before appending. When non-stream arguments require body or header bindings, POST returns `404` with an instruction to create the session first. Session creation honors the endpoint's normal bindings and body format. A deleted slot returns `410` rather than recreating it.
 
-Oversized bodies and JSON batches with more than 4096 messages return `413`. Append admission runs before storage access, including for closed or deleted slots, so an exhausted budget returns `429` with `Retry-After: 1` before checking those states. Append requests do not consume the catch-up read budget. See [Operating Durable Stream Sessions](/next/operate/durable_streams#gateway-configuration) for sizing and admission controls, and [gateway metrics](/next/operate/metrics#worker-service) for monitoring.
+Oversized bodies and JSON batches with more than 4096 messages return `413`. Append admission runs before storage access, including for closed or deleted slots, so an exhausted budget returns `429` with `Retry-After: 1` before checking those states. Append requests do not consume the catch-up read budget. See [Operating Durable Stream Sessions](/next/operate/durable_streams#gateway-configuration) for sizing and admission controls, and [gateway metrics](/next/operate/metrics#http-and-grpc-apis) for monitoring.
 
 ## Cancelling a session
 

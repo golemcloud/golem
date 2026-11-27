@@ -12,38 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 use std::time::Duration;
 
 lazy_static! {
-    static ref PROMISES_COUNT_TOTAL: Counter =
-        register_counter!("promises_count_total", "Number of promises created").unwrap();
-    static ref PROMISES_SCHEDULED_COMPLETE_TOTAL: Counter = register_counter!(
-        "promises_scheduled_complete_total",
-        "Number of scheduled promise completions"
-    )
-    .unwrap();
-    pub static ref PROMISE_COMPLETION_SECONDS: HistogramVec = register_histogram_vec!(
-        "promise_completion_seconds",
-        "Wall time of complete_promise from call entry to return, labelled by outcome",
-        &["executor_id", "outcome"],
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    pub static ref PROMISE_PENDING_COUNT: GaugeVec = register_gauge_vec!(
-        "promise_pending_count",
-        "Number of distinct PromiseIds in Pending state in this executor's PromiseRegistry",
-        &["executor_id"]
-    )
-    .unwrap();
-    pub static ref PROMISE_DATA_SIZE_BYTES: HistogramVec = register_histogram_vec!(
-        "promise_data_size_bytes",
-        "Bytes of the data payload submitted to complete_promise at call time",
-        &["executor_id"],
-        crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
-    )
-    .unwrap();
+    static ref PROMISES_COUNT_TOTAL: Counter = catalog::PROMISE_CREATED_TOTAL.register();
+    static ref PROMISES_SCHEDULED_COMPLETE_TOTAL: Counter =
+        catalog::PROMISE_SCHEDULED_COMPLETION_TOTAL.register();
+    pub static ref PROMISE_COMPLETION_SECONDS: HistogramVec =
+        catalog::PROMISE_COMPLETION_SECONDS.register();
+    pub static ref PROMISE_PENDING_COUNT: GaugeVec = catalog::PROMISE_PENDING_COUNT.register();
+    pub static ref PROMISE_DATA_SIZE_BYTES: HistogramVec =
+        catalog::PROMISE_DATA_SIZE_BYTES.register();
 }
 
 pub fn record_promise_created() {

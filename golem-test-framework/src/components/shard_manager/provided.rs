@@ -18,6 +18,7 @@ use tracing::info;
 
 pub struct ProvidedShardManager {
     host: String,
+    http_port: u16,
     grpc_port: u16,
 }
 
@@ -26,7 +27,11 @@ impl ProvidedShardManager {
         info!(
             "Using already running golem-shard-manager on {host}, http port: {http_port}, grpc port: {grpc_port}"
         );
-        Self { host, grpc_port }
+        Self {
+            host,
+            http_port,
+            grpc_port,
+        }
     }
 }
 
@@ -37,6 +42,10 @@ impl ShardManager for ProvidedShardManager {
     }
     fn grpc_port(&self) -> u16 {
         self.grpc_port
+    }
+
+    fn http_port(&self) -> u16 {
+        self.http_port
     }
 
     async fn kill(&self) {
