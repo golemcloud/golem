@@ -1,6 +1,8 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use golem_size_analysis::collect::{CollectInputs, collect, read_module_map, to_json};
+use golem_size_analysis::collect::{
+    CollectInputs, collect, read_go_packages, read_module_map, to_json,
+};
 use golem_size_analysis::fixtures::Sdk;
 use golem_size_analysis::optimize::optimize_with_wasm_opt;
 use golem_size_analysis::report::{ReportOptions, report};
@@ -33,6 +35,9 @@ enum Command {
         /// TS and Effect: the rollup module map, a JSON object of module id to rendered length.
         #[arg(long)]
         module_map: Option<PathBuf>,
+        /// Go: `GOOS=wasip1 GOARCH=wasm go list -deps -json` with the build's toolchain.
+        #[arg(long)]
+        go_packages: Option<PathBuf>,
         /// Rust, Go and MoonBit: a build of the same source that keeps its `name` section.
         #[arg(long)]
         named_wasm: Option<PathBuf>,
@@ -76,6 +81,7 @@ fn main() -> anyhow::Result<()> {
             guest,
             module,
             module_map,
+            go_packages,
             named_wasm,
             user,
             diagnostics,
@@ -92,6 +98,10 @@ fn main() -> anyhow::Result<()> {
                     .transpose()
                     .context("JavaScript module must be UTF-8")?,
                 module_map: module_map.as_deref().map(read_module_map).transpose()?,
+                go_packages: read(&go_packages)?
+                    .as_deref()
+                    .map(read_go_packages)
+                    .transpose()?,
                 named: named.as_deref(),
                 user: user.as_deref(),
             };

@@ -54,7 +54,7 @@ object AgentClientMacro {
     val ctorAccess         = methodAccess(params)
     val ctorType           = inputTypeFor(ctorAccess, params)
     val ctorContainsStream = params.exists { case (_, tpe) => containsStream(tpe, Set.empty) }
-    val methods            = symbol.methodMembers.collect {
+    val methods            = symbol.methodMembers.sortBy(_.name).collect {
       case method if method.flags.is(Flags.Deferred) && method.isDefDef && method.name != "new" =>
         val ps       = extractParameters(method)
         val access   = methodAccess(ps)
@@ -148,7 +148,7 @@ object AgentClientMacro {
     val (constructorTpe, constructorTypeExpr) = buildConstructorType(traitRepr)
     val agentTypeName                         = agentTypeNameOrDefault(traitSymbol)
 
-    val methods = traitSymbol.methodMembers.collect {
+    val methods = traitSymbol.methodMembers.sortBy(_.name).collect {
       case method if method.flags.is(Flags.Deferred) && method.isDefDef && method.name != "new" =>
         buildMethod[Trait](method)
     }

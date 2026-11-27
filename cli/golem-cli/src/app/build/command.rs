@@ -349,8 +349,19 @@ pub async fn execute_external_command(
         .map(|dir| base_command_dir.join(dir))
         .unwrap_or_else(|| base_command_dir.to_path_buf());
 
-    let (sources, targets) = {
+    let (sources, targets, missing_target) = {
         if !command.sources.is_empty() && !command.targets.is_empty() {
+            let mut targets = Vec::new();
+            let mut missing_target = false;
+            for pattern in &command.targets {
+                let matches = fs::compile_and_collect_globs(
+                    app_root_dir,
+                    &build_dir,
+                    std::slice::from_ref(pattern),
+                )?;
+                missing_target |= matches.is_empty();
+                targets.extend(matches);
+            }
             (
                 fs::compile_and_collect_globs_with_expanders(
                     app_root_dir,
@@ -358,10 +369,11 @@ pub async fn execute_external_command(
                     &command.sources,
                     &[fs::GlobExpander::TsConfigInclude],
                 )?,
-                fs::compile_and_collect_globs(app_root_dir, &build_dir, &command.targets)?,
+                targets,
+                missing_target,
             )
         } else {
-            (vec![], vec![])
+            (vec![], vec![], false)
         }
     };
 
@@ -370,6 +382,7 @@ pub async fn execute_external_command(
             build_dir: &build_dir,
             command,
         })?
+        .with_skip_check(missing_target)
         .with_sources(|| sources)
         .with_targets(|| targets)
         .run_async_or_skip(

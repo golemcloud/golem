@@ -70,6 +70,7 @@ mod server_config;
 #[cfg(unix)]
 mod server_restart;
 mod service_config_failure;
+mod size_fixtures;
 mod ssh;
 // The platform TLS verifier honours SSL_CERT_FILE on Linux.
 #[cfg(target_os = "linux")]
@@ -135,6 +136,7 @@ tag_suite!(quantity_interop, agents_guest_bridge_sources);
 tag_suite!(uuid_interop, agents_guest_bridge_sources);
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
+tag_suite!(size_fixtures, deploy);
 tag_suite!(builtin_bash, deploy);
 tag_suite!(cards, deploy);
 tag_suite!(initial_cards, deploy);

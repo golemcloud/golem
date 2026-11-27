@@ -65,4 +65,5 @@ wit-parser = { workspace = true, optional = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
+wasm-encoder = { workspace = true }
 wat = { workspace = true }

@@ -66,6 +66,7 @@ golem-schema = { version = "=0.0.0", path = "golem-schema", default-features = f
 golem-schema-derive = { version = "=0.0.0", path = "golem-schema-derive" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
+golem-size-analysis = { version = "=0.0.0", path = "golem-size-analysis", default-features = false }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
 golem-tool-metadata = { version = "=0.0.0", path = "golem-tool-metadata", default-features = false }
