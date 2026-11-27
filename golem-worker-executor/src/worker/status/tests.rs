@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::retention::OplogRetention;
 use golem_common::model::InvocationId;
 use golem_common::model::caller::Caller;
 
@@ -71,7 +72,7 @@ use golem_common::read_only_lock;
 use golem_common::resource_runtime::ResourceTypeId;
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_common::schema::SchemaValue;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailure, WorkerExecutorError};
 use uuid::Uuid;
 
 fn test_invocation_wallet_pin() -> golem_common::model::card::InvocationWalletPin {
@@ -5282,6 +5283,7 @@ async fn non_existing_oplog() {
         payload_unavailable: false,
         unreadable_from: None,
         unavailable_from: None,
+        ends_at: None,
     };
 
     let result = calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
@@ -5836,7 +5838,7 @@ async fn a_rebuild_with_regions_covering_the_empty_baseline_is_corrupt() {
         let error = WorkerExecutorError::from(OplogError::from(refusal));
         assert!(matches!(
             error,
-            WorkerExecutorError::OplogFailed { agent_id, details }
+            WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Failed { details } }
                 if agent_id == test_case.owned_agent_id.agent_id
                     && details.contains("empty status baseline")
         ));
@@ -6775,6 +6777,7 @@ impl TestCaseBuilder {
             payload_unavailable: false,
             unreadable_from: None,
             unavailable_from: None,
+            ends_at: None,
         }
     }
 }
@@ -6809,6 +6812,9 @@ struct TestCase {
     unreadable_from: Option<u64>,
     /// The first index whose archive storage does not answer, as in an outage.
     unavailable_from: Option<u64>,
+    /// The last index that a read gives. A read past it gives only the entries up to it and
+    /// reports no error, as a source that loses the end of the oplog.
+    ends_at: Option<u64>,
 }
 
 impl TestCase {
@@ -6917,6 +6923,14 @@ impl OplogService for TestCase {
         Ok(())
     }
 
+    async fn retention(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
+    }
+
     async fn delete(
         &self,
         _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
@@ -6965,7 +6979,7 @@ impl OplogService for TestCase {
                 },
             });
         }
-        for i in idx_u64..=end {
+        for i in idx_u64..=end.min(self.ends_at.unwrap_or(u64::MAX)) {
             let entry = i
                 .checked_sub(1)
                 .and_then(|offset| self.entries.get(offset as usize))
@@ -7221,7 +7235,13 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
             (WorkerExecutorError::RecoveryRequired { details, .. }, "unavailable") => {
                 assert!(details.contains("injected payload outage"), "{details}");
             }
-            (WorkerExecutorError::OplogFailed { agent_id, details }, "corrupt" | "missing") => {
+            (
+                WorkerExecutorError::OplogFailed {
+                    agent_id,
+                    failure: OplogFailure::Failed { details },
+                },
+                "corrupt" | "missing",
+            ) => {
                 assert_eq!(agent_id, &test_case.owned_agent_id.agent_id);
                 assert!(details.contains("stream session payload"), "{details}");
                 assert!(details.contains("oplog index 2"), "{details}");
@@ -11219,4 +11239,243 @@ fn cancelled_standalone_retention_survives_every_checkpoint_cut() {
             "lost or shifted cancellation deadline at cut {cut}",
         );
     }
+}
+
+/// A [`TestCase`] behind the retention layer, whose retained start is `start`.
+struct RetainedTestCase {
+    case: TestCase,
+    service: Arc<dyn OplogService>,
+}
+
+impl RetainedTestCase {
+    async fn new(case: TestCase, start: u64) -> Self {
+        let key_value_storage =
+            Arc::new(crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new());
+        crate::services::oplog::retention::advance_oplog_retention(
+            key_value_storage.as_ref(),
+            &case.owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::from_u64(start),
+        )
+        .await
+        .unwrap();
+        Self {
+            service: Arc::new(
+                crate::services::oplog::retention::RetentionOplogService::new(
+                    Arc::new(case.clone()),
+                    key_value_storage,
+                ),
+            ),
+            case,
+        }
+    }
+}
+
+impl HasOplogService for RetainedTestCase {
+    fn oplog_service(&self) -> Arc<dyn OplogService> {
+        self.service.clone()
+    }
+}
+
+impl HasConfig for RetainedTestCase {
+    fn config(&self) -> Arc<GolemConfig> {
+        self.case.config()
+    }
+}
+
+impl HasComponentService for RetainedTestCase {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
+        self.case.component_service()
+    }
+}
+
+fn retained_test_case() -> TestCase {
+    TestCase::builder(0)
+        .add(OplogEntry::grow_memory(0), |status| status)
+        .add(
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                },
+            ),
+            |status| status,
+        )
+        .add(OplogEntry::grow_memory(0), |status| status)
+        .add(
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::from_u64(4),
+                    end: OplogIndex::from_u64(4),
+                },
+            ),
+            |status| status,
+        )
+        .build()
+}
+
+/// A full status rebuild folds from a default baseline at index 1. With a retained start above
+/// 1, the fold has no start, so the rebuild fails with the expired error that names the start.
+#[test]
+async fn a_full_status_rebuild_with_a_retained_start_above_1_fails_as_expired() {
+    let case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let full = RetainedTestCase::new(case.clone(), 1).await;
+    assert!(
+        super::calculate_last_known_status(&full, &owned_agent_id, AgentMode::Durable, None)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let retained = RetainedTestCase::new(case, 3).await;
+    let error =
+        super::calculate_last_known_status(&retained, &owned_agent_id, AgentMode::Durable, None)
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            super::StatusError::Unreadable(UnreadableOplog {
+                error: crate::services::oplog::OplogReadError::Expired { retained_start },
+                ..
+            }) if *retained_start == OplogIndex::from_u64(3)
+        ),
+        "{error:?}"
+    );
+}
+
+/// A fold from a stored status reads the entries after it. The status that the executor stores
+/// for a new agent is at the `Create` entry, so the fold from it reads from index 2: it folds with
+/// a retained start of 2, and it is expired with a start of 3.
+#[test]
+async fn a_fold_from_the_status_at_the_create_entry_is_expired_only_with_a_start_above_2() {
+    let case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let at_create = case.entries[0].expected_status.clone();
+    assert_eq!(at_create.oplog_idx, OplogIndex::INITIAL);
+    let last = OplogIndex::from_u64(case.entries.len() as u64);
+
+    let folded = RetainedTestCase::new(case.clone(), 2).await;
+    let status = super::calculate_last_known_status(
+        &folded,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(at_create.clone()),
+    )
+    .await
+    .unwrap()
+    .expect("the oplog exists");
+    assert_eq!(status.oplog_idx, last);
+
+    let expired = RetainedTestCase::new(case, 3).await;
+    let error = super::calculate_last_known_status(
+        &expired,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(at_create),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            super::StatusError::Unreadable(UnreadableOplog {
+                error: crate::services::oplog::OplogReadError::Expired { retained_start },
+                ..
+            }) if *retained_start == OplogIndex::from_u64(3)
+        ),
+        "{error:?}"
+    );
+}
+
+/// A cached status at the `Create` entry folds from index 2, which is expired with a retained
+/// start of 3. The rebuild then folds from the clean status checkpoint, which is at or after the
+/// index before the start.
+#[test]
+async fn an_expired_fold_from_the_cached_status_falls_back_to_the_checkpoint() {
+    let case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let at_create = case.entries[0].expected_status.clone();
+    let checkpoint = case.entries[2].expected_status.clone();
+    assert_eq!(checkpoint.oplog_idx, OplogIndex::from_u64(3));
+    let last = OplogIndex::from_u64(case.entries.len() as u64);
+    let retained = RetainedTestCase::new(case, 3).await;
+
+    let status = super::calculate_last_known_status_with_checkpoint_reader(
+        &retained,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(at_create),
+        || async { Some(checkpoint) },
+    )
+    .await
+    .unwrap()
+    .expect("the oplog exists");
+    assert_eq!(status.oplog_idx, last);
+}
+
+/// Only an expired fold from the cached status goes on to the clean status checkpoint. A fold
+/// that fails for another reason gives its error, and the rebuild does not read the checkpoint.
+#[test]
+async fn a_fold_from_the_cached_status_that_fails_for_another_reason_gives_its_error() {
+    let mut case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let cached = case.entries[2].expected_status.clone();
+    case.unreadable_from = Some(case.entries.len() as u64);
+    let retained = RetainedTestCase::new(case, 3).await;
+    let checkpoint_read = std::sync::atomic::AtomicBool::new(false);
+
+    let status = super::calculate_last_known_status_with_checkpoint_reader(
+        &retained,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(cached),
+        || async {
+            checkpoint_read.store(true, std::sync::atomic::Ordering::SeqCst);
+            None
+        },
+    )
+    .await;
+    assert!(
+        matches!(
+            status,
+            Err(super::StatusError::Unreadable(UnreadableOplog {
+                error: crate::services::oplog::OplogReadError::Gap { .. },
+                ..
+            }))
+        ),
+        "{status:?}"
+    );
+    assert!(!checkpoint_read.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// A source that gives fewer entries than the horizon asks for leaves the history incomplete: the
+/// region read reports it as missing, and the skipped regions of a fork source fail, instead of
+/// giving the regions of the part that the source gave.
+#[test]
+async fn a_region_read_that_ends_before_the_horizon_is_missing_history() {
+    let mut case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let horizon = OplogIndex::from_u64(case.entries.len() as u64);
+    case.ends_at = Some(2);
+
+    let reader =
+        super::StatusOplogReader::new(&case, &owned_agent_id, AgentMode::Durable, None, horizon);
+    assert_eq!(
+        super::reconstruction::read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
+            .await
+            .unwrap(),
+        None
+    );
+
+    let error = super::skipped_regions_at(&case, &owned_agent_id, horizon)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, super::StatusError::Other(text) if text == "Missing fork source history"),
+        "{error:?}"
+    );
 }

@@ -410,8 +410,7 @@ impl WorkerApi {
                 self.worker_service
                     .get_oplog(
                         &agent_id,
-                        from.map(OplogIndex::from_u64)
-                            .unwrap_or(OplogIndex::INITIAL),
+                        from.map(OplogIndex::from_u64),
                         cursor,
                         count,
                         expected_fingerprint,

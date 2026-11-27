@@ -3194,6 +3194,74 @@ pub async fn take_agent_oplog_over_at_epoch(
     Ok(())
 }
 
+/// Moves the retained start of the agent's oplog forward to `index`, in the persistent key-value
+/// storage that executors started with either storage config read it from. Call it while no
+/// executor runs; the next executor opens the oplog with the new start.
+pub async fn force_oplog_retained_start(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    index: OplogIndex,
+) -> anyhow::Result<()> {
+    let storage =
+        golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage::configured(
+            &sqlite_storage_config(deps, context),
+        )
+        .await
+        .map_err(|err| anyhow!(err))?;
+    golem_worker_executor::services::oplog::retention::advance_oplog_retention(
+        &storage,
+        owned_agent_id,
+        AgentMode::Durable,
+        index,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Removes the cached status and the invocation result index of the agent incarnation
+/// `fingerprint` from the key-value storage of executors started with the SQLite storage config.
+/// The clean status checkpoint stays. Call it while no executor runs; the next executor then
+/// answers the status and the results by key from the checkpoint and the oplog. Gives the number
+/// of status keys and the number of result index keys that it removed.
+pub async fn remove_cached_status_and_result_index(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
+) -> anyhow::Result<(usize, usize)> {
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageNamespace;
+
+    let storage =
+        golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage::configured(
+            &sqlite_storage_config(deps, context),
+        )
+        .await
+        .map_err(|err| anyhow!(err))?;
+    let storage = &storage;
+    let namespaces = [
+        KeyValueStorageNamespace::AgentStatus {
+            owned_agent_id: owned_agent_id.clone(),
+            fingerprint,
+        },
+        KeyValueStorageNamespace::AgentInvocationResultIndex {
+            owned_agent_id: owned_agent_id.clone(),
+            fingerprint,
+        },
+    ];
+    let [status, result_index] = namespaces.map(|namespace| async move {
+        let keys = storage
+            .keys("test", "remove_cached_status", namespace.clone())
+            .await?;
+        let count = keys.len();
+        storage
+            .del_many("test", "remove_cached_status", namespace, keys.into())
+            .await
+            .map(|_| count)
+    });
+    Ok(futures::future::try_join(status, result_index).await?)
+}
+
 /// The indexed storage of executors started with the SQLite storage config (`start`,
 /// `start_with_overrides`, `start_customized`, `start_with_oplog_config`).
 async fn sqlite_indexed_storage(
@@ -3405,6 +3473,40 @@ pub async fn copy_agent_oplog_to(
             .await?;
     }
     Ok(())
+}
+
+/// The entries from `first` to `last`, both included, that the primary oplog of the durable agent
+/// holds in storage. The read goes through no executor and no retention layer, so it also reads
+/// the entries below the retained start.
+pub async fn stored_primary_oplog_entries(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    first: OplogIndex,
+    last: OplogIndex,
+) -> anyhow::Result<Box<[(OplogIndex, OplogEntry)]>> {
+    let storage = sqlite_indexed_storage(deps, context).await?;
+    storage
+        .read(
+            "oplog",
+            "test_read",
+            "entry",
+            IndexedStorageNamespace::OpLog {
+                owned_agent_id: owned_agent_id.clone(),
+                agent_mode: AgentMode::Durable,
+            },
+            &owned_agent_id.storage_key(),
+            first.as_u64(),
+            last.as_u64(),
+        )
+        .await?
+        .into_iter()
+        .map(|(index, bytes)| {
+            golem_common::serialization::deserialize(&bytes)
+                .map(|entry| (OplogIndex::from_u64(index), entry))
+                .map_err(|err| anyhow!(err))
+        })
+        .collect()
 }
 
 /// How many entries the agent's durable oplog holds in storage, read without going through any

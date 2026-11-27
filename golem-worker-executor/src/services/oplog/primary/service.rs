@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::retention::OplogRetention;
 
 impl Debug for PrimaryOplogService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -635,7 +636,7 @@ impl OplogService for PrimaryOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         record_oplog_call("get_last_index");
         Self::try_get_last_index_from_storage(
             &*self.indexed_storage,
@@ -644,6 +645,15 @@ impl OplogService for PrimaryOplogService {
             &self.retry_config,
         )
         .await
+        .map_err(|error| {
+            UnreadableOplog::new(
+                &owned_agent_id.agent_id,
+                crate::services::oplog::OplogReadError::source_failure(
+                    OplogReadSource::Primary,
+                    error,
+                ),
+            )
+        })
     }
 
     async fn assert_owning_epoch(
@@ -667,6 +677,14 @@ impl OplogService for PrimaryOplogService {
             None => Ok(()),
             Some(fence) => Err(OplogError::Fenced(fence)),
         }
+    }
+
+    async fn retention(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
     }
 
     async fn delete(

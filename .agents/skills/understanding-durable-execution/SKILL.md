@@ -1377,6 +1377,69 @@ or rewrites the unreadable data. The `try_*` reads of `Oplog` and `OplogService`
 maintenance reads: they return every storage failure as text for the transfer and the sweep to
 retry.
 
+The retained start of an agent oplog is the first index that the oplog keeps
+(`services/oplog/retention/`). It is a key-value record in the persistent namespace
+`AgentOplogRetention`, with one field for each agent mode. An absent record means index 1. Oplog
+indexes never renumber, and the start only moves forward: `advance_oplog_retention` writes the
+record with a compare-and-set. Only tests write the record, so in production every oplog starts at
+index 1. `RetentionOplogService` sits directly on the base oplog service, below the plugin
+forwarding layer, and it is the only layer that reads the record. A staged oplog
+(`create_staged`) is the handle of the inner service. `create` and `create_fresh` read no record,
+so a new oplog starts at index 1; a later `open` reads the record. `Oplog::retention` and
+`OplogService::retention` give the plain `OplogRetention` value. Its pure rules give the reads:
+a walk in chunks reads with `chunk`, and a public page reads with `page`; `range`, `clamp`,
+`retains`, `create_read` and the agent checks give the rest. A walk with a fixed start, such as a
+fold from a status baseline, a replay cursor walk, `max_issued_epoch` or the creation receipt of
+a fork export, counts its reads itself and does not move its start. The lookup of the component
+revision of a public read (`scan_component_revision`) charges each batch to its allowance. The replay cursor reads each deleted region from the
+retained start (`deleted_region_contains_start`), because a snapshot recovery skips the region
+from index 2 to the snapshot. Some walks need the
+whole history, because a walk from the start gives a wrong result: the full status rebuild, the
+revert preflight, the epoch fence of a stream fork revert (`max_issued_epoch`) and the creation
+receipt of a fork export. The full status rebuild, the revert preflight and `max_issued_epoch`
+with no earlier fork cut read more than the `Create` entry from index 1, so they fail as expired at
+any start above 1. Only the creation receipt reads the `Create` entry alone and then from index 2,
+so it reads with no error at a start of 2. A read below the start returns
+`OplogReadError::Expired { retained_start }`. The exceptions are an empty read and a read of the
+`Create` entry alone at index 1, because that entry is the identity of the agent. A read of more
+than the `Create` entry from index 1 is expired. This includes a page and a guest chunk, because a
+page has no fixed end. `range` and `chunk` do not refuse such a start: they move it to the retained
+start. A range page (a request with a `to`) is a page too, and without a `from` it starts at the
+retained start. A new guest search starts at or after the retained start. The host parses the query
+before resolving the start. If the start is after the authorized window, the batch moves the cursor
+to the start without scanning candidates. The revision lookup can still read metadata such as
+`Create`. The search leaves its cursor unchanged if the query is invalid, the read fails or the grant
+denies the batch (`SearchOplogEntry::apply`),
+so its next batch still starts at the retained start. The count-based revert walk
+(`cut_point::cut_before_last_invocations`) takes the retention and ends at the retained start. The
+single entry read of the public oplog serves the `Create` entry. A `Gap` that ends below
+the start becomes the same error, and a gap that ends at or after the start stays a read error.
+At full retention, `length` keeps the underlying count. After a cut it counts from the retained
+start through the committed tail and still returns an error if a layer cannot count its storage.
+The last index does not change. A range page checks its
+`to` and its cursor against the start before it checks the range, so a range without `from` whose
+`to` or cursor is below the start is expired. When the walk of the last error reaches the start
+with no invocation boundary and no error while the agent is failed or retrying, the last error is
+the expired error. The revert walk gives no cut when the last index is below the start. The stream readers keep
+the expired error typed: the consumer probe and attachment check the record that introduced the
+reader, the consumer journal scans the retained suffix, and the producer index uses
+`unknown_local_stream` to distinguish an expired
+local stream reference from corrupt history. A nested registration whose parent is below the
+start gives `CorruptHistory`. A handle of a stream that the index does not know is expired when
+the start is above 1, and a cursor below the start is expired. A producer request keeps only the
+expired read error typed (`DurableStreamRemoteError::from_producer`). The expired error becomes
+`WorkerExecutorError::OplogFailed` with the cause `OplogFailure::Expired`. It crosses gRPC as
+`OplogExpired` and REST as HTTP 400 `OPLOG_EXPIRED`, and the guest oplog API gives it as
+`internal-error` whose text names the expired cause and the retained start
+(`guest_oplog_read_error`). A status fold from a cached status that is two or more entries below the
+retained start, so that its fold reads below it, is expired, and the status goes on to the clean
+status checkpoint. An initialization whose result is below the
+start is answered from the status while the status holds that result (its exact membership or its
+recent results): a completed constructor result in `invocation_results` proves
+that the agent was initialized, and the status names the key of the initialization of a fork. A recovery that has no usable restore source at or after the start fails with this
+error and keeps the oplog. `delete` removes the record only after the delete of the oplog returns
+`Ok` (fenced for a durable oplog), so a refused delete keeps the start.
+
 Opening an oplog can fail (`OplogService::open`/`create`, `OplogConstructor::create_oplog`): an
 archive level whose last index does not read, or whose owning-epoch record fails after its
 retries, fails the open, and the open-oplog cache keeps nothing. The open fails with
@@ -4432,8 +4495,9 @@ after `CardDerived` reuses the recorded child instead of creating it again. Test
 ### Card authorization decisions
 
 Guest `search-oplog.get-next` authorizes a 100-index window from the search cursor. The host caps
-the scan budget for that call to the window size before reading entries. A batch can advance the
-cursor without finding a match. The first batch pins the oplog end separately, and each new live
+the candidate budget to the window size, also at full retention. Revision lookup and the pinned
+oplog end are separate metadata reads. A batch can advance the cursor without finding a match,
+and each new live
 batch checks the grant for its own window. Completed calls replay their recorded results.
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card

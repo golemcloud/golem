@@ -1119,9 +1119,9 @@ impl StreamSession {
             .await?
             .unwrap_or((OplogIndex::NONE, Vec::new()));
         let horizon = self.oplog.current_oplog_index().await;
-        while covered < horizon {
-            let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            for (index, entry) in self.oplog.read_exact(covered.next(), count).await? {
+        let retention = self.oplog.retention();
+        while let Some(chunk) = retention.chunk(covered.next(), horizon, 1024) {
+            for (index, entry) in self.oplog.read_exact(chunk.start, chunk.count).await? {
                 if self
                     .producer
                     .fork_lineage
@@ -1163,6 +1163,11 @@ impl StreamSession {
         &self,
         reader_id: LocalStreamReaderId,
     ) -> Result<ConsumerHistory, SessionError> {
+        // The journal of a reader starts at the record that introduced it, so the journal of a
+        // reader introduced below the retained start is expired.
+        self.oplog
+            .retention()
+            .check_agent_from(self.producer.agent_id(), reader_id.introducing_oplog_index)?;
         let root_binding = self
             .current_control_metadata()
             .await?

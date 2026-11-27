@@ -971,18 +971,21 @@ pub(crate) async fn sleep_unless_interrupted(
 }
 
 /// Counts the number of `OplogEntry::Error` entries in the oplog whose `retry_from`
-/// matches the given `retry_point`. This is used to initialize `base_retry_count`
-/// when spawning background retry tasks, so that the retry budget accounts for
-/// errors already recorded before the task was spawned.
+/// matches the given `retry_point`. Only tests call it.
+///
+/// Such an error comes after its retry point, so the count reads from the retry point, or from
+/// the retained start of the oplog when the retry point is below it.
 pub async fn count_oplog_errors_for(
     oplog: &Arc<dyn crate::services::oplog::Oplog>,
     retry_point: OplogIndex,
 ) -> Result<u32, crate::services::oplog::UnreadableOplog> {
-    let len = oplog.length().await?;
-    if len == 0 {
+    let Some(range) = oplog
+        .retention()
+        .range(retry_point, oplog.current_oplog_index().await)
+    else {
         return Ok(0);
-    }
-    let entries = oplog.read_exact(OplogIndex::INITIAL, len).await?;
+    };
+    let entries = oplog.read_exact(range.start, range.count).await?;
     let mut count: u32 = 0;
     for entry in entries.values() {
         if let OplogEntry::Error { retry_from, .. } = entry

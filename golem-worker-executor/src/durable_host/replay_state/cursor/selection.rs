@@ -927,12 +927,12 @@ impl CursorTx<'_> {
             }
             let end = region.end.min(replay_target);
             let mut next = region.start;
-            while next <= end {
-                let available = u64::from(end) - u64::from(next) + 1;
+            let retention = self.cursor.oplog.retention();
+            while let Some(chunk) = retention.chunk(next, end, CHUNK_SIZE) {
                 let entries = self
                     .cursor
                     .oplog
-                    .read_exact(next, CHUNK_SIZE.min(available))
+                    .read_exact(chunk.start, chunk.count)
                     .await?;
                 let last_read = *entries.last_key_value().unwrap().0;
                 for (index, entry) in entries {

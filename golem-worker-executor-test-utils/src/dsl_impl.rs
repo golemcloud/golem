@@ -1064,7 +1064,7 @@ impl TestDsl for TestWorkerExecutor {
             .get_oplog(workerexecutor::v1::GetOplogRequest {
                 agent_id: Some(agent_id.agent_id.into()),
                 environment_id: Some(agent_id.environment_id.into()),
-                from_oplog_index: OplogIndex::INITIAL.into(),
+                from_oplog_index: None,
                 cursor: None,
                 count: 1,
                 auth_ctx: Some(self.auth_ctx().into()),
@@ -1857,7 +1857,7 @@ impl TestWorkerExecutor {
                 .get_oplog(workerexecutor::v1::GetOplogRequest {
                     agent_id: Some(agent_id.agent_id.into()),
                     environment_id: Some(agent_id.environment_id.into()),
-                    from_oplog_index: from.into(),
+                    from_oplog_index: Some(from.into()),
                     cursor,
                     count: 100,
                     auth_ctx: Some(self.auth_ctx().into()),

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::retention::{OplogRange, OplogRetention};
 
 impl ForwardingOplogState {
     async fn while_forwarding<F: std::future::Future>(&self, future: F) -> Option<F::Output> {
@@ -235,20 +236,19 @@ impl ForwardingOplogState {
             }
         };
 
-        let batch = if live.sending_up_to > live.confirmed_up_to {
-            // RETRY: exact same range — never widen
-            Some((live.confirmed_up_to.next(), live.sending_up_to, true))
-        } else if live.confirmed_up_to < committed_tail {
-            // NEW BATCH: from confirmed+1 to committed tail
-            Some((live.confirmed_up_to.next(), committed_tail, false))
-        } else {
-            None
-        };
+        let batch = next_batch(
+            live.confirmed_up_to,
+            live.sending_up_to,
+            live.last_batch_start,
+            committed_tail,
+            self.inner.retention(),
+        );
 
-        let (batch_start, batch_end, is_retry) = match batch {
-            Some(b) => b,
-            None => return,
+        let Some((batch, is_retry)) = batch else {
+            return;
         };
+        let batch_start = batch.start;
+        let batch_end = batch.end().previous();
 
         tracing::info!(
             plugin_name = plugin.plugin_name,
@@ -309,8 +309,7 @@ impl ForwardingOplogState {
             s.send_in_progress = true;
         }
 
-        let batch_count = (batch_end.as_u64() - batch_start.as_u64() + 1) as usize;
-        let entries = match self.read_batch(batch_start, batch_count).await {
+        let entries = match self.read_batch(batch_start, batch.count as usize).await {
             Ok(entries) => entries,
             Err(error) => {
                 tracing::error!(
@@ -410,6 +409,7 @@ impl ForwardingOplogState {
             }
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.sending_up_to = batch_end;
+                s.last_batch_start = batch_start;
                 s.delivery = Some(delivery);
             }
         }
@@ -958,3 +958,27 @@ impl ForwardingOplogState {
         }
     }
 }
+
+/// The next batch for a plugin: its range, and whether it repeats a batch that was sent and not
+/// confirmed. A repeated batch has the exact range that was sent, never a wider one.
+/// A new batch goes from the entry after the confirmed index to the committed tail; when the
+/// entries after the confirmed index are gone, it starts at the retained start instead. `None`
+/// when no entry waits.
+fn next_batch(
+    confirmed_up_to: OplogIndex,
+    sending_up_to: OplogIndex,
+    last_batch_start: OplogIndex,
+    committed_tail: OplogIndex,
+    retention: OplogRetention,
+) -> Option<(OplogRange, bool)> {
+    if sending_up_to > confirmed_up_to {
+        OplogRange::within(last_batch_start, sending_up_to, u64::MAX).map(|range| (range, true))
+    } else {
+        retention
+            .range(confirmed_up_to.next(), committed_tail)
+            .map(|range| (range, false))
+    }
+}
+
+#[cfg(test)]
+mod tests;

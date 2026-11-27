@@ -73,6 +73,79 @@ pub(super) fn monthly_interrupt_error(
     })
 }
 
+/// The key of the initialization that the retained entries of `oplog` hold: the first
+/// `PendingAgentInvocation` or `AgentInvocationStarted` entry of the agent initialization, up to
+/// the last index of `status`. The walk reads from the retained start and skips the deleted
+/// regions of `status`. `None` when the retained entries hold no initialization.
+pub(crate) async fn find_initialization_key(
+    oplog: &dyn crate::services::oplog::Oplog,
+    status: &golem_common::model::AgentStatusRecord,
+) -> Result<Option<InvocationId>, crate::services::oplog::UnreadableOplog> {
+    use golem_common::model::InvocationRequestOperation;
+    use golem_common::model::oplog::OplogEntry;
+
+    let retention = oplog.retention();
+    let mut first = OplogIndex::INITIAL;
+    while let Some(chunk) = retention.chunk(first, status.oplog_idx, 256) {
+        let entries = oplog.read_exact(chunk.start, chunk.count).await?;
+        for (index, entry) in entries {
+            if status.deleted_regions.is_in_deleted_region(index) {
+                continue;
+            }
+            if let OplogEntry::PendingAgentInvocation {
+                invocation_id,
+                operation,
+                ..
+            }
+            | OplogEntry::AgentInvocationStarted {
+                invocation_id,
+                operation,
+                ..
+            } = entry
+                && *operation == InvocationRequestOperation::AgentInitialization
+            {
+                return Ok(Some(invocation_id));
+            }
+        }
+        first = chunk.end();
+    }
+    Ok(None)
+}
+
+/// The key of the initialization below the retained start of `retention`, from the invocation
+/// results of `status`. The oplog no longer keeps the entries of that initialization, but the
+/// status keeps its result. `None` when the start is at index 1, or when the status has no
+/// result of an initialization.
+pub(crate) fn initialization_key_below_start(
+    retention: crate::services::oplog::retention::OplogRetention,
+    status: &golem_common::model::AgentStatusRecord,
+) -> Option<InvocationId> {
+    retention.create_read()?;
+    status
+        .invocation_results
+        .iter()
+        .find(|(_, position)| {
+            position.operation == Some(golem_common::model::InvocationOperation::Constructor)
+        })
+        .map(|(key, _)| *key)
+}
+
+/// Whether the result `position` of the initialization proves, without a read of its terminal
+/// entry, that the initialization finished: its terminal entry is below the retained start of
+/// `retention`, the result is a completed invocation, and its operation is the constructor. A
+/// read of a terminal entry below the start is expired, so the status answers for it. Every
+/// other result is read from its terminal entry.
+pub(crate) fn initialization_finished_below_start(
+    retention: crate::services::oplog::retention::OplogRetention,
+    position: Option<&golem_common::model::InvocationResultPosition>,
+) -> bool {
+    position.is_some_and(|position| {
+        !retention.retains(position.terminal)
+            && position.end == golem_common::model::InvocationEnd::Completed
+            && position.operation == Some(golem_common::model::InvocationOperation::Constructor)
+    })
+}
+
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -114,31 +187,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Forks retain invocation keys from their source. Find the initialization by its
         // operation, not by interpreting a caller-controlled idempotency-key prefix.
         let status = self.try_get_last_known_status().await?;
-        let mut first = OplogIndex::INITIAL;
-        while first <= status.oplog_idx {
-            let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(256);
-            let entries = self.oplog.read_exact(first, count).await?;
-            for (index, entry) in entries {
-                if status.deleted_regions.is_in_deleted_region(index) {
-                    continue;
-                }
-                if let OplogEntry::PendingAgentInvocation {
-                    invocation_id,
-                    operation,
-                    ..
-                }
-                | OplogEntry::AgentInvocationStarted {
-                    invocation_id,
-                    operation,
-                    ..
-                } = entry
-                    && *operation == InvocationRequestOperation::AgentInitialization
-                {
-                    return Ok(invocation_id);
-                }
-            }
-            first = OplogIndex::from_u64(first.as_u64() + count);
+        if let Some(key) = find_initialization_key(self.oplog.as_ref(), &status).await? {
+            return Ok(key);
         }
+        // The initialization of a fork is in its retained entries, or it is below the retained
+        // start, where the oplog no longer keeps it and the status names its key.
+        let retention = self.oplog.retention();
+        if let Some(key) = initialization_key_below_start(retention, &status) {
+            return Ok(key);
+        }
+        retention.check_agent_from(&self.owned_agent_id.agent_id, OplogIndex::INITIAL)?;
         Err(self.missing_initialization())
     }
 
@@ -187,20 +245,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     })
                 })
         };
-        let index = if let Some(index) = cached_index {
-            Some(index)
-        } else if let Some(index) = status.invocation_results.get(key) {
-            Some(*index)
-        } else if !status.invocation_results.is_exact_complete()
+        let position = if let Some(position) = status.invocation_results.position(key) {
+            Some(position.clone())
+        } else if cached_index.is_none()
+            && !status.invocation_results.is_exact_complete()
             && status.invocation_results.might_contain(key)
         {
             self.resolve_old_invocation_result_index(&status, key)
                 .await?
-                .map(|position| position.terminal)
         } else {
             None
         };
+        let index = cached_index.or(position.as_ref().map(|position| position.terminal));
         if let Some(index) = index {
+            if initialization_finished_below_start(self.oplog.retention(), position.as_ref()) {
+                return Ok(true);
+            }
             return match self.oplog.read(index).await? {
                 OplogEntry::AgentInvocationFinished {
                     invocation_id,

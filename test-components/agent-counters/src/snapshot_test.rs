@@ -279,6 +279,9 @@ trait JsonSnapshotCounter {
     fn initializer_seed_hash(&self) -> u64;
     #[read_only(cache = "no_cache")]
     fn peek(&self) -> u32;
+    /// Creates a promise and gives the count. When the storage refuses the promise, the call
+    /// fails with an error that the executor retries.
+    fn create_promise(&mut self) -> u32;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -308,6 +311,11 @@ impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
     }
 
     fn peek(&self) -> u32 {
+        self.count
+    }
+
+    fn create_promise(&mut self) -> u32 {
+        let _promise = golem_rust::create_promise();
         self.count
     }
 }

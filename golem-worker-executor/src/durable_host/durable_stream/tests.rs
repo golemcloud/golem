@@ -24,6 +24,7 @@ use super::{
     StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentState,
     StreamSegmentSource, StreamStoreError,
 };
+use crate::services::oplog::retention::OplogRetention;
 use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogOps, OplogReadSource,
     OrderedOplogStart, PendingUpload, RawDurableStreamSessionStatus, UnreadableOplog,
@@ -1541,7 +1542,10 @@ fn consumer_journal_rejects_malformed_records_without_partial_mutation() {
         binding_slot: 0,
     };
     let key = (identity.invocation.clone(), reader_id);
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     let empty_packed = consumer_item_record(
         StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         reader_id,
@@ -1627,7 +1631,10 @@ fn consumer_journal_validates_terminal_order_and_duplicate_overlay_ordinal() {
             consumer_read_ordinal: 0,
         },
     );
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     index
         .apply_consumer_journal_record(
             &overlay,
@@ -7428,7 +7435,10 @@ async fn malformed_history_is_rejected_while_rebuilding_the_index() {
 #[test]
 async fn rejected_nested_item_batch_does_not_partially_mutate_the_stream_index() {
     let identity = identity();
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     let root_index = OplogIndex::INITIAL;
     let root = registered_stream(
         root_index,
@@ -7873,7 +7883,10 @@ async fn foreign_mappings_are_deduplicated_and_count_toward_the_session_limit() 
             mapping,
         })
     };
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     for position in 0..MAX_DURABLE_STREAMS_PER_SESSION {
         index
             .apply_session_references(
@@ -10705,4 +10718,463 @@ async fn successful_session_finishes_agent_writers_but_abandons_tool_writers() {
         );
         assert!(reader.next().await.unwrap().is_none());
     }
+}
+
+/// The stream readers of a store go by the retained start of its oplog: the load of the stream
+/// index and the refresh of the session control metadata read no entry below the start. With the
+/// full oplog, the same readers read from index 1.
+#[test]
+async fn the_stream_index_and_the_control_refresh_read_from_the_retained_start() {
+    use crate::durable_host::durable_stream::session_state::SessionControlMetadata;
+    use crate::services::oplog::retention::test_oplog::{at, idx, jump, retained_handle};
+    use futures::{StreamExt, TryStreamExt};
+
+    let identity = identity();
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=6)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let handle = registered_stream(
+        OplogIndex::from_u64(5),
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        root_registration(&identity),
+    )
+    .handle;
+    let session_key = attachment_key(&identity, handle.stream_id).session_key;
+    let read_starts = |retention| {
+        let physical = physical.clone();
+        let identity = &identity;
+        let session_key = &session_key;
+        async move {
+            physical.take_read_ranges();
+            let oplog = retained_handle(physical.clone(), identity.agent_id, retention);
+            let store = DurableStreamStore::load(
+                oplog,
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let loaded = physical.take_read_ranges();
+            store
+                .refresh_control_metadata(session_key, &mut SessionControlMetadata::default())
+                .await
+                .unwrap();
+            let refreshed = physical.take_read_ranges();
+            (
+                loaded.into_iter().map(|(start, _)| start).min(),
+                refreshed.into_iter().map(|(start, _)| start).min(),
+            )
+        }
+    };
+
+    assert_eq!(read_starts(at(4)).await, (Some(idx(4)), Some(idx(4))));
+    assert_eq!(read_starts(at(1)).await, (Some(idx(1)), Some(idx(1))));
+}
+
+/// A stream registered after the retained start reads its items by handle through the retained
+/// oplog. Each item keeps the offset that its write gave, which holds the original oplog index.
+#[test]
+async fn items_read_after_the_retained_start_keep_their_original_offsets() {
+    use crate::services::oplog::retention::test_oplog::{at, jump, retained_handle};
+    use futures::{StreamExt, TryStreamExt};
+    use golem_common::model::durable_stream::StreamHandleReadRequest;
+
+    let identity = identity();
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=3)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let live = producer(physical.clone(), &identity, None).await;
+    let handle = live
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    let written = live
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![3, 9, 17]),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(
+        written
+            .iter()
+            .all(|offset| offset.producer_oplog_index() > OplogIndex::from_u64(4)),
+        "{written:?}"
+    );
+    drop(live);
+
+    let oplog = retained_handle(physical, identity.agent_id, at(4));
+    let retained = DurableStreamStore::load(
+        oplog,
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let read = retained
+        .read_by_handle(StreamHandleReadRequest {
+            handle,
+            after: None,
+            max_items: 10,
+            max_bytes: 100,
+            wait_millis: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        read.events
+            .iter()
+            .map(|event| event.offset)
+            .collect::<Vec<_>>(),
+        written
+    );
+}
+
+/// The control metadata starts at the retained start, so an attach of a reader that a record
+/// below the start introduced fails with the expired error that names the start. With the
+/// introducing record at the start, the same attach commits, and a repeat finds the commit.
+#[test]
+async fn an_attach_of_a_reader_introduced_below_the_retained_start_is_expired() {
+    use crate::services::oplog::UnreadableOplog;
+    use crate::services::oplog::retention::test_oplog::{at, expired, jump, retained_handle};
+    use futures::{StreamExt, TryStreamExt};
+
+    let source_identity = identity();
+    let source = producer(Arc::new(TestOplog::default()), &source_identity, None).await;
+    let handle = source
+        .register(None, root_registration(&source_identity))
+        .await
+        .unwrap()
+        .value;
+    let offsets = source
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
+        .await
+        .unwrap()
+        .value;
+    let key = attachment_key(&source_identity, handle.stream_id);
+    let consumer_identity = TestIdentity {
+        environment_id: key.consumer_environment_id,
+        agent_id: key.consumer,
+        fingerprint: key.expected_consumer_fingerprint,
+        invocation: key.consumer_invocation.clone(),
+    };
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=2)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let consumer = producer(physical.clone(), &consumer_identity, None).await;
+    consumer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key),
+                mapping: StreamBindingRecord {
+                    transport_stream_id: 0,
+                    source: StreamRecordReference::Foreign(handle),
+                    role: SessionStreamRole::Input,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+    let reader_id = LocalStreamReaderId {
+        introducing_oplog_index: consumer.oplog.current_oplog_index().await,
+        binding_slot: 0,
+    };
+    assert_eq!(reader_id.introducing_oplog_index, OplogIndex::from_u64(3));
+    physical.add(jump(4)).await.unwrap();
+    let offset = offsets[0];
+    let attach = |retention| {
+        let physical = physical.clone();
+        let consumer_identity = &consumer_identity;
+        let key = key.clone();
+        async move {
+            let oplog = retained_handle(physical, consumer_identity.agent_id, retention);
+            DurableStreamStore::load(
+                oplog,
+                consumer_identity.environment_id,
+                consumer_identity.agent_id,
+                consumer_identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap()
+            .commit_source_unavailable_overlay(None, key, reader_id, offset, 0)
+            .await
+        }
+    };
+
+    assert_eq!(
+        attach(at(4)).await,
+        Err(StreamStoreError::Unreadable(UnreadableOplog::new(
+            &consumer_identity.agent_id,
+            expired(4),
+        )))
+    );
+    assert_eq!(attach(at(3)).await, Ok(false), "the attach commits");
+    assert_eq!(attach(at(3)).await, Ok(true), "the repeat finds the commit");
+}
+
+/// The store of `identity` over `physical`, with the start of the oplog at `retention`.
+async fn store_at(
+    physical: Arc<TestOplog>,
+    identity: &TestIdentity,
+    retention: crate::services::oplog::retention::OplogRetention,
+) -> Result<Arc<DurableStreamStore>, StreamStoreError> {
+    let oplog = crate::services::oplog::retention::test_oplog::retained_handle(
+        physical,
+        identity.agent_id,
+        retention,
+    );
+    DurableStreamStore::load(
+        oplog,
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+    )
+    .await
+}
+
+/// An oplog of jumps from index 1 to `last`, with a stream registered after them.
+async fn stream_registered_after(
+    last: u64,
+    identity: &TestIdentity,
+) -> (
+    Arc<TestOplog>,
+    Arc<DurableStreamStore>,
+    golem_common::base_model::durable_stream::DurableStreamHandle,
+) {
+    use crate::services::oplog::retention::test_oplog::jump;
+    use futures::{StreamExt, TryStreamExt};
+
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=last)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let live = producer(physical.clone(), identity, None).await;
+    let handle = live
+        .register(None, root_registration(identity))
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        physical.current_oplog_index().await,
+        OplogIndex::from_u64(last + 1),
+        "the registration is the entry after the jumps"
+    );
+    (physical, live, handle)
+}
+
+/// The index of a store folds the oplog from the retained start. A record at or after the start
+/// that references a registration below it gives the expired error with the start, not corrupt
+/// history. With the registration at the start, the same oplog loads.
+#[test]
+async fn a_record_that_references_a_registration_below_the_retained_start_is_expired() {
+    use crate::services::oplog::UnreadableOplog;
+    use crate::services::oplog::retention::test_oplog::{at, expired};
+
+    let identity = identity();
+    let (physical, live, handle) = stream_registered_after(3, &identity).await;
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![1]),
+    )
+    .await
+    .unwrap();
+    drop(live);
+
+    assert_eq!(
+        store_at(physical.clone(), &identity, at(5)).await.err(),
+        Some(StreamStoreError::Unreadable(UnreadableOplog::new(
+            &identity.agent_id,
+            expired(5)
+        )))
+    );
+    assert!(store_at(physical, &identity, at(4)).await.is_ok());
+}
+
+/// The index of a local stream id that the fold did not see: below the retained start it is
+/// expired with the start; at or after the start, or in an index with no retention, it is corrupt
+/// history.
+#[test]
+fn an_unknown_local_stream_is_expired_only_below_the_retained_start() {
+    use crate::services::oplog::UnreadableOplog;
+    use crate::services::oplog::retention::test_oplog::{at, expired, idx};
+
+    let identity = identity();
+    let index = ProducerStreamIndex::retained_by(identity.agent_id, at(4));
+    assert_eq!(
+        index.runtime_stream_id(LocalStreamId(idx(3))),
+        Err(StreamStoreError::Unreadable(UnreadableOplog::new(
+            &identity.agent_id,
+            expired(4)
+        )))
+    );
+    assert!(matches!(
+        index.runtime_stream_id(LocalStreamId(idx(4))),
+        Err(StreamStoreError::CorruptHistory(_))
+    ));
+    assert!(matches!(
+        ProducerStreamIndex::retained_by(
+            crate::durable_host::durable_stream::tests::identity().agent_id,
+            OplogRetention::FULL,
+        )
+        .runtime_stream_id(LocalStreamId(idx(3))),
+        Err(StreamStoreError::CorruptHistory(_))
+    ));
+}
+
+/// A handle of a stream that the store does not know needs the oplog below the retained start
+/// to check it, so it is expired with the start. With the registration at the start, the handle
+/// is valid, and with the full oplog an unknown handle is not valid.
+#[test]
+async fn a_handle_of_a_stream_registered_below_the_retained_start_is_expired() {
+    use crate::services::oplog::UnreadableOplog;
+    use crate::services::oplog::retention::test_oplog::{at, expired, jump};
+
+    let identity = identity();
+    let (physical, live, handle) = stream_registered_after(3, &identity).await;
+    drop(live);
+    physical.add(jump(5)).await.unwrap();
+
+    let retained = store_at(physical.clone(), &identity, at(5)).await.unwrap();
+    assert_eq!(
+        retained.validate_handle(&handle).await,
+        Err(StreamStoreError::Unreadable(UnreadableOplog::new(
+            &identity.agent_id,
+            expired(5)
+        )))
+    );
+    let at_the_start = store_at(physical.clone(), &identity, at(4)).await.unwrap();
+    assert_eq!(at_the_start.validate_handle(&handle).await, Ok(()));
+    let mut unknown = handle.clone();
+    unknown.stream_id = StreamId(uuid::Uuid::from_u128(7));
+    let full = store_at(
+        physical,
+        &identity,
+        crate::services::oplog::retention::OplogRetention::FULL,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        full.validate_handle(&unknown).await,
+        Err(StreamStoreError::InvalidHandle)
+    );
+}
+
+/// A cursor after an item below the retained start is expired with the start, not an unavailable
+/// cursor. A cursor at an item after the start is valid.
+#[test]
+async fn a_cursor_below_the_retained_start_is_expired() {
+    use crate::services::oplog::UnreadableOplog;
+    use crate::services::oplog::retention::test_oplog::{at, expired, idx};
+
+    let identity = identity();
+    let (physical, live, handle) = stream_registered_after(3, &identity).await;
+    let written = live
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![1, 2]),
+        )
+        .await
+        .unwrap()
+        .value;
+    drop(live);
+
+    let retained = store_at(physical, &identity, at(4)).await.unwrap();
+    assert_eq!(
+        retained
+            .validate_cursor(handle.stream_id, Some(StreamOffset::new(idx(3), 0)))
+            .await,
+        Err(StreamStoreError::Unreadable(UnreadableOplog::new(
+            &identity.agent_id,
+            expired(4)
+        )))
+    );
+    assert_eq!(
+        retained
+            .validate_cursor(handle.stream_id, Some(written[0]))
+            .await,
+        Ok(())
+    );
+}
+
+/// The refresh of the consumer journals walks the oplog after the indexed coverage from the
+/// retained start, not from index 1.
+#[test]
+async fn the_consumer_journal_refresh_reads_from_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{at, idx, jump};
+    use futures::{StreamExt, TryStreamExt};
+
+    let identity = identity();
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=4)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let store = store_at(physical.clone(), &identity, at(3)).await.unwrap();
+    physical.take_read_ranges();
+    let record = consumer_item_record(
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        LocalStreamReaderId {
+            introducing_oplog_index: idx(3),
+            binding_slot: 0,
+        },
+        StreamOffset::new(idx(90), 0),
+        0,
+        vec![1],
+        false,
+    );
+    assert_eq!(
+        store
+            .refresh_consumer_journals(
+                &mut ProducerStreamIndex::retained_by(
+                    crate::durable_host::durable_stream::tests::identity().agent_id,
+                    OplogRetention::FULL,
+                ),
+                &[record]
+            )
+            .await,
+        Ok(())
+    );
+    assert_eq!(
+        physical
+            .take_read_ranges()
+            .into_iter()
+            .map(|(start, _)| start)
+            .min(),
+        Some(idx(3))
+    );
 }

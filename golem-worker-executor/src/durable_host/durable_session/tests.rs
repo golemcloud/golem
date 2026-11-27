@@ -16645,3 +16645,84 @@ async fn external_inline_demand_interrupt_preserves_ordinal_and_journal() {
     assert_eq!(wait_polls.load(Ordering::SeqCst), 0);
     assert_eq!(wait_drops.load(Ordering::SeqCst), 1);
 }
+
+/// A stream session of `identity` over an oplog of jumps from index 1 to 4, behind the retention
+/// layer at start 3, with the oplog of jumps.
+async fn session_from_start_3(identity: &TestIdentity) -> (Arc<TestOplog>, StreamSession) {
+    use crate::services::oplog::retention::test_oplog::{at, jump, retained_handle};
+    use futures::{StreamExt, TryStreamExt};
+
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=4)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let oplog = retained_handle(physical.clone(), identity.agent_id, at(3));
+    let store = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let session = StreamSession::new(
+        store,
+        oplog,
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    );
+    (physical, session)
+}
+
+/// The consumer journal of a reader walks the oplog from the retained start, not from index 1.
+#[test]
+async fn the_consumer_journal_walk_reads_from_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::idx;
+
+    let identity = identity();
+    let (physical, session) = session_from_start_3(&identity).await;
+    physical.take_read_ranges();
+    let reader = LocalStreamReaderId {
+        introducing_oplog_index: idx(3),
+        binding_slot: 0,
+    };
+    assert_eq!(
+        session.consumer_history_positions(reader).await,
+        Ok(Vec::new())
+    );
+    assert_eq!(
+        physical
+            .take_read_ranges()
+            .into_iter()
+            .map(|(start, _)| start)
+            .min(),
+        Some(idx(3))
+    );
+}
+
+/// The journal of a reader starts at the record that introduced it. For a reader introduced
+/// below the retained start, the journal is expired with the start; for a reader introduced at
+/// the start that the session does not know, the error is not the expired error.
+#[test]
+async fn the_consumer_journal_of_a_reader_introduced_below_the_retained_start_is_expired() {
+    use crate::services::oplog::UnreadableOplog;
+    use crate::services::oplog::retention::test_oplog::{expired, idx};
+
+    let identity = identity();
+    let (_, session) = session_from_start_3(&identity).await;
+    let history = |introducing| {
+        session.consumer_history(LocalStreamReaderId {
+            introducing_oplog_index: idx(introducing),
+            binding_slot: 0,
+        })
+    };
+    assert!(matches!(
+        history(2).await,
+        Err(SessionError::Unreadable(unreadable))
+            if unreadable == UnreadableOplog::new(&identity.agent_id, expired(3))
+    ));
+    assert!(matches!(history(3).await, Err(SessionError::Failed(_))));
+}

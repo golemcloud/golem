@@ -66,6 +66,7 @@ pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
 pub mod oplog_processor;
+pub mod oplog_retained_start;
 pub mod oplog_sweep;
 pub mod oplog_unreadable;
 pub mod owner_tool_isolation;

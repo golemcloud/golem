@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::retention::OplogRetention;
 use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps, UnreadableOplog};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{
@@ -41,6 +42,17 @@ enum LineageSource<'a> {
 }
 
 impl LineageSource<'_> {
+    async fn retention(&self) -> Result<OplogRetention, UnreadableOplog> {
+        match self {
+            Self::Open(oplog) => Ok(oplog.retention()),
+            Self::Service {
+                service,
+                owner,
+                mode,
+            } => service.retention(owner, *mode).await,
+        }
+    }
+
     async fn read_exact(
         &self,
         index: OplogIndex,
@@ -107,21 +119,25 @@ impl StreamForkLineage {
             owner,
             mode,
         };
-        let mut covered = from.previous();
-        while covered < horizon {
-            let count = (horizon.as_u64() - covered.as_u64()).min(1024);
+        let retention = source
+            .retention()
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut next = from;
+        while let Some(chunk) = retention.chunk(next, horizon, 1024) {
             let entries = source
-                .read_exact(covered.next(), count)
+                .read_exact(chunk.start, chunk.count)
                 .await
                 .map_err(|error| error.to_string())?;
-            if entries.len() as u64 != count {
+            if entries.len() as u64 != chunk.count {
                 return Err("missing oplog entries while discovering stream fork lineage".into());
             }
+            next = chunk.start;
             for (index, entry) in entries {
-                if index != covered.next() {
+                if index != next {
                     return Err("noncontiguous oplog while discovering stream fork lineage".into());
                 }
-                covered = index;
+                next = index.next();
                 if matches!(entry, OplogEntry::Revert { .. }) {
                     return Ok(true);
                 }
@@ -187,29 +203,34 @@ impl StreamForkLineage {
         horizon: OplogIndex,
         pending_cut: Option<StreamForkCutRecord>,
     ) -> Result<Self, String> {
+        // Both passes start at the retained start of the oplog: the history before it is gone.
         // The first bounded pass reads no external payloads. It builds the complete deletion mask
         // used by the second pass, so payloads in deleted regions are never downloaded.
+        let retention = source
+            .retention()
+            .await
+            .map_err(|error| error.to_string())?;
         let mut reverts = Vec::new();
         let mut first_stream_entry = None;
-        let mut covered = OplogIndex::NONE;
-        while covered < horizon {
-            let count = (horizon.as_u64() - covered.as_u64()).min(1024);
+        let mut next = OplogIndex::NONE;
+        while let Some(chunk) = retention.chunk(next, horizon, 1024) {
             let entries = source
-                .read_exact(covered.next(), count)
+                .read_exact(chunk.start, chunk.count)
                 .await
                 .map_err(|error| error.to_string())?;
-            if entries.len() as u64 != count {
+            if entries.len() as u64 != chunk.count {
                 return Err(
                     "missing oplog entries while discovering reverted stream history".into(),
                 );
             }
+            next = chunk.start;
             for (index, entry) in entries {
-                if index != covered.next() {
+                if index != next {
                     return Err(
                         "noncontiguous oplog while discovering reverted stream history".into(),
                     );
                 }
-                covered = index;
+                next = index.next();
                 if matches!(
                     entry,
                     OplogEntry::StreamRegistered { .. }
@@ -231,21 +252,21 @@ impl StreamForkLineage {
         let mut cuts = Vec::new();
         let mut registrations = Vec::new();
         let mut finished = Vec::new();
-        let mut covered = OplogIndex::NONE;
-        while covered < horizon {
-            let count = (horizon.as_u64() - covered.as_u64()).min(1024);
+        let mut next = OplogIndex::NONE;
+        while let Some(chunk) = retention.chunk(next, horizon, 1024) {
             let entries = source
-                .read_exact(covered.next(), count)
+                .read_exact(chunk.start, chunk.count)
                 .await
                 .map_err(|error| error.to_string())?;
-            if entries.len() as u64 != count {
+            if entries.len() as u64 != chunk.count {
                 return Err("missing oplog entries while loading stream fork lineage".into());
             }
+            next = chunk.start;
             for (index, entry) in entries {
-                if index != covered.next() {
+                if index != next {
                     return Err("noncontiguous oplog while loading stream fork lineage".into());
                 }
-                covered = index;
+                next = index.next();
                 if deleted_regions.is_in_deleted_region(index) {
                     continue;
                 }

@@ -738,3 +738,80 @@ async fn first_spanning_construct_is_reported() {
         })
     );
 }
+
+/// The cut of a count-based revert, from a walk that reads only the entries that `retention`
+/// keeps. A read below the start fails with its index.
+async fn cut_before(
+    entries: &HashMap<u64, OplogEntry>,
+    retention: OplogRetention,
+    last: u64,
+    number_of_invocations: u64,
+) -> Result<Option<u64>, OplogIndex> {
+    cut_before_last_invocations(
+        |i: OplogIndex| {
+            let entry = retention
+                .retains(i)
+                .then(|| {
+                    entries
+                        .get(&u64::from(i))
+                        .cloned()
+                        .unwrap_or_else(|| OplogEntry::grow_memory(0))
+                })
+                .ok_or(i);
+            async move { entry }
+        },
+        retention,
+        idx(last),
+        number_of_invocations,
+    )
+    .await
+    .map(|cut| cut.map(u64::from))
+}
+
+/// The revert walk counts the invocations back to the retained start and reads no entry below
+/// it. A `Revert` whose dropped region begins below the start ends the walk.
+#[test]
+async fn the_revert_walk_counts_invocations_back_to_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{at, invocation_started};
+
+    let entries: HashMap<u64, OplogEntry> = [(2, invocation_started()), (4, invocation_started())]
+        .into_iter()
+        .collect();
+    assert_eq!(
+        cut_before(&entries, OplogRetention::FULL, 5, 2).await,
+        Ok(Some(1))
+    );
+    assert_eq!(
+        cut_before(&entries, OplogRetention::FULL, 5, 3).await,
+        Ok(None)
+    );
+    assert_eq!(cut_before(&entries, at(2), 5, 2).await, Ok(Some(1)));
+    assert_eq!(cut_before(&entries, at(3), 5, 1).await, Ok(Some(3)));
+    assert_eq!(cut_before(&entries, at(3), 5, 2).await, Ok(None));
+    assert_eq!(cut_before(&entries, at(4), 5, 1).await, Ok(Some(3)));
+    assert_eq!(cut_before(&entries, at(5), 5, 1).await, Ok(None));
+    assert_eq!(cut_before(&entries, at(6), 5, 1).await, Ok(None));
+    assert_eq!(cut_before(&entries, at(12), 10, 1).await, Ok(None));
+
+    let reverted: HashMap<u64, OplogEntry> = [
+        (4, invocation_started()),
+        (6, OplogEntry::revert(OplogRegion::from_range(2..=5))),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        cut_before(&reverted, OplogRetention::FULL, 6, 1).await,
+        Ok(None)
+    );
+    assert_eq!(cut_before(&reverted, at(3), 6, 1).await, Ok(None));
+    let reverted_after_the_start: HashMap<u64, OplogEntry> = [
+        (4, invocation_started()),
+        (6, OplogEntry::revert(OplogRegion::from_range(5..=5))),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        cut_before(&reverted_after_the_start, at(3), 6, 1).await,
+        Ok(Some(3))
+    );
+}

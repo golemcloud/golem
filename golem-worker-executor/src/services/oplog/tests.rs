@@ -47,7 +47,7 @@ use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailure, WorkerExecutorError};
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
@@ -743,6 +743,7 @@ pub(crate) struct ReadCountingIndexedStorage {
     fail_delete_once: AtomicBool,
     fail_drop_prefix_once: AtomicBool,
     fail_length_once: AtomicBool,
+    fail_last_id_once: AtomicBool,
     fail_exists_once: AtomicBool,
     miss_closest_once: AtomicBool,
     /// Fails every `last_id` of a compressed archive level with this error.
@@ -838,6 +839,10 @@ impl ReadCountingIndexedStorage {
 
     fn fail_next_length(&self) {
         self.fail_length_once.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fail_next_last_id(&self) {
+        self.fail_last_id_once.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn fail_next_exists(&self) {
@@ -1234,6 +1239,11 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
         self.count_read();
+        if self.fail_last_id_once.swap(false, Ordering::Relaxed) {
+            return Err(IndexedStorageError::Other(
+                "injected tail lookup failure".into(),
+            ));
+        }
         if let (Some(error), IndexedStorageNamespace::CompressedOpLog { .. }) =
             (&self.archive_last_id_error, &namespace)
         {
@@ -2275,6 +2285,9 @@ async fn missing_external_payload_is_classified_as_corrupt_history(_tracing: &Tr
 
 #[test]
 async fn a_layered_oplog_length_counts_every_layer(_tracing: &Tracing) {
+    use crate::services::oplog::retention::RetentionOplogService;
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let primary = Arc::new(
         PrimaryOplogService::new(
@@ -2293,7 +2306,12 @@ async fn a_layered_oplog_length_counts_every_layer(_tracing: &Tracing) {
         1,
         RetryConfig::default(),
     ));
-    let service = MultiLayerOplogService::new(primary.clone(), nev![lower.clone()], 1000, 1000);
+    let service = Arc::new(MultiLayerOplogService::new(
+        primary.clone(),
+        nev![lower.clone()],
+        1000,
+        1000,
+    ));
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId::from_parts(7, 7);
@@ -2352,7 +2370,25 @@ async fn a_layered_oplog_length_counts_every_layer(_tracing: &Tracing) {
         "each layer must hold an entry"
     );
 
-    assert_eq!(oplog.length().await.unwrap(), primary_length + archived);
+    let expected = primary_length + archived;
+    assert_eq!(oplog.length().await.unwrap(), expected);
+    assert_ne!(oplog.current_oplog_index().await.as_u64(), expected);
+    let service = RetentionOplogService::new(service, Arc::new(InMemoryKeyValueStorage::new()));
+    let full = service
+        .open(
+            &mut service.lock_lifecycle(&agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(full.length().await.unwrap(), expected);
+    assert_eq!(full.try_length().await.unwrap(), expected);
 }
 
 #[test]
@@ -9080,6 +9116,69 @@ async fn archive_open_service(storage: Arc<ReadCountingIndexedStorage>) -> Multi
     MultiLayerOplogService::new(primary, nev![archive], 10, 10)
 }
 
+#[test]
+async fn public_oplog_pages_keep_a_gap_and_an_unavailable_archive_unknown(_tracing: &Tracing) {
+    use crate::model::public_oplog::{PublicOplogPageLimits, get_public_oplog_page};
+    use crate::services::oplog::retention::OplogRetention;
+    use crate::services::oplog::retention::test_oplog::RetainedOplog;
+    use crate::services::worker::session_index_tests::UnusedComponentService;
+    use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
+    use golem_common::model::caller::ClaimVisibility;
+
+    let gapped = RetainedOplog::new().await;
+    gapped.with_jumps(3).await;
+    gapped
+        .open()
+        .await
+        .try_drop_prefix(OplogIndex::INITIAL)
+        .await
+        .unwrap();
+    let unavailable = archive_open_service(Arc::new(ReadCountingIndexedStorage {
+        archive_last_id_error: Some(IndexedStorageError::Transient("archive outage".into())),
+        ..ReadCountingIndexedStorage::default()
+    }))
+    .await;
+    let cases: [(Arc<dyn OplogService>, &str); 2] = [
+        (gapped.service.clone(), "missing oplog entries"),
+        (Arc::new(unavailable), "archive outage"),
+    ];
+    let read = |service| {
+        get_public_oplog_page(
+            Arc::new(UnusedComponentService),
+            service,
+            &gapped.owned_agent_id,
+            AgentMode::Durable,
+            OplogRetention::FULL,
+            gapped.component_id,
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::INITIAL,
+            PublicOplogPageLimits {
+                count: 2,
+                max_bytes: usize::MAX,
+                max_entry_bytes: usize::MAX,
+            },
+            ClaimVisibility::Hidden,
+        )
+    };
+    for (service, detail) in cases {
+        let error = read(service).await.err().unwrap();
+        let decoded = WorkerExecutorError::try_from(WorkerExecutionError::from(error)).unwrap();
+        assert!(
+            matches!(decoded, WorkerExecutorError::Unknown { details } if details.contains(detail))
+        );
+    }
+
+    // The page still uses the old start, but the service reads the new one.
+    gapped.advance(3).await;
+    let error = read(gapped.service.clone()).await.err().unwrap();
+    assert_eq!(
+        WorkerExecutorError::try_from(WorkerExecutionError::from(error)).unwrap(),
+        WorkerExecutorError::oplog_expired(gapped.owned_agent_id.agent_id, OplogIndex::from_u64(3)),
+    );
+}
+
 /// Opens the oplog of `owned_agent_id` on `service` and returns the error of the open, which must
 /// fail without a panic.
 async fn failed_open(
@@ -9122,7 +9221,7 @@ fn assert_oplog_failed(
     needles: &[&str],
 ) {
     assert!(
-        matches!(error, WorkerExecutorError::OplogFailed { agent_id, details }
+        matches!(error, WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Failed { details } }
             if agent_id == &owned_agent_id.agent_id
                 && needles.iter().all(|needle| details.contains(needle))),
         "{error:?}"
@@ -9370,6 +9469,8 @@ async fn an_ephemeral_epoch_record_that_is_unavailable_requires_a_recovery(_trac
 /// read that a later call can pass, not an oplog that failed for good.
 #[test]
 async fn an_ephemeral_length_over_an_unavailable_archive_is_transient(_tracing: &Tracing) {
+    use crate::services::oplog::retention::test_oplog::{at, retained_handle};
+
     let storage = Arc::new(ReadCountingIndexedStorage {
         archive_length_error: Some(IndexedStorageError::Transient(
             "injected length outage".to_string(),
@@ -9378,12 +9479,73 @@ async fn an_ephemeral_length_over_an_unavailable_archive_is_transient(_tracing: 
     });
     let service = archive_open_service(storage).await;
     let oplog = create_ephemeral_oplog(&service, "ephemeral-length-outage").await;
+    let (agent_id, _, _) = archive_open_agent("ephemeral-length-outage");
+    let maintenance_error = oplog.try_length().await.unwrap_err();
+    assert!(maintenance_error.contains("injected length outage"));
+    for retention in [at(1), at(3)] {
+        let handle = retained_handle(oplog.clone(), agent_id, retention);
+        let error = handle
+            .length()
+            .await
+            .expect_err("the archive length must fail");
+        assert!(error.is_transient(), "{error:?}");
+        assert!(error.to_string().contains("archive layer 0"), "{error}");
+        let error = handle
+            .try_length()
+            .await
+            .expect_err("the archive length must fail");
+        assert_eq!(error, maintenance_error);
+    }
+}
+
+#[test]
+async fn retained_length_keeps_an_unavailable_archive_tail_transient(_tracing: &Tracing) {
+    use crate::services::oplog::retention::{RetentionOplogService, advance_oplog_retention};
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+
+    let storage = Arc::new(ReadCountingIndexedStorage {
+        archive_last_id_error: Some(IndexedStorageError::Transient(
+            "injected archive tail outage".to_string(),
+        )),
+        ..ReadCountingIndexedStorage::default()
+    });
+    let archives = Arc::new(archive_open_service(storage).await);
+    let kv = Arc::new(InMemoryKeyValueStorage::new());
+    let service = RetentionOplogService::new(archives, kv.clone());
+    let (_, owner, mut metadata) = archive_open_agent("retained-archive-tail-outage");
+    let mode = AgentMode::Ephemeral;
+    metadata.agent_mode = mode;
+    advance_oplog_retention(kv.as_ref(), &owner, mode, OplogIndex::from_u64(2))
+        .await
+        .unwrap();
+    let mut lifecycle = service.lock_lifecycle(&owner.agent_id).await;
+    let oplog = service
+        .open(
+            &mut lifecycle,
+            &owner,
+            mode,
+            Some(OplogIndex::from_u64(3)),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(mode),
+            None,
+        )
+        .await
+        .expect("open with a known tail must succeed");
+
     let error = oplog
         .length()
         .await
-        .expect_err("the archive length must fail");
-    assert!(error.is_transient(), "{error:?}");
-    assert!(error.to_string().contains("archive layer 0"), "{error}");
+        .expect_err("the stored tail is unavailable");
+    let OplogReadError::SourceUnavailable {
+        source: OplogReadSource::Archive(0),
+        detail,
+    } = error.error
+    else {
+        panic!("{error:?}");
+    };
+    assert!(detail.contains("injected archive tail outage"), "{detail}");
+    assert_eq!(oplog.try_length().await, Err(detail));
 }
 
 #[test]

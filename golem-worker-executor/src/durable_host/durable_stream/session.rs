@@ -171,7 +171,7 @@ impl DurableStreamStore {
         if keys.is_empty() {
             return Ok(());
         }
-        let mut refreshed = ProducerStreamIndex::default();
+        let mut refreshed = ProducerStreamIndex::retained_by(self.producer, self.oplog.retention());
         let mut covered = OplogIndex::NONE;
         if let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() {
             let keys = keys.iter().cloned().collect::<Vec<_>>();
@@ -199,9 +199,9 @@ impl DurableStreamStore {
             covered = horizon;
         }
         let current = self.oplog.current_oplog_index().await;
-        while covered < current {
-            let count = (current.as_u64() - covered.as_u64()).min(1024);
-            for (position, entry) in self.oplog.read_exact(covered.next(), count).await? {
+        let retention = self.oplog.retention();
+        while let Some(chunk) = retention.chunk(covered.next(), current, 1024) {
+            for (position, entry) in self.oplog.read_exact(chunk.start, chunk.count).await? {
                 covered = position;
                 if self
                     .fork_lineage
@@ -384,13 +384,9 @@ impl DurableStreamStore {
         }
         metadata.ensure_valid()?;
         let horizon = self.oplog.current_oplog_index().await;
-        while metadata.covered_through() < horizon {
-            let count = (horizon.as_u64() - metadata.covered_through().as_u64()).min(1024);
-            for (index, entry) in self
-                .oplog
-                .read_exact(metadata.covered_through().next(), count)
-                .await?
-            {
+        let retention = self.oplog.retention();
+        while let Some(chunk) = retention.chunk(metadata.covered_through().next(), horizon, 1024) {
+            for (index, entry) in self.oplog.read_exact(chunk.start, chunk.count).await? {
                 if self
                     .fork_lineage
                     .deleted_regions()

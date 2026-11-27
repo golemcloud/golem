@@ -54,6 +54,11 @@ impl DurableStreamStore {
         {
             return Err(StreamStoreError::InvalidAttachmentState);
         }
+        // The control metadata starts at the retained start, so it does not know a reader that
+        // a record below the start introduced. That reader is expired, not unknown.
+        self.oplog
+            .retention()
+            .check_agent_from(&self.producer, reader_id.introducing_oplog_index)?;
         let mut metadata = SessionControlMetadata::default();
         self.refresh_control_metadata(&key.session_key, &mut metadata)
             .await

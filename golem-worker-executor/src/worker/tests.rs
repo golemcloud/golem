@@ -21,6 +21,7 @@ use super::*;
 use golem_common::model::oplog::AgentError;
 use golem_common::model::{AssistedSelection, IdempotencyKey, UsableAutomaticSnapshot};
 use golem_common::schema::SchemaValue;
+use golem_service_base::error::worker_executor::OplogFailure;
 use test_r::test;
 
 fn accounting_tracker(saved: u64, current: u64) -> LinearMemoryTracker {
@@ -422,7 +423,7 @@ fn only_a_fenced_terminal_write_is_a_lost_shard() {
             level: 0,
             details: "injected archive failure".to_string(),
         })),
-        Ok(WorkerExecutorError::OplogFailed { details, .. })
+        Ok(WorkerExecutorError::OplogFailed { failure: OplogFailure::Failed { details }, .. })
             if details.contains("injected archive failure")
     ));
     let fence = OplogFence {

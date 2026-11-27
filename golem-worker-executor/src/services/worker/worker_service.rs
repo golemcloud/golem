@@ -567,6 +567,11 @@ impl WorkerService for DefaultWorkerService {
             let namespace =
                 Self::invocation_result_index_namespace(owned_agent_id, fingerprint);
             let status_generation = status.invocation_results.revert_generation();
+            // The index covers the retained oplog: the entries before its start are gone.
+            let retention = self
+                .oplog_service
+                .retention(owned_agent_id, agent_mode)
+                .await?;
             'reload: loop {
                 let observed_metadata = self
                     .key_value_storage
@@ -669,29 +674,23 @@ impl WorkerService for DefaultWorkerService {
                     }
                 };
 
-                while metadata.covered_through < status.oplog_idx {
-                    let remaining =
-                        status.oplog_idx.as_u64() - metadata.covered_through.as_u64();
-                    let count = remaining
-                        .min(
-                            self.config
-                                .invocation_results
-                                .physical_index_catch_up_chunk_size,
-                        )
-                        .max(1);
+                // The catch-up ends when no retained entry is after the covered index, also when
+                // the last index is below the retained start: then nothing is left to index.
+                while let Some(chunk) = retention.chunk(
+                    metadata.covered_through.next(),
+                    status.oplog_idx,
+                    self.config
+                        .invocation_results
+                        .physical_index_catch_up_chunk_size,
+                ) {
+                    let start = chunk.start;
                     let entries = self
                         .oplog_service
-                        .read_exact(
-                            owned_agent_id,
-                            agent_mode,
-                            metadata.covered_through.next(),
-                            count,
-                        )
+                        .read_exact(owned_agent_id, agent_mode, start, chunk.count)
                         .await?;
                     if entries.is_empty() {
                         return Err(WorkerExecutorError::runtime(format!(
-                            "failed to advance invocation result index for {owned_agent_id}: oplog range starting at {} was empty",
-                            metadata.covered_through.next()
+                            "failed to advance invocation result index for {owned_agent_id}: oplog range starting at {start} was empty"
                         )));
                     }
 

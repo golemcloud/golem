@@ -131,6 +131,9 @@ impl PostgresKeyValueStorage {
                     owned_agent_id.storage_key()
                 )
             }
+            KeyValueStorageNamespace::AgentOplogRetention { owned_agent_id } => {
+                format!("agent:oplog_retention:{}", owned_agent_id.storage_key())
+            }
             KeyValueStorageNamespace::Promise {
                 owned_agent_id,
                 fingerprint,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::retention::OplogRetention;
 use golem_common::model::InvocationId;
 
 use super::*;
@@ -180,6 +181,14 @@ impl OplogService for IndexTestOplogService {
         _expected_epoch: golem_common::model::ShardEpoch,
     ) -> Result<(), crate::services::oplog::OplogError> {
         Ok(())
+    }
+
+    async fn retention(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
     }
 
     async fn delete(
@@ -2405,6 +2414,14 @@ impl OplogService for FakeOplogService {
         Ok(())
     }
 
+    async fn retention(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
+    }
+
     async fn delete(
         &self,
         _lifecycle: &mut OplogLifecycleGuard,
@@ -3412,6 +3429,49 @@ fn batch(cursor: &str, examined_keys: u64) -> ScanPage {
         agent_ids: vec![],
         examined_keys,
     }
+}
+
+#[test]
+async fn invocation_result_index_catches_up_from_the_stored_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, jump};
+    use golem_common::model::ShardEpoch;
+
+    let oplog = RetainedOplog::new().await;
+    let _handle = oplog.create(oplog.create_entry(), ShardEpoch(1)).await;
+    let key = idempotency_key("retained");
+    let mut entries = BTreeMap::new();
+    invocation_pair(&mut entries, 4, &key);
+    oplog
+        .add([jump(2), jump(3)].into_iter().chain(entries.into_values()))
+        .await;
+    oplog.advance(4).await;
+
+    let service = DefaultWorkerService::new(
+        oplog.key_value_storage(),
+        Arc::new(ShardServiceDefault::new()),
+        oplog.service.clone(),
+        Arc::new(IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let status = invocation_status(5, 0, &[], 0, DeletedRegions::new());
+    let fingerprint = invocation_index_fingerprint();
+    service
+        .catch_up_invocation_result_index(
+            &oplog.owned_agent_id,
+            AgentMode::Durable,
+            fingerprint,
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .lookup_invocation_result_index(&oplog.owned_agent_id, fingerprint, &status, &key)
+            .await
+            .map(positions_only)
+            .unwrap(),
+        InvocationResultIndexLookup::Found(result_at(5))
+    );
 }
 
 #[test]

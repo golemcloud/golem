@@ -3327,6 +3327,52 @@ async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
     ));
 }
 
+/// The skipped region of a snapshot starts at index 2 and can hold the retained start. A claim
+/// that misses reads the region from the retained start, so it finds the matching `Start` in the
+/// retained part of the region. The replay recovers from the snapshot at the end of the region,
+/// so its metadata scan starts after the region.
+#[test]
+async fn start_claim_reads_a_skipped_region_from_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, idx};
+
+    let retained = RetainedOplog::new().await;
+    retained
+        .add([
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start_now(),
+            start_with_parent(1),
+        ])
+        .await;
+    retained.advance(3).await;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]);
+    let rs = test_replay_state(
+        retained.owned_agent_id.clone(),
+        retained.open().await,
+        skipped,
+        Some(idx(3)),
+    )
+    .await
+    .unwrap();
+
+    let outcome = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        ReplayStartClaimOutcome::DeletedRegion { start_index } if start_index == idx(3)
+    ));
+}
+
 #[test]
 async fn identity_claim_includes_replay_target_after_full_scan_chunk() {
     let mut entries = Vec::with_capacity(CHUNK_SIZE as usize + 2);
@@ -18848,5 +18894,38 @@ async fn a_driven_call_numbered_under_a_custom_root_of_a_closed_invocation_repla
     assert!(
         matches!(result, Ok(Some(_))),
         "a driven call numbered under a closed custom root replays, got {result:?}"
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_scan_that_ends_at_index_0_reads_nothing() {
+    let (rs, oplog) = replay_state_and_oplog_over(vec![start_now()]).await;
+    let reads = oplog.reads.lock().unwrap().clone();
+
+    let result = rs
+        .cursor
+        .scan_oplog(
+            OplogIndex::INITIAL,
+            OplogIndex::NONE,
+            &DeletedRegions::default(),
+            None,
+            OplogIndex::INITIAL,
+            |_, _, _| true,
+            |_, _, _| true,
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        OplogEntryLookupResult::NotFound {
+            violates_for_all: false
+        }
+    ));
+    assert_eq!(
+        *oplog.reads.lock().unwrap(),
+        reads,
+        "a scan with no index before its end reads no entry"
     );
 }

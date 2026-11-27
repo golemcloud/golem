@@ -21,9 +21,7 @@ use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::model::public_oplog::PublicOplogEntryOps;
-use crate::model::public_oplog::find_component_revision_at;
-use crate::model::public_oplog::get_public_oplog_chunk;
-use crate::model::public_oplog::search_public_oplog;
+use crate::model::public_oplog::{get_guest_oplog_chunk, search_guest_oplog};
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::oplog::Host as OplogHost;
 use crate::preview2::golem_api_1_x::oplog::HostGetOplog;
@@ -50,7 +48,6 @@ use golem_common::model::oplog::host_functions::GolemApiEnrichOplogEntries;
 use golem_common::model::oplog::host_functions::GolemApiGetOplogNext;
 use golem_common::model::oplog::host_functions::GolemApiSearchOplogNext;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::num::NonZeroU64;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
@@ -223,30 +220,16 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
-    let agent_mode = identity.agent_mode;
-    let current_component_revision = if entry.initialized {
-        entry.current_component_revision
-    } else {
-        find_component_revision_at(
-            ctx.state.oplog_service(),
-            &entry.owned_agent_id,
-            agent_mode,
-            entry.next_oplog_index,
-        )
-        .await
-        .map_err(|error| error.to_string())?
-    };
-    let agent_type = &identity.create_parameters().agent_type_name;
-    get_public_oplog_chunk(
+    get_guest_oplog_chunk(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
-        agent_mode,
+        identity.agent_mode,
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
-        agent_type.as_ref(),
-        current_component_revision,
+        identity.create_parameters().agent_type_name.as_ref(),
         entry.next_oplog_index,
+        entry.continued(),
         entry.page_size,
         GUEST_CLAIM_VISIBILITY,
     )
@@ -264,40 +247,20 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
-    let agent_mode = identity.agent_mode;
-    let current_component_revision = if entry.initialized {
-        entry.current_component_revision
-    } else {
-        find_component_revision_at(
-            ctx.state.oplog_service(),
-            &entry.owned_agent_id,
-            agent_mode,
-            entry.next_oplog_index,
-        )
-        .await
-        .map_err(|error| error.to_string())?
-    };
-    let agent_type = &identity.create_parameters().agent_type_name;
-    // The grant covers page_size indexes, not page_size matches. The scanner caps each
-    // storage read at the remaining entry budget, even when a chunk has no matches.
-    let mut budget = ctx.state.config.limits.scan_budget;
-    budget.entries = budget
-        .entries
-        .min(NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero"));
-    search_public_oplog(
+    search_guest_oplog(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
-        agent_mode,
+        identity.agent_mode,
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
-        agent_type.as_ref(),
-        current_component_revision,
+        identity.create_parameters().agent_type_name.as_ref(),
         entry.next_oplog_index,
         entry.last_oplog_index,
         entry.page_size,
+        entry.continued(),
         &entry.query,
-        budget,
+        ctx.state.config.limits.scan_budget,
         GUEST_CLAIM_VISIBILITY,
     )
     .await
@@ -480,6 +443,12 @@ impl GetOplogEntry {
         self.current_component_revision = current_component_revision;
         self.initialized = true;
     }
+
+    /// The component revision that the next chunk continues from. `None` for a new read, which
+    /// finds the component revision at its cursor.
+    pub fn continued(&self) -> Option<ComponentRevision> {
+        self.initialized.then_some(self.current_component_revision)
+    }
 }
 
 impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
@@ -596,22 +565,10 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             handle.complete(self, response).await?
         };
 
-        let denied = is_denied_oplog_read(&response);
-        self.as_wasi_view().table().get_mut(&self_).map(|entry| {
-            if denied {
-                entry.update(
-                    entry.next_oplog_index,
-                    entry.current_component_revision,
-                    entry.last_oplog_index,
-                );
-            } else {
-                entry.update(
-                    response.next_oplog_index,
-                    response.current_component_revision,
-                    response.last_oplog_index,
-                );
-            }
-        })?;
+        self.as_wasi_view()
+            .table()
+            .get_mut(&self_)
+            .map(|entry| entry.apply(&response))?;
         match response.result {
             Ok(Some(entries)) => {
                 let entries: Vec<(OplogIndex, PublicOplogEntry)> = serde_json::from_slice(&entries)
@@ -689,6 +646,25 @@ impl SearchOplogEntry {
         self.current_component_revision = current_component_revision;
         self.last_oplog_index = last_oplog_index;
         self.initialized = true;
+    }
+
+    /// Moves the search to the position that the response of a batch gives. A batch that failed,
+    /// or that the grant denied, leaves the search as it was. A new search then stays new, so the
+    /// next batch still starts it at the retained start.
+    pub fn apply(&mut self, response: &HostResponseGolemApiOplogChunk) {
+        if response.result.is_ok() {
+            self.update(
+                response.next_oplog_index,
+                response.current_component_revision,
+                response.last_oplog_index,
+            );
+        }
+    }
+
+    /// The component revision that the next batch continues from. `None` for a new search, which
+    /// starts at its cursor, or at the retained start when the cursor is below it.
+    pub fn continued(&self) -> Option<ComponentRevision> {
+        self.initialized.then_some(self.current_component_revision)
     }
 }
 
@@ -900,6 +876,9 @@ mod tests {
             }),
         })
     }
+
+    #[path = "retention/tests.rs"]
+    mod retention;
 
     /// The enrichment of a failed update reads the recorded `Start` at the index of its
     /// divergence, which the guest supplies, so the oplog grant must cover that index too.

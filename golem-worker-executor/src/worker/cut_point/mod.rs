@@ -21,6 +21,7 @@
 //! Outcomes beyond the cut do not constrain these calls. Remote transactions still require a
 //! cut that preserves their committed/rolled-back outcome.
 
+use crate::services::oplog::retention::OplogRetention;
 use crate::worker::status::update_queue::UpdateQueue;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::PendingUpdateKind;
@@ -170,10 +171,12 @@ impl Display for SpanningConstruct {
 /// The cut point that drops the last `number_of_invocations` invocations of an oplog whose last
 /// entry is at `last_index`: the index just before the `number_of_invocations`-th
 /// `AgentInvocationStarted`, counted back from `last_index`. Invocations in the region that a
-/// `Revert` entry dropped are not counted: the walk continues before that region. `None` when the
-/// oplog holds fewer invocations. A failed `read` ends the walk with its error.
+/// `Revert` entry dropped are not counted: the walk continues before that region. The walk reads
+/// only the entries that `retention` keeps: `None` when the retained oplog holds fewer
+/// invocations. A failed `read` ends the walk with its error.
 pub async fn cut_before_last_invocations<Read, ReadFut, E>(
     read: Read,
+    retention: OplogRetention,
     last_index: OplogIndex,
     number_of_invocations: u64,
 ) -> Result<Option<OplogIndex>, E>
@@ -181,6 +184,9 @@ where
     Read: Fn(OplogIndex) -> ReadFut,
     ReadFut: Future<Output = Result<OplogEntry, E>>,
 {
+    if !retention.retains(last_index) {
+        return Ok(None);
+    }
     let mut current = last_index;
     let mut found = 0;
     loop {
@@ -195,7 +201,7 @@ where
             OplogEntry::Revert { dropped_region, .. } => dropped_region.start.min(current),
             _ => current,
         };
-        if continue_before == OplogIndex::INITIAL {
+        if !retention.retains(continue_before.previous()) {
             return Ok(None);
         }
         current = continue_before.previous();

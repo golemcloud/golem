@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::retention::OplogRetention;
 
 impl MultiLayerOplogService {
     pub fn new(
@@ -463,17 +464,17 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         let mut result = self
             .primary
             .try_get_last_index(owned_agent_id, agent_mode)
             .await?;
         if result == OplogIndex::NONE {
-            for layer in &self.lower {
+            for (level, layer) in self.lower.iter().enumerate() {
                 let idx = layer
                     .get_last_index(owned_agent_id, agent_mode)
                     .await
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| unreadable_archive(owned_agent_id, level, error))?;
                 if idx != OplogIndex::NONE {
                     result = idx;
                     break;
@@ -492,6 +493,14 @@ impl OplogService for MultiLayerOplogService {
         self.primary
             .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
             .await
+    }
+
+    async fn retention(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
     }
 
     async fn delete(

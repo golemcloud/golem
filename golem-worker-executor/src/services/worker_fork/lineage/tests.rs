@@ -797,3 +797,323 @@ fn through_preserves_marker_and_deletion_boundaries() {
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }
+
+#[test]
+async fn a_fork_cut_search_reads_from_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, idx, jump};
+
+    let revert = |index: u64| OplogEntry::Revert {
+        timestamp: Timestamp::from(index),
+        dropped_region: OplogRegion {
+            start: idx(index - 1),
+            end: idx(index - 1),
+        },
+    };
+    let oplog = RetainedOplog::new().await;
+    oplog
+        .add((1..=10).map(|index| {
+            if index == 3 {
+                revert(index)
+            } else {
+                jump(index)
+            }
+        }))
+        .await;
+    let search = || {
+        StreamForkLineage::suffix_contains_fork_cut(
+            oplog.service.as_ref(),
+            &oplog.owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::INITIAL,
+            idx(10),
+        )
+    };
+
+    assert_eq!(search().await, Ok(true));
+    oplog.advance(3).await;
+    assert_eq!(search().await, Ok(true), "the revert is at the start");
+    oplog.advance(4).await;
+    assert_eq!(
+        search().await,
+        Ok(false),
+        "the revert is before the start, and the search does not read it"
+    );
+    oplog.advance(11).await;
+    assert_eq!(search().await, Ok(false));
+}
+
+#[test]
+async fn a_lineage_load_reads_from_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, idx, jump};
+
+    let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(37));
+    let oplog = RetainedOplog::new().await;
+    oplog
+        .add((1..=10).map(|index| {
+            if index == 3 {
+                OplogEntry::Revert {
+                    timestamp: Timestamp::from(index),
+                    dropped_region: OplogRegion::from_range(2..=2),
+                }
+            } else {
+                jump(index)
+            }
+        }))
+        .await;
+    let oplog = &oplog;
+    let load = || async move {
+        let open = oplog.open().await;
+        let from_open = StreamForkLineage::load(&*open, &oplog.owned_agent_id, fingerprint).await;
+        let from_service = StreamForkLineage::load_from_service(
+            oplog.service.as_ref(),
+            &oplog.owned_agent_id,
+            AgentMode::Durable,
+            fingerprint,
+            idx(10),
+        )
+        .await;
+        [from_open, from_service].map(|lineage| {
+            lineage.map(|lineage| lineage.deleted_regions().is_in_deleted_region(idx(2)))
+        })
+    };
+
+    assert_eq!(load().await, [Ok(true), Ok(true)]);
+    oplog.advance(5).await;
+    assert_eq!(
+        load().await,
+        [Ok(false), Ok(false)],
+        "the load reads from the retained start, so the revert before it deletes nothing"
+    );
+}
+
+/// An oplog service whose reads do not look at the asked range: read `n` gives the indexes in
+/// `reads[n]`, and the last item serves each later read. A test can so give a read with an entry
+/// less, or with a gap, which the storage layers below never give.
+#[derive(Debug)]
+struct ScriptedReadService {
+    reads: Vec<Vec<u64>>,
+    served: std::sync::atomic::AtomicUsize,
+}
+
+impl ScriptedReadService {
+    fn new(reads: &[&[u64]]) -> Self {
+        Self {
+            reads: reads.iter().map(|indexes| indexes.to_vec()).collect(),
+            served: Default::default(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl OplogService for ScriptedReadService {
+    async fn lock_lifecycle(
+        &self,
+        _agent_id: &golem_common::model::AgentId,
+    ) -> crate::services::oplog::OplogLifecycleGuard {
+        unreachable!()
+    }
+
+    fn set_stream_session_index(
+        &self,
+        _index: Arc<crate::services::stream_session_index::StreamSessionIndexService>,
+    ) {
+        unreachable!()
+    }
+
+    fn stream_session_index(
+        &self,
+    ) -> Option<Arc<crate::services::stream_session_index::StreamSessionIndexService>> {
+        None
+    }
+
+    async fn staged_exists(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: Uuid,
+    ) -> Result<bool, String> {
+        unreachable!()
+    }
+
+    async fn create(
+        &self,
+        _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _initial_entry: OplogEntry,
+        _initial_worker_metadata: AgentMetadata,
+        _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+        _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<Arc<dyn Oplog>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        unreachable!()
+    }
+
+    async fn create_fresh(
+        &self,
+        _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _initial_entry: OplogEntry,
+        _initial_worker_metadata: AgentMetadata,
+        _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+        _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<Arc<dyn Oplog>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        unreachable!()
+    }
+
+    async fn open(
+        &self,
+        _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _last_oplog_index: Option<OplogIndex>,
+        _initial_worker_metadata: AgentMetadata,
+        _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+        _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<Arc<dyn Oplog>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        unreachable!()
+    }
+
+    async fn get_last_index(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        unreachable!()
+    }
+
+    async fn retention(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
+    }
+
+    async fn delete(
+        &self,
+        _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _expected_epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<(), crate::services::oplog::OplogError> {
+        unreachable!()
+    }
+
+    async fn assert_owning_epoch(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _expected_epoch: golem_common::model::ShardEpoch,
+    ) -> Result<(), crate::services::oplog::OplogError> {
+        unreachable!()
+    }
+
+    async fn read_exact(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _idx: OplogIndex,
+        _n: u64,
+    ) -> Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        use crate::services::oplog::retention::test_oplog::{idx, jump};
+
+        let served = self
+            .served
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(self.reads[served.min(self.reads.len() - 1)]
+            .iter()
+            .map(|index| (idx(*index), jump(*index)))
+            .collect())
+    }
+
+    async fn exists(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog> {
+        unreachable!()
+    }
+
+    async fn scan_for_type(
+        &self,
+        _environment_id: &EnvironmentId,
+        _type_id: golem_common::model::type_id::TypeId,
+        _modes: Option<AgentMode>,
+        _cursor: golem_common::model::ScanCursor,
+        _count: u64,
+    ) -> Result<
+        crate::services::oplog::ScanPage,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        unreachable!()
+    }
+
+    async fn upload_raw_payload(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _data: Vec<u8>,
+    ) -> Result<golem_common::model::oplog::RawOplogPayload, String> {
+        unreachable!()
+    }
+
+    async fn download_raw_payload(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _payload_id: golem_common::model::oplog::PayloadId,
+        _md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        unreachable!()
+    }
+}
+
+async fn load_with_reads(reads: &[&[u64]]) -> Result<StreamForkLineage, String> {
+    StreamForkLineage::load_from_service(
+        &ScriptedReadService::new(reads),
+        &owner("source"),
+        AgentMode::Durable,
+        AgentFingerprint(uuid::Uuid::from_u128(37)),
+        OplogIndex::from_u64(4),
+    )
+    .await
+}
+
+#[test]
+async fn a_lineage_read_with_an_entry_less_fails() {
+    assert_eq!(
+        load_with_reads(&[&[1, 3, 4]]).await,
+        Err("missing oplog entries while discovering reverted stream history".to_string())
+    );
+    assert_eq!(
+        load_with_reads(&[&[1, 2, 3, 4], &[1, 3, 4]]).await,
+        Err("missing oplog entries while loading stream fork lineage".to_string()),
+        "the second pass checks its read too"
+    );
+    assert_eq!(
+        StreamForkLineage::suffix_contains_fork_cut(
+            &ScriptedReadService::new(&[&[1, 3, 4]]),
+            &owner("source"),
+            AgentMode::Durable,
+            OplogIndex::INITIAL,
+            OplogIndex::from_u64(4),
+        )
+        .await,
+        Err("missing oplog entries while discovering stream fork lineage".to_string())
+    );
+}
+
+#[test]
+async fn a_lineage_read_with_a_gap_fails() {
+    assert_eq!(
+        load_with_reads(&[&[1, 3, 4, 5]]).await,
+        Err("noncontiguous oplog while discovering reverted stream history".to_string())
+    );
+}

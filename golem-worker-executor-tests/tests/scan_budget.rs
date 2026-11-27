@@ -618,7 +618,7 @@ async fn get_oplog(
         .get_oplog(GetOplogRequest {
             agent_id: Some(worker_id.agent_id.into()),
             environment_id: Some(worker_id.environment_id.into()),
-            from_oplog_index: 1,
+            from_oplog_index: Some(1),
             cursor,
             count,
             auth_ctx: Some(executor.auth_ctx().into()),

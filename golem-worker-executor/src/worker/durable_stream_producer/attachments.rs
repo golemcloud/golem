@@ -819,9 +819,10 @@ impl DurableTopologyRecoveryCache {
         if !self.initialized {
             self.reload(service, owner, mode, fingerprint).await?;
         }
-        'suffix: while self.covered_through < current {
-            let count = (current.as_u64() - self.covered_through.as_u64()).min(1024);
-            let entries = oplog.read_exact(self.covered_through.next(), count).await?;
+        let retention = oplog.retention();
+        'suffix: while let Some(chunk) = retention.chunk(self.covered_through.next(), current, 1024)
+        {
+            let entries = oplog.read_exact(chunk.start, chunk.count).await?;
             for (index, entry) in &entries {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;

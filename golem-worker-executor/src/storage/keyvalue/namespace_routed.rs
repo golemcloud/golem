@@ -409,6 +409,9 @@ mod tests {
     use golem_common::model::AgentId;
     use test_r::test;
 
+    #[path = "retention/tests.rs"]
+    mod retention;
+
     #[test]
     fn snapshot_rejections_use_persistent_storage_not_status_cache() {
         let storage = NamespaceRoutedKeyValueStorage::new(

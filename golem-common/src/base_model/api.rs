@@ -281,6 +281,9 @@ pub mod error_code {
     /// An oplog read refuses its cursor: the cursor points past the end of the agent's oplog, or
     /// it came from the pages of another query. The caller starts again without a cursor.
     pub const STALE_CURSOR: &str = "STALE_CURSOR";
+    /// An oplog read reaches below the retained start of the agent's oplog, and the oplog keeps no
+    /// entry before that start. The error names where the oplog starts.
+    pub const OPLOG_EXPIRED: &str = "OPLOG_EXPIRED";
     pub const TYPE_CHECKER_ERROR: &str = "TYPE_CHECKER_ERROR";
     pub const UNKNOWN_OIDC_STATE: &str = "UNKNOWN_OIDC_STATE";
     pub const VALIDATION_ERROR: &str = "VALIDATION_ERROR";

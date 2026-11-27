@@ -684,7 +684,7 @@ pub trait WorkerClient: Send + Sync {
     async fn get_oplog(
         &self,
         agent_id: &AgentId,
-        from_oplog_index: OplogIndex,
+        from_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         range: Option<OplogRangeRead>,
@@ -1637,7 +1637,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn get_oplog(
         &self,
         agent_id: &AgentId,
-        from_oplog_index: OplogIndex,
+        from_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         range: Option<OplogRangeRead>,
@@ -1658,7 +1658,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             move |worker_executor_client| {
                 let request = workerexecutor::v1::GetOplogRequest {
                     agent_id: Some(agent_id.into()),
-                    from_oplog_index: from_oplog_index.into(),
+                    from_oplog_index: from_oplog_index.map(Into::into),
                     cursor: cursor.clone().map(|c| c.into()),
                     count,
                     environment_id: Some(environment_id.into()),

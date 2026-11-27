@@ -79,6 +79,7 @@ mod primary;
 pub mod rate_limited;
 mod raw_session;
 mod reader;
+pub mod retention;
 
 mod epoch;
 mod extensions;
@@ -301,18 +302,22 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, UnreadableOplog>;
 
-    /// The last index for archive maintenance: every storage failure is returned, not only an
-    /// unreadable archive.
+    /// The last index without panicking on a primary storage failure.
     async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
-        Ok(self
-            .get_last_index(owned_agent_id, agent_mode)
-            .await
-            .map_err(|error| error.to_string())?)
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.get_last_index(owned_agent_id, agent_mode).await
     }
+
+    /// The retention of the oplog of the agent: where its retained entries start; see
+    /// [`Oplog::retention`].
+    async fn retention(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<retention::OplogRetention, UnreadableOplog>;
 
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
@@ -1006,6 +1011,13 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// and checkpoint.
     fn fence(&self) -> Option<OplogFence> {
         self.inner().and_then(|inner| inner.fence())
+    }
+
+    /// The retention of this oplog: where its retained entries start. A read below the start
+    /// fails as expired, except an empty read and a read of the `Create` entry alone at index 1.
+    fn retention(&self) -> retention::OplogRetention {
+        self.inner()
+            .map_or(retention::OplogRetention::FULL, |inner| inner.retention())
     }
 
     /// Returns the inner oplog wrapped by this implementation, if any.

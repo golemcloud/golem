@@ -13,20 +13,19 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::retention::{OplogRange, OplogRetention};
 
 /// Number of oplog entries read per backward-scan window. Sized to match the compressed oplog
 /// archive's chunk and cache sizes so that each window generally costs a single chunk decompression.
 const BACKWARD_OPLOG_SCAN_WINDOW: u64 = 4096;
 
-/// Returns the start index of the inclusive backward-scan window ending at `end`, clamped to
-/// [`OplogIndex::INITIAL`].
-fn backward_scan_window_start(end: OplogIndex) -> OplogIndex {
-    let initial = OplogIndex::INITIAL.as_u64();
-    let start = end
-        .as_u64()
-        .saturating_sub(BACKWARD_OPLOG_SCAN_WINDOW - 1)
-        .max(initial);
-    OplogIndex::from_u64(start)
+/// The inclusive backward-scan window that ends at `end`: at most [`BACKWARD_OPLOG_SCAN_WINDOW`]
+/// retained entries. `None` when `end` is below the retained start, which ends the scan.
+fn backward_scan_window(retention: OplogRetention, end: OplogIndex) -> Option<OplogRange> {
+    retention.range(
+        OplogIndex::from_u64(end.as_u64().saturating_sub(BACKWARD_OPLOG_SCAN_WINDOW - 1)),
+        end,
+    )
 }
 
 /// Finds the most recent error of the current invocation (if any) together with its retry point and
@@ -64,6 +63,14 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     if last_index == OplogIndex::NONE {
         return None;
     }
+    let retention = match this
+        .oplog_service()
+        .retention(owned_agent_id, agent_mode)
+        .await
+    {
+        Ok(retention) => retention,
+        Err(error) => return Some(unreadable_last_error(error)),
+    };
 
     let mut first_error = None;
     let mut first_retry_from = OplogIndex::NONE;
@@ -72,16 +79,10 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     // Walk the oplog backward in windows, reading each window in a single bulk range read instead of
     // one entry at a time (the latter thrashes the compressed-archive chunk cache).
     let mut window_end = last_index;
-    'scan: loop {
-        let window_start = backward_scan_window_start(window_end);
+    'scan: while let Some(window) = backward_scan_window(retention, window_end) {
         let entries = match this
             .oplog_service()
-            .read_exact(
-                owned_agent_id,
-                agent_mode,
-                window_start,
-                window_end.as_u64() - window_start.as_u64() + 1,
-            )
+            .read_exact(owned_agent_id, agent_mode, window.start, window.count)
             .await
         {
             Ok(entries) => entries,
@@ -138,16 +139,13 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
                 }
             }
 
-            if idx == OplogIndex::INITIAL {
-                break 'scan;
-            }
-            if idx == window_start {
+            if idx == window.start {
                 break;
             }
             idx = idx.previous();
         }
 
-        window_end = window_start.previous();
+        window_end = window.start.previous();
     }
 
     match first_error {
@@ -156,6 +154,17 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
             stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index).await,
             retry_from: first_retry_from,
         }),
+        None if !retention.retains(window_end)
+            && matches!(
+                latest_worker_status.status,
+                AgentStatus::Failed | AgentStatus::Retrying
+            ) =>
+        {
+            retention
+                .check_agent_from(&owned_agent_id.agent_id, OplogIndex::INITIAL)
+                .err()
+                .map(unreadable_last_error)
+        }
         None => None,
     }
 }
@@ -186,20 +195,22 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     let mut current_stderr_entries_batch = Vec::new();
     let mut first_seen_invocation = None;
 
+    let Ok(retention) = this
+        .oplog_service()
+        .retention(owned_agent_id, agent_mode)
+        .await
+    else {
+        return String::new();
+    };
+
     // Walk the oplog backward in windows, reading each window in a single bulk range read instead of
     // one entry at a time.
     let mut window_end = last_oplog_idx;
-    'scan: loop {
-        let window_start = backward_scan_window_start(window_end);
+    'scan: while let Some(window) = backward_scan_window(retention, window_end) {
         // The stderr is the context of an error, so a window that does not read ends it.
         let Ok(entries) = this
             .oplog_service()
-            .read_exact(
-                owned_agent_id,
-                agent_mode,
-                window_start,
-                window_end.as_u64() - window_start.as_u64() + 1,
-            )
+            .read_exact(owned_agent_id, agent_mode, window.start, window.count)
             .await
         else {
             break 'scan;
@@ -258,17 +269,17 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                 _ => {}
             }
 
-            if idx == OplogIndex::INITIAL {
-                break 'scan;
-            }
-            if idx == window_start {
+            if idx == window.start {
                 break;
             }
             idx = idx.previous();
         }
 
-        window_end = window_start.previous();
+        window_end = window.start.previous();
     }
     stderr_entries.reverse();
     stderr_entries.join("")
 }
+
+#[cfg(test)]
+mod tests;

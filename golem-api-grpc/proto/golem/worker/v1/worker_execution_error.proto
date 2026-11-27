@@ -46,11 +46,19 @@ message WorkerExecutionError {
     InvocationCancelled invocation_cancelled = 34;
     CannotCancelRunningInvocation cannot_cancel_running_invocation = 35;
     NotAnAgent not_an_agent = 36;
+    OplogExpired oplog_expired = 37;
   }
 }
 
 message NotAnAgent {
   AgentId agent_id = 1;
+}
+
+// An oplog read reaches below the retained start of the agent's oplog, and the oplog keeps no
+// entry before that start.
+message OplogExpired {
+  AgentId agent_id = 1;
+  uint64 retained_start = 2;
 }
 
 // An oplog read refuses its cursor: the cursor did not come from a page of this read.

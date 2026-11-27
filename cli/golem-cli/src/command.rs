@@ -1929,7 +1929,9 @@ pub mod worker {
             #[command(flatten)]
             agent_id: AgentIdArgs,
         },
-        /// Queries and streams an agent's full oplog.
+        /// Queries and streams an agent's oplog. An obfuscated export first requests a page at
+        /// index 1. If the retained start is later, the request expires before `--from` is used.
+        /// The export's data pages honor `--from`.
         /// Structured formats emit one output document per oplog entry; with `--page`, one
         /// `agent.oplog-page` document with one page of entries and the cursor of the next page.
         /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.
@@ -1937,7 +1939,7 @@ pub mod worker {
         Oplog {
             #[command(flatten)]
             agent_id: AgentIdArgs,
-            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query and --cursor.
+            /// Index of the first oplog entry to get. If missing, the oplog is returned from its retained start, the first entry that the oplog keeps. An index below the retained start is expired. Mutually exclusive with --query and --cursor.
             #[arg(long, conflicts_with_all = ["query", "cursor"])]
             from: Option<u64>,
             #[arg(
@@ -1968,7 +1970,8 @@ pub mod worker {
             /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,
             /// with the same `--query`. The cursor is opaque; use `--from` to start at an oplog
             /// index. A cursor of another query, or one past the end of the oplog, is refused as
-            /// stale (`STALE_CURSOR`).
+            /// stale (`STALE_CURSOR`). A cursor below the retained start of the oplog is expired
+            /// (`OPLOG_EXPIRED`).
             #[arg(long, requires = "page")]
             cursor: Option<OplogCursor>,
             #[command(flatten)]

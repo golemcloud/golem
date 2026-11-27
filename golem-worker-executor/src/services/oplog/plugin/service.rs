@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::retention::OplogRetention;
 
 #[derive(Clone)]
 struct CreateOplogConstructor {
@@ -374,7 +375,7 @@ impl OplogService for ForwardingOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner
             .try_get_last_index(owned_agent_id, agent_mode)
             .await
@@ -389,6 +390,14 @@ impl OplogService for ForwardingOplogService {
         self.inner
             .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
             .await
+    }
+
+    async fn retention(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        self.inner.retention(owned_agent_id, agent_mode).await
     }
 
     async fn delete(

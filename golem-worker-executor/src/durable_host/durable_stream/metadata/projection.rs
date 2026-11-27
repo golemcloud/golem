@@ -453,11 +453,12 @@ pub(crate) async fn project_producer_metadata(
     owner: &OwnedAgentId,
     mode: AgentMode,
     fingerprint: AgentFingerprint,
+    retention: crate::services::oplog::retention::OplogRetention,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     lineage: &StreamForkLineage,
 ) -> Result<ProducerMetadataProjection, String> {
     let mut projection = Projection {
-        index: ProducerStreamIndex::default(),
+        index: ProducerStreamIndex::retained_by(owner.agent_id, retention),
         loaded: HashSet::new(),
         new_sessions: HashSet::new(),
         replacements: HashMap::new(),

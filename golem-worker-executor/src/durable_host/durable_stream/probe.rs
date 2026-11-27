@@ -354,6 +354,12 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         if !current.is_defined() {
             return Ok(None);
         }
+        // The journal of a reader starts at the record that introduced it. A reader introduced
+        // below the retained start has records that the oplog does not keep, so it is expired.
+        let retention = self.oplog_service.retention(&consumer, agent_mode).await?;
+        readers.iter().try_for_each(|reader_id| {
+            retention.check_agent_from(&key.consumer, reader_id.introducing_oplog_index)
+        })?;
         let lineage = StreamForkLineage::load_from_service(
             self.oplog_service.as_ref(),
             &consumer,
@@ -376,11 +382,15 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 )
             })
             .collect::<HashMap<_, _>>();
-        for (index, entry) in self
-            .oplog_service
-            .read_exact(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
-            .await?
-        {
+        let retained = match retention.range(OplogIndex::INITIAL, current) {
+            Some(range) => {
+                self.oplog_service
+                    .read_exact(&consumer, agent_mode, range.start, range.count)
+                    .await?
+            }
+            None => BTreeMap::new(),
+        };
+        for (index, entry) in retained {
             if lineage.deleted_regions().is_in_deleted_region(index) {
                 continue;
             }

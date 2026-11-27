@@ -314,15 +314,27 @@ impl<E> DurableStreamRemoteError<E> {
         }
     }
 
+    /// The error of a producer request that failed with `error`. An expired read reaches the
+    /// caller as `OplogFailed` with the retained start. Apart from an unavailable store, `map`
+    /// gives the other errors from their text.
     pub(crate) fn from_producer(
         error: crate::durable_host::durable_stream::StreamStoreError,
         map: impl FnOnce(String) -> E,
-    ) -> Self {
+    ) -> Self
+    where
+        E: From<WorkerExecutorError>,
+    {
         match error {
             // A fenced store is as unavailable here as one awaiting recovery: the stream lives on
             // with the shard's new owner.
             crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired
             | crate::durable_host::durable_stream::StreamStoreError::Fenced(_) => Self::Unavailable,
+            crate::durable_host::durable_stream::StreamStoreError::Unreadable(
+                oplog::UnreadableOplog {
+                    agent_id,
+                    error: oplog::OplogReadError::Expired { retained_start },
+                },
+            ) => Self::Other(WorkerExecutorError::oplog_expired(agent_id, retained_start).into()),
             error => Self::Other(map(error.to_string())),
         }
     }

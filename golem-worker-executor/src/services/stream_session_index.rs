@@ -829,6 +829,9 @@ impl StreamSessionIndexService {
             .oplog
             .upgrade()
             .ok_or_else(|| "oplog service is unavailable".to_string())?;
+        // The index covers the retained oplog: the entries before its start are gone. The
+        // `Create` entry is kept below the start, and names the producer.
+        let retention = oplog.retention(id, mode).await?;
         loop {
             let mut expected = self
                 .kv
@@ -866,10 +869,12 @@ impl StreamSessionIndexService {
             if metadata.covered_through >= horizon {
                 return Ok(());
             }
-            let count = (horizon.as_u64() - metadata.covered_through.as_u64()).min(1024);
-            let mut entries = oplog
-                .read_exact(id, mode, metadata.covered_through.next(), count)
-                .await?;
+            // A horizon below the retained start leaves nothing to index.
+            let Some(chunk) = retention.chunk(metadata.covered_through.next(), horizon, 1024)
+            else {
+                return Ok(());
+            };
+            let mut entries = oplog.read_exact(id, mode, chunk.start, chunk.count).await?;
             if entries.is_empty() {
                 return Err(
                     format!("empty oplog range while indexing stream sessions for {id}").into(),
@@ -877,12 +882,24 @@ impl StreamSessionIndexService {
             }
             let previously_discovered = metadata.lineage_discovered_through;
             if metadata.producer_fingerprint.is_none() {
-                metadata.producer_fingerprint = entries.values().find_map(|entry| match entry {
-                    OplogEntry::Create { parameters, .. } => {
-                        Some(AgentFingerprint(parameters.instance_id))
+                let create = match retention.create_read() {
+                    Some(create) => {
+                        oplog
+                            .read_exact(id, mode, create.start, create.count)
+                            .await?
                     }
-                    _ => None,
-                });
+                    None => Default::default(),
+                };
+                metadata.producer_fingerprint =
+                    create
+                        .values()
+                        .chain(entries.values())
+                        .find_map(|entry| match entry {
+                            OplogEntry::Create { parameters, .. } => {
+                                Some(AgentFingerprint(parameters.instance_id))
+                            }
+                            _ => None,
+                        });
             }
             if let Some(fingerprint) = metadata.producer_fingerprint
                 && metadata.lineage_discovered_through < horizon
@@ -1017,6 +1034,7 @@ impl StreamSessionIndexService {
                         id,
                         mode,
                         fingerprint,
+                        retention,
                         &entries,
                         &metadata.stream_fork_lineage,
                     )

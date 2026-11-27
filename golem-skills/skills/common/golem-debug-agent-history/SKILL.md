@@ -23,7 +23,7 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 
 | Flag | Description |
 |------|-------------|
-| `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query` or `--cursor`. |
+| `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query` or `--cursor`. The server refuses an index before the retained start of the oplog with `OPLOG_EXPIRED`, which names the index where the oplog starts. |
 | `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Cannot be combined with `--from`. |
 | `--omit-payloads` | Show the entries that oplog pages omit only by their type, timestamp and size. Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by default), for example an entry with a large snapshot, invocation input or host call response. Without this flag the CLI reads each omitted entry in full. |
 | `--serve` | Serve an interactive HTML viewer on a local port and open it in the default browser. The viewer loads the oplog page by page through the API, runs Lucene queries on the server and can follow a running agent, so it works for oplogs of any size. `--from` and `--query` set the initial position and query. Runs until interrupted. |
@@ -37,9 +37,9 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 | `--keep-error-text` | Requires `--obfuscate`. Keep the free text of error messages. Leaks any customer value that the text contains, such as a URL, an input value or a file name. |
 | `--max-entry-bytes <N>` | Requires `--obfuscate`. Read an entry that the oplog page omitted only when its size is at most `N` bytes (default 16777216). A larger entry stays omitted with its size. |
 | `--page` | Read one page of at most 50 entries (the HTTP batch size) and print it as one `agent.oplog-page` document, with a `cursor` when the oplog has entries after the page. A search page can end early at the server's scan budget, so it can have fewer entries, or none, and still have a cursor. Cannot be combined with `--html`, `--serve` or `--obfuscate`. |
-| `--cursor <CURSOR>` | With `--page`: read the page after the one that returned `CURSOR`. Pass the cursor back unchanged, with the same `--query`. The server refuses a cursor of another query, or one past the end of the oplog, with `STALE_CURSOR`. |
+| `--cursor <CURSOR>` | With `--page`: read the page after the one that returned `CURSOR`. Pass the cursor back unchanged, with the same `--query`. The server refuses a cursor of another query, or one past the end of the oplog, with `STALE_CURSOR`. A cursor below the retained start of the oplog gives `OPLOG_EXPIRED`. |
 
-If neither `--from` nor `--query` is provided, the entire oplog is streamed. Without `--page`, the CLI follows the cursors to the end of the oplog.
+If neither `--from` nor `--query` is provided, the entire retained oplog is streamed, from its retained start. Without `--page`, the CLI follows the cursors to the end of the oplog.
 
 ### Obfuscated export
 

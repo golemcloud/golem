@@ -1172,6 +1172,119 @@ async fn active_plugin_receives_buffered_entries() {
     assert_eq!(sends[0].entry_count, 2, "Batch should contain 2 entries");
 }
 
+/// A plugin that confirmed no entry gets its first batch from the retained start of the oplog,
+/// not from index 1, which the oplog no longer keeps.
+#[test]
+async fn a_first_batch_starts_at_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{at, idx, retained_handle};
+    use futures::{StreamExt, TryStreamExt};
+
+    let grant_id = EnvironmentPluginGrantId::new();
+    let (metadata, status_lock, status_writer) =
+        test_worker_metadata_with_status_writer(HashSet::from([grant_id]));
+    let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+    recording_plugin
+        .failed_sends_remaining
+        .store(2, Ordering::Relaxed);
+    let components: Arc<dyn ComponentService> = Arc::new(
+        FakeComponentService::with_one_oplog_processor_plugin(grant_id),
+    );
+    let stored: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+    futures::stream::iter(1..=5)
+        .then(|delta| {
+            stored.add(OplogEntry::GrowMemory {
+                timestamp: Timestamp::now_utc(),
+                delta,
+            })
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let inner = retained_handle(stored.clone(), metadata.agent_id, at(3));
+
+    let mut state = ForwardingOplogState {
+        forwarding_retired: CancellationToken::new(),
+        forwarding_activity: ActivityGate::new(),
+        pending_checkpoint_activity: None,
+        buffer: None,
+        buffer_start_idx: OplogIndex::from_u64(6),
+        commit_count: 0,
+        last_send: Instant::now(),
+        oplog_plugins: recording_plugin.clone(),
+        initial_worker_metadata: metadata.clone(),
+        last_known_status: status_lock,
+        last_oplog_idx: OplogIndex::from_u64(5),
+        last_committed_idx: OplogIndex::from_u64(5),
+        components,
+        inner,
+        plugin_state: HashMap::from([(
+            grant_id,
+            LivePluginState {
+                target_agent_id: Some(recording_plugin.target_agent_id),
+                confirmed_up_to: OplogIndex::NONE,
+                sending_up_to: OplogIndex::NONE,
+                send_in_progress: false,
+                last_batch_start: OplogIndex::NONE,
+                delivery: None,
+            },
+        )]),
+        pending_direct_commits: BTreeMap::new(),
+        worker_event_service: None,
+        monitor_tasks: Vec::new(),
+    };
+
+    state.try_flush().await;
+    // Move the committed tail so a retry of the first batch cannot use the new batch bounds.
+    stored.add(grow_memory(7)).await.unwrap();
+    state.last_oplog_idx = idx(7);
+    state.last_committed_idx = idx(7);
+    state.try_flush().await;
+
+    let checkpoint = stored.read_exact(idx(6), 1).await.unwrap();
+    let recovered_status = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        status_writer.load_full().as_ref().clone(),
+        checkpoint,
+        &golem_common::model::RetryConfig::default(),
+    )
+    .unwrap()
+    .unwrap();
+    status_writer.store(Arc::new(recovered_status));
+    let reopened = ForwardingOplog::new(
+        state.inner,
+        recording_plugin.clone(),
+        state.components,
+        metadata.clone(),
+        read_only_lock::arc_swap::ReadOnlyView::new(status_writer),
+        idx(7),
+        Box::new(|| {}),
+        usize::MAX,
+        Duration::from_secs(3600),
+    )
+    .await;
+    reopened.tick().await;
+
+    let sends = recording_plugin.sends().await;
+    assert_eq!(
+        sends
+            .iter()
+            .map(|send| (send.initial_oplog_index, send.entry_count))
+            .collect::<Vec<_>>(),
+        vec![(idx(3), 3); 3]
+    );
+    let key = |send: &RecordedSend| {
+        oplog_processor_idempotency_key(
+            send.metadata.environment_id,
+            &send.metadata.agent_id,
+            &send.plugin.environment_plugin_grant_id,
+            send.initial_oplog_index,
+            send.initial_oplog_index.range_end(send.entry_count as u64),
+        )
+    };
+    assert_eq!(key(&sends[0]), key(&sends[1]));
+    assert_eq!(key(&sends[0]), key(&sends[2]));
+}
+
 #[test]
 async fn plugin_monitor_looks_up_status_as_original_worker_owner() {
     let grant_id = EnvironmentPluginGrantId::new();
@@ -1899,4 +2012,40 @@ async fn direct_checkpoint_commits_are_returned_even_after_cache_pruning() {
         3
     );
     assert!(oplog.commit(CommitLevel::Always).await.unwrap().is_empty());
+}
+
+/// The forwarding and the rate-limited services give the retention of the service that they wrap.
+/// A forward that gives `FULL` puts the start back at 1 on each reload through that wrapper.
+#[test]
+async fn the_forwarding_and_the_rate_limited_services_give_the_retention_of_the_inner_service() {
+    use crate::services::oplog::rate_limited::RateLimitedOplogService;
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, at};
+    use crate::services::resource_limits::ResourceLimitsDisabled;
+
+    let oplog = RetainedOplog::new().await;
+    oplog.advance(4).await;
+    let forwarding: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
+        oplog.service.clone(),
+        Arc::new(RecordingOplogProcessorPlugin::new()),
+        Arc::new(FakeComponentService::with_one_oplog_processor_plugin(
+            EnvironmentPluginGrantId::new(),
+        )),
+        100,
+        std::time::Duration::from_secs(3600),
+    ));
+    let rate_limited: Arc<dyn OplogService> = Arc::new(RateLimitedOplogService::new(
+        oplog.service.clone(),
+        Arc::new(ResourceLimitsDisabled),
+    ));
+    let retentions = futures::future::join_all([forwarding, rate_limited].map(|service| {
+        let owned_agent_id = oplog.owned_agent_id.clone();
+        async move {
+            service
+                .retention(&owned_agent_id, AgentMode::Durable)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }))
+    .await;
+    assert_eq!(retentions, vec![Ok(at(4)), Ok(at(4))]);
 }

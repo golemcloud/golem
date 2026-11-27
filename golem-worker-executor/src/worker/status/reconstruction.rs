@@ -125,7 +125,9 @@ where
 /// Calculates the latest worker status, trying baselines in order of decreasing freshness:
 ///
 /// 1. the live cached status (`last_known`), folded forward — the common cold-load path;
-/// 2. on a fold failure (e.g. a jump deleted the cached index), the *clean* status checkpoint
+/// 2. on a fold failure (e.g. a jump deleted the cached index, or the cached status is two or more
+///    entries below the retained start, so that its fold reads below it and is expired), the
+///    *clean* status checkpoint
 ///    (read lazily via `read_checkpoint`), folded forward — this predates any later jump region and
 ///    avoids re-reading the whole oplog;
 /// 3. a full recompute from the start of the oplog.
@@ -168,15 +170,22 @@ where
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
 {
     // 1. Try folding forward from the live cached status.
-    if let Some(last_known) = last_known
-        && let Some(status) = try_fold_status_from_reader(this, reader, last_known).await?
-    {
-        crate::metrics::workers::record_agent_status_recompute("cache");
-        return Ok(Some(status));
+    if let Some(last_known) = last_known {
+        match try_fold_status_from_reader(this, reader, last_known).await {
+            Ok(Some(status)) => {
+                crate::metrics::workers::record_agent_status_recompute("cache");
+                return Ok(Some(status));
+            }
+            Ok(None) => {}
+            Err(error) if is_expired_fold(&error) => {}
+            Err(error) => return Err(error),
+        }
     }
 
     // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
-    //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
+    //    index, a revert moved the oplog behind it, or the cached status is two or more entries
+    //    below the retained start, so that its fold reads below it and is expired): try folding
+    //    from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
         && let Some(status) = try_fold_status_from_reader(this, reader, checkpoint).await?
     {
@@ -190,6 +199,19 @@ where
         crate::metrics::workers::record_agent_status_recompute("full");
     }
     Ok(status)
+}
+
+/// Whether the fold failed because it read below the retained start. The fold reads from the entry
+/// after its baseline. So a baseline two or more entries below the retained start cannot fold, but
+/// a baseline at the entry before the start, or later, can.
+fn is_expired_fold(error: &StatusError) -> bool {
+    matches!(
+        error,
+        StatusError::Unreadable(UnreadableOplog {
+            error: crate::services::oplog::OplogReadError::Expired { .. },
+            ..
+        })
+    )
 }
 
 /// Folds an acknowledged commit, returning receipt-gap detection and the fixed repair horizon.
@@ -352,6 +374,8 @@ where
         return fold_status_with_precomputed_regions(this, reader, baseline, chunk_size).await;
     }
 
+    // The fold continues from its baseline, so it reads every entry after the baseline and moves
+    // no start.
     let original_baseline = baseline.clone();
     let mut first = baseline.oplog_idx.next();
     while first <= last_oplog_index {
@@ -424,6 +448,8 @@ where
     let owned_agent_id = reader.owned_agent_id;
     let agent_mode = reader.agent_mode;
     let last_oplog_index = reader.horizon;
+    // The fold continues from its baseline and moves no start: a full rebuild reads from index 1,
+    // so it fails as expired when the retained start is above 1.
     let start = baseline.oplog_idx.next();
     let Some(region_entries) = read_region_entries(reader, start, chunk_size, true).await? else {
         return Ok(None);
@@ -714,9 +740,10 @@ pub(crate) async fn skipped_regions_at(
     Ok(skipped_regions(&entries))
 }
 
-/// The entries from `first` to the horizon of `reader` that the region fold reads: the jumps,
-/// the reverts and the update entries, and the manual update invocations when
-/// `manual_admissions` is true.
+/// The retained entries from `first` to the horizon of `reader` that the region fold reads: the
+/// jumps, the reverts and the update entries, and the manual update invocations when
+/// `manual_admissions` is true. The read does not move `first`, so a `first` below the retained
+/// start fails as expired.
 pub(super) async fn read_region_entries(
     reader: &StatusOplogReader<'_>,
     mut first: OplogIndex,

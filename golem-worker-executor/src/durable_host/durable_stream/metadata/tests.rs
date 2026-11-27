@@ -17,6 +17,7 @@ use crate::durable_host::durable_stream::registration::registered_stream;
 use crate::durable_host::durable_stream::tests::{TestIdentity, identity, registration};
 use crate::model::ExecutionStatus;
 use crate::services::golem_config::GolemConfig;
+use crate::services::oplog::retention::OplogRetention;
 use crate::services::oplog::tests::{ReadCountingBlobStorage, ReadCountingIndexedStorage};
 use crate::services::oplog::{
     CompressedOplogArchiveService, MultiLayerOplog, MultiLayerOplogService, OplogService,
@@ -907,7 +908,10 @@ async fn attached_transport_sequences_survive_indexed_cold_load_with_http_interl
     assert_eq!(high_water.highest_contiguous_sequence, 2);
     assert!(!high_water.terminal);
 
-    *cold.index.lock().await = ProducerStreamIndex::default();
+    *cold.index.lock().await = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     fixture.indexed.reset();
     let rehydrated = cold
         .write_attached_items_with_nested(
@@ -3211,7 +3215,10 @@ async fn metadata_task_admission_workloads() {
                             );
                         }
                         "cold-hydration" => {
-                            *producer.index.lock().await = ProducerStreamIndex::default();
+                            *producer.index.lock().await = ProducerStreamIndex::retained_by(
+                                crate::durable_host::durable_stream::tests::identity().agent_id,
+                                OplogRetention::FULL,
+                            );
                             let query = producer.clone().hydrate_query(
                                 vec![ProducerMetadataKey::Stream(handle.stream_id)],
                                 Some(handle.stream_id),
@@ -3473,4 +3480,73 @@ async fn cold_metadata_recovers_terminal_origin_before_cancellation() {
             assert_eq!(fixture.oplog.current_oplog_index().await, horizon);
         }
     }
+}
+
+/// The projection of producer metadata folds the oplog from the retained start. An item batch at
+/// or after the start that references a registration below it gives the expired error with the
+/// start, not corrupt history. With the full oplog, the same batch is corrupt history.
+#[test]
+async fn a_projected_record_that_references_a_registration_below_the_start_is_expired() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, at, expired, idx};
+
+    let identity = identity();
+    let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
+    let oplog = RetainedOplog::new().await;
+    let storage = InMemoryKeyValueStorage::new();
+    let namespace =
+        crate::storage::keyvalue::KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+            owned_agent_id: owner.clone(),
+            fingerprint: identity.fingerprint,
+        };
+    let lineage = StreamForkLineage::default();
+    let entries = BTreeMap::from([(
+        idx(5),
+        OplogEntry::StreamItems {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            record: OplogPayload::Inline(Box::new(StreamItemsRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                stream_id: golem_common::base_model::durable_stream::LocalStreamId(idx(3)),
+                first_sequence: 0,
+                offsets: vec![StreamOffset::new(idx(5), 0)],
+                nested_stream_ids: vec![],
+                newly_registered_stream_ids: vec![],
+                payload: StreamItemsPayload::PackedU8(vec![1]),
+            })),
+            summary: None,
+        },
+    )]);
+    let project = |retention| {
+        project_producer_metadata(
+            &storage,
+            namespace.clone(),
+            oplog.service.as_ref(),
+            &owner,
+            AgentMode::Durable,
+            identity.fingerprint,
+            retention,
+            &entries,
+            &lineage,
+        )
+    };
+
+    assert_eq!(
+        project(at(4)).await.err(),
+        Some(
+            StreamStoreError::Unreadable(crate::services::oplog::UnreadableOplog::new(
+                &identity.agent_id,
+                expired(4)
+            ))
+            .to_string()
+        )
+    );
+    assert_eq!(
+        project(OplogRetention::FULL).await.err(),
+        Some(
+            StreamStoreError::CorruptHistory(
+                "producer record references an unknown local stream registration".into()
+            )
+            .to_string()
+        )
+    );
 }

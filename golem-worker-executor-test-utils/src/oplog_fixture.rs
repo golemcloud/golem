@@ -24,6 +24,7 @@ use golem_common::model::{
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
+use golem_worker_executor::services::oplog::retention::OplogRetention;
 use golem_worker_executor::services::oplog::{
     Oplog, OplogError, OplogLifecycleGuard, OplogService, RawOplogPayloadDownloadError, ScanPage,
     StagePublication, UnreadableOplog,
@@ -201,8 +202,16 @@ impl OplogService for OplogFixtureService {
         &self,
         id: &OwnedAgentId,
         mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner.try_get_last_index(id, mode).await
+    }
+
+    async fn retention(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        self.inner.retention(owned_agent_id, agent_mode).await
     }
 
     async fn delete(

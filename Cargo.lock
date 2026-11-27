@@ -6150,6 +6150,7 @@ dependencies = [
  "golem-service-base",
  "golem-shard-manager",
  "golem-test-framework",
+ "golem-worker-executor",
  "h2",
  "headers",
  "http",

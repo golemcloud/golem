@@ -24,7 +24,7 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
 use golem_service_base::clients::registry::RegistryServiceError;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailure, WorkerExecutorError};
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
@@ -324,6 +324,10 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::StaleCursor { .. } => {
                 Self::bad_request(api::error_code::STALE_CURSOR, error)
             }
+            WorkerExecutorError::OplogFailed {
+                failure: OplogFailure::Expired { .. },
+                ..
+            } => Self::bad_request(api::error_code::OPLOG_EXPIRED, error),
             WorkerExecutorError::AgentNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
@@ -782,6 +786,9 @@ mod tests {
             }
         }
     }
+
+    #[path = "retention/tests.rs"]
+    mod retention;
 
     #[test]
     fn internal_worker_executor_error_still_maps_to_internal_error() {
