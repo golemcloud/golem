@@ -136,6 +136,33 @@ func (r Ref) containsStream(seen map[string]bool) bool {
 	return false
 }
 
+// ContainsHandle reports whether a host-managed value occurs anywhere in the
+// type, including through recursive definitions and optional or list elements.
+func (r Ref) ContainsHandle() bool { return r.containsHandle(map[string]bool{}) }
+
+func (r Ref) containsHandle(seen map[string]bool) bool {
+	if ref, ok := r.typ.Body.(RefType); ok {
+		if seen[ref.Id] {
+			return false
+		}
+		seen[ref.Id] = true
+	}
+	body, err := r.body()
+	if err != nil {
+		return false
+	}
+	switch body.(type) {
+	case SecretType, QuotaTokenType, PermissionCardType, FutureType, StreamType:
+		return true
+	}
+	for _, child := range r.children(body) {
+		if r.At(child).containsHandle(seen) {
+			return true
+		}
+	}
+	return false
+}
+
 // children returns the types directly reachable from a body.
 func (r Ref) children(b SchemaTypeBody) []SchemaType {
 	switch t := b.(type) {

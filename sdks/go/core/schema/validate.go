@@ -328,7 +328,7 @@ func (r Ref) validateItems(elem SchemaType, items []SchemaValue, path string, de
 }
 
 // discriminates reports whether a branch body satisfies the rule that selects
-// its branch. String rules apply to a string or text body, field rules to a
+// its branch. String rules apply to a string, text, URL or path body, field rules to a
 // record body; a rule that cannot apply to the body's shape does not hold.
 func (r Ref) discriminates(branch UnionBranch, v SchemaValue) bool {
 	var text string
@@ -338,6 +338,10 @@ func (r Ref) discriminates(branch UnionBranch, v SchemaValue) bool {
 		text, hasText = n.Value, true
 	case TextValue:
 		text, hasText = n.Text, true
+	case UrlValue:
+		text, hasText = n.Value, true
+	case PathValue:
+		text, hasText = n.Value, true
 	}
 	switch d := branch.Discriminator.(type) {
 	case PrefixRule:
@@ -382,12 +386,6 @@ func fieldRuleHolds(rule DiscriminatorRule, t RecordType, v RecordValue) bool {
 		if !ok {
 			return false
 		}
-		if opt, isOpt := field.(OptionValue); isOpt {
-			if opt.Value == nil {
-				return false
-			}
-			field = *opt.Value
-		}
 		if d.Literal == nil {
 			return true
 		}
@@ -396,15 +394,15 @@ func fieldRuleHolds(rule DiscriminatorRule, t RecordType, v RecordValue) bool {
 			return n.Value == *d.Literal
 		case TextValue:
 			return n.Text == *d.Literal
+		case UrlValue:
+			return n.Value == *d.Literal
+		case PathValue:
+			return n.Value == *d.Literal
 		}
 		return false
 	case FieldAbsentRule:
-		field, ok := find(d.FieldName)
-		if !ok {
-			return true
-		}
-		opt, isOpt := field.(OptionValue)
-		return isOpt && opt.Value == nil
+		_, ok := find(d.FieldName)
+		return !ok
 	}
 	return false
 }

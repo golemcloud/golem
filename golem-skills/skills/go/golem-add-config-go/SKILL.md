@@ -7,7 +7,7 @@ description: "Adding typed configuration to a Go Golem agent with DefineConfigur
 
 ## Overview
 
-A Go agent's configuration is a single **config struct** attached to the agent's type. Each exported field becomes a config key; the platform provisions the values (from `golem.yaml`, env, or the CLI) and the agent reads them back at runtime as a typed struct. Config is materialized once per worker and cached, so reads on a hot method are near-free.
+A Go agent's configuration is a single **config struct** attached to the agent's type. Each exported field becomes one whole config value unless it has a `golemConfig:"nested"` tag. The host resolves static values from deployment config, creation overrides, and code defaults. Each `ctx.Config(...)` call reads static fields from the host's selected owner revision; the SDK does not cache them. Secret fields are lazy handles and read the host only when revealed.
 
 Two things change versus a plain agent:
 
@@ -34,12 +34,11 @@ import "github.com/golemcloud/golem/sdks/go/golem"
 
 type ID struct{ Name string }
 
-// Config is the agent's whole config surface. Each exported field is a config
-// key; a nested struct flattens into multi-segment paths; a pointer field is
-// optional; list/map fields decode as their WIT shapes.
+// Config is the agent's whole config surface. Each exported field is one config
+// value; a struct field is one record, not a group of config declarations.
 type Config struct {
 	Greeting string
-	Tax      TaxConfig         // nested → paths tax.ratePct
+	Tax      TaxConfig         // one record value at path tax
 	Timezone *string           // optional (read back as nil when unset)
 	Features []string          // list
 	Limits   map[string]int64  // map
@@ -58,7 +57,31 @@ var (
 )
 ```
 
-Field-name conventions match plain agent types: use sized integers (`int64`, not bare `int`), a `*T` field is `option<T>`, and nested structs recurse. Field names are lowerCamelCase for the wire, with each initialism as one word (`RatePct` → `ratePct`, `APIKey` → `apiKey`, `AccountID` → `accountId`).
+Field-name conventions match plain agent types: use sized integers (`int64`, not bare `int`), and a `*T` field is `option<T>`. Field names are lowerCamelCase for the wire, with each initialism as one word (`RatePct` → `ratePct`, `APIKey` → `apiKey`, `AccountID` → `accountId`).
+
+The `Tax TaxConfig` field above declares one record-valued config key, `tax`. To declare its fields as separate config keys, mark the group explicitly:
+
+```go
+type Config struct {
+	Tax TaxConfig `golemConfig:"nested"` // declares tax.ratePct
+}
+```
+
+A nested group must be a struct. Put defaults and restrictions on its fields, not on the group itself. Both forms use nested YAML maps, but only the tagged form declares `tax.ratePct` as an independent config key.
+
+## Code Defaults
+
+Use `golemDefault` to declare a literal canonical JSON default for a static field:
+
+```go
+type Config struct {
+	Retries  uint32  `golem:"max=5" golemDefault:"3"`
+	Greeting string  `golemDefault:"\"Welcome\""`
+	Timezone *string `golemDefault:"null"`
+}
+```
+
+The SDK validates defaults against each field's schema and exports them in metadata. The host supplies a code default only when neither deployment config nor a creation override supplies the value. An explicit `null`, `false`, zero, or empty value is not missing. Omitting the tag differs from declaring `golemDefault:"null"`. Defaults are literals, not expressions or SDK-side fallbacks, and cannot supply secrets or other host-managed handles.
 
 ## Implementation (`agents/shop/impl/impl.go`)
 
@@ -93,6 +116,8 @@ func init() {
 ```
 
 `ctx.Config(shop.Agent)` returns the whole `shop.Config` value; `ctx` is the running method's `*golem.Context[state]` (requiring it means config is only readable from inside a running method). The constructor reads the same config via `ctx.Config()` on its `InitContext`.
+
+Each call reads the static fields again from the host's selected owner revision and builds lazy secret handles. Saving a returned value in application state, as the constructor does with `greeting`, preserves that saved value; later config reads do not update it automatically.
 
 A config field takes the same `golem` restriction tag as a method parameter (see `golem-add-agent-go`), which publishes it in the config's declared type:
 
@@ -136,7 +161,7 @@ client, err := shop.Agent.Create(
 
 - Config is **agent-attached and instance-bound** — read only from within that agent's own constructor or methods, never from free-floating code.
 - Reading an **undeclared** key, or an unset **required** key, traps. Declare a field as a pointer (`*T`) to read an absent value back as `nil` instead of trapping.
-- Config is materialized **once per worker** and cached; local fields are read on first access and reused for the worker's life. (Secret fields stay live — see `golem-add-secret-go`.)
+- Each config read fetches static fields from the host's selected owner revision. The SDK does not cache them across reads; secret handles defer host reads until `.Get()` or `.MustGet()` (see `golem-add-secret-go`).
 - Use `golem.DefineAgent[ID]` (no config) for agents that need none; `golem.NoConfig` is the empty config type and never needs naming.
 
 ### Related Skills

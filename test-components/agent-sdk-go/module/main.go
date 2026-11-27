@@ -26,6 +26,7 @@ import (
 	_ "agent-sdk-go/agents/saga/impl"
 	_ "agent-sdk-go/agents/scheduler/impl"
 	_ "agent-sdk-go/agents/snapstate/impl"
+	_ "agent-sdk-go/agents/staticdefaults/impl"
 	_ "agent-sdk-go/agents/wsecho/impl"
 
 	_ "github.com/golemcloud/golem/sdks/go/golem"

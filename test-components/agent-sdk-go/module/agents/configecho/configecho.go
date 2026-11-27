@@ -12,7 +12,7 @@ type FeeConfig struct{ Cents int64 }
 // Fee.Cents -> "fee"/"cents".
 type Config struct {
 	Greeting string
-	Fee      FeeConfig
+	Fee      FeeConfig `golemConfig:"nested"`
 }
 
 var Agent = golem.DefineConfiguredAgent[Id, Config](golem.Spec{

@@ -366,20 +366,71 @@ func TestFieldDefaultIsCheckedAgainstItsField(t *testing.T) {
 	}
 }
 
-// TestUnionPicksTheFirstBranchThatFits — the tag is not in the JSON, so
-// branches are tried in declaration order.
-func TestUnionPicksTheFirstBranchThatFits(t *testing.T) {
+// The tag is not in canonical JSON. Two branches with the same payload type
+// must still select by discriminator, rather than picking the first body.
+func TestUnionSelectsByDiscriminator(t *testing.T) {
 	root := typ(UnionType{Branches: []UnionBranch{
-		{Tag: "count", Body: typ(S32Type{}), Discriminator: RegexRule{Pattern: `^\d+$`}},
-		{Tag: "label", Body: typ(StringType{}), Discriminator: PrefixRule{Value: ""}},
+		{Tag: "selected", Body: typ(StringType{}), Discriminator: PrefixRule{Value: "selected:"}},
+		{Tag: "other", Body: typ(StringType{}), Discriminator: PrefixRule{Value: "other:"}},
 	}})
-	if got := roundTrip(t, root, `7`); got != `7` {
-		t.Errorf("a numeric union value round-tripped to %s", got)
+	r := NewRef(SchemaGraph{Root: root})
+	for _, tag := range []string{"selected", "other"} {
+		raw := `"` + tag + `:value"`
+		got, err := r.PackJSONBytes([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.(UnionValue).Tag != tag {
+			t.Fatalf("%s selected branch %q, want %q", raw, got.(UnionValue).Tag, tag)
+		}
+		if err := r.Validate(got); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := roundTrip(t, root, `"seven"`); got != `"seven"` {
-		t.Errorf("a string union value round-tripped to %s", got)
-	}
+	mustReject(t, root, `"neither:value"`, "matches no declared union branch")
 	mustReject(t, root, `true`, "matches no declared union branch")
+}
+
+func TestUnionUsesRawJSONDiscriminators(t *testing.T) {
+	for _, body := range []SchemaType{typ(UrlType{}), typ(PathType{})} {
+		root := typ(UnionType{Branches: []UnionBranch{
+			{Tag: "other", Body: body, Discriminator: PrefixRule{Value: "other:"}},
+			{Tag: "selected", Body: body, Discriminator: PrefixRule{Value: "selected:"}},
+		}})
+		r := NewRef(SchemaGraph{Root: root})
+		got, err := r.PackJSONBytes([]byte(`"selected:value"`))
+		if err != nil {
+			t.Fatalf("%T: %v", body.Body, err)
+		}
+		if got.(UnionValue).Tag != "selected" {
+			t.Fatalf("%T selected %q", body.Body, got.(UnionValue).Tag)
+		}
+		if err := r.Validate(got); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := typ(UnionType{Branches: []UnionBranch{
+		{Tag: "absent", Body: typ(RecordType{}), Discriminator: FieldAbsentRule{FieldName: "kind"}},
+		{Tag: "present", Body: typ(RecordType{Fields: []NamedField{
+			{Name: "kind", Body: typ(OptionType{Inner: typ(StringType{})})},
+		}}), Discriminator: FieldEqualsRule{FieldName: "kind"}},
+	}})
+	r := NewRef(SchemaGraph{Root: root})
+	got, err := r.PackJSONBytes([]byte(`{"kind":null}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.(UnionValue).Tag != "present" {
+		t.Fatalf("explicit null selected %q", got.(UnionValue).Tag)
+	}
+	if err := r.Validate(got); err != nil {
+		t.Fatal(err)
+	}
+	ambiguous := typ(UnionType{Branches: []UnionBranch{
+		{Tag: "first", Body: typ(StringType{}), Discriminator: PrefixRule{Value: "a"}},
+		{Tag: "second", Body: typ(StringType{}), Discriminator: SuffixRule{Value: "z"}},
+	}})
+	mustReject(t, ambiguous, `"abz"`, "matches multiple declared union branches")
 }
 
 func TestDatetimeIsRFC3339(t *testing.T) {

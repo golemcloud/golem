@@ -63,7 +63,7 @@ type demoDBConfig struct {
 
 type demoAppConfig struct {
 	Greeting string
-	Db       demoDBConfig
+	Db       demoDBConfig `golemConfig:"nested"`
 }
 
 var (
