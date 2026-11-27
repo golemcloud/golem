@@ -892,8 +892,14 @@ pub const SECRET_CREATE: &str = "Examples:
   # Create the secret without a value
   golem-cli secret create apiKey --type String --no-value
 
+  # Create a secret with allowed destinations
+  golem-cli secret create apiKey --type String --value 'sk-abc123' --destination https://api.example.com --destination 'https://*.example.org'
+
   # Create the secret, or update its value if it already exists
   golem-cli secret create apiKey --type String --value 'sk-abc123' --update-existing
+
+  # Also replace the existing destinations
+  golem-cli secret create apiKey --type String --value 'sk-abc123' --update-existing --destination https://api.example.com
 
   # Also replace an existing secret that has a different type (asks for confirmation)
   golem-cli secret create retries --type u32 --value 3 --update-existing --replace-on-type-change
@@ -903,10 +909,10 @@ pub const SECRET_CREATE: &str = "Examples:
   #   --type string   for TypeScript";
 
 pub const SECRET_GET: &str = "Examples:
-  # Get a secret by path
+  # Get secret metadata by path (values are never returned)
   golem-cli secret get apiKey
 
-  # Get a secret by ID
+  # Get secret metadata by ID
   golem-cli secret get --id sec-12345";
 
 pub const SECRET_UPDATE: &str = "Examples:
@@ -920,8 +926,17 @@ pub const SECRET_UPDATE: &str = "Examples:
   # Read the new value from STDIN
   printenv API_KEY | golem-cli secret update apiKey --value-stdin
 
+  # Replace destinations without reading or changing the value
+  golem-cli secret update apiKey --destination https://api.example.com --destination 'https://*.example.org'
+
+  # Update the value and destinations together
+  golem-cli secret update apiKey --value 'new-value' --destination https://api.example.com
+
   # Remove the value of a secret
-  golem-cli secret update apiKey --unset";
+  golem-cli secret update apiKey --unset
+
+  # Remove the value and replace destinations together
+  golem-cli secret update apiKey --unset --destination https://api.example.com";
 
 pub const SECRET_DELETE: &str = "Examples:
   # Delete a secret by path or by ID (asks for confirmation)

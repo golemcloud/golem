@@ -697,15 +697,30 @@ async fn agent_secret_grpc_revision_modes_and_environment_catalog() {
                 current_revision: r2.revision,
                 secret_value: OptionalFieldUpdate::Set(SchemaValue::String("rotated".to_string())),
             },
+            None,
             &auth,
         )
         .await
         .unwrap();
     assert_eq!(r3.destinations, vec![b.clone()]);
+    let r4 = service
+        .update(
+            r1.id,
+            AgentSecretUpdate {
+                current_revision: r3.revision,
+                secret_value: OptionalFieldUpdate::Set(SchemaValue::String("combined".to_string())),
+            },
+            Some(vec![a.clone()]),
+            &writer,
+        )
+        .await
+        .unwrap();
+    assert_eq!(r4.revision, r3.revision.next().unwrap());
     for (revision, value, destinations) in [
-        (r1.revision, "original", vec![a]),
+        (r1.revision, "original", vec![a.clone()]),
         (r2.revision, "original", vec![b.clone()]),
         (r3.revision, "rotated", vec![b.clone()]),
+        (r4.revision, "combined", vec![a.clone()]),
     ] {
         let read = client
             .get_agent_secret_revision(
@@ -739,9 +754,9 @@ async fn agent_secret_grpc_revision_modes_and_environment_catalog() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(current.revision, r3.revision);
-    assert_eq!(current.secret_value, r3.secret_value);
-    assert_eq!(current.destinations, vec![b.clone()]);
+    assert_eq!(current.revision, r4.revision);
+    assert_eq!(current.secret_value, r4.secret_value);
+    assert_eq!(current.destinations, vec![a.clone()]);
 
     let repo = DbAgentSecretRepo::new(pool);
     let agent_id = AgentId::from_parts(7, 19);
@@ -816,7 +831,7 @@ async fn agent_secret_grpc_revision_modes_and_environment_catalog() {
         assert!(matches!(service.update(id, AgentSecretUpdate {
             current_revision: AgentSecretRevision::INITIAL,
             secret_value: OptionalFieldUpdate::Unset,
-        }, &auth).await, Err(AgentSecretError::AgentSecretNotFound(found)) if found == id));
+        }, None, &auth).await, Err(AgentSecretError::AgentSecretNotFound(found)) if found == id));
         assert!(
             matches!(service.update_destinations(id, AgentSecretRevision::INITIAL, vec![], &auth).await,
             Err(AgentSecretError::AgentSecretNotFound(found)) if found == id)
@@ -834,10 +849,10 @@ async fn agent_secret_grpc_revision_modes_and_environment_catalog() {
     let listed = state.agent_secrets.get(&path).unwrap();
     assert_eq!(listed.id, r1.id);
     assert_eq!(listed.owner, AgentSecretOwner::Environment);
-    assert_eq!(listed.destinations, vec![b.clone()]);
-    assert_eq!(listed.secret_value, r3.secret_value);
+    assert_eq!(listed.destinations, vec![a]);
+    assert_eq!(listed.secret_value, r4.secret_value);
 
-    let deleted = service.delete(r1.id, r3.revision, &auth).await.unwrap();
+    let deleted = service.delete(r1.id, r4.revision, &auth).await.unwrap();
     assert!(deleted.destinations.is_empty());
     assert!(
         client

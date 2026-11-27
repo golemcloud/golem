@@ -1710,12 +1710,8 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
         secret_type: golem_common::schema::SchemaGraph::anonymous(
             golem_common::schema::SchemaType::string(),
         ),
-        secret_value: Some(
-            golem_common::schema::ExternalSchemaValue::try_from(
-                golem_common::schema::SchemaValue::String("super-secret".to_string()),
-            )
-            .unwrap(),
-        ),
+        has_value: true,
+        destinations: vec!["https://example.com".to_string()],
     };
 
     let outputs = vec![
@@ -1765,8 +1761,9 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
             .unwrap_or(&output);
 
         assert_eq!(secret_view["secretType"]["root"]["kind"], json!("string"));
-        assert_eq!(secret_view["secretValue"]["kind"], json!("string"));
-        assert_eq!(secret_view["secretValue"]["value"], json!("***"));
+        assert_eq!(secret_view["hasValue"], json!(true));
+        assert_eq!(secret_view["destinations"], json!(["https://example.com"]));
+        assert!(secret_view.get("secretValue").is_none());
     }
 }
 
@@ -9256,9 +9253,10 @@ fn arb_secret() -> BoxedStrategy<golem_client::model::AgentSecretDto> {
         proptest::collection::vec(arb_small_string(), 1..4),
         arb_small_u64(),
         arb_secret_type_and_value(),
+        proptest::collection::vec(arb_small_string(), 0..4),
     )
         .prop_map(
-            |(id, environment_id, path, revision, (secret_type, secret_value))| {
+            |(id, environment_id, path, revision, (secret_type, secret_value), destinations)| {
                 golem_client::model::AgentSecretDto {
                     id: golem_common::model::agent_secret::AgentSecretId(id),
                     environment_id: golem_common::model::environment::EnvironmentId(environment_id),
@@ -9266,9 +9264,8 @@ fn arb_secret() -> BoxedStrategy<golem_client::model::AgentSecretDto> {
                     revision: golem_common::model::agent_secret::AgentSecretRevision::new(revision)
                         .expect("generated revision should be valid"),
                     secret_type,
-                    secret_value: secret_value.map(|value| {
-                        golem_common::schema::ExternalSchemaValue::try_from(value).unwrap()
-                    }),
+                    has_value: secret_value.is_some(),
+                    destinations,
                 }
             },
         )

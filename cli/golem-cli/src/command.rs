@@ -2271,7 +2271,7 @@ pub mod api {
     }
 
     pub mod secret {
-        use crate::args::parse_secret_path;
+        use crate::args::{parse_secret_destination, parse_secret_path};
         use clap::Subcommand;
         use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
 
@@ -2313,6 +2313,11 @@ pub mod api {
                 /// Create the secret without a value
                 #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
                 no_value: bool,
+                /// Allowed destination for the secret. Repeat to supply multiple destinations.
+                /// With `--update-existing`, replaces destinations when supplied; otherwise keeps them.
+                /// New secrets default to no destinations.
+                #[arg(long = "destination", value_parser = parse_secret_destination)]
+                destinations: Vec<String>,
                 /// If a secret already exists at the path, update its value instead of failing.
                 /// Fails if the existing secret has a different type, unless
                 /// `--replace-on-type-change` is also given.
@@ -2325,7 +2330,7 @@ pub mod api {
                 replace_on_type_change: bool,
             },
 
-            /// Get Secret by path or ID
+            /// Get Secret metadata by path or ID. Secret values are never returned.
             #[command(after_help = crate::command_examples::SECRET_GET)]
             Get {
                 /// Path of the secret (dot-separated). Mutually exclusive with `--id`.
@@ -2336,7 +2341,7 @@ pub mod api {
                 id: Option<AgentSecretId>,
             },
 
-            /// Update Secret value
+            /// Update Secret value or destinations
             #[command(after_help = crate::command_examples::SECRET_UPDATE)]
             Update {
                 /// Path of the secret (dot-separated). Mutually exclusive with `--id`.
@@ -2346,8 +2351,8 @@ pub mod api {
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
                 /// New value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the
-                /// project's language syntax or JSON. When no value option is given, the value is
-                /// prompted for with hidden input.
+                /// project's language syntax or JSON. When neither a value option nor
+                /// `--destination` is given, the value is prompted for with hidden input.
                 #[arg(long, conflicts_with_all = ["value_stdin", "unset"])]
                 value: Option<String>,
                 /// Read the new value of the secret from STDIN (one trailing newline is removed)
@@ -2356,6 +2361,11 @@ pub mod api {
                 /// Remove the value of the secret
                 #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
                 unset: bool,
+                /// Replace the allowed destinations. Repeat to supply multiple destinations.
+                /// Without a value option, keeps the current value and does not prompt.
+                /// If omitted, keeps the current destinations.
+                #[arg(long = "destination", value_parser = parse_secret_destination)]
+                destinations: Vec<String>,
             },
 
             /// DESTRUCTIVE: Permanently deletes the secret. Any agent or API binding referencing it will start failing. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.

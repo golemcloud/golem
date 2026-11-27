@@ -11,7 +11,7 @@ use golem_common::model::quota::{
 use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
 use golem_common::schema::agent::{InputSchema, NamedField, OutputSchema};
 use golem_common::schema::schema_type::SchemaType;
-use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaTypeDef, SchemaValue, TypeId};
+use golem_common::schema::{SchemaGraph, SchemaTypeDef, SchemaValue, TypeId};
 use golem_schema::Empty;
 use test_r::test;
 use uuid::Uuid;
@@ -247,7 +247,8 @@ fn secret_dto(
         ),
         revision: serde_json::from_value(serde_json::json!(0)).unwrap(),
         secret_type,
-        secret_value: value.map(|value| ExternalSchemaValue::try_from(value).unwrap()),
+        has_value: value.is_some(),
+        destinations: Vec::new(),
     }
 }
 
@@ -430,7 +431,7 @@ fn environment_setup_sends_secret_defaults_only_when_needed() {
             secret_dto(
                 &["compatible"],
                 string_schema.clone(),
-                Some(SchemaValue::String("env".to_string())),
+                Some(SchemaValue::String(String::new())),
             ),
             secret_dto(
                 &["incompatible"],

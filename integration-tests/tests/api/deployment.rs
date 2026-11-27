@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent_secret::read_secret_value;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceDeployEnvironmentError,
     RegistryServiceGetToolReleaseError, RegistryServiceRollbackEnvironmentError,
@@ -1217,12 +1218,10 @@ async fn deploy_creates_missing_secret_from_default(
 
     assert_eq!(secret.path.0, secret_path);
     assert_secret_type_is_string(&secret.secret_type);
+    assert!(secret.has_value);
     assert_eq!(
-        secret
-            .secret_value
-            .as_ref()
-            .map(ExternalSchemaValue::as_inner),
-        Some(&SchemaValue::String("foo".to_string()))
+        read_secret_value(deps, secret).await?,
+        Some(SchemaValue::String("foo".to_string()))
     );
 
     Ok(())
@@ -1243,6 +1242,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
+                destinations: Vec::new(),
                 path: AgentSecretPath(secret_path.clone()),
                 secret_type: SchemaGraph::anonymous(SchemaType::string()),
                 secret_value: Some(external(SchemaValue::String("bar".to_string()))),
@@ -1296,12 +1296,10 @@ async fn deploy_ignores_default_if_secret_already_exists(
     assert_secret_type_is_string(&secret.secret_type);
 
     // Existing value must be preserved
+    assert!(secret.has_value);
     assert_eq!(
-        secret
-            .secret_value
-            .as_ref()
-            .map(ExternalSchemaValue::as_inner),
-        Some(&SchemaValue::String("bar".to_string()))
+        read_secret_value(deps, secret).await?,
+        Some(SchemaValue::String("bar".to_string()))
     );
 
     Ok(())
@@ -1322,6 +1320,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
+                destinations: Vec::new(),
                 path: AgentSecretPath(secret_path.clone()),
                 secret_type: SchemaGraph::anonymous(SchemaType::string()),
                 secret_value: None,
@@ -1374,12 +1373,10 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
     assert_eq!(secret.path.0, secret_path);
     assert_secret_type_is_string(&secret.secret_type);
 
+    assert!(secret.has_value);
     assert_eq!(
-        secret
-            .secret_value
-            .as_ref()
-            .map(ExternalSchemaValue::as_inner),
-        Some(&SchemaValue::String("foo".to_string()))
+        read_secret_value(deps, secret).await?,
+        Some(SchemaValue::String("foo".to_string()))
     );
 
     Ok(())
@@ -1400,6 +1397,7 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
+                destinations: Vec::new(),
                 path: AgentSecretPath(secret_path.clone()),
                 secret_type: SchemaGraph::anonymous(SchemaType::bool()),
                 secret_value: Some(external(SchemaValue::Bool(false))),

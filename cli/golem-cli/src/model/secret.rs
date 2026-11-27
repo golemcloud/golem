@@ -15,12 +15,12 @@
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::create_action::CreateAction;
-use crate::model::masking::{Masked, MaskingConfig, mask_json_secret_value};
+use crate::model::masking::{Masked, MaskingConfig};
 use crate::model::text_format::*;
 
 use comfy_table::Cell;
 use golem_client::model::AgentSecretDto;
-use golem_common::schema::{SchemaGraph, SchemaValue};
+use golem_common::schema::SchemaGraph;
 use serde::Serialize as _;
 use serde::Serializer;
 use serde_derive::{Deserialize, Serialize};
@@ -33,7 +33,8 @@ pub struct SecretView {
     pub path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
     pub revision: golem_common::model::agent_secret::AgentSecretRevision,
     pub secret_type: SchemaGraph,
-    pub secret_value: Option<SchemaValue>,
+    pub has_value: bool,
+    pub destinations: Vec<String>,
 }
 
 impl From<AgentSecretDto> for SecretView {
@@ -44,17 +45,13 @@ impl From<AgentSecretDto> for SecretView {
             path: value.path,
             revision: value.revision,
             secret_type: value.secret_type,
-            secret_value: value.secret_value.map(|value| value.into_inner()),
+            has_value: value.has_value,
+            destinations: value.destinations,
         }
     }
 }
 
-impl Masked for SecretView {
-    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
-        self.secret_value = mask_json_secret_value(config, &self.secret_value);
-        Ok(self)
-    }
-}
+impl Masked for SecretView {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -226,20 +223,12 @@ fn secret_view_fields(view: &SecretView) -> Vec<(String, String)> {
         .fmt_field("Secret Type", &view.secret_type, |graph| {
             render_type_for_language(&SourceLanguage::default(), graph, &graph.root, false)
         })
-        .fmt_field_option("Secret Value", &view.secret_value, render_schema_value);
+        .fmt_field("Has Value", &view.has_value, |value| value.to_string())
+        .fmt_field("Destinations", &view.destinations, |values| {
+            values.join(", ")
+        });
 
     fields.build()
-}
-
-fn render_schema_value(value: &SchemaValue) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "<unrenderable>".to_string())
-}
-
-fn format_secret_value(secret_value: &Option<SchemaValue>) -> String {
-    secret_value
-        .as_ref()
-        .map(render_schema_value)
-        .unwrap_or_else(|| "null".to_string())
 }
 
 fn wrap_uuid_for_table(uuid: &str) -> String {
@@ -279,7 +268,8 @@ impl SecretListView {
             Column::new("Environment").fixed(),
             Column::new("Path"),
             Column::new("Revision").fixed_right(),
-            Column::new("Secret Value"),
+            Column::new("Has Value"),
+            Column::new("Destinations"),
         ]);
 
         if self.show_ids {
@@ -287,21 +277,21 @@ impl SecretListView {
                 Cell::new("Environment"),
                 Cell::new("Path"),
                 Cell::new("Revision"),
-                Cell::new("Secret Value"),
+                Cell::new("Has Value"),
+                Cell::new("Destinations"),
                 Cell::new("Environment ID"),
                 Cell::new("Secret ID"),
             ]);
         }
 
         for secret in &self.secrets {
-            let secret_value = format_secret_value(&secret.secret_value);
-
             if self.show_ids {
                 table.add_row(vec![
                     self.environment_name.clone(),
                     secret.path.to_string(),
                     secret.revision.get().to_string(),
-                    secret_value,
+                    secret.has_value.to_string(),
+                    secret.destinations.join(", "),
                     wrap_uuid_for_table(&secret.environment_id.0.to_string()),
                     wrap_uuid_for_table(&secret.id.to_string()),
                 ]);
@@ -310,7 +300,8 @@ impl SecretListView {
                     self.environment_name.clone(),
                     secret.path.to_string(),
                     secret.revision.get().to_string(),
-                    secret_value,
+                    secret.has_value.to_string(),
+                    secret.destinations.join(", "),
                 ]);
             }
         }
@@ -353,7 +344,7 @@ mod tests {
         AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
     };
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::{SchemaGraph, SchemaType};
     use serde_json::json;
     use test_r::test;
 
@@ -368,10 +359,8 @@ mod tests {
             path: CanonicalAgentSecretPath(vec!["token".to_string()]),
             revision: AgentSecretRevision::new(7).unwrap(),
             secret_type: SchemaGraph::anonymous(SchemaType::string()),
-            secret_value: Some(
-                ExternalSchemaValue::try_from(SchemaValue::String("super-secret".to_string()))
-                    .unwrap(),
-            ),
+            has_value: true,
+            destinations: vec!["https://example.com".to_string()],
         }
         .into()
     }
@@ -402,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn list_view_json_masks_secret_values_by_default() {
+    fn list_view_json_exposes_secret_metadata() {
         let view = SecretListView {
             secrets: vec![sample_secret()],
             environment_name: "local".to_string(),
@@ -412,38 +401,36 @@ mod tests {
         let masked = view.masked(MaskingConfig::hide_secrets()).unwrap();
         let json = serde_json::to_value(&masked).unwrap();
 
+        assert_eq!(json["secrets"][0]["hasValue"], json!(true));
         assert_eq!(
-            json["secrets"][0]["secretValue"],
-            json!({ "kind": "string", "value": "***" })
+            json["secrets"][0]["destinations"],
+            json!(["https://example.com"])
         );
-        assert!(!json.to_string().contains("super-secret"));
+        assert!(json["secrets"][0].get("secretValue").is_none());
     }
 
     #[test]
-    fn get_view_json_masks_secret_value_by_default() {
+    fn get_view_json_exposes_secret_metadata() {
         let view = SecretGetView(sample_secret());
 
         let masked = view.masked(MaskingConfig::hide_secrets()).unwrap();
         let json = serde_json::to_value(&masked).unwrap();
 
-        assert_eq!(
-            json["secretValue"],
-            json!({ "kind": "string", "value": "***" })
-        );
-        assert!(!json.to_string().contains("super-secret"));
+        assert_eq!(json["hasValue"], json!(true));
+        assert_eq!(json["destinations"], json!(["https://example.com"]));
+        assert!(json.get("secretValue").is_none());
     }
 
     #[test]
-    fn get_view_json_shows_secret_value_when_requested() {
+    fn get_view_json_show_secrets_still_only_exposes_metadata() {
         let view = SecretGetView(sample_secret());
 
         let masked = view.masked(MaskingConfig::show_secrets()).unwrap();
         let json = serde_json::to_value(&masked).unwrap();
 
-        assert_eq!(
-            json["secretValue"],
-            json!({ "kind": "string", "value": "super-secret" })
-        );
+        assert_eq!(json["hasValue"], json!(true));
+        assert_eq!(json["destinations"], json!(["https://example.com"]));
+        assert!(json.get("secretValue").is_none());
     }
 
     #[test]
@@ -460,13 +447,15 @@ mod tests {
         assert!(rendered.contains("Environment"));
         assert!(rendered.contains("Path"));
         assert!(rendered.contains("Revision"));
-        assert!(rendered.contains("Secret Value"));
+        assert!(rendered.contains("Has Value"));
+        assert!(rendered.contains("Destinations"));
         assert!(!rendered.contains("Environment ID"));
         assert!(!rendered.contains("Secret ID"));
         assert!(!rendered.contains("Secret Type"));
         assert!(rendered.contains("local"));
         assert!(rendered.contains("token"));
-        assert!(rendered.contains("***"));
+        assert!(rendered.contains("true"));
+        assert!(rendered.contains("https://example.com"));
     }
 
     #[test]

@@ -45,6 +45,7 @@ pub enum AgentSecretOwner {
     },
 }
 
+#[cfg(feature = "full")]
 impl From<AgentSecretOwner> for golem_api_grpc::proto::golem::registry::AgentSecretOwner {
     fn from(value: AgentSecretOwner) -> Self {
         use golem_api_grpc::proto::golem::registry::{
@@ -66,6 +67,7 @@ impl From<AgentSecretOwner> for golem_api_grpc::proto::golem::registry::AgentSec
     }
 }
 
+#[cfg(feature = "full")]
 impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecretOwner> for AgentSecretOwner {
     type Error = String;
 
@@ -335,7 +337,8 @@ declare_structs! {
         pub path: CanonicalAgentSecretPath,
         pub revision: AgentSecretRevision,
         pub secret_type: SchemaGraph,
-        pub secret_value: Option<SchemaValue>,
+        pub has_value: bool,
+        pub destinations: Vec<String>,
     }
 
     pub struct AgentSecretCreation {

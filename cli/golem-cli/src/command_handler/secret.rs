@@ -55,6 +55,7 @@ impl SecretCommandHandler {
                 value,
                 value_stdin,
                 no_value,
+                destinations,
                 update_existing,
                 replace_on_type_change,
             } => {
@@ -62,6 +63,7 @@ impl SecretCommandHandler {
                     path,
                     secret_type,
                     SecretValueInput::from_args(value, value_stdin, no_value),
+                    destinations,
                     update_existing,
                     replace_on_type_change,
                 )
@@ -74,11 +76,13 @@ impl SecretCommandHandler {
                 value,
                 value_stdin,
                 unset,
+                destinations,
             } => {
                 self.cmd_update(
                     path,
                     id,
                     SecretValueInput::from_args(value, value_stdin, unset),
+                    destinations,
                 )
                 .await
             }
@@ -135,6 +139,7 @@ impl SecretCommandHandler {
         path: AgentSecretPath,
         secret_type: String,
         value_input: SecretValueInput,
+        destinations: Vec<String>,
         update_existing: bool,
         replace_on_type_change: bool,
     ) -> anyhow::Result<()> {
@@ -230,6 +235,7 @@ impl SecretCommandHandler {
                     path,
                     secret_type,
                     secret_value,
+                    destinations,
                     update_existing,
                 )
                 .await?,
@@ -243,6 +249,7 @@ impl SecretCommandHandler {
                         &AgentSecretUpdate {
                             current_revision: existing.revision,
                             secret_value: OptionalFieldUpdate::update_from_option(secret_value),
+                            destinations: (!destinations.is_empty()).then_some(destinations),
                         },
                     )
                     .await
@@ -254,6 +261,11 @@ impl SecretCommandHandler {
                     .delete_agent_secret(&existing.id.0, existing.revision.into())
                     .await
                     .map_service_error()?;
+                let destinations = if destinations.is_empty() {
+                    existing.destinations
+                } else {
+                    destinations
+                };
                 (
                     CreateAction::Replaced,
                     self.create_secret(
@@ -261,6 +273,7 @@ impl SecretCommandHandler {
                         path,
                         secret_type,
                         secret_value,
+                        destinations,
                         update_existing,
                     )
                     .await?,
@@ -282,6 +295,7 @@ impl SecretCommandHandler {
         path: AgentSecretPath,
         secret_type: SchemaGraph,
         secret_value: Option<ExternalSchemaValue>,
+        destinations: Vec<String>,
         update_existing: bool,
     ) -> anyhow::Result<AgentSecretDto> {
         let clients = self.ctx.golem_clients().await?;
@@ -295,6 +309,7 @@ impl SecretCommandHandler {
                     path,
                     secret_type,
                     secret_value,
+                    destinations,
                 },
             )
             .await
@@ -334,21 +349,27 @@ impl SecretCommandHandler {
         path: Option<AgentSecretPath>,
         id: Option<AgentSecretId>,
         value_input: SecretValueInput,
+        destinations: Vec<String>,
     ) -> anyhow::Result<()> {
         let current = self.resolve_secret(path, id).await?;
-        let source_language = self.guess_source_language().await;
-
-        let secret_value = self.read_secret_value(
-            value_input,
-            &current.path.to_string(),
-            ShowClapHelpTarget::SecretUpdate,
-            "--value, --value-stdin or --unset",
-        )?;
-        let secret_value = self.parse_external_secret_value(
-            secret_value.as_deref(),
-            &current.secret_type,
-            &source_language,
-        )?;
+        let secret_value =
+            if !destinations.is_empty() && matches!(&value_input, SecretValueInput::Prompt) {
+                OptionalFieldUpdate::NoChange
+            } else {
+                let source_language = self.guess_source_language().await;
+                let secret_value = self.read_secret_value(
+                    value_input,
+                    &current.path.to_string(),
+                    ShowClapHelpTarget::SecretUpdate,
+                    "--value, --value-stdin, --unset or --destination",
+                )?;
+                let secret_value = self.parse_external_secret_value(
+                    secret_value.as_deref(),
+                    &current.secret_type,
+                    &source_language,
+                )?;
+                OptionalFieldUpdate::update_from_option(secret_value)
+            };
 
         let clients = self.ctx.golem_clients().await?;
 
@@ -358,7 +379,8 @@ impl SecretCommandHandler {
                 &current.id.0,
                 &AgentSecretUpdate {
                     current_revision: current.revision,
-                    secret_value: OptionalFieldUpdate::update_from_option(secret_value),
+                    secret_value,
+                    destinations: (!destinations.is_empty()).then_some(destinations),
                 },
             )
             .await

@@ -32,6 +32,9 @@ pub struct AgentSecretCreation {
     pub path: AgentSecretPath,
     pub secret_type: SchemaGraph,
     pub secret_value: Option<ExternalSchemaValue>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub destinations: Vec<String>,
 }
 
 impl From<AgentSecretCreation> for DomainAgentSecretCreation {
@@ -53,7 +56,10 @@ impl From<AgentSecretCreation> for DomainAgentSecretCreation {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSecretUpdate {
     pub current_revision: AgentSecretRevision,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
     pub secret_value: OptionalFieldUpdate<ExternalSchemaValue>,
+    pub destinations: Option<Vec<String>>,
 }
 
 impl From<AgentSecretUpdate> for DomainAgentSecretUpdate {
@@ -82,23 +88,20 @@ pub struct AgentSecretDto {
     pub path: CanonicalAgentSecretPath,
     pub revision: AgentSecretRevision,
     pub secret_type: SchemaGraph,
-    pub secret_value: Option<ExternalSchemaValue>,
+    pub has_value: bool,
+    pub destinations: Vec<String>,
 }
 
-impl TryFrom<DomainAgentSecretDto> for AgentSecretDto {
-    type Error = String;
-
-    fn try_from(value: DomainAgentSecretDto) -> Result<Self, Self::Error> {
-        Ok(Self {
+impl From<DomainAgentSecretDto> for AgentSecretDto {
+    fn from(value: DomainAgentSecretDto) -> Self {
+        Self {
             id: value.id,
             environment_id: value.environment_id,
             path: value.path,
             revision: value.revision,
             secret_type: value.secret_type,
-            secret_value: value
-                .secret_value
-                .map(ExternalSchemaValue::try_from)
-                .transpose()?,
-        })
+            has_value: value.has_value,
+            destinations: value.destinations,
+        }
     }
 }
