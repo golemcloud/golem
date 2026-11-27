@@ -5190,6 +5190,7 @@ fn create_entry_with_revision(
         initial_active_plugins: HashSet::new(),
         local_agent_config: Vec::new(),
         constructor_parameters: None,
+        standalone_tool: None,
         never_live: false,
         instance_id: Uuid::new_v4(),
         create_request: golem_common::model::oplog::CreateRequest::new(

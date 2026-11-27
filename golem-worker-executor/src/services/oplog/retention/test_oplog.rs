@@ -180,6 +180,7 @@ impl RetainedOplog {
             config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
+            standalone_tool: None,
             last_known_status: AgentStatusRecord::default(),
             fingerprint: AgentFingerprint::new(),
             agent_mode: AgentMode::Durable,
@@ -214,6 +215,7 @@ impl RetainedOplog {
             local_agent_config: vec![],
             instance_id: metadata.fingerprint.0,
             create_request: metadata.create_request,
+            standalone_tool: None,
             never_live: false,
         }))
     }
