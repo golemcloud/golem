@@ -101,6 +101,43 @@ func TestNarrowIntegersAreNumbers(t *testing.T) {
 	mustReject(t, typ(S32Type{}), `"5"`, "expected integer")
 }
 
+// TestPackJSONUnrestrictedLeavesRestrictionsToValidate: a command-line reader
+// decodes every argument, at any depth, before it validates the input.
+func TestPackJSONUnrestrictedLeavesRestrictionsToValidate(t *testing.T) {
+	max := NumericBound{Kind: BoundUnsigned, Unsigned: 10}
+	r := NewRef(SchemaGraph{Root: typ(ListType{Element: typ(U8Type{Restrictions: &NumericRestrictions{Max: &max}})})})
+	in := []any{json.Number("5"), json.Number("50")}
+	if _, err := r.PackJSON(in); err == nil {
+		t.Errorf("PackJSON accepted a list element above its maximum")
+	}
+	v, err := r.PackJSONUnrestricted(in)
+	if err != nil {
+		t.Fatalf("PackJSONUnrestricted: %v", err)
+	}
+	if err := r.Validate(v); err == nil || !strings.Contains(err.Error(), "above maximum 10") {
+		t.Errorf("Validate of the unrestricted value: %v", err)
+	}
+	small := UnionBranch{Tag: "small", Body: typ(U8Type{Restrictions: &NumericRestrictions{Max: &max}}), Discriminator: RegexRule{Pattern: `^\d+$`}}
+	big := UnionBranch{Tag: "big", Body: typ(U32Type{}), Discriminator: RegexRule{Pattern: `^\d+$`}}
+	u, err := NewRef(SchemaGraph{Root: typ(UnionType{Branches: []UnionBranch{small, big}})}).PackJSONUnrestricted(json.Number("50"))
+	if err != nil || u.(UnionValue).Tag != "big" {
+		t.Errorf("PackJSONUnrestricted of a union took %v, %v; want the branch whose restrictions hold", u, err)
+	}
+	only := NewRef(SchemaGraph{Root: typ(UnionType{Branches: []UnionBranch{small}})})
+	u, err = only.PackJSONUnrestricted(json.Number("50"))
+	if err != nil {
+		t.Fatalf("PackJSONUnrestricted of a union with one restricted branch: %v", err)
+	}
+	if err := only.Validate(u); err == nil || !strings.Contains(err.Error(), "above maximum 10") {
+		t.Errorf("Validate of the unrestricted union value: %v", err)
+	}
+	for _, root := range []SchemaType{typ(PathType{}), typ(UrlType{})} {
+		if _, err := NewRef(SchemaGraph{Root: root}).PackJSONUnrestricted(""); err == nil {
+			t.Errorf("PackJSONUnrestricted accepted an empty %T", root.Body)
+		}
+	}
+}
+
 // TestDurationIsAnObjectOfNanoseconds — not an ISO-8601 string.
 func TestDurationIsAnObjectOfNanoseconds(t *testing.T) {
 	in := `{"nanoseconds":"-1500000000"}`

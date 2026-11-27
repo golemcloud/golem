@@ -100,6 +100,8 @@ Golem 1.6 ships Go SDK 0.1.0. Go agents are compiled to WebAssembly components w
 
 Offline builds require the toolchain to be installed already, or the `GOLEM_GO_TOOLCHAIN` environment variable to point at a Go toolchain built from [golemcloud/go](https://github.com/golemcloud/go).
 
+The CLI also downloads Golem's build of the WASI preview1 adapter from [golemcloud/wasmtime](https://github.com/golemcloud/wasmtime/releases) and passes it to `componentize-go` with `--adapt`. Unlike the adapter `componentize-go` embeds, it lets Go code create and remove files through directories it opens itself, such as with `os.Root`. Offline builds require the adapter to be downloaded already, or the `GOLEM_GO_ADAPTER` environment variable to point at an adapter file.
+
 #### Installing Go
 
 A regular **Go 1.27.1 or newer** installation is recommended for your editor, `go test`, and `go vet`, but it is not required to build. Install it from [go.dev/dl](https://go.dev/dl/).

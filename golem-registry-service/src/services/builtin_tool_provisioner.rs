@@ -194,16 +194,28 @@ pub async fn provision_builtin_tools(
     tool_release_service: &Arc<ToolReleaseService>,
     tool_middleware_release_service: &Arc<ToolMiddlewareReleaseService>,
 ) -> anyhow::Result<()> {
+    let (descriptors, unselected): (Vec<_>, Vec<_>) = BUILTIN_EXPORTS
+        .iter()
+        .copied()
+        .partition(|descriptor| artifact_resolver.has_source(descriptor.artifact_id));
+    for artifact_id in unselected
+        .iter()
+        .map(|descriptor| descriptor.artifact_id)
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        tracing::info!(
+            artifact_id,
+            "Not provisioning optional built-in; select it with GOLEM_OPTIONAL_BUILTINS"
+        );
+    }
     let artifacts = artifact_resolver
         .resolve_many(
             BuiltinArtifactKind::Tools,
-            BUILTIN_EXPORTS
-                .iter()
-                .map(|descriptor| descriptor.artifact_id),
+            descriptors.iter().map(|descriptor| descriptor.artifact_id),
         )
         .await?;
     provision_descriptors(
-        BUILTIN_EXPORTS,
+        &descriptors,
         &artifacts,
         artifact_resolver,
         startup_progress,

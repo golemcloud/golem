@@ -16,6 +16,7 @@ package tool
 
 import (
 	"io"
+	"reflect"
 	"testing"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
@@ -123,6 +124,45 @@ func VcsFixture(t *testing.T) (Metadata, func(types.TypedSchemaValue) error, fun
 	return metadataOf(t, r, d, "vcs"), invoke, func() CommitArgs { return *v.seen }
 }
 
+// DeclaredMetadata declares the enums, each type with its cases, and a tool
+// with declare in a fresh registry, and returns the tool's published metadata.
+func DeclaredMetadata[T any](t *testing.T, name string, spec Spec, enums map[reflect.Type][]string, declare func(*Definition[T])) Metadata {
+	t.Helper()
+	r, d := newToolRegistry(), newDefinitions()
+	for typ, cases := range enums {
+		d.DefineEnum(typ, cases)
+	}
+	declare(defineToolInto[T](r, d, name, spec, false))
+	return metadataOf(t, r, d, name)
+}
+
+type reservedStatus struct{}
+type reservedStatusArgs struct{}
+
+// ReservedStatusMetadata declares the tool "status" whose command "run" returns
+// golem.ProcessExitStatus, and lets reshape rewrite the fields of the published
+// golem.tool.ProcessExitStatus definition, as another producer could publish it.
+func ReservedStatusMetadata(t *testing.T, reshape func(g *types.SchemaGraph, fields []types.NamedFieldType) []types.NamedFieldType) Metadata {
+	t.Helper()
+	r, d := newToolRegistry(), newDefinitions()
+	def := defineToolInto[reservedStatus](r, d, "status", Spec{Version: "1.0.0", Summary: "Reserved status"}, false)
+	def.Command[reservedStatusArgs, golem.ProcessExitStatus]("run", func(*reservedStatusArgs, *CommandSpec) {}).
+		Handle(func(*Context, reservedStatusArgs) (golem.ProcessExitStatus, error) {
+			return golem.ProcessExitStatus{}, nil
+		})
+	m := metadataOf(t, r, d, "status")
+	g := &m.wit.Schema
+	for _, def := range g.Defs {
+		if def.Id == "golem.tool.ProcessExitStatus" {
+			fields := reshape(g, g.TypeNodes[def.Body].Body.RecordType())
+			g.TypeNodes[def.Body].Body = types.MakeSchemaTypeBodyRecordType(fields)
+			return m
+		}
+	}
+	t.Fatalf("no golem.tool.ProcessExitStatus definition")
+	return Metadata{}
+}
+
 func metadataOf(t *testing.T, r *toolRegistry, d *definitions, name string) Metadata {
 	t.Helper()
 	tools, ok := r.discover(d)
@@ -156,6 +196,39 @@ func RecordToolCalls(t *testing.T, outcome func(path []string) (witTypes.Option[
 		}, cancel: func() {}}, nil
 	}
 	return &calls
+}
+
+// ScriptedCall is the outcome of a scripted tool call: what the command
+// writes to each output it declares, then its result or its failure.
+type ScriptedCall struct {
+	Stdout, Stderr []byte
+	Result         witTypes.Option[types.TypedSchemaValue]
+	Err            *types.ToolRpcError
+}
+
+// ScriptToolCalls routes tool calls to script, which sees each call's command
+// path and the standard input it carries, nil when none.
+func ScriptToolCalls(t *testing.T, script func(path []string, stdin io.Reader) ScriptedCall) {
+	t.Helper()
+	prev := startToolCall
+	t.Cleanup(func() { startToolCall = prev })
+	startToolCall = func(_ string, path []string, _ types.TypedSchemaValue, stdin io.Reader, streams Streams) (toolCall, error) {
+		s := script(path, stdin)
+		output := func(requested bool, data []byte) *byteReader {
+			if !requested {
+				return nil
+			}
+			return &byteReader{src: &fakeSource{items: []streamItem{chunk(string(data))}}}
+		}
+		return toolCall{
+			stdout: output(streams.Stdout, s.Stdout),
+			stderr: output(streams.Stderr, s.Stderr),
+			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+				return s.Result, s.Err
+			},
+			cancel: func() {},
+		}, nil
+	}
 }
 
 // RecordToolInputs routes tool calls to an empty result and records the inputs

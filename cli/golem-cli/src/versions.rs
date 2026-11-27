@@ -91,6 +91,22 @@ pub mod go_toolchain {
     ];
 }
 
+// The preview1 component adapter Go components are built with.
+//
+// componentize-go embeds wasmtime's upstream adapter, which never requests
+// `mutate-directory` on a directory the guest opens itself. Golem's agent
+// filesystem enforces that flag, so Go code that creates or removes entries
+// through such a directory (`os.Root`, for one) fails with a read-only error.
+// Golem publishes a patched adapter as a release asset of its wasmtime fork,
+// and the CLI passes it to componentize-go with `--adapt`. A bump changes TAG
+// and SHA256 together.
+pub mod go_adapter {
+    pub const REPO: &str = "golemcloud/wasmtime";
+    pub const TAG: &str = "golem-adapter-v50.0.1-1";
+    pub const ASSET: &str = "wasi_snapshot_preview1.reactor.wasm";
+    pub const SHA256: &str = "4a2476a873ef97e990b74d8ab712af559030077f160d10ac84c17e268d9943d6";
+}
+
 // Keep this aligned with the Go component template's `tool` directive.
 //
 // componentize-go must be pinned to a concrete version, never `latest`: below

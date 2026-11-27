@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::{ParsedToolArguments, parse, parse_with_variables};
+use crate::schema::schema_type::{
+    NumericBound, NumericRestrictions, PathDirection, PathKind, PathSpec,
+};
 use crate::schema::tool::process::{ParsedProcessCommand, parse_command};
 use crate::schema::tool::*;
 use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
@@ -1619,4 +1622,444 @@ fn help_shows_an_optional_dash_dash_separator() {
         "Usage: example [OPTIONS] -- [args]...",
         "{help}"
     );
+}
+
+fn conformance_doc(summary: &str) -> Doc {
+    Doc {
+        summary: summary.into(),
+        ..Doc::default()
+    }
+}
+
+fn conformance_option(
+    name: &str,
+    short: Option<char>,
+    shape: OptionShape,
+    summary: &str,
+) -> OptionSpec {
+    OptionSpec {
+        short,
+        doc: conformance_doc(summary),
+        ..option(name, shape)
+    }
+}
+
+fn conformance_flag(name: &str, short: Option<char>, shape: FlagShape, summary: &str) -> FlagSpec {
+    FlagSpec {
+        long: name.into(),
+        short,
+        aliases: vec![],
+        doc: conformance_doc(summary),
+        shape,
+        env_var: None,
+    }
+}
+
+fn bool_shape(default: bool, negatable: bool) -> FlagShape {
+    FlagShape::BoolFlag(BoolFlagShape { default, negatable })
+}
+
+fn conformance_positional(
+    name: &str,
+    type_: SchemaType,
+    required: bool,
+    summary: &str,
+) -> Positional {
+    Positional {
+        required,
+        doc: conformance_doc(summary),
+        ..positional(name, type_)
+    }
+}
+
+fn conformance_tail(name: &str, max: Option<u32>, verbatim: bool, summary: &str) -> TailPositional {
+    TailPositional {
+        name: name.into(),
+        doc: conformance_doc(summary),
+        value_name: None,
+        item_type: SchemaType::string(),
+        min: 0,
+        max,
+        separator: Some("--".into()),
+        verbatim,
+        accepts_stdio: false,
+    }
+}
+
+fn conformance_node(name: &str, summary: &str, body: Option<CommandBody>) -> CommandNode {
+    CommandNode {
+        name: name.into(),
+        aliases: vec![],
+        doc: conformance_doc(summary),
+        http: None,
+        globals: Globals::default(),
+        subcommands: vec![],
+        body,
+    }
+}
+
+/// The fixtures of test-data/tool-argv-conformance/v1.json, built as its `fixtures` describe them.
+fn conformance_tool(fixture: &str) -> Tool {
+    let string = SchemaType::string;
+    let mut b = body();
+    let nodes = match fixture {
+        "deploy" => {
+            b.positionals.fixed = vec![
+                conformance_positional("target", string(), true, "Where to deploy"),
+                conformance_positional("artifact", string(), false, "Artifact to deploy"),
+            ];
+            let mut profile = conformance_option(
+                "profile",
+                Some('p'),
+                OptionShape::Scalar(SchemaType::r#enum(vec!["debug".into(), "release".into()])),
+                "Build profile",
+            );
+            profile.default = Some(SchemaValue::Enum { case: 0 });
+            let mut color = conformance_option(
+                "color",
+                None,
+                OptionShape::OptionalScalar(string()),
+                "Colour output",
+            );
+            color.value_name = Some("WHEN".into());
+            color.default = Some(SchemaValue::String("always".into()));
+            let mut output = conformance_option(
+                "output",
+                Some('o'),
+                OptionShape::Scalar(string()),
+                "Output file",
+            );
+            output.aliases = vec!["out".into()];
+            b.options = vec![
+                profile,
+                conformance_option(
+                    "retries",
+                    None,
+                    OptionShape::Scalar(SchemaType::u32()),
+                    "Retry count",
+                ),
+                conformance_option(
+                    "offset",
+                    None,
+                    OptionShape::Scalar(SchemaType::s64()),
+                    "Start offset",
+                ),
+                color,
+                output,
+            ];
+            b.flags = vec![
+                conformance_flag("force", Some('f'), bool_shape(false, false), "Overwrite"),
+                conformance_flag("cache", None, bool_shape(true, true), "Use the cache"),
+                conformance_flag(
+                    "verbose",
+                    Some('v'),
+                    FlagShape::CountFlag(Some(3)),
+                    "More output",
+                ),
+            ];
+            vec![conformance_node("deploy", "Deploy an artifact", Some(b))]
+        }
+        "vcs" => {
+            let mut root = conformance_node("vcs", "Version control", None);
+            let mut cwd = conformance_option(
+                "cwd",
+                None,
+                OptionShape::Scalar(string()),
+                "Working directory",
+            );
+            cwd.default = Some(SchemaValue::String("/".into()));
+            root.globals.options.push(cwd);
+            root.globals.flags.push(conformance_flag(
+                "quiet",
+                Some('q'),
+                bool_shape(false, false),
+                "Less output",
+            ));
+            root.subcommands = vec![CommandIndex(1), CommandIndex(2)];
+            let mut commit_body = body();
+            let mut message = conformance_option(
+                "message",
+                Some('m'),
+                OptionShape::Scalar(string()),
+                "Commit message",
+            );
+            message.required = true;
+            commit_body.options.push(message);
+            commit_body.flags.push(conformance_flag(
+                "amend",
+                None,
+                bool_shape(false, false),
+                "Amend the last commit",
+            ));
+            let mut commit = conformance_node("commit", "Record changes", Some(commit_body));
+            commit.aliases = vec!["ci".into()];
+            let mut status_body = body();
+            status_body.flags.push(conformance_flag(
+                "short",
+                Some('s'),
+                bool_shape(false, false),
+                "Short format",
+            ));
+            let status =
+                conformance_node("status", "Show the working tree state", Some(status_body));
+            vec![root, commit, status]
+        }
+        "exec" => {
+            b.positionals.tail = Some(conformance_tail(
+                "command",
+                None,
+                true,
+                "Command and its arguments",
+            ));
+            b.options.push(conformance_option(
+                "cwd",
+                None,
+                OptionShape::Scalar(string()),
+                "Working directory",
+            ));
+            b.flags.push(conformance_flag(
+                "dry-run",
+                Some('n'),
+                bool_shape(false, false),
+                "Print only",
+            ));
+            vec![conformance_node("exec", "Run a command", Some(b))]
+        }
+        "run" => {
+            b.positionals.fixed =
+                vec![conformance_positional("program", string(), true, "Program")];
+            b.positionals.tail = Some(conformance_tail("args", Some(2), false, "Arguments"));
+            vec![conformance_node("run", "Run a program", Some(b))]
+        }
+        "collect" => {
+            let list = |repetition| {
+                OptionShape::RepeatableList(RepeatableListShape {
+                    repetition,
+                    item_type: SchemaType::string(),
+                })
+            };
+            let map = |repetition, duplicate_key_policy| {
+                OptionShape::RepeatableMap(RepeatableMapShape {
+                    repetition,
+                    map_type: SchemaType::map(SchemaType::string(), SchemaType::string()),
+                    duplicate_key_policy,
+                })
+            };
+            b.options = vec![
+                conformance_option(
+                    "include",
+                    Some('I'),
+                    list(Repetition::Repeated),
+                    "Include path",
+                ),
+                conformance_option("tag", None, list(Repetition::Delimited(',')), "Tag"),
+                conformance_option(
+                    "env",
+                    Some('e'),
+                    map(Repetition::Repeated, DuplicateKeyPolicy::Reject),
+                    "Variable",
+                ),
+                conformance_option(
+                    "label",
+                    None,
+                    map(Repetition::Either(','), DuplicateKeyPolicy::LastWins),
+                    "Label",
+                ),
+            ];
+            vec![conformance_node("collect", "Collect values", Some(b))]
+        }
+        "report" => {
+            let mut mode = conformance_option(
+                "mode",
+                None,
+                OptionShape::Scalar(SchemaType::r#enum(vec!["live".into(), "dry".into()])),
+                "Mode",
+            );
+            mode.default = Some(SchemaValue::Enum { case: 0 });
+            b.options = vec![
+                conformance_option("user", None, OptionShape::Scalar(string()), "User"),
+                conformance_option("password", None, OptionShape::Scalar(string()), "Password"),
+                mode,
+            ];
+            b.flags = vec![
+                conformance_flag("json", None, bool_shape(false, false), "JSON output"),
+                conformance_flag("text", None, bool_shape(false, false), "Text output"),
+            ];
+            let present = |name: &str| Ref::Present(name.into());
+            b.constraints = vec![
+                Constraint::MutexGroups(vec![
+                    RefGroup {
+                        refs: vec![present("json")],
+                    },
+                    RefGroup {
+                        refs: vec![present("text")],
+                    },
+                ]),
+                Constraint::Implies(ImpliesC {
+                    lhs_quant: Quantifier::All,
+                    lhs: vec![present("user")],
+                    rhs_quant: Quantifier::All,
+                    rhs: vec![present("password")],
+                }),
+                Constraint::Forbids(ForbidsC {
+                    lhs_quant: Quantifier::All,
+                    lhs: vec![Ref::ValueIs(ValueIsRef {
+                        name: "mode".into(),
+                        value: SchemaValue::Enum { case: 1 },
+                    })],
+                    rhs: vec![present("json")],
+                }),
+            ];
+            vec![conformance_node("report", "Write a report", Some(b))]
+        }
+        "env" => {
+            let with_variable = |mut option: OptionSpec, variable: &str| {
+                option.env_var = Some(variable.into());
+                option
+            };
+            let mut token =
+                conformance_option("token", None, OptionShape::Scalar(string()), "Token");
+            token.required = true;
+            let mut port =
+                conformance_option("port", None, OptionShape::Scalar(SchemaType::u32()), "Port");
+            port.default = Some(SchemaValue::U32(80));
+            let path = conformance_option(
+                "path",
+                None,
+                OptionShape::RepeatableList(RepeatableListShape {
+                    repetition: Repetition::Delimited(':'),
+                    item_type: string(),
+                }),
+                "Search path",
+            );
+            b.options = vec![
+                with_variable(token, "TOKEN"),
+                with_variable(port, "PORT"),
+                with_variable(path, "PATHS"),
+            ];
+            let mut debug =
+                conformance_flag("debug", None, bool_shape(false, false), "Debug output");
+            debug.env_var = Some("DEBUG".into());
+            let mut level =
+                conformance_flag("level", None, FlagShape::CountFlag(Some(2)), "Log level");
+            level.env_var = Some("LEVEL".into());
+            b.flags = vec![debug, level];
+            vec![conformance_node("env", "Read variables", Some(b))]
+        }
+        "numbers" => {
+            b.positionals.fixed = vec![conformance_positional(
+                "value",
+                SchemaType::s32(),
+                true,
+                "Value",
+            )];
+            b.flags.push(conformance_flag(
+                "one",
+                Some('1'),
+                bool_shape(false, false),
+                "Use one",
+            ));
+            vec![conformance_node("numbers", "Read a number", Some(b))]
+        }
+        "bounded" => {
+            b.positionals.fixed = vec![conformance_positional(
+                "size",
+                SchemaType::U8 {
+                    restrictions: Some(NumericRestrictions {
+                        min: Some(NumericBound::Unsigned(1)),
+                        max: Some(NumericBound::Unsigned(10)),
+                        unit: None,
+                    }),
+                    metadata: Default::default(),
+                },
+                true,
+                "Size",
+            )];
+            b.options = vec![
+                conformance_option(
+                    "count",
+                    None,
+                    OptionShape::Scalar(SchemaType::u32()),
+                    "Count",
+                ),
+                conformance_option(
+                    "file",
+                    None,
+                    OptionShape::Scalar(SchemaType::path(PathSpec {
+                        direction: PathDirection::InOut,
+                        kind: PathKind::Any,
+                        allowed_mime_types: None,
+                        allowed_extensions: None,
+                    })),
+                    "File",
+                ),
+                conformance_option(
+                    "site",
+                    None,
+                    OptionShape::Scalar(SchemaType::url(Default::default())),
+                    "Site",
+                ),
+            ];
+            vec![conformance_node("bounded", "Read a bounded size", Some(b))]
+        }
+        other => panic!("unknown argv conformance fixture {other}"),
+    };
+    Tool {
+        version: "1.0.0".into(),
+        requires_filesystem: false,
+        http_mount: None,
+        schema: SchemaGraph::empty(),
+        commands: CommandTree { nodes },
+    }
+}
+
+#[test]
+fn the_argv_conformance_corpus_matches_the_reference_parser() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../test-data/tool-argv-conformance/v1.json"
+    ))
+    .expect("valid argv conformance corpus");
+    for case in corpus["cases"].as_array().expect("cases array") {
+        let id = case["id"].as_str().expect("case id");
+        let tool = conformance_tool(case["fixture"].as_str().expect("fixture"));
+        let args: Vec<String> = case["args"]
+            .as_array()
+            .expect("args")
+            .iter()
+            .map(|arg| arg.as_str().expect("string argument").to_string())
+            .collect();
+        let variables: HashMap<String, String> = case["variables"]
+            .as_object()
+            .map(|variables| {
+                variables
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.as_str().unwrap().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let expected = &case["expected"];
+        match parse_with_variables(&tool, &args, &variables) {
+            Ok(ParsedToolArguments::Help(help)) => {
+                assert_eq!(Some(help.as_str()), expected["help"].as_str(), "{id}")
+            }
+            Ok(ParsedToolArguments::Invoke {
+                command_path,
+                input,
+            }) => {
+                let graph = input.graph();
+                let rendered =
+                    crate::schema::render::to_json_value(graph, &graph.root, input.value())
+                        .unwrap_or_else(|error| panic!("{id}: {error}"));
+                assert_eq!(
+                    serde_json::json!({ "path": command_path, "input": rendered }),
+                    expected["invoke"],
+                    "{id}"
+                );
+            }
+            Err(error) => match expected["errorPrefix"].as_str() {
+                Some(prefix) => assert!(error.starts_with(prefix), "{id}: {error}"),
+                None => assert_eq!(Some(error.as_str()), expected["error"].as_str(), "{id}"),
+            },
+        }
+    }
 }

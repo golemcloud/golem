@@ -132,13 +132,44 @@ Do not disable curl to bypass missing headers: the differential suite uses Git's
 The `git-network-probe` fixture imports the tool's source files, so its npm install also installs
 the sibling tool's locked dependencies before bundling; a warm tool `node_modules` is not required.
 
+## Optional built-in tools
+
+This mechanism is temporary. It keeps the growing set of tools out of every developer's build
+until `/golem/` packages replace the built-in provisioners and development fetches pinned
+prebuilt packages (Packages GOL-1516 and GOL-1524). Remove it with that cutover.
+
+A built-in whose `builtin-artifacts.json` entry has `"optional": true` is optional. New tools are
+optional; the tools listed above are mandatory. `GOLEM_OPTIONAL_BUILTINS` selects optional tools
+for development:
+
+- unset or empty: none;
+- `all`: every optional tool;
+- a comma-separated list of artifact IDs, such as `yq,gawk`.
+
+Set it once in the shell profile to work with all tools:
+
+```shell
+export GOLEM_OPTIONAL_BUILTINS=all
+```
+
+`build-builtin-tools` and `ensure-builtin-artifacts` build and require only the mandatory tools
+and the selected optional ones. Running an optional tool's own task, such as
+`cargo make build-yq-tool`, builds it also when it is not selected. A development registry provisions the same
+selection, fixed when `golem-registry-service` compiles, and logs one line for each optional
+tool it does not provision. A selection that names something other than an optional built-in
+fails the registry build. Tests of an optional tool need it selected.
+
+The `ci` cargo-make profile sets `all`, so Main validation and release preparation build,
+test and publish every tool. Release binaries provision every tool in the release manifest.
+
 ## Adding a component-implemented built-in tool
 
 1. Add a standalone tool component source and build it through its Golem application manifest. Do
    not invoke its language compiler directly.
 2. Add its logical artifact ID to `BuiltinExportDescriptor`; keep export metadata in the descriptor
    and add the component name, output path, build task, and transitive inputs to
-   `builtin-artifacts.json`.
+   `builtin-artifacts.json`. Mark a new tool `"optional": true` (see
+   [Optional built-in tools](#optional-built-in-tools)).
 3. Set `component_name`, `export_name`, `release_version`, and `kind` to the artifact's exported
    metadata. Provisioning validates these values before writing anything.
 4. Add an independent build task and include it in `build-builtin-tools`. Validate the generated

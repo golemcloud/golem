@@ -184,6 +184,12 @@ impl BuiltinArtifactResolver {
         Ok(artifacts.into_iter().collect())
     }
 
+    /// Whether this server has a source for the artifact. A development build has none for an
+    /// optional built-in that `GOLEM_OPTIONAL_BUILTINS` does not select.
+    pub fn has_source(&self, artifact_id: &str) -> bool {
+        self.sources.contains_key(artifact_id)
+    }
+
     pub async fn resolve(&self, artifact_id: &str) -> anyhow::Result<Arc<Vec<u8>>> {
         let source =
             self.sources.get(artifact_id).cloned().ok_or_else(|| {

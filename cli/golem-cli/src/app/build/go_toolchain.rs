@@ -22,6 +22,9 @@
 //! toolchain Golem pins into the very directory componentize-go looks in, and
 //! puts it first on PATH for every Go command it runs: componentize-go then
 //! finds an acceptable `go` immediately and downloads nothing.
+//!
+//! It also installs the preview1 adapter componentize-go wraps the module with
+//! (see [`crate::versions::go_adapter`]), which the build passes as `--adapt`.
 
 use crate::fs;
 use crate::log::{LogColorize, log_action};
@@ -37,6 +40,10 @@ use std::time::Duration;
 /// Points the CLI at an already installed toolchain instead of downloading the
 /// pinned release. Used to test a change to the Go fork before releasing it.
 pub const GO_TOOLCHAIN_ENV_VAR: &str = "GOLEM_GO_TOOLCHAIN";
+
+/// Points the CLI at a local preview1 adapter instead of downloading the pinned
+/// release. Used to test a change to the adapter before releasing it.
+pub const GO_ADAPTER_ENV_VAR: &str = "GOLEM_GO_ADAPTER";
 
 /// Records which release is installed in a toolchain directory. componentize-go
 /// keeps no such marker, so a directory without one was put there by
@@ -159,18 +166,7 @@ async fn install(
         ),
     );
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(DOWNLOAD_TIMEOUT)
-        .build()?;
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .and_then(|response| response.error_for_status())
-        .with_context(|| anyhow!("Failed to download the Golem Go toolchain from {url}"))?;
-    let archive = response
-        .bytes()
+    let archive = download(&url)
         .await
         .with_context(|| anyhow!("Failed to download the Golem Go toolchain from {url}"))?;
     verify_archive(&archive, expected_sha256, &url)?;
@@ -205,10 +201,149 @@ async fn install(
     Ok(())
 }
 
+async fn download(url: &str) -> anyhow::Result<bytes::Bytes> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(DOWNLOAD_TIMEOUT)
+        .build()?;
+    Ok(client
+        .get(url)
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())?
+        .bytes()
+        .await?)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Makes the pinned preview1 adapter available, downloading it if needed, and
+/// returns its path.
+pub async fn ensure_go_adapter(config: &ApplicationConfig) -> anyhow::Result<PathBuf> {
+    if let Some(path) = std::env::var_os(GO_ADAPTER_ENV_VAR) {
+        let path = PathBuf::from(path);
+        if !path.is_file() {
+            bail!(
+                "{} is set to {}, which is not a file",
+                GO_ADAPTER_ENV_VAR,
+                path.display()
+            );
+        }
+        return Ok(path);
+    }
+
+    let path = adapter_path()?;
+    if adapter_installed(&path) {
+        return Ok(path);
+    }
+
+    let url = adapter_download_url();
+    if config.offline {
+        bail!(
+            "The Golem preview1 adapter ({tag}) is not installed, and offline mode is enabled.\n\
+             Install it by building without --offline, or set {env} to a copy of {url}",
+            tag = crate::versions::go_adapter::TAG,
+            env = GO_ADAPTER_ENV_VAR,
+        );
+    }
+
+    log_action(
+        "Installing",
+        format!(
+            "the Golem preview1 adapter {}, downloading {}",
+            crate::versions::go_adapter::TAG.log_color_highlight(),
+            url.log_color_highlight()
+        ),
+    );
+    let adapter = download(&url)
+        .await
+        .with_context(|| anyhow!("Failed to download the Golem preview1 adapter from {url}"))?;
+    verify_adapter(&adapter, crate::versions::go_adapter::SHA256, &url)?;
+
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow!("Invalid adapter path: {}", path.display()))?;
+    fs::create_dir_all(dir)?;
+    // A concurrent build may install the same file; each writes its own copy
+    // and the rename replaces the file atomically.
+    let incoming = dir.join(format!(
+        "{}.{}.incoming",
+        crate::versions::go_adapter::ASSET,
+        std::process::id()
+    ));
+    fs::write(&incoming, &adapter)?;
+    fs::rename(&incoming, &path)?;
+
+    Ok(path)
+}
+
+fn adapter_installed(path: &Path) -> bool {
+    std::fs::read(path)
+        .map(|adapter| sha256_hex(&adapter) == crate::versions::go_adapter::SHA256)
+        .unwrap_or(false)
+}
+
+/// Fails unless `adapter` hashes to the pinned sha256, so a corrupted download
+/// or a replaced release asset is never built into a component.
+fn verify_adapter(adapter: &[u8], expected_sha256: &str, url: &str) -> anyhow::Result<()> {
+    let actual = sha256_hex(adapter);
+    if actual != expected_sha256 {
+        bail!(
+            "The Golem preview1 adapter downloaded from {url} does not match the checksum this \
+             CLI pins for {tag}: expected sha256 {expected_sha256}, got {actual}. Retry the \
+             build; if it keeps failing, set {env} to an adapter built from https://github.com/{repo}.",
+            tag = crate::versions::go_adapter::TAG,
+            env = GO_ADAPTER_ENV_VAR,
+            repo = crate::versions::go_adapter::REPO,
+        );
+    }
+    Ok(())
+}
+
+fn adapter_path() -> anyhow::Result<PathBuf> {
+    let cache_dir = dirs::cache_dir()
+        .ok_or_else(|| anyhow!("Failed to determine the user's cache directory"))?;
+    Ok(cache_dir
+        .join("golem")
+        .join("go-adapter")
+        .join(crate::versions::go_adapter::TAG)
+        .join(crate::versions::go_adapter::ASSET))
+}
+
+fn adapter_download_url() -> String {
+    format!(
+        "https://github.com/{repo}/releases/download/{tag}/{asset}",
+        repo = crate::versions::go_adapter::REPO,
+        tag = crate::versions::go_adapter::TAG,
+        asset = crate::versions::go_adapter::ASSET,
+    )
+}
+
+/// Where `--adapt` goes in the arguments of a `go` command, or `None` when the
+/// command does not wrap a module into a component with componentize-go or
+/// already names an adapter. `args` follow the `go` program itself.
+pub fn componentize_go_adapter_position(args: &[String]) -> Option<usize> {
+    match args {
+        [tool, componentize_go, subcommand, rest @ ..]
+            if tool == "tool"
+                && componentize_go == "componentize-go"
+                && matches!(subcommand.as_str(), "build" | "test")
+                && !rest
+                    .iter()
+                    .any(|arg| arg == "--adapt" || arg.starts_with("--adapt=")) =>
+        {
+            Some(3)
+        }
+        _ => None,
+    }
+}
+
 /// Fails unless `archive` hashes to the sha256 pinned for this platform, so a
 /// corrupted download or a replaced release asset is never unpacked and run.
 fn verify_archive(archive: &[u8], expected_sha256: &str, url: &str) -> anyhow::Result<()> {
-    let actual = format!("{:x}", Sha256::digest(archive));
+    let actual = sha256_hex(archive);
     if actual != expected_sha256 {
         bail!(
             "The Golem Go toolchain downloaded from {url} does not match the checksum this CLI pins \
@@ -391,6 +526,80 @@ mod tests {
             .to_string();
         assert!(error.contains("does not match the checksum"), "{error}");
         assert!(error.contains(empty), "{error}");
+    }
+
+    fn args(command: &str) -> Vec<String> {
+        shlex::split(command).unwrap()[1..].to_vec()
+    }
+
+    #[test]
+    fn the_template_builds_get_the_adapter_after_the_subcommand() {
+        let template = include_str!("../../../templates/go/common-on-demand/golem.yaml");
+        let builds: Vec<&str> = template
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- command: "))
+            .filter(|command| command.starts_with("go tool componentize-go"))
+            .collect();
+        assert_eq!(builds.len(), 2, "{builds:?}");
+        for build in builds {
+            assert_eq!(
+                componentize_go_adapter_position(&args(build)),
+                Some(3),
+                "{build}"
+            );
+        }
+        assert_eq!(
+            componentize_go_adapter_position(&args("go tool componentize-go test --wasip1")),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn other_go_commands_and_named_adapters_are_left_alone() {
+        for command in [
+            "go mod tidy",
+            "go build ./...",
+            "go tool componentize-go bindings -o out",
+            "go tool other build",
+            "go tool componentize-go build --adapt my.wasm -o out.wasm",
+            "go tool componentize-go build -o out.wasm --adapt=my.wasm",
+        ] {
+            assert_eq!(
+                componentize_go_adapter_position(&args(command)),
+                None,
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_adapter_must_match_its_pinned_checksum() {
+        let empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        verify_adapter(b"", empty, "https://example.test/adapter.wasm").unwrap();
+        let error = verify_adapter(b"tampered", empty, "https://example.test/adapter.wasm")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not match the checksum"), "{error}");
+        assert!(error.contains(GO_ADAPTER_ENV_VAR), "{error}");
+
+        let pinned = crate::versions::go_adapter::SHA256;
+        assert_eq!(pinned.len(), 64);
+        assert!(
+            pinned
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+    }
+
+    #[test]
+    fn adapter_url_points_at_the_pinned_release() {
+        assert_eq!(
+            adapter_download_url(),
+            format!(
+                "https://github.com/golemcloud/wasmtime/releases/download/{}/wasi_snapshot_preview1.reactor.wasm",
+                crate::versions::go_adapter::TAG
+            )
+        );
     }
 
     #[test]

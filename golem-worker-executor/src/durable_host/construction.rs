@@ -261,8 +261,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentMode::Durable => None,
             AgentMode::Ephemeral => Some(config.suspend.ephemeral_max_sleep),
         };
+        // Language runtimes read the program name while they initialize (Go's pflag indexes
+        // os.Args[0]), so every Store gets one: the tool or middleware name in an entity Store,
+        // the component name otherwise. Both are fixed for the Store, so replay sees the same.
+        let program_name = match &runtime {
+            OwnerRuntime::Entity(entity) => entity.name().to_string(),
+            OwnerRuntime::Agent => component_metadata.component_name.to_string(),
+        };
         let (wasi, io_ctx, table) = wasi_host::create_context(
-            &[] as &[&str],
+            &[program_name],
             stdin.clone(),
             stdout,
             stderr,
