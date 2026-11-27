@@ -594,12 +594,12 @@ async fn corrupt_recovery_stays_fenced_without_automatic_retries() {
 /// A producer request that reads below the retained start, such as a routed attach or a routed
 /// source-unavailable overlay of a reader that a record below the start introduced, gives the
 /// caller the expired error with the start, not a runtime error. A store that awaits recovery
-/// stays unavailable, and every other error keeps its text.
+/// stays unavailable. A transient or corrupt read gives a runtime error with the read error text.
 #[test]
-fn a_producer_request_keeps_the_expired_error() {
+fn a_producer_request_keeps_only_the_expired_read_error_typed() {
     use crate::durable_host::durable_stream::StreamStoreError;
-    use crate::services::oplog::UnreadableOplog;
     use crate::services::oplog::retention::test_oplog::expired;
+    use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
     use crate::services::rpc::DurableStreamRemoteError;
 
     let agent_id = identity().agent_id;
@@ -625,4 +625,17 @@ fn a_producer_request_keeps_the_expired_error() {
             StreamStoreError::InvalidHandle.to_string()
         ))
     );
+    [
+        OplogReadError::source_unavailable(OplogReadSource::Primary, "storage unavailable"),
+        OplogReadError::corruption(OplogReadSource::Primary, "corrupt entry"),
+    ]
+    .into_iter()
+    .for_each(|error| {
+        let error = StreamStoreError::Unreadable(UnreadableOplog::new(&agent_id, error));
+        let expected = WorkerExecutorError::runtime(error.to_string());
+        assert_eq!(
+            producer_error(error),
+            DurableStreamRemoteError::Other(expected)
+        );
+    });
 }
