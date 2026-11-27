@@ -7971,6 +7971,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationReturnedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
@@ -8033,6 +8034,7 @@ components:
           End: '#/components/schemas/PublicOplogEntry_r#EndParams'
           Cancelled: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
+          AgentInvocationReturned: '#/components/schemas/PublicOplogEntry_r#AgentInvocationReturnedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
           AgentInvocationSettled: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
@@ -8172,6 +8174,18 @@ components:
             - AgentInvocationFinished
             example: AgentInvocationFinished
       - $ref: '#/components/schemas/r#AgentInvocationFinishedParams'
+    PublicOplogEntry_r#AgentInvocationReturnedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AgentInvocationReturned
+            example: AgentInvocationReturned
+      - $ref: '#/components/schemas/r#AgentInvocationReturnedParams'
     PublicOplogEntry_r#AgentInvocationSettledParams:
       allOf:
       - type: object
@@ -12178,6 +12192,28 @@ components:
         consumedFuel:
           type: integer
           format: int64
+        componentRevision:
+          type: integer
+          format: uint64
+    r#AgentInvocationReturnedParams:
+      type: object
+      title: r#AgentInvocationReturnedParams
+      required:
+      - timestamp
+      - invocationId
+      - result
+      - componentRevision
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        result:
+          $ref: '#/components/schemas/TypedSchemaValue'
+        methodName:
+          type: string
         componentRevision:
           type: integer
           format: uint64

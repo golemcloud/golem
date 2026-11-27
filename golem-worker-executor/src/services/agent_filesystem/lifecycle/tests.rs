@@ -10237,9 +10237,8 @@ async fn interrupted_guest_observation_retains_started_call_and_drain() {
         call,
     ));
     gate.wait_started().await;
-    let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-        golem_common::model::Timestamp::now_utc(),
-    );
+    let kind =
+        golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
     stop.send(kind).unwrap();
     assert_eq!(observer.await.unwrap().unwrap_err(), kind);
     drop(node);

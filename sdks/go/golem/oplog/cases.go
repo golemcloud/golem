@@ -30,6 +30,8 @@ const (
 	Cancelled = oplogwit.PublicOplogEntryCancelled
 	// The agent has been invoked
 	AgentInvocationStarted = oplogwit.PublicOplogEntryAgentInvocationStarted
+	// The export returned a value before its returned streams ended.
+	AgentInvocationReturned = oplogwit.PublicOplogEntryAgentInvocationReturned
 	// The agent has completed an invocation
 	AgentInvocationFinished = oplogwit.PublicOplogEntryAgentInvocationFinished
 	// A method failed without failing the agent.

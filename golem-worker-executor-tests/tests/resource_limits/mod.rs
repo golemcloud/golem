@@ -310,9 +310,9 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::InterruptKind;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::{OplogEntry, OplogIndex};
-    use golem_service_base::error::worker_executor::InterruptKind;
     use golem_worker_executor::services::{HasOplog, UsesAllDeps};
     use golem_worker_executor::worker::Worker;
 
@@ -476,8 +476,8 @@ async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::InterruptKind;
     use golem_common::model::Timestamp;
-    use golem_service_base::error::worker_executor::InterruptKind;
     use golem_worker_executor::services::golem_config::FilesystemStorageMode;
 
     {
@@ -589,9 +589,9 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::InterruptKind;
     use golem_common::model::Timestamp;
     use golem_common::model::oplog::{OplogEntry, OplogIndex};
-    use golem_service_base::error::worker_executor::InterruptKind;
     use golem_worker_executor::services::HasOplog;
     use golem_worker_executor::worker::Worker;
     use tokio::io::AsyncReadExt;

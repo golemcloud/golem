@@ -32,6 +32,8 @@ use crate::services::resource_limits::{
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
+#[cfg(any(test, feature = "test-utils"))]
+use golem_common::model::InterruptKind;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::entity::{
     EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
@@ -39,8 +41,6 @@ use golem_common::model::entity::{
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::regions::DeletedRegions;
-#[cfg(any(test, feature = "test-utils"))]
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
 use std::future::Future;
@@ -1710,11 +1710,12 @@ mod tests {
 
     #[test]
     fn epoch_capacity_trap_retains_raw_suspend_only_for_resource_exhaustion() {
+        use golem_common::model::InterruptKind;
         use golem_common::model::agent::AgentMode;
         use golem_common::model::oplog::{
             EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
         };
-        use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
 
         for exhaustion in [
             AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
@@ -1745,11 +1746,12 @@ mod tests {
     #[timeout("10s")]
     async fn instantiation_error_classification_recognises_host_call_interruption()
     -> anyhow::Result<()> {
+        use golem_common::model::InterruptKind;
         use golem_common::model::Timestamp;
         use golem_common::model::entity::{AgentEntity, OwnerRuntime};
         use golem_common::model::oplog::EphemeralCannotSuspendError;
         use golem_common::model::tool::ToolName;
-        use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
 
         let engine =
             Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;

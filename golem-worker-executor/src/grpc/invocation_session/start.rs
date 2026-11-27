@@ -450,7 +450,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         if let Some(result) = streams.persisted_result().await.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))? {
                             break result;
                         }
-                        outcome.map_err(|details| WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned()))?;
+                        if let Err(failure) = outcome {
+                            return Err(super::response::session_failure_error::<Ctx, _>(self, streams, failure).await);
+                        }
                         return Err(WorkerExecutorError::runtime("session finished successfully without a persisted result"));
                     }
                     if let Some(output) = completed.take() {
@@ -490,8 +492,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             })),
                         }).await;
                     }
-                    Err(details) => send_worker_failure(&responses,
-                        WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned())).await,
+                    Err(failure) => send_worker_failure(&responses,
+                        super::response::session_failure_error::<Ctx, _>(self, streams, failure).await).await,
                 }
                 Ok(())
             };
@@ -663,7 +665,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     unreachable!("completed output was checked to contain an error");
                 };
                 let details = error.to_string();
-                if let Err(finish_error) = durable_streams.fail_invocation(details).await {
+                let cause = super::response::session_failure_cause::<Ctx, _>(self, durable_streams, &error).await;
+                if let Err(finish_error) = durable_streams.fail(cause, details).await {
                     send_protocol_failure(&responses, finish_error).await;
                     return;
                 }
@@ -726,8 +729,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         },
                         Err(error) => {
                             let details = error.to_string();
+                            let cause = super::response::session_failure_cause::<Ctx, _>(self, durable_streams, &error).await;
                             if let Err(finish_error) = durable_streams
-                                .fail_invocation(details)
+                                .fail(cause, details)
                                 .await
                             {
                                 send_protocol_failure(&responses, finish_error).await;
@@ -792,9 +796,40 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 send_worker_failure(&responses, error).await;
                 return;
             }
-            if let Err(error) = durable_streams.complete().await {
+            if native_tool && let Err(error) = durable_streams.complete().await {
                 send_protocol_failure(&responses, error).await;
                 return;
+            }
+            let finished = durable_streams.wait_persisted_finished();
+            tokio::pin!(finished);
+            let outcome = loop {
+                tokio::select! {
+                    result = &mut finished => break result,
+                    request = inbound.message() => match request {
+                        Ok(Some(request)) => {
+                            if let Err(error) = route_durable_request(durable_streams, &responses, &state, request).await {
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, error, async {}).await;
+                                return;
+                            }
+                        }
+                        Ok(None) | Err(_) => return,
+                    },
+                    revocation = &mut attachment_revoked => {
+                        send_attachment_revocation(&responses, revocation).await;
+                        return;
+                    },
+                }
+            };
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(failure)) => {
+                    send_worker_failure(&responses, super::response::session_failure_error::<Ctx, _>(self, durable_streams, failure).await).await;
+                    return;
+                }
+                Err(error) => {
+                    send_protocol_failure(&responses, error).await;
+                    return;
+                }
             }
             if let Err(error) = durable_streams.pump_input_cancellations(&responses, &high_waters).await {
                 send_protocol_failure(&responses, error).await;

@@ -181,6 +181,44 @@ impl SessionControlMetadata {
     pub fn result_position(&self) -> Option<OplogIndex> {
         self.invocation_result
     }
+
+    /// Records the return position and the bindings introduced by its value.
+    pub fn apply_invocation_returned(
+        &mut self,
+        index: OplogIndex,
+        bindings: &[StreamBindingRecord],
+    ) {
+        self.invocation_result.get_or_insert(index);
+        for (slot, binding) in bindings.iter().enumerate() {
+            if binding.role.direction() == SessionStreamRole::Output
+                && !self.root_outputs.contains(&binding.transport_stream_id)
+            {
+                self.root_outputs.push(binding.transport_stream_id);
+            }
+            if self.reader_id(binding).is_err() {
+                self.reader_bindings.push((
+                    LocalStreamReaderId {
+                        introducing_oplog_index: index,
+                        binding_slot: slot as u32,
+                    },
+                    binding.clone(),
+                ));
+            }
+            if !self.acceptance_mappings.contains(binding) {
+                self.acceptance_mappings.push(binding.clone());
+            }
+            self.visible_mappings.insert(binding.clone());
+            if !self
+                .recoverable_mappings
+                .iter()
+                .any(|(_, existing)| existing == binding)
+            {
+                self.recoverable_mappings.push((index, binding.clone()));
+            }
+            self.persisted_mappings.insert(binding.clone());
+        }
+        self.covered_through = index;
+    }
     /// Returns the session terminal record position.
     pub fn finished_position(&self) -> Option<OplogIndex> {
         self.finished
@@ -1006,7 +1044,7 @@ impl SessionControlMetadata {
             {
                 record.recursive_mappings.clone()
             }
-            StreamSessionRecord::InvocationResult(record) if record_matches => {
+            StreamSessionRecord::RemoteResult(record) if record_matches => {
                 self.invocation_result.get_or_insert(index);
                 for mapping in &record.stream_mappings {
                     if mapping.role.direction() == SessionStreamRole::Output
@@ -1027,7 +1065,7 @@ impl SessionControlMetadata {
             record,
             StreamSessionRecord::Prepared(_)
                 | StreamSessionRecord::Mapping(_)
-                | StreamSessionRecord::InvocationResult(_)
+                | StreamSessionRecord::RemoteResult(_)
                 | StreamSessionRecord::ConsumerItemValue(_)
         ) {
             for (slot, binding) in bindings.iter().enumerate() {
@@ -1052,7 +1090,7 @@ impl SessionControlMetadata {
             record,
             StreamSessionRecord::Prepared(_)
                 | StreamSessionRecord::Mapping(_)
-                | StreamSessionRecord::InvocationResult(_)
+                | StreamSessionRecord::RemoteResult(_)
                 | StreamSessionRecord::ConsumerItemValue(_)
         ) {
             self.visible_mappings.extend(bindings.iter().cloned());
@@ -1061,7 +1099,7 @@ impl SessionControlMetadata {
             record,
             StreamSessionRecord::Prepared(_)
                 | StreamSessionRecord::Mapping(_)
-                | StreamSessionRecord::InvocationResult(_)
+                | StreamSessionRecord::RemoteResult(_)
                 | StreamSessionRecord::ConsumerItemValue(_)
         ) {
             for binding in &bindings {
@@ -1191,7 +1229,7 @@ mod tests {
 
     #[test]
     fn repeated_binding_evidence_preserves_one_reader_per_binding() {
-        use golem_common::base_model::durable_stream::StreamSessionInvocationResultRecord;
+        use golem_common::base_model::durable_stream::StreamSessionRemoteResultRecord;
 
         let owner = identity();
         let key = owner.invocation.clone();
@@ -1207,7 +1245,7 @@ mod tests {
                 session_key: reference.clone(),
                 mapping: first.clone(),
             }),
-            StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+            StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: reference.clone(),
                 result: Vec::new(),

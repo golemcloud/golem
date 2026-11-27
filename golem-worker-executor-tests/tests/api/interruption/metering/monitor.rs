@@ -254,8 +254,8 @@ monitor_control!(silent_tcp_monitor_111, true, true, true);
 mod retries {
     use super::*;
     use anyhow::Context as _;
+    use golem_common::model::InterruptKind;
     use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
-    use golem_service_base::error::worker_executor::InterruptKind;
     use pretty_assertions::assert_eq;
     use test_r::test;
     use tokio::io::AsyncReadExt;

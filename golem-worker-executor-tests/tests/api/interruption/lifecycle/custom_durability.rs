@@ -428,7 +428,7 @@ async fn quota_custom_finish(
     let kind = tokio::time::timeout(Duration::from_secs(10), interrupt).await?;
     assert!(matches!(
         kind,
-        golem_service_base::error::worker_executor::InterruptKind::Suspend(_)
+        golem_common::model::InterruptKind::Suspend(_)
     ));
     assert!(!invocation.is_finished());
     release.send(()).unwrap();

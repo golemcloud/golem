@@ -1076,23 +1076,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )?,
             )
         } else if let Some(result_index) = content_status.invocation_result {
-            let StreamSessionRecord::InvocationResult(result) =
-                self.read_stream_session_record(result_index).await?
-            else {
-                return Err(WorkerExecutorError::runtime(
-                    "session result locator is invalid",
-                ));
-            };
+            let result = self
+                .durable_stream_producer()
+                .await?
+                .read_invocation_result_value(
+                    result_index,
+                    content_status.session_key.unwrap_or(*session_key),
+                )
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             if schema.is_stream {
                 let mappings = self
                     .durable_stream_producer()
                     .await?
-                    .materialize_bindings(&result.stream_mappings)
+                    .materialize_bindings(&result.stream_bindings)
                     .await
                     .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
                 SlotSource::Stream(
                     schema.extract_handle(
-                        &result.result,
+                        &result.value,
                         &mappings
                             .into_iter()
                             .map(|mapping| mapping.handle)
@@ -1101,7 +1103,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
             } else {
                 SlotSource::Value {
-                    encoded: result.result,
+                    encoded: result.value,
                     offset: StreamOffset::new(result_index, 0),
                 }
             }

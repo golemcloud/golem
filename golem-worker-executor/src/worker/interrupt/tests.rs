@@ -14,8 +14,8 @@
 
 use super::*;
 use crate::worker::{InterruptEstablishment, UnloadReason, UnloadRequest};
+use golem_common::model::InterruptKind;
 use golem_common::model::Timestamp;
-use golem_service_base::error::worker_executor::InterruptKind;
 use test_r::test;
 
 fn interrupt(kind: InterruptKind) -> PendingWorkerInterrupt {

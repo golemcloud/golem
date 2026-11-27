@@ -38,6 +38,7 @@ use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure
 use crate::services::environment_state::ToolDiscoveryError;
 use futures::FutureExt;
 use golem_common::base_model::durable_stream::StreamTerminal;
+use golem_common::model::InterruptKind;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
@@ -74,7 +75,7 @@ use golem_common::schema::{
     TypeId, TypedSchemaValue,
 };
 use golem_schema::schema::SchemaValueStream;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -854,7 +855,8 @@ fn completed_skipped_terminal_selects_no_body_replay() {
             body_execution: SerializableEntityBodyExecution::Skipped,
             result: Err(SerializableToolRpcError::ResourceExhausted(
                 "recorded limit".to_string(),
-            )),
+            ))
+            .into(),
         }
         .into_typed_schema_value()
         .unwrap()),
@@ -2219,7 +2221,8 @@ async fn streamed_tool_response_publishes_mappings_before_body_outcome() {
             oplog,
             StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
             [],
-        );
+        )
+        .with_entity_parent_start_index(Some(golem_common::model::OplogIndex::INITIAL));
         let tasks = WorkerTasks::default();
         let mut outputs = NativeReconstructionTasks::new(&tasks).unwrap();
         let mut producers = ProducerOutcomeScope::new(tasks);
@@ -2258,7 +2261,23 @@ async fn streamed_tool_response_publishes_mappings_before_body_outcome() {
         )
         .await
         .unwrap();
-        assert_eq!(response.is_err(), custom_error);
+        let golem_common::model::oplog::payload::types::RecordedToolResult::Remote {
+            reference,
+            custom_error: recorded_error,
+            ..
+        } = &response
+        else {
+            panic!("a materialized result must refer to its one journal record");
+        };
+        assert_eq!(recorded_error.as_deref(), custom_error.then_some("partial"));
+        assert_eq!(
+            Some(reference.clone()),
+            streams.remote_result_reference().await.unwrap()
+        );
+        let restored = super::streams::restore_response(&streams, response)
+            .await
+            .unwrap();
+        assert_eq!(restored.is_err(), custom_error);
         let handle = streams.materialized_mappings()[0].handle.clone();
         let terminal = if custom_error {
             producers.settle(Err("body trapped".into()));
@@ -2313,7 +2332,8 @@ async fn schema_output_fence_interrupts_a_parked_body_after_mapping_publication(
         oplog.clone(),
         StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         [],
-    );
+    )
+    .with_entity_parent_start_index(Some(golem_common::model::OplogIndex::INITIAL));
     let tasks = WorkerTasks::default();
     let mut outputs = NativeReconstructionTasks::new(&tasks).unwrap();
     let mut producers = ProducerOutcomeScope::new(tasks);
@@ -2338,7 +2358,6 @@ async fn schema_output_fence_interrupts_a_parked_body_after_mapping_publication(
         &outputs.spawner(),
     )
     .await
-    .unwrap()
     .unwrap();
     assert_eq!(streams.materialized_mappings().len(), 1);
 

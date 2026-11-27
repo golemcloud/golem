@@ -280,7 +280,6 @@ fn handle_stream_summary(
                 StreamTerminalOrigin::Control => "control",
             }),
         ),
-        DurableStreamEventSummary::SessionResult => ("session-result", 1, None, None),
         DurableStreamEventSummary::SessionFinished(value) => (
             "session-finished",
             1,
@@ -1501,11 +1500,64 @@ mod tests {
         OplogEntry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
             timestamp: instant(20, 0),
             invocation_id: INVOCATION,
-            result: OplogPayload::Inline(Vec::new()),
+            result: golem_rust::bindings::golem::api::oplog::FinishedResult::Payload(
+                OplogPayload::Inline(Vec::new()),
+            ),
             method_name: None,
             consumed_fuel: 0,
             component_revision: 0,
         })
+    }
+
+    #[test]
+    fn an_early_return_does_not_finish_or_count_the_invocation_twice() {
+        use golem_rust::bindings::golem::api::oplog::{
+            FinishedResult, RawAgentInvocationReturnedParameters,
+        };
+        let mut state = state();
+        process_entries(&mut state, vec![invocation_started("trace-a", vec![])]);
+        let returned = process_entries(
+            &mut state,
+            vec![OplogEntry::AgentInvocationReturned(
+                RawAgentInvocationReturnedParameters {
+                    timestamp: instant(15, 0),
+                    invocation_id: INVOCATION,
+                    result: OplogPayload::Inline(vec![17, 29]),
+                    method_name: Some("run".into()),
+                    component_revision: 0,
+                },
+            )],
+        );
+        assert!(returned.spans.is_empty());
+        assert!(returned.metrics.is_empty());
+        assert!(state.invocation_start_ns.is_some());
+        let OplogEntry::AgentInvocationFinished(mut finished) = invocation_finished() else {
+            unreachable!()
+        };
+        finished.result = FinishedResult::Returned(7);
+        finished.consumed_fuel = 43;
+        let output = process_entries(
+            &mut state,
+            vec![OplogEntry::AgentInvocationFinished(finished)],
+        );
+        assert!(state.invocation_start_ns.is_none());
+        assert_eq!(
+            output
+                .metrics
+                .iter()
+                .filter(|metric| metric.name == "golem.invocation.duration_ns")
+                .count(),
+            1
+        );
+        let fuel = output
+            .metrics
+            .iter()
+            .find(|metric| metric.name == "golem.invocation.fuel_consumed")
+            .unwrap();
+        assert_eq!(
+            fuel.sum.as_ref().unwrap().data_points[0].as_int.as_deref(),
+            Some("43")
+        );
     }
 
     fn revert_original_start() -> OplogEntry {

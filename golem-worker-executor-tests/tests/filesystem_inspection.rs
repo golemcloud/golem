@@ -751,8 +751,8 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
+    use golem_common::model::InterruptKind;
     use golem_common::model::Timestamp;
-    use golem_service_base::error::worker_executor::InterruptKind;
     let id = "lifecycle-reads-use-common-scheduling";
     let vector = case(id);
     let context = TestContext::new(last_unique_id);

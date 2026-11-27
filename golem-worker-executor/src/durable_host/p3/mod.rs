@@ -42,10 +42,10 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::InterruptKind;
 use golem_common::model::RetryProperties;
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::oplog::{DeniablePair, DurableFunctionType};
-use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{HasData, Linker};
 
 use wasmtime_wasi::cli::{WasiCliCtxView, WasiCliView};

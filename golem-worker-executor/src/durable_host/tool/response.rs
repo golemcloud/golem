@@ -140,7 +140,17 @@ pub(super) fn decode_tool_terminal(
         SerializableToolOperationTerminal::from_value(value.value()).map_err(|error| {
             WorkerExecutorError::runtime(format!("invalid durable tool terminal: {error}"))
         })?;
-    match terminal.result {
+    let result = terminal
+        .result
+        .into_inline()
+        .map_err(WorkerExecutorError::runtime)?;
+    decode_tool_result(result)
+}
+
+pub(super) fn decode_tool_result(
+    result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
+) -> Result<ToolInvokeResponse, WorkerExecutorError> {
+    match result {
         Ok(result) => {
             let result = result
                 .result
@@ -293,7 +303,7 @@ pub(super) async fn encode_tool_operation_terminal(
     encode_tool_terminal(
         SerializableToolOperationTerminal {
             body_execution: SerializableEntityBodyExecution::Executed,
-            result,
+            result: result.into(),
             admission_refusal: None,
         },
         "failed to encode durable tool operation terminal",

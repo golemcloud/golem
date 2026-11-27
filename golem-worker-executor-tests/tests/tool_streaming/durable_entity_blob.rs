@@ -690,14 +690,26 @@ async fn capture_snapshot(
                     .await
                     .map_err(anyhow::Error::msg)?,
             ))),
-            OplogEntry::AgentInvocationFinished { result, .. } => {
-                Some(RecordedPayload::Result(Box::new(
-                    oplog
-                        .download_payload(result.clone())
-                        .await
-                        .map_err(anyhow::Error::msg)?,
-                )))
-            }
+            OplogEntry::AgentInvocationFinished {
+                invocation_id,
+                result,
+                ..
+            } => Some(RecordedPayload::Result(Box::new(
+                golem_worker_executor::services::oplog::resolve_finished_result(
+                    OplogIndex::from_u64(offset as u64 + 1),
+                    *invocation_id,
+                    result.clone(),
+                    |index| {
+                        let oplog = &oplog;
+                        async move { oplog.read(index).await.map_err(|error| error.to_string()) }
+                    },
+                    |payload| oplog.download_payload(payload),
+                    |payload| oplog.download_payload(payload),
+                    std::convert::identity,
+                )
+                .await
+                .map_err(anyhow::Error::msg)?,
+            ))),
             OplogEntry::Start {
                 request: Some(request),
                 ..

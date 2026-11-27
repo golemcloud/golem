@@ -29,6 +29,7 @@ use crate::worker::entity_invocation::{RetainedEntityStore, await_component_enti
 use crate::worker::entity_slot::{EntitySlot, EntitySlotRegistration};
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::InterruptKind;
 use golem_common::model::component::ComponentId;
 use golem_common::model::entity::{
     EntityActivation, EntityActivationPolicy, EntityInvocationId, EntityInvocationScope,
@@ -38,7 +39,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{SecretKeyScope, ToolFilesystemAccess};
 use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;

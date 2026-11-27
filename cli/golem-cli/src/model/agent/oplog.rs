@@ -461,6 +461,19 @@ impl TextOutput for PublicOplogEntry {
                     logln(format!("{pad}scope card:        {scope_card_id}"));
                 }
             }
+            PublicOplogEntry::AgentInvocationReturned(params) => {
+                logln(format_message_highlight("INVOKE RETURNED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id)
+                ));
+                logln(format!("{pad}output:"));
+                log_typed_schema_value(pad, &params.result);
+            }
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 let variant_label = match &params.result {
                     PublicAgentInvocationResult::AgentInitialization(_) => "initialization",

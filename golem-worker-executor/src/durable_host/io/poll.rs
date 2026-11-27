@@ -20,13 +20,13 @@ use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
 
 use futures::pin_mut;
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::pin::Pin;
 use tracing::debug;
 use wasmtime::component::{Accessor, Linker, Resource, ResourceType};

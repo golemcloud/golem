@@ -55,6 +55,13 @@ impl BaseAgent for MethodFailure {
         _context: InvocationContext,
     ) -> Result<AgentInvocationResult, AgentError> {
         let mut input = DirectAgentInput::new(input).map_err(custom_error)?;
+        if method_name == "fail_input" {
+            let stream = input.take::<AgentStream<u32>>().map_err(custom_error)?;
+            input.finish().map_err(custom_error)?;
+            drop(stream);
+            self.fail();
+            return Err(custom_error("method gave up with an input stream"));
+        }
         if method_name == "fail_after_http" || method_name == "fail_stream_after_http" {
             let url = input.take::<String>().map_err(custom_error)?;
             input.finish().map_err(custom_error)?;
@@ -160,6 +167,7 @@ golem_rust::ctor::__support::ctor_parse!(
                     },
                     methods: [
                         "fail",
+                        "fail_input",
                         "fail_after_http",
                         "fail_stream_after_http",
                         "value",
@@ -173,9 +181,14 @@ golem_rust::ctor::__support::ctor_parse!(
                         description: String::new(),
                         prompt_hint: None,
                         http_endpoint: vec![],
-                        input_schema: if name == "fail_after_http"
-                            || name == "fail_stream_after_http"
-                        {
+                        input_schema: if name == "fail_input" {
+                            vec![(
+                                "input".into(),
+                                EnrichedParameterSchema::Value(
+                                    <AgentStream<u32>>::get_type().get_schema_graph().unwrap(),
+                                ),
+                            )]
+                        } else if name == "fail_after_http" || name == "fail_stream_after_http" {
                             vec![(
                                 "url".into(),
                                 EnrichedParameterSchema::Value(

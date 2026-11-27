@@ -1607,7 +1607,9 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
             OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
                 invocation_id: idempotency_key,
-                result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+                result: golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+                    Box::new(AgentInvocationResult::AgentInitialization),
+                )),
                 method_name: None,
                 consumed_fuel: 0,
                 component_revision: ComponentRevision::INITIAL,
@@ -2398,7 +2400,9 @@ fn finished_invocation(key: &InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::now_utc(),
         invocation_id: *key,
-        result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+        result: golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+            Box::new(AgentInvocationResult::AgentInitialization),
+        )),
         method_name: None,
         consumed_fuel: 0,
         component_revision: ComponentRevision::INITIAL,
@@ -6043,7 +6047,9 @@ impl TestCaseBuilder {
             OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
                 invocation_id: idempotency_key,
-                result: OplogPayload::Inline(Box::new(result)),
+                result: golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+                    Box::new(result),
+                )),
                 method_name: None,
                 consumed_fuel: 0,
                 component_revision,
@@ -10720,6 +10726,7 @@ fn expect_started(
             ),
         },
         last_change: status.oplog_idx,
+        returned: None,
         last_change_at: timestamp,
     });
 }

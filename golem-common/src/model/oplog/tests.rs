@@ -276,9 +276,9 @@ fn log_trace_context_binary_and_raw_protobuf_roundtrip() {
 fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_payloads() {
     use crate::model::durable_stream::{
         LocalStreamId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
-        StreamRegistrationInvocation, StreamSessionFinishedRecord,
-        StreamSessionInvocationResultRecord, StreamSessionRecord, StreamTerminal,
-        StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
+        StreamRegistrationInvocation, StreamSessionFinishedRecord, StreamSessionRecord,
+        StreamSessionRemoteResultRecord, StreamTerminal, StreamTerminalAuthor,
+        StreamTerminalOrigin, StreamTerminalRecord,
     };
     use crate::model::oplog::PayloadId;
     use crate::model::oplog::raw_types::{
@@ -321,15 +321,14 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
     let failed_session = StreamSessionRecord::Finished(StreamSessionFinishedRecord {
         format_version: 1,
         session_key: session_key.clone(),
-        result: Err(vec![8]),
+        result: Err(crate::model::durable_stream::SessionFailure::Invocation),
     });
-    let session_result =
-        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
-            format_version: 1,
-            session_key: session_key.clone(),
-            result: vec![7],
-            stream_mappings: vec![],
-        });
+    let session_result = StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
+        format_version: 1,
+        session_key: session_key.clone(),
+        result: vec![7],
+        stream_mappings: vec![],
+    });
     let session_cancellation = StreamSessionRecord::CancelRequested(
         crate::model::durable_stream::StreamSessionCancelRequestedRecord {
             format_version: 1,
@@ -430,7 +429,7 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
             outcome: DurableStreamOutcome::Error
         })
     );
-    assert_eq!(summaries[7], Some(DurableStreamEventSummary::SessionResult));
+    assert_eq!(summaries[7], None);
     assert_eq!(
         summaries[8],
         Some(DurableStreamEventSummary::SessionCancellation)
@@ -470,6 +469,101 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
                 entry.clone().try_into().unwrap();
             assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
         }
+    }
+}
+
+#[test]
+fn session_failure_binary_schema_and_raw_public_protobuf_roundtrip() {
+    use crate::model::InterruptKind;
+    use crate::model::durable_stream::{
+        SessionFailure, StreamRegistrationInvocation, StreamSessionFinishedRecord,
+        StreamSessionRecord,
+    };
+    use crate::model::oplog::public_oplog_entry::StreamSessionParams;
+    use crate::model::oplog::raw_types::DurableStreamEventSummary;
+    use crate::schema::wit::{decode_typed, encode_typed};
+    use crate::schema::{FromSchema, IntoSchema};
+
+    let timestamp: Timestamp = "2026-11-26T19:23:41.123Z".parse().unwrap();
+    let causes = [
+        SessionFailure::Invocation,
+        SessionFailure::Interrupted(InterruptKind::Interrupt(timestamp)),
+        SessionFailure::Interrupted(InterruptKind::Restart),
+        SessionFailure::Interrupted(InterruptKind::Suspend(timestamp)),
+        SessionFailure::Interrupted(InterruptKind::Jump),
+        SessionFailure::Interrupted(InterruptKind::EntityCancellation),
+        SessionFailure::Interrupted(InterruptKind::ShardLost),
+        SessionFailure::Protocol("input 7 ended before item 19 — invalid frame".into()),
+    ];
+    // Invocation has no payload in the schema, unlike Protocol, whose text exists only here.
+    assert_eq!(
+        causes[0].to_value(),
+        SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: None,
+        })
+    );
+    let precise_timestamp = "2026-11-26T19:23:41.123456789Z".parse().unwrap();
+    for kind in [
+        InterruptKind::Interrupt(precise_timestamp),
+        InterruptKind::Suspend(precise_timestamp),
+    ] {
+        let original = SessionFailure::Interrupted(kind);
+        assert_eq!(
+            SessionFailure::from_value(&original.to_value()).unwrap(),
+            original
+        );
+    }
+    for cause in causes {
+        let record = StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+            format_version: 1,
+            session_key: StreamRegistrationInvocation::Local(crate::model::InvocationId::new()),
+            result: Err(cause),
+        });
+        let bytes = crate::serialization::serialize(&record).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<StreamSessionRecord>(&bytes).unwrap(),
+            record
+        );
+        let typed = record.clone().into_typed_schema_value().unwrap();
+        let wire = encode_typed(&typed).unwrap();
+        let decoded = decode_typed(&wire).unwrap();
+        assert_eq!(
+            StreamSessionRecord::from_value(decoded.value()).unwrap(),
+            record
+        );
+
+        let public = PublicOplogEntry::StreamSession(StreamSessionParams {
+            timestamp,
+            record: typed,
+        });
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            public.clone().try_into().unwrap();
+        assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+        let super::OplogEnrichmentEntry::Other(raw) =
+            super::OplogEnrichmentEntry::try_from(public).unwrap()
+        else {
+            panic!("expected a stream session record");
+        };
+        let expected = OplogEntry::StreamSession {
+            timestamp,
+            entity_parent_start_index: None,
+            record: OplogPayload::Inline(Box::new(record.clone())),
+            summary: DurableStreamEventSummary::session(&record),
+        };
+        assert_eq!(raw, expected);
+        let raw = OplogEntry::StreamSession {
+            timestamp,
+            entity_parent_start_index: None,
+            record: OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            },
+            summary: DurableStreamEventSummary::session(&record),
+        };
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            raw.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), raw);
     }
 }
 
@@ -906,6 +1000,7 @@ fn create_serialization_poem_serde_equivalence() {
         crate::model::agent::OwnerKind::ComponentAgent,
         crate::model::agent::OwnerKind::EphemeralExternalTool,
         crate::model::agent::OwnerKind::OplogProcessor,
+        crate::model::agent::OwnerKind::StandaloneTool,
     ] {
         let mut entry = entry.clone();
         let PublicOplogEntry::Create(parameters) = &mut entry else {
@@ -929,7 +1024,7 @@ fn create_serialization_poem_serde_equivalence() {
             unreachable!()
         };
         assert_eq!(create.owner_kind, i32::from(owner_kind));
-        create.owner_kind = 3;
+        create.owner_kind = i32::MAX;
         assert!(super::OplogEnrichmentEntry::try_from(proto).is_err());
     }
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
@@ -1088,7 +1183,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     unreachable!()
                 };
                 assert_eq!(create.owner_kind, i32::from(owner_kind));
-                create.owner_kind = 3;
+                create.owner_kind = i32::MAX;
                 assert!(OplogEntry::try_from(proto).is_err());
             }
             let Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::Create(create)) =
@@ -2352,22 +2447,40 @@ fn request_entries_keep_their_operation_outside_the_payload() {
 
 #[test]
 fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
-    use crate::model::oplog::AgentError;
+    use crate::model::oplog::{AgentError, FinishedResult, ReturnedValue};
 
     let finished = OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::from(1_000),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
-        result: OplogPayload::SerializedInline {
+        result: crate::model::oplog::FinishedResult::Payload(OplogPayload::SerializedInline {
             bytes: crate::serialization::serialize(
                 &crate::model::AgentInvocationResult::AgentInitialization,
             )
             .unwrap(),
             cached: None,
-        },
+        }),
         method_name: None,
         consumed_fuel: 7,
         component_revision: ComponentRevision::INITIAL,
         awaits_settlement: true,
+    };
+    let mut referring = finished.clone();
+    if let OplogEntry::AgentInvocationFinished { result, .. } = &mut referring {
+        *result = FinishedResult::Returned(OplogIndex::from_u64(19));
+    }
+    let returned = OplogEntry::AgentInvocationReturned {
+        timestamp: Timestamp::from(900),
+        invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
+        result: OplogPayload::SerializedInline {
+            bytes: crate::serialization::serialize(&ReturnedValue {
+                value: vec![1, 7, 42],
+                stream_bindings: vec![],
+            })
+            .unwrap(),
+            cached: None,
+        },
+        method_name: Some("stream-result".into()),
+        component_revision: ComponentRevision::INITIAL,
     };
     let invocation_error = OplogEntry::Error {
         timestamp: Timestamp::from(2_000),
@@ -2392,7 +2505,13 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         retrying_start_index: None,
     };
 
-    for entry in [finished, invocation_error, recovery_error] {
+    for entry in [
+        returned,
+        finished,
+        referring,
+        invocation_error,
+        recovery_error,
+    ] {
         let bytes = crate::serialization::serialize(&entry).unwrap();
         let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
         assert_eq!(decoded, entry);
@@ -2424,6 +2543,21 @@ fn raw_recovery_error_naming_an_invocation_is_rejected() {
 
 #[test]
 fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
+    use golem_schema::IntoTypedSchemaValue;
+    let returned = PublicOplogEntry::AgentInvocationReturned(
+        crate::model::oplog::public_oplog_entry::AgentInvocationReturnedParams {
+            timestamp: Timestamp::from(900),
+            invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
+            result: crate::model::oplog::ReturnedValue {
+                value: vec![1, 7, 42],
+                stream_bindings: vec![],
+            }
+            .into_typed_schema_value()
+            .unwrap(),
+            method_name: Some("stream-result".into()),
+            component_revision: ComponentRevision::INITIAL,
+        },
+    );
     let finished = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
@@ -2468,7 +2602,7 @@ fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
         retrying_start_index: None,
     });
 
-    for entry in [finished, invocation_error, recovery_error] {
+    for entry in [returned, finished, invocation_error, recovery_error] {
         let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
             entry.clone().try_into().unwrap();
         let decoded: PublicOplogEntry = proto.try_into().unwrap();

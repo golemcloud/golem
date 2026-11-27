@@ -115,6 +115,12 @@ pub struct OrderedOplogStart {
 }
 
 pub enum DurableStreamOplogRecord {
+    InvocationReturned {
+        invocation_id: golem_common::model::InvocationId,
+        value: golem_common::model::oplog::ReturnedValue,
+        method_name: Option<String>,
+        component_revision: golem_common::model::component::ComponentRevision,
+    },
     Registered(Option<OplogIndex>, Box<StreamRegisteredRecord>),
     Items(Option<OplogIndex>, StreamItemsRecord),
     Terminal(Option<OplogIndex>, StreamTerminalRecord),
@@ -125,6 +131,7 @@ pub enum DurableStreamOplogRecord {
 impl DurableStreamOplogRecord {
     pub(super) fn serialize(&self) -> Result<Vec<u8>, String> {
         match self {
+            Self::InvocationReturned { value, .. } => serialize(value),
             Self::Registered(_, record) => serialize(record),
             Self::Items(_, record) => serialize(record),
             Self::Terminal(_, record) => serialize(record),
@@ -135,6 +142,17 @@ impl DurableStreamOplogRecord {
 
     pub(super) fn into_entry(self, raw: RawOplogPayload) -> Result<OplogEntry, String> {
         match self {
+            Self::InvocationReturned {
+                invocation_id,
+                value,
+                method_name,
+                component_revision,
+            } => Ok(OplogEntry::agent_invocation_returned(
+                invocation_id,
+                raw.into_payload_with_cache(Arc::new(value))?,
+                method_name,
+                component_revision,
+            )),
             Self::Registered(entity_parent_start_index, record) => {
                 Ok(OplogEntry::stream_registered(
                     entity_parent_start_index,
@@ -172,6 +190,17 @@ impl DurableStreamOplogRecord {
 
     pub fn into_inline_entry(self) -> OplogEntry {
         match self {
+            Self::InvocationReturned {
+                invocation_id,
+                value,
+                method_name,
+                component_revision,
+            } => OplogEntry::agent_invocation_returned(
+                invocation_id,
+                OplogPayload::Inline(Box::new(value)),
+                method_name,
+                component_revision,
+            ),
             Self::Registered(entity_parent_start_index, record) => OplogEntry::stream_registered(
                 entity_parent_start_index,
                 OplogPayload::Inline(record),

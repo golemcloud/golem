@@ -20,9 +20,10 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{AgentError, ReplayDivergence};
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{AgentId, BackgroundFailure, OplogIndex, PromiseId, ShardId, Timestamp};
+use golem_common::model::{
+    AgentId, BackgroundFailure, InterruptKind, OplogIndex, PromiseId, ShardId, Timestamp,
+};
 use prost::Message;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -1592,40 +1593,6 @@ impl Display for GolemSpecificWasmTrap {
 }
 
 impl Error for GolemSpecificWasmTrap {}
-
-#[derive(
-    Debug, Copy, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec,
-)]
-pub enum InterruptKind {
-    Interrupt(Timestamp),
-    Restart,
-    Suspend(Timestamp),
-    Jump,
-    /// Cooperative cancellation of one transient entity body, not its owning agent.
-    EntityCancellation,
-    /// This executor no longer owns the agent's shard. Terminal here: the agent is stopped
-    /// without writing to its oplog or its status, dropped from the executor, and left for the
-    /// worker service to resume on the shard's owner. Never a restart in place - that would
-    /// reopen the oplog with the same stale epoch.
-    ShardLost,
-}
-
-impl Display for InterruptKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InterruptKind::Interrupt(_) => write!(f, "Interrupted via the Golem API"),
-            InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
-            InterruptKind::Suspend(_) => write!(f, "Suspended"),
-            InterruptKind::Jump => write!(f, "Jumping back in time"),
-            InterruptKind::EntityCancellation => write!(f, "Entity invocation cancelled"),
-            InterruptKind::ShardLost => {
-                write!(f, "This executor no longer owns the agent's shard")
-            }
-        }
-    }
-}
-
-impl Error for InterruptKind {}
 
 #[cfg(feature = "worker-executor")]
 mod service {

@@ -51,9 +51,7 @@ mod raw_imports {
 
     pub use crate::model::oplog::raw_types::*;
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
-    pub use crate::model::{
-        AgentInvocationResult, InvocationRequestOperation, StoredAgentInvocationPayload,
-    };
+    pub use crate::model::{InvocationRequestOperation, StoredAgentInvocationPayload};
     pub use crate::resource_runtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
@@ -218,6 +216,24 @@ oplog_entry! {
             wallet_pin: PublicInvocationWalletPin,
         }
     },
+    /// The export of a method whose result type contains streams returned, before its drain ended.
+    AgentInvocationReturned {
+        hint: true
+        wit_raw_type: "raw-agent-invocation-returned-parameters"
+        wit_public_type: "agent-invocation-returned-parameters"
+        raw {
+            invocation_id: InvocationId,
+            result: payload::OplogPayload<ReturnedValue>,
+            method_name: Option<String>,
+            component_revision: ComponentRevision,
+        }
+        public {
+            invocation_id: InvocationId,
+            result: TypedSchemaValue,
+            method_name: Option<String>,
+            component_revision: ComponentRevision,
+        }
+    },
     /// The agent has completed an invocation
     ///
     /// `awaits_settlement` is set when the result was recorded at the export's return: the
@@ -229,7 +245,7 @@ oplog_entry! {
         wit_public_type: "agent-invocation-finished-parameters"
         raw {
             invocation_id: InvocationId,
-            result: payload::OplogPayload<AgentInvocationResult>,
+            result: FinishedResult,
             method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,

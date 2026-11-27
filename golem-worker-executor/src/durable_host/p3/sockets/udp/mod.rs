@@ -26,6 +26,7 @@ use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
+use golem_common::model::InterruptKind;
 use golem_common::model::oplog::host_functions::{
     P3SocketsTypesUdpSocketBind, P3SocketsTypesUdpSocketConnect, P3SocketsTypesUdpSocketDisconnect,
     P3SocketsTypesUdpSocketReceive, P3SocketsTypesUdpSocketSend,
@@ -40,7 +41,6 @@ use golem_common::model::oplog::{
     HostResponseP3SocketsUdpConnect, HostResponseP3SocketsUdpDisconnect,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::future::Future;
 use wasmtime::component::{Accessor, Resource};
 use wasmtime_wasi::p3::bindings::sockets::types;

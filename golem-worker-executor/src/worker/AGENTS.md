@@ -27,7 +27,7 @@ rewinding a cursor.
   storage. Ephemeral agents use `CommitLevel::Deferred`: the ordered writer handoff and receipt
   precede notification, without waiting for storage or the queued status fold (bounded writer
   backpressure may still wait). Do not weaken `Always` elsewhere; `DurableOnly` remains a no-op
-  for ephemeral agents. A successful constructor and agent methods that use no streams record
+  for ephemeral agents. A successful constructor and agent methods whose declared result type contains no stream record
   their result at the export's return and notify waiters then; a constructor error drains first,
   within the invocation and tail-work time limits, and takes its fatal path. Tool children that already run, or need no admission,
   settle before the result is recorded, and their failure fails the invocation. The invocation's
@@ -41,8 +41,7 @@ rewinding a cursor.
   the loop commits a deferred `Settled` itself before other work, before it waits for a command
   or a permit, and when it exits (`commit_deferred_settlement`). The start of the next
   invocation (payload hydration, scope card, instance lock) runs with `Settled` buffered and the
-  status `Running`. Methods that use streams (stream
-  inputs or a stream result), snapshot save and load (including a manual update's),
+  status `Running`. Stream inputs do not delay the terminal: reads after the return are background work, and an input still open at the drain's end ends consumer-cancelled before `Settled`. Session completion waits for every input terminal, including forwarded inputs. Methods whose declared result type contains a stream, snapshot save and load (including a manual update's),
   oplog-processor batches and external-tool invocations keep the settled path: they settle their
   active durable-call work before their terminal (`tail_work.rs`) and write no `Settled`. A
   failure during the drain never replaces the recorded result: a trap reconstructs under the retry

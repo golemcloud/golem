@@ -1297,6 +1297,18 @@ impl Walker<'_, '_> {
                 .add("invocation", self.invocation(invocation))
                 .add("walletPin", self.tok(wallet_pin))
                 .build(),
+            PublicOplogEntry::AgentInvocationReturned(AgentInvocationReturnedParams {
+                timestamp: _,
+                invocation_id,
+                result,
+                method_name,
+                component_revision,
+            }) => Fields::new()
+                .add("invocationId", self.tok(invocation_id))
+                .add("result", self.customer(result))
+                .opt("methodName", method_name.as_ref().map(|m| text(m.clone())))
+                .add("componentRevision", number(component_revision.get()))
+                .build(),
             PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                 timestamp: _,
                 invocation_id,

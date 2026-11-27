@@ -36,7 +36,7 @@ use golem_common::model::durable_stream::{
 };
 use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{
-    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+    OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
@@ -74,6 +74,7 @@ mod gc_timed_cleanup;
 mod held_response_restart;
 mod hint_before_rpc_start;
 mod input_gc;
+mod invocation_result;
 mod kept_handle_deleting_child;
 mod replay_barrier_probe;
 mod websocket_crash_probe;
@@ -82,6 +83,10 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(
     #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_rust")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -4293,6 +4298,35 @@ async fn streaming_output_resume_restores_exact_cursors(
     }
     let gate = gate.ok_or_else(|| anyhow::anyhow!("streaming output omitted its promise gate"))?;
     if restart_executor {
+        let entries = executor.stored_oplog(&worker_agent_id.agent_id).await;
+        let returned = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                OplogEntry::AgentInvocationReturned {
+                    invocation_id,
+                    method_name: Some(method),
+                    ..
+                } if method == method_name => Some(*invocation_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            returned.len(),
+            1,
+            "the gated output has one authoritative early result"
+        );
+        assert!(!entries.iter().any(|entry| matches!(entry,
+            OplogEntry::AgentInvocationFinished { invocation_id, .. } if *invocation_id == returned[0]
+        )), "the early result must precede the terminal while outputs are open");
+        let public = executor
+            .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+            .await?;
+        assert!(!public.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::StreamSession(record)
+                if matches!(StreamSessionRecord::from_value(record.record.value()), Ok(StreamSessionRecord::RemoteResult(_)))
+        )), "the callee writes no session result copy");
+    }
+    if restart_executor {
         executor.shutdown_and_wait_for_invocation_loops().await?;
     }
     drop(requests);
@@ -4518,6 +4552,30 @@ async fn streaming_output_resume_restores_exact_cursors(
         "resume must deliver every exact sibling value once"
     );
     if restart_executor {
+        let entries = executor.stored_oplog(&worker_agent_id.agent_id).await;
+        let returned = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry {
+                OplogEntry::AgentInvocationReturned {
+                    invocation_id,
+                    method_name: Some(method),
+                    ..
+                } if method == method_name => {
+                    Some((OplogIndex::from_u64(index as u64 + 1), *invocation_id))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            returned.len(),
+            1,
+            "restart must not write another returned value"
+        );
+        assert_eq!(entries.iter().filter(|entry| matches!(entry,
+            OplogEntry::AgentInvocationFinished { invocation_id, result: golem_common::model::oplog::FinishedResult::Returned(index), .. }
+                if *invocation_id == returned[0].1 && *index == returned[0].0
+        )).count(), 1, "the terminal must refer to the original return");
         return Ok(());
     }
     let final_agent_id = OwnedAgentId::new(
@@ -5565,6 +5623,396 @@ async fn open_raw_session(
     };
     let accepted = await_session_readiness(&mut responses, None, accepted).await?;
     Ok((requests, responses, accepted))
+}
+
+#[test]
+#[timeout("3 minutes")]
+async fn session_failure_causes_survive_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::InterruptKind;
+    use golem_common::model::durable_stream::SessionFailure;
+    use golem_common::model::{NamedRetryPolicy, Predicate, RetryPolicy};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let server_attempts = attempts.clone();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        while let Ok((connection, _)) = listener.accept().await {
+            server_attempts.fetch_add(1, Ordering::SeqCst);
+            drop(connection);
+        }
+    }));
+
+    for cause in [
+        "invocation",
+        "interrupt",
+        "protocol",
+        "recovery-exit",
+        "method",
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let overrides = TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.max_in_function_retry_delay = Duration::from_millis(1);
+            })),
+            retry_policies: Some(vec![NamedRetryPolicy {
+                name: "session-failure".into(),
+                priority: 100,
+                predicate: Predicate::True,
+                policy: RetryPolicy::CountBox {
+                    max_retries: 2,
+                    inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(10))),
+                },
+            }]),
+            ..Default::default()
+        };
+        let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component = executor
+            .component_dep(
+                &context.default_environment_id,
+                if cause == "method" {
+                    agent_sdk_rust
+                } else {
+                    agent_rpc_rust
+                },
+            )
+            .store()
+            .await?;
+        let target = executor
+            .start_agent_with(
+                &component.id,
+                if cause == "method" {
+                    agent_key!("RustMethodFailure", cause)
+                } else {
+                    agent_key!("StreamingRpcTarget", cause)
+                },
+                std::collections::HashMap::from([(
+                    "SESSION_FAILURE_RETRY_PORT".into(),
+                    port.to_string(),
+                )]),
+                Vec::new(),
+            )
+            .await?;
+        let metadata = executor.get_worker_metadata(&target).await?;
+        let method = if cause == "method" {
+            "fail_input"
+        } else if cause == "recovery-exit" {
+            "exit_after_input"
+        } else if cause == "invocation" {
+            "fail_with_retries"
+        } else {
+            "consume"
+        };
+        let mut start = origin_observer_start(
+            &executor,
+            &component,
+            &target,
+            &target,
+            metadata.fingerprint.0,
+            &IdempotencyKey::fresh(),
+            method,
+        );
+        start.origin_invocation = None;
+        start.context = None;
+        start.caller = Some(callers::anonymous().into());
+        let mut failure_gate = matches!(cause, "invocation" | "interrupt")
+            .then(|| executor.gate_next_invocation_failure_return(&target.agent_id));
+        let (mut requests, mut responses, mut accepted) =
+            open_raw_session(&executor, start.clone()).await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if executor.get_oplog(&target, OplogIndex::INITIAL).await?.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation)
+                            if invocation.method_name == method))
+                }) {
+                    break Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await??;
+        let resume_request =
+            |accepted: &InvocationAccepted, operation: ResumeOperation| InvocationRequest {
+                request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+                    idempotency_key: accepted.idempotency_key,
+                    agent_id: crate::agent::start_target_id(&start),
+                    environment_id: start.environment_id,
+                    attachment_id: accepted.attachment_id,
+                    attempt_id: Some(uuid::Uuid::new_v4().into()),
+                    expected_callee_fingerprint: start.expected_callee_fingerprint,
+                    expected_epoch: accepted.epoch,
+                    operation: operation as i32,
+                    cursors: Vec::new(),
+                    auth_ctx: start.auth_ctx.clone(),
+                    caller: start.caller.clone(),
+                })),
+            };
+        match cause {
+            "invocation" => {} // The failed HTTP call exhausts its named retry policy.
+            "method" => {}     // The export returns a method failure, not a guest trap.
+            "interrupt" => {
+                executor
+                    .interrupt_loaded_worker(
+                        &target.agent_id,
+                        InterruptKind::Interrupt(golem_common::model::Timestamp::now_utc()),
+                    )
+                    .await?
+            }
+            "protocol" => {
+                requests
+                    .send(InvocationRequest {
+                        request: Some(invocation_request::Request::Start(start.clone())),
+                    })
+                    .await?
+            }
+            "recovery-exit" => {
+                drop(requests);
+                drop(responses);
+                drop(executor);
+                executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+                let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                executor.probe_next_instance_preparation(
+                    &target.agent_id,
+                    move |_| {
+                        Box::pin(async move {
+                            let _ = entered_tx.send(());
+                            let _ = release_rx.await;
+                            Ok(())
+                        })
+                    },
+                    |_| {
+                        Box::pin(async {
+                            panic!("recovery should give up, not finish preparation")
+                        })
+                    },
+                );
+                let (tx, receiver) = mpsc::channel(8);
+                tx.send(resume_request(&accepted, ResumeOperation::Takeover))
+                    .await?;
+                requests = tx;
+                responses = executor
+                    .client
+                    .clone()
+                    .invoke_agent_session(ReceiverStream::new(receiver))
+                    .await?
+                    .into_inner();
+                let first = responses.message().await?.expect("resumed acceptance");
+                let Some(invocation_response::Response::Accepted(resumed)) = first.response else {
+                    anyhow::bail!("expected resumed acceptance: {first:?}");
+                };
+                accepted = resumed;
+                let recovery_executor = executor.clone();
+                let recovery_target = target.clone();
+                let recovery =
+                    tokio::spawn(
+                        async move { recovery_executor.resume(&recovery_target, false).await },
+                    );
+                tokio::time::timeout(Duration::from_secs(10), entered_rx).await??;
+                requests
+                    .send(InvocationRequest {
+                        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                            transport_stream_id: 1,
+                            producer_sequence: 0,
+                            direction: StreamDirection::Input as i32,
+                            authored_by: StreamTerminalAuthor::Guest as i32,
+                            outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
+                            durable_stream_id: accepted.stream_mappings[0]
+                                .handle
+                                .as_ref()
+                                .unwrap()
+                                .stream_id,
+                            epoch: accepted.epoch,
+                            ..Default::default()
+                        })),
+                    })
+                    .await?;
+                let _ = release_tx.send(());
+                let _ = recovery.await?;
+            }
+            _ => unreachable!(),
+        }
+        let live_failure = loop {
+            let response = responses.message().await?.expect("session completion");
+            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+                let Some(invocation_session_completion::Outcome::Failure(failure)) =
+                    finished.outcome
+                else {
+                    anyhow::bail!("expected {cause} failure: {finished:?}");
+                };
+                break failure;
+            }
+        };
+        if cause == "method" {
+            executor
+                .wait_for_status(&target, AgentStatus::Idle, Duration::from_secs(30))
+                .await?;
+            assert!(
+                executor
+                    .stored_oplog(&target.agent_id)
+                    .await
+                    .iter()
+                    .any(|entry| matches!(
+                        entry,
+                        OplogEntry::AgentInvocationFailed {
+                            awaits_settlement: true,
+                            ..
+                        }
+                    ))
+            );
+        }
+        let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        if let Some((entered, _)) = &mut failure_gate {
+            let details = tokio::time::timeout(Duration::from_secs(10), entered).await??;
+            if cause == "interrupt" {
+                assert_eq!(
+                    live_failure.message,
+                    "Runtime error: Interrupted via the Golem API"
+                );
+            }
+            assert!(
+                selected_stream_terminals(&oplog)
+                    .iter()
+                    .any(|record| record.terminal
+                        == StreamTerminal::Failed(StreamError::Trapped(details.clone()))),
+                "{cause}: the stream-terminal message changed from {details:?}"
+            );
+        }
+        let finished = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StreamSession(session) => {
+                    match StreamSessionRecord::from_value(session.record.value()).unwrap() {
+                        StreamSessionRecord::Finished(record) => Some(record.result),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(finished.len(), 1, "{cause}");
+        match (cause, &finished[0]) {
+            ("method", Err(SessionFailure::Invocation)) => {
+                assert!(
+                    live_failure
+                        .message
+                        .contains("method gave up with an input stream"),
+                    "{live_failure:?}"
+                );
+                assert_eq!(
+                    oplog
+                        .iter()
+                        .filter(|entry| matches!(
+                            entry.entry,
+                            PublicOplogEntry::AgentInvocationFailed(_)
+                        ))
+                        .count(),
+                    1
+                );
+                assert!(oplog.iter().any(|entry| matches!(
+                    entry.entry,
+                    PublicOplogEntry::AgentInvocationSettled(_)
+                )));
+                assert!(
+                    !oplog
+                        .iter()
+                        .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                );
+            }
+            ("invocation", Err(SessionFailure::Invocation)) => {
+                assert!(
+                    oplog
+                        .iter()
+                        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                        .count()
+                        >= 2,
+                    "the retry policy did not exhaust its attempts"
+                );
+                assert!(
+                    attempts.load(Ordering::SeqCst) >= 2,
+                    "the HTTP call was not retried"
+                );
+                assert!(
+                    live_failure
+                        .message
+                        .contains("session failure after exhausted HTTP retry policy"),
+                    "{live_failure:?}"
+                );
+            }
+            ("interrupt", Err(SessionFailure::Interrupted(InterruptKind::Interrupt(_)))) => {}
+            ("recovery-exit", Err(SessionFailure::Invocation)) => {
+                assert!(
+                    oplog
+                        .iter()
+                        .any(|entry| matches!(entry.entry, PublicOplogEntry::Exited(_)))
+                );
+                assert!(live_failure.message.contains("exited"), "{live_failure:?}");
+            }
+            ("protocol", Err(SessionFailure::Protocol(message))) => {
+                assert_eq!(
+                    message,
+                    "invocation start or resume-attach may only appear as the first request"
+                );
+                assert_eq!(message, &live_failure.message);
+            }
+            _ => anyhow::bail!("wrong persisted {cause} cause: {finished:?}"),
+        }
+        // The start observer has sent its failure while the loop is still held after the callback.
+        // Its fallback write must not replace the cause or the caller's stream-terminal message.
+        if let Some((_, release)) = failure_gate.take() {
+            let _ = release.send(());
+        }
+        let expected_message = match &finished[0] {
+            Err(SessionFailure::Invocation) if cause == "recovery-exit" => {
+                "Runtime error: Process exited".to_string()
+            }
+            Err(SessionFailure::Invocation) => live_failure.message,
+            Err(SessionFailure::Interrupted(kind)) => kind.to_string(),
+            Err(SessionFailure::Protocol(message)) => message.clone(),
+            Ok(()) => unreachable!(),
+        };
+        drop(requests);
+        drop(responses);
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let (requests, receiver) = mpsc::channel(1);
+        requests
+            .send(resume_request(&accepted, ResumeOperation::Resume))
+            .await?;
+        let mut responses = executor
+            .client
+            .clone()
+            .invoke_agent_session(ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        loop {
+            let response = responses.message().await?.expect("resumed completion");
+            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+                let Some(invocation_session_completion::Outcome::Failure(failure)) =
+                    finished.outcome
+                else {
+                    anyhow::bail!("expected resumed {cause} failure: {finished:?}");
+                };
+                assert_eq!(failure.message, expected_message, "{cause}");
+                assert_eq!(
+                    failure.kind,
+                    if cause == "protocol" {
+                        InvocationFailureKind::Protocol
+                    } else {
+                        InvocationFailureKind::Execution
+                    } as i32
+                );
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -7185,7 +7633,7 @@ fn input_observations(
         {
             StreamSessionRecord::Prepared(record) => record.stream_mappings,
             StreamSessionRecord::Mapping(record) => vec![record.mapping],
-            StreamSessionRecord::InvocationResult(record) => record.stream_mappings,
+            StreamSessionRecord::RemoteResult(record) => record.stream_mappings,
             StreamSessionRecord::ConsumerItemValue(record) => record.recursive_mappings,
             _ => anyhow::bail!("consumer reader entry has no binding table"),
         };
@@ -12257,6 +12705,159 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
         )), "recovery must close the embedded invocation span at {checkpoint:?}");
     }
 
+    Ok(())
+}
+
+#[test]
+#[timeout("4 minutes")]
+async fn rpc_result_journal_survives_a_crash_before_the_referring_terminal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::HostResponse;
+    use golem_common::model::oplog::payload::types::RecordedRpcResult;
+
+    for synchronous in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let key = agent_key!(
+            "StreamingRpcCaller",
+            format!("result-journal-{synchronous}")
+        );
+        let caller = executor.start_agent(&component.id, key.clone()).await?;
+        let invocation_key = IdempotencyKey::fresh();
+        let mut gate = executor
+            .gate_next_rpc_commit(&caller.agent_id, RpcCheckpoint::ResultJournal)
+            .await;
+        let invocation = tokio::spawn({
+            let executor = executor.clone();
+            let component = component.clone();
+            let key = key.clone();
+            let invocation_key = invocation_key.clone();
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &key,
+                        &invocation_key,
+                        "streaming_increment",
+                        data_value!(synchronous),
+                    )
+                    .await
+            }
+        });
+        gate.committed().await;
+        let before = executor.stored_oplog(&caller.agent_id).await;
+        let mut journals = Vec::new();
+        for (offset, entry) in before.iter().enumerate() {
+            if let OplogEntry::StreamSession { record, .. } = entry
+                && let StreamSessionRecord::RemoteResult(result) = executor
+                    .stored_payload(&caller.agent_id, record.clone())
+                    .await?
+            {
+                journals.push((OplogIndex::from_u64(offset as u64 + 1), result));
+            }
+        }
+        assert_eq!(journals.len(), 1);
+        assert_eq!(journals[0].1.stream_mappings.len(), 1);
+        assert!(!invocation.is_finished());
+        // The committed prefix contains the journal, not a duplicate host-call value.
+        for entry in &before {
+            if let OplogEntry::End {
+                response: Some(response),
+                ..
+            } = entry
+            {
+                assert!(!matches!(
+                    executor
+                        .stored_payload(&caller.agent_id, response.clone())
+                        .await?,
+                    HostResponse::GolemRpcInvokeAndAwait(_)
+                ));
+            }
+        }
+        gate.abort_return();
+        invocation.abort();
+        let _ = invocation.await;
+        drop(gate);
+        drop(executor);
+        let executor = start(deps, &context).await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &key,
+                    &invocation_key,
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            vec![1]
+        );
+        let after = executor.stored_oplog(&caller.agent_id).await;
+        let mut recovered_journals = Vec::new();
+        let mut responses = Vec::new();
+        for (offset, entry) in after.iter().enumerate() {
+            match entry {
+                OplogEntry::StreamSession { record, .. } => {
+                    if let StreamSessionRecord::RemoteResult(result) = executor
+                        .stored_payload(&caller.agent_id, record.clone())
+                        .await?
+                    {
+                        recovered_journals.push((OplogIndex::from_u64(offset as u64 + 1), result));
+                    }
+                }
+                OplogEntry::End {
+                    response: Some(response),
+                    ..
+                } => {
+                    if let HostResponse::GolemRpcInvokeAndAwait(result) = executor
+                        .stored_payload(&caller.agent_id, response.clone())
+                        .await?
+                    {
+                        responses.push(result.result);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            recovered_journals, journals,
+            "replay must retain the value and mappings"
+        );
+        let [RecordedRpcResult::Remote(reference)] = responses.as_slice() else {
+            anyhow::bail!("expected one reference-only response: {responses:?}");
+        };
+        assert_eq!(reference.index, journals[0].0);
+        assert_eq!(reference.session_key, journals[0].1.session_key);
+        let public = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        let rpc_starts = public.iter().filter_map(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Start(start) if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await"
+        ).then_some(entry.oplog_index)).collect::<Vec<_>>();
+        assert!(public.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::End(end) if rpc_starts.contains(&end.start_index)
+        )));
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &key,
+                    "streaming_increment",
+                    data_value!(synchronous),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            vec![2],
+            "the target executes exactly once"
+        );
+    }
     Ok(())
 }
 

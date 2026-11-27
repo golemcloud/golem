@@ -19,11 +19,10 @@ use crate::preview2::golem::durability::durability;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::InterruptKind;
 use golem_common::model::oplog::{DurableFunctionType, HostResponse};
 use golem_common::model::{RetryProperties, Timestamp};
-use golem_service_base::error::worker_executor::{
-    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
-};
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use std::future::Future;
 use std::pin::Pin;
 

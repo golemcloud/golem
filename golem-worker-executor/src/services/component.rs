@@ -527,7 +527,7 @@ pub(crate) fn component_support_error(metadata: &ComponentMetadata) -> Option<&'
 pub(crate) fn compilation_join_error(error: tokio::task::JoinError) -> WorkerExecutorError {
     if error.is_cancelled() {
         WorkerExecutorError::Interrupted {
-            kind: golem_service_base::error::worker_executor::InterruptKind::Restart,
+            kind: golem_common::model::InterruptKind::Restart,
         }
     } else {
         WorkerExecutorError::runtime(format!("Component compilation task failed: {error}"))

@@ -31,6 +31,7 @@ use crate::durable_host::tail_work::TailActivity;
 use crate::services::oplog::{Oplog, OplogError, OplogFence, OplogOps};
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
+use golem_common::model::InterruptKind;
 use golem_common::model::oplog::host_functions::P3HttpClientRequestBodyTransmission;
 use golem_common::model::oplog::payload::types::{
     SerializableHttpErrorCode, SerializableP3HttpRequestBodyFrame,
@@ -40,7 +41,6 @@ use golem_common::model::oplog::{
     HostResponseP3HttpClientRequestBodyTransmission, HostStreamKind, OplogEntry, OplogIndex,
 };
 use golem_common::serialization::serialize;
-use golem_service_base::error::worker_executor::InterruptKind;
 use http::HeaderMap;
 use http_body::Body as HttpBody;
 use http_body::Frame;

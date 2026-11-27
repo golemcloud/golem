@@ -21,10 +21,10 @@ use crate::durable_host::stream_bus::{
 use crate::worker::suspension::{ExternalActivity, RuntimeSource};
 use crate::workerctx::WorkerCtx;
 use golem_common::base_model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
+use golem_common::model::InterruptKind;
 use golem_schema::schema::wit::wire::{SchemaValueTree, StreamOutcome};
 use golem_schema::schema::wit::{decode_value_with, encode_value_with_streams};
 use golem_schema::schema::{SchemaValue, SchemaValueStream};
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1164,9 +1164,8 @@ mod tests {
         let (_publisher, endpoint) = relay_stream_pair(1).unwrap();
         let lifecycle = endpoint.lifecycle();
         let (stop, signal) = tokio::sync::oneshot::channel();
-        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-            golem_common::model::Timestamp::now_utc(),
-        );
+        let kind =
+            golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         let mut receive = Box::pin(receive_input_event(
             endpoint.activate(),
             lifecycle.cancelled.clone(),
@@ -1201,9 +1200,8 @@ mod tests {
             publisher.publish_item(SchemaValue::U8(22)).await
         }));
         let (stop, signal) = tokio::sync::oneshot::channel();
-        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-            golem_common::model::Timestamp::now_utc(),
-        );
+        let kind =
+            golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         consumer.interrupt = Box::pin(async move { signal.await.unwrap() });
         let mut cx = Context::from_waker(futures::task::noop_waker_ref());
         assert!(consumer.poll_pending(&mut cx).is_pending());
@@ -1216,7 +1214,7 @@ mod tests {
         .expect("bounded publication observation must stop")
         .unwrap_err();
         assert_eq!(
-            error.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>(),
+            error.downcast_ref::<golem_common::model::InterruptKind>(),
             Some(&kind)
         );
         assert!(consumer.pending.is_some());

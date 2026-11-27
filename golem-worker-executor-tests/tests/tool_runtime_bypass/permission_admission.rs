@@ -26,6 +26,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 
+use golem_common::model::InterruptKind;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_component_metadata;
@@ -56,7 +57,7 @@ use golem_common::model::{
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::serialization::deserialize;
 use golem_common::{agent_key, data_value};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::card::{CardService, CardState, RuntimeCardCreation};

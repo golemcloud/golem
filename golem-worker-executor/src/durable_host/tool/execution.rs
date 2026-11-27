@@ -870,7 +870,8 @@ mod finalization_tests {
                 body_execution: SerializableEntityBodyExecution::Executed,
                 result: Err(SerializableToolRpcError::RemoteInternalError(
                     "chosen result".into(),
-                )),
+                ))
+                .into(),
             });
             if cancelled {
                 assert!(operation.begin_cancel());
@@ -978,7 +979,7 @@ mod finalization_tests {
                         Arc::new(SerializableToolOperationTerminal {
                             admission_refusal: None,
                             body_execution: SerializableEntityBodyExecution::Executed,
-                            result: Err(SerializableToolRpcError::Cancelled),
+                            result: Err(SerializableToolRpcError::Cancelled).into(),
                         }),
                         operation::TerminalResolution::Committed,
                     )

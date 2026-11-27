@@ -96,6 +96,9 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         val reqCount = p.request.size
         s"EXPORT @ $ts func=${p.functionName} params=$reqCount inv=${p.invocationId}"
 
+      case OplogApi.OplogEntry.AgentInvocationReturned(p) =>
+        s"RETURNED @ $ts inv=${p.invocationId} result=${summarizeTyped(p.result)}"
+
       case OplogApi.OplogEntry.AgentInvocationFinished(p) =>
         val resp = p.response.map(summarizeTyped).getOrElse("void")
         s"COMPLETED @ $ts response=$resp fuel=${p.consumedFuel}"

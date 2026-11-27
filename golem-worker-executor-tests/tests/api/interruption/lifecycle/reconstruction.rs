@@ -3,8 +3,8 @@ use super::*;
 mod completed_history {
     use super::*;
     use anyhow::Context as _;
+    use golem_common::model::InterruptKind;
     use golem_common::model::oplog::OplogEntry;
-    use golem_service_base::error::worker_executor::InterruptKind;
     use golem_worker_executor::services::HasOplog;
     use pretty_assertions::assert_eq;
     use test_r::test;
@@ -342,8 +342,8 @@ mod post_export {
 
     use super::*;
     use anyhow::Context as _;
+    use golem_common::model::InterruptKind;
     use golem_common::model::oplog::OplogEntry;
-    use golem_service_base::error::worker_executor::InterruptKind;
     use golem_worker_executor::services::HasOplog;
     use golem_worker_executor::services::oplog::CommitLevel;
     use golem_worker_executor::worker::Worker;

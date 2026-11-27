@@ -48,6 +48,7 @@ use crate::wasi_filesystem::{
 };
 use crate::workerctx::WorkerCtx;
 use bytes::{Bytes, BytesMut};
+use golem_common::model::InterruptKind;
 use golem_common::model::card::{FilesystemVerb, PermissionTarget};
 use golem_common::model::entity::FilesystemCapability;
 use golem_common::model::oplog::host_functions::{
@@ -61,7 +62,6 @@ use golem_common::model::oplog::{
     HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
     HostResponsePermissionCheck,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{
     Access, Accessor, Destination, FutureReader, Linker, Resource, Source, StreamConsumer,
     StreamProducer, StreamReader, StreamResult,

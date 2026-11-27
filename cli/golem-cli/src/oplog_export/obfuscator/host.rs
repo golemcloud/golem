@@ -25,12 +25,13 @@ use super::value::{
 use crate::oplog_export::model::{HostPayloadDirection, ReportField, ReportNode, TupleNode};
 use golem_common::model::AgentFingerprint;
 use golem_common::model::oplog::host_functions::{self, HostFunctionName};
+use golem_common::model::oplog::payload::types::PublicRpcResponse;
 use golem_common::model::oplog::{
     HostPayloadPair, HostRequestGolemAgentGetConfigValue, HostRequestGolemApiForkAgent,
     HostRequestGolemRpcBindSelf, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
     HostRequestRandomBytes, HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
     HostResponseGolemApiPromiseId, HostResponseGolemRpcCreate, HostResponseGolemRpcCreated,
-    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcPrepareInvocation,
+    HostResponseGolemRpcPrepareInvocation,
 };
 use golem_common::schema::{
     FromSchema, IntoSchema, SchemaGraph, SchemaType, SchemaValue, TypeId, TypedSchemaValue,
@@ -70,7 +71,13 @@ where
         .then(|| try_into_schema_graph::<P::Req>().ok())
         .flatten();
     let response = matches!(bare, Bare::Neither | Bare::Request)
-        .then(|| try_into_schema_graph::<P::Resp>().ok())
+        .then(|| {
+            if P::Resp::type_id() == PublicRpcResponse::type_id() {
+                try_into_schema_graph::<PublicRpcResponse>().ok()
+            } else {
+                try_into_schema_graph::<P::Resp>().ok()
+            }
+        })
         .flatten();
     Some(PairGraphs { request, response })
 }
@@ -775,7 +782,7 @@ static RULE_IDS: LazyLock<RuleIds> = LazyLock::new(|| RuleIds {
     config_value: <HostRequestGolemAgentGetConfigValue as IntoSchema>::type_id(),
     fork_agent: <HostRequestGolemApiForkAgent as IntoSchema>::type_id(),
     random_bytes: <HostRequestRandomBytes as IntoSchema>::type_id(),
-    invoke_and_await: <HostResponseGolemRpcInvokeAndAwait as IntoSchema>::type_id(),
+    invoke_and_await: <PublicRpcResponse as IntoSchema>::type_id(),
     agent_types: <HostResponseGolemAgentAgentTypes as IntoSchema>::type_id(),
     agent_type: <HostResponseGolemAgentAgentType as IntoSchema>::type_id(),
     created_promise: <HostResponseGolemApiPromiseId as IntoSchema>::type_id(),

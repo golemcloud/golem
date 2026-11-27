@@ -42,6 +42,7 @@ pub mod environment_tool_middleware_grant;
 pub mod error;
 pub mod external_agent_secret;
 pub mod http_api_deployment;
+pub mod interrupt;
 pub mod invocation_context;
 pub mod invocation_id;
 pub mod json;
@@ -70,6 +71,7 @@ pub mod worker;
 pub mod worker_filter;
 
 pub use durable_stream::*;
+pub use interrupt::InterruptKind;
 pub use invocation_id::{
     IdempotencyScope, InvocationOwner, InvocationRequestKey, OwnedInvocationId,
     StandaloneToolInvocation,
@@ -112,6 +114,32 @@ impl FromStr for Timestamp {
             Some(ts) => Ok(Self(ts)),
             None => Err("Invalid timestamp".to_string()),
         }
+    }
+}
+
+impl golem_schema::schema::IntoSchema for Timestamp {
+    fn type_id() -> golem_schema::schema::TypeId {
+        golem_schema::schema::TypeId::new("golem_common.base_model.Timestamp")
+    }
+
+    fn register_in(
+        builder: &mut golem_schema::schema::SchemaBuilder,
+    ) -> golem_schema::schema::SchemaType {
+        <String as golem_schema::schema::IntoSchema>::register_in(builder)
+    }
+
+    fn to_value(&self) -> golem_schema::schema::SchemaValue {
+        golem_schema::schema::IntoSchema::to_value(&self.0.format_nanoseconds().to_string())
+    }
+}
+
+impl golem_schema::schema::FromSchema for Timestamp {
+    fn from_value(
+        value: &golem_schema::schema::SchemaValue,
+    ) -> Result<Self, golem_schema::schema::FromSchemaError> {
+        <String as golem_schema::schema::FromSchema>::from_value(value)?
+            .parse()
+            .map_err(golem_schema::schema::FromSchemaError::custom)
     }
 }
 

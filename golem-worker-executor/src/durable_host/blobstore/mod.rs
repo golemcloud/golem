@@ -601,11 +601,9 @@ pub(crate) enum BlobProviderOperation {
 
 pub(crate) async fn await_blob_provider<T>(
     operation: BlobProviderOperation,
-    interrupt: impl std::future::Future<
-        Output = golem_service_base::error::worker_executor::InterruptKind,
-    >,
+    interrupt: impl std::future::Future<Output = golem_common::model::InterruptKind>,
     provider: impl std::future::Future<Output = T>,
-) -> Result<T, golem_service_base::error::worker_executor::InterruptKind> {
+) -> Result<T, golem_common::model::InterruptKind> {
     match operation {
         // The host call retains mutation work, its lock and quota settlement, and then
         // completes its durable response before guest execution observes interruption.
@@ -622,7 +620,7 @@ mod tests {
         BlobProviderOperation, BlobStoreError, HostFailureKind, await_blob_provider,
         classify_blob_store_error,
     };
-    use golem_service_base::error::worker_executor::InterruptKind;
+    use golem_common::model::InterruptKind;
     use test_r::test;
 
     #[test]

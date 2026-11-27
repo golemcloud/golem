@@ -26,6 +26,7 @@ use crate::preview2::golem::tool::host::{
 use crate::services::oplog::OplogOps;
 use crate::services::{HasActiveAgents, HasWorker};
 use crate::workerctx::{ReplayAdmissionStage, WorkerCtx};
+use golem_common::model::InterruptKind;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::attachment as model;
 use golem_common::model::oplog::payload::tool_attachment::{
@@ -35,7 +36,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestToolAttachmentWrite, HostResponseToolAttachmentWrite,
     OplogEntry,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
 use std::pin::Pin;
 use wasmtime::component::{Accessor, HasData, HasSelf};

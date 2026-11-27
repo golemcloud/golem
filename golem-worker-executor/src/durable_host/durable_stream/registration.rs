@@ -14,12 +14,16 @@
 
 use super::index::registration_coordinate_depth;
 use super::*;
+use golem_common::model::InvocationId;
+use golem_common::model::durable_stream::StreamSessionRemoteResultRecord;
+use golem_common::model::oplog::ReturnedValue;
 
 #[derive(Debug, PartialEq)]
-/// Durable handles and the session record produced while materializing result streams.
+/// Durable handles and the invocation return produced while materializing result streams.
 pub struct ResultStreamRegistration {
     pub handles: Vec<DurableStreamHandle>,
-    pub session_record: StreamSessionRecord,
+    pub returned_value: ReturnedValue,
+    pub oplog_index: OplogIndex,
 }
 
 impl DurableStreamStore {
@@ -223,6 +227,41 @@ impl DurableStreamStore {
                         result,
                         outputs,
                         entity_parent_start_index,
+                        None,
+                    )
+                    .await
+            },
+        )
+        .await
+    }
+
+    pub async fn register_invocation_return(
+        &self,
+        context: Option<&StreamWriteContext>,
+        session_key: StreamSessionKey,
+        result: Vec<u8>,
+        outputs: Vec<ProducerOutputRegistration>,
+        entity_parent_start_index: Option<OplogIndex>,
+        method_name: Option<String>,
+        component_revision: golem_common::model::component::ComponentRevision,
+    ) -> Result<ResultStreamRegistration, StreamStoreError> {
+        if entity_parent_start_index.is_some() {
+            return Err(StreamStoreError::CorruptHistory(
+                "an agent invocation return cannot have entity attribution".into(),
+            ));
+        }
+        self.run_owned(
+            context,
+            result.len() * 2,
+            move |owner, context| async move {
+                owner
+                    .register_result_streams_owned(
+                        &context,
+                        session_key,
+                        result,
+                        outputs,
+                        entity_parent_start_index,
+                        Some((method_name, component_revision)),
                     )
                     .await
             },
@@ -237,6 +276,10 @@ impl DurableStreamStore {
         result: Vec<u8>,
         outputs: Vec<ProducerOutputRegistration>,
         entity_parent_start_index: Option<OplogIndex>,
+        invocation: Option<(
+            Option<String>,
+            golem_common::model::component::ComponentRevision,
+        )>,
     ) -> Result<ResultStreamRegistration, StreamStoreError> {
         let mut keys = vec![ProducerMetadataKey::Session(session_key.clone())];
         for output in &outputs {
@@ -256,6 +299,15 @@ impl DurableStreamStore {
             }
         }
         let mut index = self.index_for(keys).await?;
+        if invocation.is_some()
+            && index
+                .session_entity_parent_start_index(&session_key)
+                .is_some()
+        {
+            return Err(StreamStoreError::CorruptHistory(
+                "an agent invocation return cannot have entity attribution".into(),
+            ));
+        }
         let invalid_existing_handle = outputs.iter().any(|output| {
             matches!(&output.source, ProducerOutputSource::Existing(handle) | ProducerOutputSource::Registered(handle, _)
                 if self.owns_handle_identity(handle)
@@ -311,14 +363,10 @@ impl DurableStreamStore {
                         }
                     })
                     .collect::<Vec<_>>();
-                StreamSessionRecord::InvocationResult(
-                    golem_common::base_model::durable_stream::StreamSessionInvocationResultRecord {
-                        format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        session_key: result_session_reference,
-                        result,
-                        stream_mappings,
-                    },
-                )
+                ReturnedValue {
+                    value: result,
+                    stream_bindings: stream_mappings,
+                }
             };
         index.ensure_producer_write_allowed()?;
         if requests.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
@@ -336,23 +384,20 @@ impl DurableStreamStore {
             && let Some(result_offset) = result_offset
         {
             let expected = make_result(outputs, Vec::new());
-            let StreamSessionRecord::InvocationResult(_) = &expected else {
-                return Err(StreamStoreError::CorruptHistory(
-                    "empty result registration did not build an invocation-result record"
-                        .to_string(),
-                ));
-            };
-            if !expected.has_supported_format() {
-                return Err(StreamStoreError::CorruptHistory(
-                    "result registration built a malformed invocation-result record".to_string(),
-                ));
-            }
             drop(index);
-            let record = self.read_session_record(result_offset).await?;
+            let record = self
+                .validate_result_registration(
+                    result_offset,
+                    result_session_key.idempotency_key,
+                    &expected,
+                    &invocation,
+                )
+                .await?;
             return if record == expected {
                 Ok(ResultStreamRegistration {
                     handles: Vec::new(),
-                    session_record: record,
+                    returned_value: record,
+                    oplog_index: result_offset,
                 })
             } else {
                 Err(StreamStoreError::RegistrationDivergence)
@@ -390,7 +435,14 @@ impl DurableStreamStore {
                     .collect();
                 let expected = make_result(outputs, sources);
                 drop(index);
-                let record = self.read_session_record(offset).await?;
+                let record = self
+                    .validate_result_registration(
+                        offset,
+                        result_session_key.idempotency_key,
+                        &expected,
+                        &invocation,
+                    )
+                    .await?;
                 if record == expected {
                     crate::metrics::durable_stream::record_producer_operation(
                         "register_result",
@@ -398,7 +450,8 @@ impl DurableStreamStore {
                     );
                     return Ok(ResultStreamRegistration {
                         handles,
-                        session_record: record,
+                        returned_value: record,
+                        oplog_index: offset,
                     });
                 }
                 return Err(StreamStoreError::RegistrationDivergence);
@@ -553,7 +606,7 @@ impl DurableStreamStore {
                         Box::new(record),
                     ));
                 }
-                let session_record = make_result(
+                let returned_value = make_result(
                     outputs,
                     handles
                         .iter()
@@ -566,23 +619,17 @@ impl DurableStreamStore {
                         })
                         .collect(),
                 );
-                if !session_record.has_supported_format() {
-                    return Vec::new();
-                }
-                let StreamSessionRecord::InvocationResult(invocation_result) = &session_record else {
-                    unreachable!("result builder returns an invocation result");
-                };
                 let mut cancelled = HashSet::new();
                 for (position, epoch, terminal, applied_locally) in cancellations {
-                    let source = invocation_result.stream_mappings[position].source.clone();
+                    let source = returned_value.stream_bindings[position].source.clone();
                     if !cancelled.insert(source.clone()) { continue; }
                     result.push(DurableStreamOplogRecord::Session(
                         entity_parent_start_index,
                         Box::new(StreamSessionRecord::ConsumerCancelIntent(
                             golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecord {
                                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                session_key: invocation_result.session_key.clone(),
-                                consumer_invocation: *invocation_result.session_key.idempotency_key(),
+                                session_key: result_session_reference.clone(),
+                                consumer_invocation: *result_session_reference.idempotency_key(),
                                 source: source.clone(),
                                 epoch,
                                 cancellation: StreamCancellationRequest {
@@ -617,8 +664,8 @@ impl DurableStreamStore {
                                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                                     intent: golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecord {
                                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                        session_key: invocation_result.session_key.clone(),
-                                        consumer_invocation: *invocation_result.session_key.idempotency_key(),
+                                        session_key: result_session_reference.clone(),
+                                        consumer_invocation: *result_session_reference.idempotency_key(),
                                         source,
                                         epoch,
                                         cancellation: StreamCancellationRequest {
@@ -633,10 +680,23 @@ impl DurableStreamStore {
                         ));
                     }
                 }
-                result.push(DurableStreamOplogRecord::Session(
-                    entity_parent_start_index,
-                    Box::new(session_record),
-                ));
+                result.push(match invocation {
+                    Some((method_name, component_revision)) => DurableStreamOplogRecord::InvocationReturned {
+                        invocation_id: *result_session_reference.idempotency_key(),
+                        value: returned_value,
+                        method_name,
+                        component_revision,
+                    },
+                    None => DurableStreamOplogRecord::Session(
+                        entity_parent_start_index,
+                        Box::new(StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: result_session_reference,
+                            result: returned_value.value,
+                            stream_mappings: returned_value.stream_bindings,
+                        })),
+                    ),
+                });
                 result
             }))
             .await
@@ -645,7 +705,7 @@ impl DurableStreamStore {
 
         let registered_count = registered_handles.len();
         let mut handles = registered_handles;
-        let mut session_record = None;
+        let mut invocation_returned = None;
         let mut cancelled_count = 0;
         for (oplog_index, entry) in entries {
             match entry {
@@ -681,6 +741,25 @@ impl DurableStreamStore {
                             Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),
                         );
                 }
+                OplogEntry::AgentInvocationReturned {
+                    invocation_id,
+                    result,
+                    ..
+                } => {
+                    let value = self
+                        .oplog
+                        .download_payload(result)
+                        .await
+                        .map_err(StreamStoreError::Oplog)?;
+                    index
+                        .invocation_results
+                        .insert(result_session_key.clone(), oplog_index);
+                    index.apply_returned_bindings(&result_session_key, &value.stream_bindings)?;
+                    if invocation_id != result_session_key.idempotency_key {
+                        return Err(StreamStoreError::RegistrationDivergence);
+                    }
+                    invocation_returned = Some((oplog_index, value));
+                }
                 OplogEntry::StreamSession {
                     entity_parent_start_index,
                     record,
@@ -705,8 +784,14 @@ impl DurableStreamStore {
                         &self.producer,
                         self.producer_fingerprint,
                     );
-                    if matches!(record, StreamSessionRecord::InvocationResult(_)) {
-                        session_record = Some(record);
+                    if let StreamSessionRecord::RemoteResult(record) = record {
+                        invocation_returned = Some((
+                            oplog_index,
+                            ReturnedValue {
+                                value: record.result,
+                                stream_bindings: record.stream_mappings,
+                            },
+                        ));
                     }
                 }
                 OplogEntry::StreamTerminal {
@@ -745,14 +830,155 @@ impl DurableStreamStore {
         self.record_registered_streams(handles.len() - registered_count);
         self.record_terminal_streams(cancelled_count);
         crate::metrics::durable_stream::record_producer_operation("register_result", false);
+        let (oplog_index, returned_value) = invocation_returned.ok_or_else(|| {
+            StreamStoreError::CorruptHistory(
+                "result registration batch contains no invocation return".to_string(),
+            )
+        })?;
         Ok(ResultStreamRegistration {
             handles,
-            session_record: session_record.ok_or_else(|| {
-                StreamStoreError::CorruptHistory(
-                    "result registration batch contains no session record".to_string(),
-                )
-            })?,
+            returned_value,
+            oplog_index,
         })
+    }
+
+    async fn validate_result_registration(
+        &self,
+        index: OplogIndex,
+        invocation_id: InvocationId,
+        expected: &ReturnedValue,
+        invocation: &Option<(
+            Option<String>,
+            golem_common::model::component::ComponentRevision,
+        )>,
+    ) -> Result<ReturnedValue, StreamStoreError> {
+        if invocation.is_none() {
+            let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await? else {
+                return Err(StreamStoreError::RegistrationDivergence);
+            };
+            let StreamSessionRecord::RemoteResult(record) = self
+                .oplog
+                .download_payload(record)
+                .await
+                .map_err(StreamStoreError::Oplog)?
+            else {
+                return Err(StreamStoreError::RegistrationDivergence);
+            };
+            if record.format_version != DURABLE_STREAM_FORMAT_VERSION
+                || record.session_key != StreamRegistrationInvocation::Local(invocation_id)
+                || record.result != expected.value
+                || record.stream_mappings != expected.stream_bindings
+            {
+                return Err(StreamStoreError::RegistrationDivergence);
+            }
+            return Ok(ReturnedValue {
+                value: record.result,
+                stream_bindings: record.stream_mappings,
+            });
+        }
+        let OplogEntry::AgentInvocationReturned {
+            invocation_id: recorded_id,
+            result,
+            method_name: recorded_method,
+            component_revision: recorded_revision,
+            ..
+        } = self.oplog.read(index).await?
+        else {
+            return Err(StreamStoreError::RegistrationDivergence);
+        };
+        if recorded_id != invocation_id
+            || invocation.as_ref() != Some(&(recorded_method, recorded_revision))
+        {
+            return Err(StreamStoreError::RegistrationDivergence);
+        }
+        let recorded = self
+            .oplog
+            .download_payload(result)
+            .await
+            .map_err(StreamStoreError::Oplog)?;
+        if &recorded != expected {
+            return Err(StreamStoreError::RegistrationDivergence);
+        }
+        Ok(recorded)
+    }
+
+    pub async fn read_invocation_returned(
+        &self,
+        index: OplogIndex,
+        invocation_id: InvocationId,
+    ) -> Result<ReturnedValue, StreamStoreError> {
+        match self
+            .oplog
+            .read(index)
+            .await
+            .map_err(StreamStoreError::from)?
+        {
+            OplogEntry::AgentInvocationReturned {
+                invocation_id: recorded,
+                result,
+                ..
+            } if recorded == invocation_id => self
+                .oplog
+                .download_payload(result)
+                .await
+                .map_err(StreamStoreError::Oplog),
+            _ => Err(StreamStoreError::RegistrationDivergence),
+        }
+    }
+
+    pub async fn read_invocation_result_value(
+        &self,
+        index: OplogIndex,
+        invocation_id: InvocationId,
+    ) -> Result<ReturnedValue, StreamStoreError> {
+        use golem_common::model::AgentInvocationResult;
+        use golem_common::model::oplog::FinishedResult;
+        use prost::Message;
+
+        match self.oplog.read(index).await? {
+            OplogEntry::AgentInvocationReturned {
+                invocation_id: recorded,
+                result,
+                ..
+            } if recorded == invocation_id => self
+                .oplog
+                .download_payload(result)
+                .await
+                .map_err(StreamStoreError::Oplog),
+            OplogEntry::AgentInvocationFinished {
+                invocation_id: recorded,
+                result,
+                ..
+            } if recorded == invocation_id => match result {
+                FinishedResult::Returned(returned) if returned < index => {
+                    self.read_invocation_returned(returned, invocation_id).await
+                }
+                FinishedResult::Payload(payload) => {
+                    let result = self
+                        .oplog
+                        .download_payload(payload)
+                        .await
+                        .map_err(StreamStoreError::Oplog)?;
+                    let AgentInvocationResult::AgentMethod { output } = result else {
+                        return Err(StreamStoreError::CorruptHistory(
+                            "session result is not a method result".into(),
+                        ));
+                    };
+                    let value = golem_common::schema::streaming::encode_recursive_stream_value(
+                        &output,
+                        |_, _| Err("inline invocation result contains a stream".into()),
+                    )
+                    .map_err(StreamStoreError::CorruptHistory)?
+                    .encode_to_vec();
+                    Ok(ReturnedValue {
+                        value,
+                        stream_bindings: Vec::new(),
+                    })
+                }
+                _ => Err(StreamStoreError::RegistrationDivergence),
+            },
+            _ => Err(StreamStoreError::RegistrationDivergence),
+        }
     }
 
     /// Rejects registration reuse whose durable identity or schema differs.

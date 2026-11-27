@@ -356,7 +356,9 @@ fn invocation_pair(
         OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
             invocation_id: *key,
-            result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+            result: golem_common::model::oplog::FinishedResult::Payload(OplogPayload::Inline(
+                Box::new(AgentInvocationResult::AgentInitialization),
+            )),
             method_name: None,
             consumed_fuel: 0,
             component_revision: ComponentRevision::INITIAL,

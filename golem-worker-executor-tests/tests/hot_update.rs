@@ -5470,7 +5470,7 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
     executor
         .interrupt_loaded_worker(
             &worker_id.agent_id,
-            golem_service_base::error::worker_executor::InterruptKind::Interrupt(
+            golem_common::model::InterruptKind::Interrupt(
                 golem_common::model::Timestamp::now_utc(),
             ),
         )
@@ -6316,7 +6316,7 @@ async fn restart_target_get_retries_update_without_resume(
         deps,
         agent_update_v1,
         Some(WorkerExecutorError::Interrupted {
-            kind: golem_service_base::error::worker_executor::InterruptKind::Restart,
+            kind: golem_common::model::InterruptKind::Restart,
         }),
     )
     .await

@@ -148,6 +148,29 @@ async fn inline_and_absent_payloads_do_not_touch_blob_storage() {
 }
 
 #[test]
+async fn a_fork_preserves_a_finished_return_reference_without_copying_another_payload() {
+    let reference = OplogIndex::from_u64(17);
+    let mut terminal = OplogEntry::agent_invocation_finished(
+        test_invocation_id("stream".into()),
+        golem_common::model::oplog::FinishedResult::Returned(reference),
+        Some("stream".into()),
+        29,
+        golem_common::model::component::ComponentRevision::INITIAL,
+        false,
+    );
+    let expected = terminal.clone();
+    copy_entry_payloads(
+        &mut terminal,
+        |_, _| -> std::future::Ready<Result<RawOplogPayload, String>> {
+            panic!("the early return is the only payload a fork must copy")
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(terminal, expected);
+}
+
+#[test]
 async fn visits_every_stream_payload_and_snapshot_update() {
     fn external<T: BinaryCodec + Debug + Clone + PartialEq>() -> OplogPayload<T> {
         OplogPayload::External {
@@ -195,6 +218,20 @@ async fn visits_every_stream_payload_and_snapshot_update() {
         OplogEntry::stream_items(None, external(), None),
         OplogEntry::stream_terminal(None, external(), None),
         OplogEntry::stream_session(None, external(), None),
+        OplogEntry::agent_invocation_returned(
+            test_invocation_id("returned".into()),
+            external(),
+            Some("stream".into()),
+            golem_common::model::component::ComponentRevision::INITIAL,
+        ),
+        OplogEntry::agent_invocation_finished(
+            test_invocation_id("scalar".into()),
+            golem_common::model::oplog::FinishedResult::Payload(external()),
+            Some("scalar".into()),
+            0,
+            golem_common::model::component::ComponentRevision::INITIAL,
+            true,
+        ),
         OplogEntry::pending_update(
             UpdateDescription::SnapshotBased {
                 target_revision: golem_common::model::component::ComponentRevision::INITIAL,

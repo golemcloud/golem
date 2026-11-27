@@ -15,6 +15,7 @@
 use crate::worker::filesystem_snapshots::ReplayBaseline;
 use crate::workerctx::WorkerCtx;
 use futures::future::ready;
+use golem_common::model::InterruptKind;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentMode, AgentTypeName};
@@ -33,9 +34,7 @@ use golem_common::model::{
     AgentId, AgentInvocationOutput, OplogIndex, PendingUpdateRef, ShardAssignment, ShardId,
     Timestamp,
 };
-use golem_service_base::error::worker_executor::{
-    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
-};
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use golem_service_base::model::component::Component;
 use nonempty_collections::NEVec;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -1063,9 +1062,8 @@ mod tests {
         let mut status =
             super::ExecutionStatus::loading(golem_common::model::agent::AgentMode::Durable);
         let existing = status.create_await_interrupt_signal();
-        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-            golem_common::model::Timestamp::now_utc(),
-        );
+        let kind =
+            golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         let signal = match &status {
             ExecutionStatus::Loading {
                 interrupt_signal, ..

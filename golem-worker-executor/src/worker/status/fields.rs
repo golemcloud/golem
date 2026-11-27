@@ -805,9 +805,19 @@ pub(crate) fn fold_invocation_result_entries(
                         accepted_at,
                         operation,
                     },
+                    returned: None,
                     last_change: *oplog_idx,
                     last_change_at: changed_at,
                 });
+            }
+            OplogEntry::AgentInvocationReturned { invocation_id, .. } => {
+                if let Some(current) = requests
+                    .current
+                    .as_mut()
+                    .filter(|current| current.key == *invocation_id)
+                {
+                    current.returned = Some(*oplog_idx);
+                }
             }
             OplogEntry::AgentInvocationFinished {
                 invocation_id,

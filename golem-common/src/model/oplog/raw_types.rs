@@ -38,6 +38,27 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use uuid::Uuid;
 
+/// The value returned before an invocation's output streams end.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+pub struct ReturnedValue {
+    pub value: Vec<u8>,
+    pub stream_bindings: Vec<crate::model::durable_stream::StreamBindingRecord>,
+}
+
+/// A completed invocation owns its scalar payload or refers to its stream-bearing return.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub enum FinishedResult {
+    Payload(OplogPayload<crate::model::AgentInvocationResult>),
+    Returned(OplogIndex),
+}
+
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct CreateParameters {
@@ -255,7 +276,6 @@ pub enum DurableStreamEventSummary {
         outcome: DurableStreamTerminalOutcome,
         origin: crate::model::durable_stream::StreamTerminalOrigin,
     },
-    SessionResult,
     SessionFinished {
         outcome: DurableStreamOutcome,
     },
@@ -302,7 +322,7 @@ impl DurableStreamEventSummary {
     pub fn session(record: &crate::model::durable_stream::StreamSessionRecord) -> Option<Self> {
         use crate::model::durable_stream::StreamSessionRecord;
         match record {
-            StreamSessionRecord::InvocationResult(_) => Some(Self::SessionResult),
+            StreamSessionRecord::RemoteResult(_) => None,
             StreamSessionRecord::Finished(record) => Some(Self::SessionFinished {
                 outcome: if record.result.is_ok() {
                     DurableStreamOutcome::Success

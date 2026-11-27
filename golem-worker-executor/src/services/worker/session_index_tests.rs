@@ -45,7 +45,7 @@ use golem_common::model::durable_stream::{
     StreamForkCutRecord, StreamInvocationId, StreamRegistrationInvocation, StreamResumeOperation,
     StreamSessionAttachedRecord, StreamSessionDetachedRecord, StreamSessionExpiredRecord,
     StreamSessionExpiryPolicy, StreamSessionExpiryRefreshedRecord, StreamSessionFinishedRecord,
-    StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
+    StreamSessionPreparedRecord, StreamSessionRecord, StreamSessionRemoteResultRecord,
     StreamSessionResumeAttemptRecord,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -914,6 +914,18 @@ async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> Oplog
         .add(DurableStreamOplogRecord::Session(None, Box::new(record)).into_inline_entry())
         .await
         .expect("oplog write")
+}
+
+fn returned_entry(invocation_id: InvocationId, value: Vec<u8>) -> OplogEntry {
+    OplogEntry::agent_invocation_returned(
+        invocation_id,
+        OplogPayload::Inline(Box::new(golem_common::model::oplog::ReturnedValue {
+            value,
+            stream_bindings: vec![],
+        })),
+        None,
+        ComponentRevision::INITIAL,
+    )
 }
 
 async fn append_accepted_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> OplogIndex {
@@ -1848,16 +1860,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     for _ in 0..2050 {
         append_memory_hint(oplog.as_ref()).await;
     }
-    let result = append_session(
-        oplog.as_ref(),
-        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
-            format_version: 1,
-            session_key: local_registration(&key),
-            result: vec![42; 8192],
-            stream_mappings: vec![],
-        }),
-    )
-    .await;
+    let result = oplog
+        .add(returned_entry(key.idempotency_key, vec![42; 8192]))
+        .await
+        .unwrap();
     oplog
         .commit(CommitLevel::Always)
         .await
@@ -3912,16 +3918,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let old = test_invocation_id("old".into());
     let old_first = append_session(oplog.as_ref(), prepared_record(&id, &old)).await;
-    let old_result = append_session(
-        oplog.as_ref(),
-        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
-            format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(old),
-            result: vec![1],
-            stream_mappings: vec![],
-        }),
-    )
-    .await;
+    let old_result = oplog.add(returned_entry(old, vec![1])).await.unwrap();
     let old_finished = append_session(
         oplog.as_ref(),
         StreamSessionRecord::Finished(StreamSessionFinishedRecord {
@@ -4027,16 +4024,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
     assert_eq!(initial.first_prepared, Some(first));
     assert_eq!(initial.finished, None);
 
-    let result = append_session(
-        oplog.as_ref(),
-        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
-            format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key),
-            result: vec![2],
-            stream_mappings: vec![],
-        }),
-    )
-    .await;
+    let result = oplog.add(returned_entry(key, vec![2])).await.unwrap();
     let finished = append_session(
         oplog.as_ref(),
         StreamSessionRecord::Finished(StreamSessionFinishedRecord {
@@ -4094,35 +4082,34 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
     .unwrap();
     assert!(!status.has_durable_stream_history);
     status = AgentStatusRecord::default();
-    let records = [
-        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
-            format_version: 1,
-            session_key: remote_registration(&outgoing_session),
-            result: vec![],
-            stream_mappings: vec![],
-        }),
-        prepared_record(&id, &key),
-        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
-            format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key),
-            result: vec![],
-            stream_mappings: vec![],
-        }),
-        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
-            format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key),
-            result: Ok(()),
-        }),
-    ];
-    for (offset, record) in records.into_iter().enumerate() {
-        let entry = OplogEntry::stream_session(
+    let session_entry = |record| {
+        OplogEntry::stream_session(
             None,
             OplogPayload::SerializedInline {
                 bytes: serialize(&record).unwrap(),
                 cached: None,
             },
             None,
-        );
+        )
+    };
+    let records = [
+        session_entry(StreamSessionRecord::RemoteResult(
+            StreamSessionRemoteResultRecord {
+                format_version: 1,
+                session_key: remote_registration(&outgoing_session),
+                result: vec![],
+                stream_mappings: vec![],
+            },
+        )),
+        session_entry(prepared_record(&id, &key)),
+        returned_entry(key, vec![]),
+        session_entry(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+            format_version: 1,
+            session_key: StreamRegistrationInvocation::Local(key),
+            result: Ok(()),
+        })),
+    ];
+    for (offset, entry) in records.into_iter().enumerate() {
         status = update_status_with_new_entries(
             AgentMode::Durable,
             status,
@@ -4860,7 +4847,7 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
     let first_key = first_value.attempt.session_key.clone();
     let remote = owned_agent("remote-callee");
     let second_key = session_key(&remote, &idempotency_key);
-    let second = StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+    let second = StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
         format_version: 1,
         session_key: remote_registration(&second_key),
         result: vec![],

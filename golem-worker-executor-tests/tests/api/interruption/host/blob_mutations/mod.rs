@@ -1,7 +1,7 @@
 use super::*;
 use crate::blob_mutation_storage::MutationStorage;
 use anyhow::{Context as _, ensure};
-use golem_service_base::error::worker_executor::InterruptKind;
+use golem_common::model::InterruptKind;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_worker_executor::services::blob_store::DefaultBlobStoreService;
 use golem_worker_executor::services::resource_limits::ResourceLimitsDisabled;

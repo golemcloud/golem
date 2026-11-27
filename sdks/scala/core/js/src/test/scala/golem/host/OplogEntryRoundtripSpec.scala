@@ -448,6 +448,25 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         l.params.traceContext.contains(LogTraceContext("trace-1", "span-1"))
       )
     },
+    test("AgentInvocationReturned retains the early result and its invocation metadata") {
+      val raw = wrapEntry(
+        "agent-invocation-returned",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          invocationId = invocationUuidJs,
+          result = sampleTypedJs,
+          methodName = "stream-values",
+          componentRevision = js.BigInt("7")
+        )
+      )
+      val returned = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.AgentInvocationReturned]
+      assertTrue(
+        returned.params.result.value == SchemaValue.S32Value(42),
+        returned.params.invocationId == invocationUuid,
+        returned.params.methodName.contains("stream-values"),
+        returned.params.componentRevision == 7L
+      )
+    },
     test("AgentInvocationFinished with response from dynamic (agent-method result)") {
       val raw = wrapEntry(
         "agent-invocation-finished",

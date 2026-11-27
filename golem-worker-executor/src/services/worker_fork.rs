@@ -37,7 +37,7 @@ use crate::services::agent_filesystem_snapshots::{
 };
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, UnreadableOplog};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogServiceOps, UnreadableOplog};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -837,8 +837,40 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let external_payload_bytes = Arc::new(AtomicU64::new(0));
 
         for oplog_index in oplog_range {
+            let source_entry = read_source(oplog_index).await?;
+            if let OplogEntry::AgentInvocationFinished {
+                invocation_id,
+                result,
+                ..
+            } = &source_entry
+            {
+                crate::services::oplog::resolve_finished_result(
+                    oplog_index,
+                    *invocation_id,
+                    result.clone(),
+                    |index| {
+                        let read_source = &read_source;
+                        async move { read_source(index).await.map_err(|error| error.to_string()) }
+                    },
+                    |payload| async {
+                        self.oplog_service
+                            .download_payload(&owned_source_agent_id, agent_mode, payload)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    |payload| async {
+                        self.oplog_service
+                            .download_payload(&owned_source_agent_id, agent_mode, payload)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    std::convert::identity,
+                )
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            }
             let mut entry = rewrite_forked_oplog_entry(
-                read_source(oplog_index).await?,
+                source_entry,
                 &owned_source_agent_id,
                 &owned_target_agent_id,
             );

@@ -231,11 +231,9 @@ async fn lifecycle_interrupt_is_handled_after_permit_before_reconstruction_finis
         .await
         .unwrap();
     old.primary()
-        .set_interrupting(
-            golem_service_base::error::worker_executor::InterruptKind::Suspend(
-                golem_common::model::Timestamp::now_utc(),
-            ),
-        )
+        .set_interrupting(golem_common::model::InterruptKind::Suspend(
+            golem_common::model::Timestamp::now_utc(),
+        ))
         .await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while old.primary().is_loaded().await {
@@ -258,7 +256,7 @@ async fn lifecycle_interrupt_is_handled_after_permit_before_reconstruction_finis
     });
     gate.entered().await;
     old.primary()
-        .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
+        .set_interrupting(golem_common::model::InterruptKind::Restart)
         .await?;
     gate.release();
 
@@ -677,11 +675,9 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
             .into_typed()?;
         assert!(healthy);
         old_worker
-            .set_interrupting(
-                golem_service_base::error::worker_executor::InterruptKind::Interrupt(
-                    golem_common::model::Timestamp::now_utc(),
-                ),
-            )
+            .set_interrupting(golem_common::model::InterruptKind::Interrupt(
+                golem_common::model::Timestamp::now_utc(),
+            ))
             .await?;
         assert!(Arc::ptr_eq(
             &replacement,

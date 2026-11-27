@@ -105,6 +105,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.CompletionDelivered(p)          => s"completion-delivered(${p.startIndex})"
     case OplogEntry.HostCall(p)                     => s"import(${p.functionName})"
     case OplogEntry.AgentInvocationStarted(p)       => s"export(${p.functionName})"
+    case OplogEntry.AgentInvocationReturned(p)      => s"returned(${p.invocationId})"
     case OplogEntry.AgentInvocationFinished(p)      => s"completed(${p.consumedFuel})"
     case OplogEntry.AgentInvocationFailed(p)        => s"failed(${p.error})"
     case OplogEntry.AgentInvocationSettled(p)       => s"settled(${p.consumedFuel})"

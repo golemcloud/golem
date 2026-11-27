@@ -51,10 +51,11 @@ use crate::worker::{
 };
 use crate::workerctx::default::Context;
 use golem_common::model::AgentInvocationKind;
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::oplog::AgentError;
 use golem_common::model::{OplogIndex, Timestamp};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

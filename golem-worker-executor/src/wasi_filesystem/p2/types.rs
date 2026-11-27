@@ -1686,7 +1686,7 @@ mod tests {
 
     #[test]
     async fn immutable_initial_file_stat_interrupts_pending_observation() {
-        use golem_service_base::error::worker_executor::InterruptKind;
+        use golem_common::model::InterruptKind;
 
         let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         let result = tokio::time::timeout(
@@ -1701,7 +1701,7 @@ mod tests {
 
     #[test]
     async fn immutable_initial_file_stat_prefers_completion_and_clears_timestamps() {
-        use golem_service_base::error::worker_executor::InterruptKind;
+        use golem_common::model::InterruptKind;
 
         let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         let stat = p2_stable_initial_file_stat(

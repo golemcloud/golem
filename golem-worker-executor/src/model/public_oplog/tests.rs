@@ -341,6 +341,81 @@ fn stream_terminal_public_wit_preserves_terminal_payloads() {
 }
 
 #[test]
+fn invocation_return_and_both_finished_results_survive_wit_roundtrips() {
+    use crate::preview2::golem_api_1_x::oplog;
+    use golem_common::model::oplog::{FinishedResult, ReturnedValue};
+    let invocation_id = Uuid::from_u128(42).into();
+    let returned = ReturnedValue {
+        value: vec![7, 3, 19],
+        stream_bindings: vec![],
+    };
+    let entries = [
+        OplogEntry::AgentInvocationReturned {
+            timestamp: Timestamp::from(900),
+            invocation_id,
+            result: OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(&returned).unwrap(),
+                cached: None,
+            },
+            method_name: Some("optional-stream".into()),
+            component_revision: ComponentRevision::INITIAL,
+        },
+        OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::from(1_000),
+            invocation_id,
+            result: FinishedResult::Returned(OplogIndex::from_u64(7)),
+            method_name: Some("optional-stream".into()),
+            consumed_fuel: 19,
+            component_revision: ComponentRevision::INITIAL,
+            awaits_settlement: false,
+        },
+        OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::from(1_000),
+            invocation_id,
+            result: FinishedResult::Payload(OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(
+                    &AgentInvocationResult::AgentInitialization,
+                )
+                .unwrap(),
+                cached: None,
+            }),
+            method_name: None,
+            consumed_fuel: 23,
+            component_revision: ComponentRevision::INITIAL,
+            awaits_settlement: false,
+        },
+    ];
+    for entry in entries {
+        let wire: oplog::OplogEntry = entry.clone().try_into().unwrap();
+        let restored = golem_common::model::oplog::OplogEnrichmentEntry::try_from(wire).unwrap();
+        assert_eq!(restored, entry.into());
+    }
+    let entry = PublicOplogEntry::AgentInvocationReturned(
+        golem_common::model::oplog::public_oplog_entry::AgentInvocationReturnedParams {
+            timestamp: Timestamp::from(900),
+            invocation_id,
+            result: returned.into_typed_schema_value().unwrap(),
+            method_name: Some("optional-stream".into()),
+            component_revision: ComponentRevision::INITIAL,
+        },
+    );
+    let wire: oplog::PublicOplogEntry = entry.clone().try_into().unwrap();
+    let oplog::PublicOplogEntry::AgentInvocationReturned(wire) = wire else {
+        panic!("expected invocation return")
+    };
+    let PublicOplogEntry::AgentInvocationReturned(expected) = entry else {
+        unreachable!()
+    };
+    assert_eq!(
+        golem_schema::schema::wit::decode_typed(&wire.result).unwrap(),
+        expected.result
+    );
+    assert_eq!(wire.method_name, expected.method_name);
+    assert_eq!(wire.component_revision, expected.component_revision.get());
+    assert_eq!(Uuid::from(wire.invocation_id), expected.invocation_id.0);
+}
+
+#[test]
 fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
     use crate::preview2::golem_api_1_x::oplog;
     use golem_common::model::durable_stream::StreamTerminalOrigin;
@@ -398,7 +473,6 @@ fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
                     origin,
                 })
             ),
-            entry!(StreamSession, Some(Summary::SessionResult)),
             entry!(
                 StreamSession,
                 Some(Summary::SessionFinished {
@@ -1572,7 +1646,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .unwrap();
     let tool_terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Executed,
-        result: Ok(SerializableToolStructuredResult { result: None }),
+        result: Ok(SerializableToolStructuredResult { result: None }).into(),
         admission_refusal: None,
     }
     .into_typed_schema_value()
@@ -1823,7 +1897,17 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let PublicOplogEntry::End(tool_terminal_params) = &tool_terminal_entry.entry else {
         panic!("expected tool End");
     };
-    assert_eq!(tool_terminal_params.response.as_ref(), Some(&tool_terminal));
+    let public_terminal = golem_common::model::oplog::payload::types::PublicToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Executed,
+        result: Ok(SerializableToolStructuredResult { result: None }),
+        admission_refusal: None,
+    }
+    .into_typed_schema_value()
+    .unwrap();
+    assert_eq!(
+        tool_terminal_params.response.as_ref(),
+        Some(&public_terminal)
+    );
     assert!(
         !serde_json::to_string(tool_terminal_entry)
             .unwrap()
@@ -2239,7 +2323,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
         .unwrap();
     let entity_terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Executed,
-        result: Ok(SerializableToolStructuredResult { result: None }),
+        result: Ok(SerializableToolStructuredResult { result: None }).into(),
         admission_refusal: None,
     }
     .into_typed_schema_value()
@@ -2274,7 +2358,16 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             entity_input,
         ),
     );
-    expected_ends.insert(entity_end_idx, entity_terminal);
+    expected_ends.insert(
+        entity_end_idx,
+        golem_common::model::oplog::types::PublicToolOperationTerminal {
+            body_execution: SerializableEntityBodyExecution::Executed,
+            result: Ok(SerializableToolStructuredResult { result: None }),
+            admission_refusal: None,
+        }
+        .into_typed_schema_value()
+        .unwrap(),
+    );
 
     let mut input_type = SchemaType::string();
     let mut input_value = SchemaValue::String("nested MCP input".into());
@@ -2614,6 +2707,368 @@ async fn open_test_oplog(
         .await
         .unwrap();
     (oplog_service, owned_agent_id, oplog)
+}
+
+#[test]
+async fn referring_host_responses_resolve_the_journal_and_keep_the_public_shape() {
+    use golem_common::model::durable_stream::{
+        DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, SessionStreamRole, StreamBindingRecord,
+        StreamRecordReference, StreamRegistrationInvocation, StreamSessionRecord,
+        StreamSessionRemoteResultRecord,
+    };
+    use golem_common::model::oplog::HostResponseGolemRpcInvokeAndAwait;
+    use golem_common::model::oplog::payload::types::{
+        RecordedRpcResult, RecordedToolResult, RemoteResultReference,
+    };
+    use golem_common::schema::FromSchema;
+
+    #[derive(golem_common::schema::FromSchema)]
+    struct RpcResponse {
+        result: Result<SchemaValue, golem_common::model::oplog::types::SerializableRpcError>,
+    }
+    #[derive(golem_common::schema::FromSchema)]
+    struct ToolTerminal {
+        body_execution: SerializableEntityBodyExecution,
+        result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
+        admission_refusal:
+            Option<golem_common::model::oplog::types::SerializableToolAdmissionRefusal>,
+    }
+
+    for entity in [false, true] {
+        let (service, owner, oplog) = open_test_oplog("one-caller-result").await;
+        let start = oplog
+            .add(OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: if entity {
+                    HostFunctionName::GolemEntityInvoke
+                } else {
+                    HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult
+                },
+                invocation_id: None,
+                observational_owner: None,
+                driver: None,
+                request: None,
+                durable_function_type: DurableFunctionType::WriteRemote,
+                span_started: None,
+                denial: None,
+            })
+            .await
+            .unwrap();
+        let key = StreamRegistrationInvocation::Local(Uuid::from_u128(117).into());
+        let expected = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("the only result bytes".into()),
+                SchemaValue::Tuple { elements: vec![] },
+                SchemaValue::Tuple { elements: vec![] },
+            ],
+        };
+        let actual = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("the only result bytes".into()),
+                SchemaValue::Tuple { elements: vec![] },
+                SchemaValue::Stream(
+                    golem_common::schema::stream::SchemaValueStream::from_host_endpoint(()),
+                ),
+            ],
+        };
+        let record = StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: key.clone(),
+            result: golem_common::schema::streaming::encode_recursive_stream_value(
+                &actual,
+                |_, _| Ok(0),
+            )
+            .unwrap()
+            .encode_to_vec(),
+            stream_mappings: vec![StreamBindingRecord {
+                transport_stream_id: 91,
+                source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(7))),
+                role: SessionStreamRole::Output,
+            }],
+        });
+        let journal = oplog
+            .add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: entity.then_some(start),
+                record: oplog.upload_payload(&record).await.unwrap(),
+                summary: None,
+            })
+            .await
+            .unwrap();
+        let reference = RemoteResultReference {
+            index: journal,
+            session_key: key,
+        };
+        let graph = SchemaGraph::anonymous(SchemaType::record(vec![
+            NamedFieldType {
+                name: "text".into(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "unit".into(),
+                body: SchemaType::tuple(vec![]),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "output".into(),
+                body: SchemaType::stream(Some(SchemaType::u32())),
+                metadata: Default::default(),
+            },
+        ]));
+        for invalid in [false, true] {
+            let mut reference = reference.clone();
+            if invalid {
+                reference.session_key =
+                    StreamRegistrationInvocation::Local(Uuid::from_u128(118).into());
+            }
+            let response: HostResponse = if entity {
+                HostResponseEntityInvocation {
+                    result: Ok(SerializableToolOperationTerminal {
+                        body_execution: SerializableEntityBodyExecution::Executed,
+                        result: RecordedToolResult::Remote {
+                            reference,
+                            graph: graph.clone(),
+                            custom_error: None,
+                        },
+                        admission_refusal: None,
+                    }
+                    .into_typed_schema_value()
+                    .unwrap()),
+                }
+                .into()
+            } else {
+                HostResponseGolemRpcInvokeAndAwait {
+                    result: RecordedRpcResult::Remote(reference),
+                }
+                .into()
+            };
+            // RPC projection reads the Start's attribution. No request payload is needed to resolve the value.
+            let entry = OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: start,
+                response: Some(oplog.upload_payload(&response).await.unwrap()),
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            };
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            let public = PublicOplogEntry::from_oplog_entry(
+                journal.next(),
+                entry,
+                service.clone(),
+                Arc::new(PanicComponentService),
+                &owner,
+                AgentMode::Durable,
+                test_component_id(),
+                OwnerKind::ComponentAgent,
+                None,
+                ComponentRevision::INITIAL,
+                ClaimVisibility::Hidden,
+            )
+            .await;
+            if invalid {
+                assert!(public.is_err());
+                continue;
+            }
+            let PublicOplogEntry::End(end) = public.unwrap() else {
+                panic!("expected End")
+            };
+            let value = end.response.as_ref().unwrap();
+            if entity {
+                let terminal = ToolTerminal::from_value(value.value()).unwrap();
+                assert_eq!(
+                    terminal.body_execution,
+                    SerializableEntityBodyExecution::Executed
+                );
+                assert_eq!(terminal.admission_refusal, None);
+                assert_eq!(
+                    terminal
+                        .result
+                        .unwrap()
+                        .result
+                        .unwrap()
+                        .into_typed()
+                        .unwrap()
+                        .value(),
+                    &expected
+                );
+            } else {
+                assert_eq!(
+                    RpcResponse::from_value(value.value())
+                        .unwrap()
+                        .result
+                        .unwrap(),
+                    expected
+                );
+            }
+            let public = PublicOplogEntry::End(end);
+            let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                public.clone().try_into().unwrap();
+            assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+            let _: crate::preview2::golem_api_1_x::oplog::PublicOplogEntry =
+                public.try_into().unwrap();
+        }
+    }
+}
+
+#[test]
+async fn remote_public_projection_matches_inline_for_nested_rpc_and_custom_errors() {
+    use golem_common::model::durable_stream::{
+        DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, SessionStreamRole, StreamBindingRecord,
+        StreamRecordReference, StreamRegistrationInvocation, StreamSessionRecord,
+        StreamSessionRemoteResultRecord,
+    };
+    use golem_common::model::oplog::HostResponseGolemRpcInvokeAndAwait;
+    use golem_common::model::oplog::payload::types::{
+        RecordedRpcResult, RecordedToolResult, RemoteResultReference, SerializableCustomToolError,
+        SerializableToolError,
+    };
+    for tool in [false, true] {
+        for custom_error in [None, Some("partial-output".to_string())] {
+            let (service, owner, oplog) = open_test_oplog("adversarial-remote-public").await;
+            let parent = Some(OplogIndex::from_u64(1));
+            let start = oplog
+                .add(OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: parent,
+                    function_name: if tool {
+                        HostFunctionName::GolemEntityInvoke
+                    } else {
+                        HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult
+                    },
+                    invocation_id: None,
+                    observational_owner: None,
+                    driver: None,
+                    request: None,
+                    durable_function_type: DurableFunctionType::WriteRemote,
+                    span_started: None,
+                    denial: None,
+                })
+                .await
+                .unwrap();
+            let key = StreamRegistrationInvocation::Local(Uuid::new_v4().into());
+            let value = SchemaValue::Tuple {
+                elements: vec![
+                    SchemaValue::String("non-ASCII payload: λ\n\0".into()),
+                    SchemaValue::Stream(
+                        golem_common::schema::stream::SchemaValueStream::from_host_endpoint(()),
+                    ),
+                ],
+            };
+            let graph = SchemaGraph::anonymous(SchemaType::tuple(vec![
+                SchemaType::string(),
+                SchemaType::stream(Some(SchemaType::u32())),
+            ]));
+            let stripped = crate::durable_host::durable_session::strip_streams(value.clone());
+            let journal = oplog
+                .add(OplogEntry::StreamSession {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: if tool { Some(start) } else { parent },
+                    record: oplog
+                        .upload_payload(&StreamSessionRecord::RemoteResult(
+                            StreamSessionRemoteResultRecord {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: key.clone(),
+                                result:
+                                    golem_common::schema::streaming::encode_recursive_stream_value(
+                                        &value,
+                                        |_, _| Ok(0),
+                                    )
+                                    .unwrap()
+                                    .encode_to_vec(),
+                                stream_mappings: vec![StreamBindingRecord {
+                                    transport_stream_id: 91,
+                                    source: StreamRecordReference::Local(LocalStreamId(start)),
+                                    role: SessionStreamRole::Output,
+                                }],
+                            },
+                        ))
+                        .await
+                        .unwrap(),
+                    summary: None,
+                })
+                .await
+                .unwrap();
+            let reference = RemoteResultReference {
+                index: journal,
+                session_key: key,
+            };
+            let inline_result = match &custom_error {
+                Some(name) => Err(SerializableToolRpcError::RemoteToolError(Box::new(
+                    SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                        name: name.clone(), payload: TypedSchemaValue::new(graph.clone(), stripped.clone()),
+                    }))
+                ))),
+                None => Ok(SerializableToolStructuredResult {
+                    result: Some(golem_common::model::oplog::payload::types::SerializableToolResultValue::from_typed(
+                        &TypedSchemaValue::new(graph.clone(), stripped.clone()),
+                    ).unwrap()),
+                }),
+            };
+            let inline: HostResponse = if tool {
+                HostResponseEntityInvocation {
+                    result: Ok(SerializableToolOperationTerminal {
+                        body_execution: SerializableEntityBodyExecution::Executed,
+                        result: RecordedToolResult::Inline(inline_result),
+                        admission_refusal: None,
+                    }
+                    .into_typed_schema_value()
+                    .unwrap()),
+                }
+                .into()
+            } else {
+                HostResponseGolemRpcInvokeAndAwait {
+                    result: RecordedRpcResult::Inline(Ok(stripped)),
+                }
+                .into()
+            };
+            let expected = super::conversion::host_response_to_public_value(inline).unwrap();
+            let remote: HostResponse = if tool {
+                HostResponseEntityInvocation {
+                    result: Ok(SerializableToolOperationTerminal {
+                        body_execution: SerializableEntityBodyExecution::Executed,
+                        result: RecordedToolResult::Remote {
+                            reference,
+                            graph,
+                            custom_error,
+                        },
+                        admission_refusal: None,
+                    }
+                    .into_typed_schema_value()
+                    .unwrap()),
+                }
+                .into()
+            } else {
+                HostResponseGolemRpcInvokeAndAwait {
+                    result: RecordedRpcResult::Remote(reference),
+                }
+                .into()
+            };
+            let response = oplog.upload_payload(&remote).await.unwrap();
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            let public = PublicOplogEntry::from_oplog_entry(
+                journal.next(),
+                OplogEntry::end(start, Some(response), false, None, None),
+                service,
+                Arc::new(PanicComponentService),
+                &owner,
+                AgentMode::Durable,
+                test_component_id(),
+                OwnerKind::ComponentAgent,
+                None,
+                ComponentRevision::INITIAL,
+                ClaimVisibility::Hidden,
+            )
+            .await
+            .unwrap();
+            let PublicOplogEntry::End(end) = public else {
+                panic!("expected End")
+            };
+            assert_eq!(end.response.unwrap(), expected);
+        }
+    }
 }
 
 #[test]

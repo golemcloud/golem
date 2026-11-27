@@ -207,7 +207,21 @@ impl StreamSession {
             deleted_outputs,
             existing_intents,
         } = metadata.materialization_state();
+        let prepared_position = metadata.prepared_position();
         drop(metadata);
+        let (method_name, invocation_return) = if self.entity_parent_start_index.is_none()
+            && let Some(index) = prepared_position
+        {
+            match self.session_record_at(index).await? {
+                StreamSessionRecord::Prepared(prepared) => match prepared.attempt.invocation.target {
+                    golem_common::model::durable_stream::PersistedInvocationTarget::AgentMethod { method_name } => (Some(method_name), true),
+                    golem_common::model::durable_stream::PersistedInvocationTarget::ExternalTool { .. } => (None, false),
+                },
+                _ => return Err("session prepared position names a different record".into()),
+            }
+        } else {
+            (None, self.entity_parent_start_index.is_none())
+        };
         let cancellation_epoch = if first_result && (cancel_session || !deleted_outputs.is_empty())
         {
             Some(self.authoritative_attachment_state().await?.epoch)
@@ -482,15 +496,29 @@ impl StreamSession {
             ..
         } = admission
             .submit(move |owner, context| async move {
-                let result = owner
-                    .register_result_streams(
-                        Some(&context),
-                        session_key,
-                        result_bytes,
-                        outputs,
-                        attribution,
-                    )
-                    .await?;
+                let result = if !invocation_return {
+                    owner
+                        .register_result_streams(
+                            Some(&context),
+                            session_key,
+                            result_bytes,
+                            outputs,
+                            attribution,
+                        )
+                        .await?
+                } else {
+                    owner
+                        .register_invocation_return(
+                            Some(&context),
+                            session_key,
+                            result_bytes,
+                            outputs,
+                            attribution,
+                            method_name,
+                            component_revision,
+                        )
+                        .await?
+                };
                 owner.notify_session_records_changed(Some(&context));
                 Ok::<_, StreamStoreError>(result)
             })
@@ -795,7 +823,7 @@ impl StreamSession {
                 .ok_or_else(|| "durable result handle index overflow".to_string())?;
             Ok(result)
         })?;
-        let record = StreamSessionInvocationResultRecord {
+        let record = StreamSessionRemoteResultRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: self.session_reference.clone(),
             result: canonical.encode_to_vec(),
@@ -808,7 +836,7 @@ impl StreamSession {
                 ));
             }
         } else {
-            self.append_record(None, StreamSessionRecord::InvocationResult(record))
+            self.append_record(None, StreamSessionRecord::RemoteResult(record))
                 .await?;
             self.commit_consumer_journal().await?;
         }
@@ -865,15 +893,75 @@ impl StreamSession {
             .map(Some)
     }
 
+    pub(crate) async fn remote_result_reference(
+        &self,
+    ) -> Result<
+        Option<golem_common::model::oplog::payload::types::RemoteResultReference>,
+        SessionError,
+    > {
+        let Some(index) = self.current_control_metadata().await?.result_position() else {
+            return Ok(None);
+        };
+        self.remote_result_record().await?;
+        Ok(Some(
+            golem_common::model::oplog::payload::types::RemoteResultReference {
+                index,
+                session_key: self.session_reference.clone(),
+            },
+        ))
+    }
+
+    pub(crate) async fn resolve_remote_result(
+        &self,
+        reference: &golem_common::model::oplog::payload::types::RemoteResultReference,
+    ) -> Result<SchemaValue, SessionError> {
+        if self.remote_result_reference().await?.as_ref() != Some(reference) {
+            return Err("remote result reference names another session or journal position".into());
+        }
+        self.replay_remote_result()
+            .await?
+            .ok_or_else(|| "remote result reference has no journal record".into())
+    }
+
+    pub(crate) async fn record_rpc_result(
+        &self,
+        result: Result<SchemaValue, golem_common::model::oplog::types::SerializableRpcError>,
+    ) -> Result<golem_common::model::oplog::payload::types::RecordedRpcResult, SessionError> {
+        use golem_common::model::oplog::payload::types::RecordedRpcResult;
+        if result.is_ok()
+            && let Some(reference) = self.remote_result_reference().await?
+        {
+            Ok(RecordedRpcResult::Remote(reference))
+        } else {
+            Ok(RecordedRpcResult::Inline(result.map(super::strip_streams)))
+        }
+    }
+
+    pub(crate) async fn resolve_rpc_result(
+        &self,
+        result: golem_common::model::oplog::payload::types::RecordedRpcResult,
+    ) -> Result<
+        Result<SchemaValue, golem_common::model::oplog::types::SerializableRpcError>,
+        SessionError,
+    > {
+        use golem_common::model::oplog::payload::types::RecordedRpcResult;
+        match result {
+            RecordedRpcResult::Inline(result) => Ok(result),
+            RecordedRpcResult::Remote(reference) => {
+                self.resolve_remote_result(&reference).await.map(Ok)
+            }
+        }
+    }
+
     pub(super) async fn remote_result_record(
         &self,
-    ) -> Result<Option<StreamSessionInvocationResultRecord>, SessionError> {
+    ) -> Result<Option<StreamSessionRemoteResultRecord>, SessionError> {
         let index = self.current_control_metadata().await?.result_position();
         let Some(index) = index else {
             return Ok(None);
         };
         match self.session_record_at(index).await? {
-            StreamSessionRecord::InvocationResult(record)
+            StreamSessionRecord::RemoteResult(record)
                 if record.session_key == self.session_reference =>
             {
                 Ok(Some(record))
@@ -1679,7 +1767,7 @@ impl StreamSession {
 
     pub(super) async fn finish(
         &self,
-        result: Result<(), Vec<u8>>,
+        result: Result<(), SessionFailure>,
         authored_by: StreamTerminalAuthor,
         input_terminal: StreamTerminal,
     ) -> Result<(), SessionError> {
@@ -1687,7 +1775,8 @@ impl StreamSession {
             return Ok(());
         }
         let session = self.clone();
-        let retained_bytes = DurableStreamStore::finish_session_retained_bytes(&result);
+        let retained_bytes =
+            DurableStreamStore::finish_session_retained_bytes(&result, &input_terminal)?;
         let outcome = self
             .producer
             .run_admitted_accounted(
@@ -1759,19 +1848,9 @@ impl StreamSession {
     }
 
     /// Records a failed session terminal after cancelling remaining stream work.
-    pub async fn fail(&self, details: String) -> Result<(), SessionError> {
+    pub async fn fail(&self, cause: SessionFailure, details: String) -> Result<(), SessionError> {
         self.finish(
-            Err(details.clone().into_bytes()),
-            StreamTerminalAuthor::Host,
-            StreamTerminal::Failed(StreamError::Trapped(details)),
-        )
-        .await
-    }
-
-    /// Finalizes streams with invocation-failed semantics and records session failure.
-    pub async fn fail_invocation(&self, details: String) -> Result<(), SessionError> {
-        self.finish(
-            Err(details.clone().into_bytes()),
+            Err(cause),
             StreamTerminalAuthor::Host,
             StreamTerminal::Failed(StreamError::Trapped(details)),
         )
@@ -1781,7 +1860,7 @@ impl StreamSession {
     /// Finalizes streams with protocol-error semantics and records session failure.
     pub async fn fail_protocol(&self, details: String) -> Result<(), SessionError> {
         self.finish(
-            Err(details.clone().into_bytes()),
+            Err(SessionFailure::Protocol(details.clone())),
             StreamTerminalAuthor::Protocol,
             StreamTerminal::Failed(StreamError::Interrupted(details)),
         )
@@ -1814,6 +1893,27 @@ impl StreamSession {
 
     /// Reads the committed invocation result, independently of stream drain progress.
     pub async fn persisted_result(&self) -> Result<Option<SessionValue>, SessionError> {
+        if self.entity_parent_start_index.is_none()
+            && let StreamRegistrationInvocation::Local(invocation_id) = self.session_reference
+        {
+            let Some(index) = self.current_control_metadata().await?.result_position() else {
+                return Ok(None);
+            };
+            let result = self
+                .producer
+                .read_invocation_result_value(index, invocation_id)
+                .await?;
+            let value = SessionValue::from_value_and_bindings(
+                &self.producer,
+                &result.value,
+                &result.stream_bindings,
+            )
+            .await?;
+            for (binding, mapping) in result.stream_bindings.into_iter().zip(&value.mappings) {
+                self.insert_binding_mapping(binding, mapping.clone())?;
+            }
+            return Ok(Some(value));
+        }
         if let Some(result) = self.remote_result_record().await? {
             let bindings = result.stream_mappings.clone();
             let value = SessionValue::from_persisted(&self.producer, result).await?;
@@ -1839,7 +1939,9 @@ impl StreamSession {
     }
 
     /// Reads the committed session terminal without waiting.
-    pub async fn persisted_finished(&self) -> Result<Option<Result<(), Vec<u8>>>, SessionError> {
+    pub async fn persisted_finished(
+        &self,
+    ) -> Result<Option<Result<(), SessionFailure>>, SessionError> {
         let index = self.current_control_metadata().await?.finished_position();
         let Some(index) = index else {
             return Ok(None);
@@ -1855,7 +1957,9 @@ impl StreamSession {
     }
 
     /// Waits until successful or failed session completion is durable.
-    pub async fn wait_persisted_finished(&self) -> Result<Result<(), Vec<u8>>, SessionError> {
+    pub async fn wait_persisted_finished(
+        &self,
+    ) -> Result<Result<(), SessionFailure>, SessionError> {
         loop {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);
@@ -1879,21 +1983,28 @@ impl Drop for OutputDrainRegistration {
 impl SessionValue {
     pub(super) async fn from_persisted(
         producer: &DurableStreamStore,
-        result: StreamSessionInvocationResultRecord,
+        result: StreamSessionRemoteResultRecord,
     ) -> Result<Self, SessionError> {
-        let value = ProtoSchemaValue::decode(result.result.as_slice())
+        Self::from_value_and_bindings(producer, &result.result, &result.stream_mappings).await
+    }
+
+    async fn from_value_and_bindings(
+        producer: &DurableStreamStore,
+        bytes: &[u8],
+        bindings: &[StreamBindingRecord],
+    ) -> Result<Self, SessionError> {
+        let value = ProtoSchemaValue::decode(bytes)
             .map_err(|error| format!("invalid persisted durable invocation result: {error}"))?;
         let value = remap_recursive_stream_references(value, |handle_index, _| {
             let index = usize::try_from(handle_index)
                 .map_err(|_| format!("durable result handle index {handle_index} is too large"))?;
-            result
-                .stream_mappings
+            bindings
                 .get(index)
                 .map(|mapping| mapping.transport_stream_id)
                 .ok_or_else(|| format!("unknown durable result handle index {handle_index}"))
         })?;
         let mappings = producer
-            .materialize_bindings(&result.stream_mappings)
+            .materialize_bindings(bindings)
             .await
             .map_err(SessionError::from)?;
         Ok(Self { value, mappings })

@@ -15,7 +15,7 @@
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{AgentFingerprint, AgentId, InvocationId, OplogIndex};
+use crate::base_model::{AgentFingerprint, AgentId, InterruptKind, InvocationId, OplogIndex};
 use golem_schema::schema::{
     FromSchema as FromSchemaTrait, FromSchemaError, IntoSchema as IntoSchemaTrait, SchemaBuilder,
     SchemaFingerprintV1, SchemaType, SchemaValue, TypeId,
@@ -1381,7 +1381,7 @@ pub struct StreamConsumerCancelAppliedRecord {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionInvocationResultRecord {
+pub struct StreamSessionRemoteResultRecord {
     pub format_version: u8,
     pub session_key: StreamRegistrationInvocation,
     pub result: Vec<u8>,
@@ -1394,7 +1394,16 @@ pub struct StreamSessionInvocationResultRecord {
 pub struct StreamSessionFinishedRecord {
     pub format_version: u8,
     pub session_key: StreamRegistrationInvocation,
-    pub result: Result<(), Vec<u8>>,
+    pub result: Result<(), SessionFailure>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum SessionFailure {
+    Invocation,
+    Interrupted(InterruptKind),
+    Protocol(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1537,7 +1546,7 @@ pub enum StreamSessionRecord {
     /// Consumption of the completion future, independently of the item stream's EOF.
     ConsumerOutcome(StreamConsumerTerminalRecord),
     ReaderForwardIntent(StreamReaderForwardIntentRecord),
-    InvocationResult(StreamSessionInvocationResultRecord),
+    RemoteResult(StreamSessionRemoteResultRecord),
     Finished(StreamSessionFinishedRecord),
     Tombstoned(StreamSlotTombstonedRecord),
     CancelRequested(StreamSessionCancelRequestedRecord),
@@ -1593,7 +1602,7 @@ impl StreamSessionRecord {
             Self::Attached(record) => return Some(&record.session_key),
             Self::ResumeAttempt(record) => return Some(&record.session_key),
             Self::Detached(record) => return Some(&record.session_key),
-            Self::InvocationResult(record) => &record.session_key,
+            Self::RemoteResult(record) => &record.session_key,
             Self::Finished(record) => &record.session_key,
             Self::Tombstoned(record) => &record.session_key,
             Self::CancelRequested(record) => &record.session_key,
@@ -1634,7 +1643,7 @@ impl StreamSessionRecord {
             Self::ConsumerTerminal(record) => record.format_version,
             Self::ConsumerOutcome(record) => record.format_version,
             Self::ReaderForwardIntent(record) => record.format_version,
-            Self::InvocationResult(record) => record.format_version,
+            Self::RemoteResult(record) => record.format_version,
             Self::Finished(record) => record.format_version,
             Self::Tombstoned(record) => record.format_version,
             Self::CancelRequested(record) => record.format_version,
@@ -1858,7 +1867,7 @@ impl StreamSessionRecord {
                         }
                     }
             }
-            Self::InvocationResult(record) => {
+            Self::RemoteResult(record) => {
                 let unique_transport_ids = record
                     .stream_mappings
                     .iter()
@@ -1984,9 +1993,9 @@ mod tests {
         StreamAttachmentKey, StreamBindingRecord, StreamConsumerItemValueRecord,
         StreamConsumerObservation, StreamConsumerTerminalRecord, StreamError, StreamId,
         StreamInvocationId, StreamOffset, StreamOffsetError, StreamRecordReference,
-        StreamRegistrationInvocation, StreamSessionExpiryPolicy,
-        StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
-        StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
+        StreamRegistrationInvocation, StreamSessionExpiryPolicy, StreamSessionPreparedRecord,
+        StreamSessionRecord, StreamSessionRemoteResultRecord, StreamTerminal, StreamTerminalAuthor,
+        StreamTerminalOrigin, StreamTerminalRecord,
     };
     use crate::base_model::component::ComponentRevision;
     use crate::base_model::environment::EnvironmentId;
@@ -2602,7 +2611,7 @@ mod tests {
         stderr_mapping.transport_stream_id = 13;
         stderr_mapping.role = SessionStreamRole::ToolStderr;
         assert!(
-            StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+            StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
                 format_version: 1,
                 session_key: StreamRegistrationInvocation::Remote(
                     prepared.attempt.invocation.session_key.clone(),

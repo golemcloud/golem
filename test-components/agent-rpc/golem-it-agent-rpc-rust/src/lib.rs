@@ -9,7 +9,9 @@ use golem_rust::{
     ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid,
     WireSchema, agent_definition, agent_implementation, encode_schema_value, oplog_commit,
 };
+use std::cell::RefCell;
 use std::future::Future;
+use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod gc_timing;
@@ -563,6 +565,8 @@ pub trait StreamingRpcTarget {
     fn new(name: String) -> Self;
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn fail_with_retries(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn exit_after_input(&self, input: AgentStream<u32>) -> Vec<u32>;
     async fn observe_input_terminal(
         &mut self,
         input: AgentStream<u32>,
@@ -579,6 +583,13 @@ pub trait StreamingRpcTarget {
     async fn drop_input(&self, input: AgentStream<u32>) -> u64;
     async fn drop_input_u64(&self, input: AgentStream<u64>) -> u64;
     async fn hold_input(&self, input: AgentStream<u32>) -> u64;
+    async fn consume_prefix(&mut self, input: AgentStream<u32>, gate: PromiseId) -> Vec<u32>;
+    fn consume_in_background(&mut self, input: AgentStream<u32>, gate: PromiseId) -> u64;
+    fn forward_in_background(&mut self, input: AgentStream<u32>, gate: PromiseId) -> u64;
+    fn observed_input(&self) -> Vec<u32>;
+    fn retain_input(&mut self, input: AgentStream<u32>, gate: PromiseId) -> u64;
+    async fn read_retained_input(&mut self) -> Result<Option<u32>, String>;
+    fn optional_output(&self) -> Option<AgentStream<u32>>;
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32>;
     fn produce_context_stream(&self, gate: PromiseId) -> AgentStream<(String, String, String)>;
     fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes>;
@@ -635,6 +646,8 @@ pub trait StreamingRpcTarget {
 struct StreamingRpcTargetImpl {
     _name: String,
     scalar: u64,
+    retained_input: Option<AgentStream<u32>>,
+    observed_input: Rc<RefCell<Vec<u32>>>,
 }
 
 #[agent_implementation]
@@ -643,7 +656,68 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         Self {
             _name: name,
             scalar: 0,
+            retained_input: None,
+            observed_input: Rc::new(RefCell::new(Vec::new())),
         }
+    }
+
+    async fn consume_prefix(&mut self, mut input: AgentStream<u32>, gate: PromiseId) -> Vec<u32> {
+        self.scalar += 1;
+        golem_rust::await_promise(&gate).await;
+        vec![
+            input.next().await.unwrap().unwrap(),
+            input.next().await.unwrap().unwrap(),
+        ]
+    }
+
+    fn consume_in_background(&mut self, mut input: AgentStream<u32>, gate: PromiseId) -> u64 {
+        self.scalar += 1;
+        let observed = self.observed_input.clone();
+        spawn_local(async move {
+            golem_rust::await_promise(&gate).await;
+            while let Some(item) = input.next().await {
+                observed.borrow_mut().push(item.unwrap());
+            }
+        });
+        self.scalar
+    }
+
+    fn forward_in_background(&mut self, input: AgentStream<u32>, gate: PromiseId) -> u64 {
+        self.scalar += 1;
+        let observed = self.observed_input.clone();
+        let target = format!("{}-forwarded-input", self._name);
+        spawn_local(async move {
+            golem_rust::await_promise(&gate).await;
+            let values = StreamingRpcTargetClient::upsert(target)
+                .consume(input)
+                .await;
+            observed.borrow_mut().extend(values);
+        });
+        self.scalar
+    }
+
+    fn observed_input(&self) -> Vec<u32> {
+        self.observed_input.borrow().clone()
+    }
+
+    fn retain_input(&mut self, input: AgentStream<u32>, gate: PromiseId) -> u64 {
+        self.retained_input = Some(input);
+        spawn_local(async move {
+            golem_rust::await_promise(&gate).await;
+        });
+        73
+    }
+
+    async fn read_retained_input(&mut self) -> Result<Option<u32>, String> {
+        match self.retained_input.as_mut().unwrap().next().await {
+            Some(Ok(value)) => Ok(Some(value)),
+            Some(Err(error)) => Err(format!("{error:?}")),
+            None => Ok(None),
+        }
+    }
+
+    fn optional_output(&self) -> Option<AgentStream<u32>> {
+        None
     }
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32> {
@@ -651,6 +725,25 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             .collect()
             .await
             .expect("failed to consume input stream")
+    }
+
+    async fn fail_with_retries(&self, input: AgentStream<u32>) -> Vec<u32> {
+        let port = std::env::var("SESSION_FAILURE_RETRY_PORT").unwrap();
+        let _ = wasi_fetch::Client::new()
+            .post(&format!("http://localhost:{port}/session-failure"))
+            .send()
+            .await
+            .expect("session failure after exhausted HTTP retry policy");
+        drop(input);
+        panic!("the failing HTTP endpoint unexpectedly succeeded")
+    }
+
+    async fn exit_after_input(&self, input: AgentStream<u32>) -> Vec<u32> {
+        input
+            .collect()
+            .await
+            .expect("failed to consume input stream");
+        std::process::exit(0)
     }
 
     async fn observe_input_terminal(

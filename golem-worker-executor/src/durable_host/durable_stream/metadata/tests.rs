@@ -608,6 +608,43 @@ async fn result_without_owned_outputs_retains_entity_attribution_after_reload() 
 
 #[test]
 #[timeout("60s")]
+async fn mapping_free_return_is_idempotent_after_cold_load() {
+    let fixture = Fixture::new().await;
+    let bytes = golem_common::schema::streaming::encode_recursive_stream_value(
+        &SchemaValue::Option { inner: None },
+        |_, _| Err("the result has no streams".into()),
+    )
+    .unwrap();
+    let bytes = prost::Message::encode_to_vec(&bytes);
+    let register = async |producer: Arc<DurableStreamStore>| {
+        producer
+            .register_invocation_return(
+                None,
+                fixture.identity.invocation.clone(),
+                bytes.clone(),
+                Vec::new(),
+                None,
+                None,
+                ComponentRevision::INITIAL,
+            )
+            .await
+    };
+    let producer = fixture.producer().await;
+    let first = register(producer.clone()).await.unwrap();
+    assert_eq!(
+        register(producer.clone()).await.unwrap().oplog_index,
+        first.oplog_index
+    );
+    fixture.persist().await;
+    drop(producer);
+    let cold = fixture.producer().await;
+    let replay = register(cold).await.unwrap();
+    assert_eq!(replay.oplog_index, first.oplog_index);
+    assert_eq!(fixture.oplog.current_oplog_index().await, first.oplog_index);
+}
+
+#[test]
+#[timeout("60s")]
 async fn external_producer_offsets_survive_indexed_cold_load() {
     let fixture = Fixture::new().await;
     let producer = fixture.producer().await;

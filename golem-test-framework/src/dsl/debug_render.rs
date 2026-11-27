@@ -180,6 +180,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 let _ = writeln!(result, "{pad}scope card:        {scope_card_id}");
             }
         }
+        PublicOplogEntry::AgentInvocationReturned(params) => {
+            let _ = writeln!(result, "AGENT INVOCATION RETURNED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
+            let _ = writeln!(result, "{pad}result:            {:?}", params.result);
+        }
         PublicOplogEntry::AgentInvocationFinished(params) => {
             let _ = writeln!(result, "AGENT INVOCATION FINISHED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);

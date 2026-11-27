@@ -39,8 +39,8 @@ use crate::model::oplog::raw_types::{
     DurableStreamOutcome, DurableStreamTerminalOutcome,
 };
 use crate::model::oplog::{
-    AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails, LogLevel,
-    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails, UpdateFailureClass,
+    AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails, FinishedResult,
+    LogLevel, OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails, UpdateFailureClass,
 };
 use crate::resource_runtime::ResourceTypeId;
 
@@ -79,7 +79,6 @@ impl From<DurableStreamEventSummary>
                 None,
                 None,
             ),
-            DurableStreamEventSummary::SessionResult => (Kind::SessionResult, None, None),
             DurableStreamEventSummary::SessionFinished { outcome } => {
                 (Kind::SessionFinished, None, Some(outcome))
             }
@@ -152,7 +151,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary>
                 outcome: DurableStreamTerminalOutcome::ConsumerCancelled,
                 origin,
             }),
-            (Kind::SessionResult, None, None, None) => Ok(Self::SessionResult),
             (Kind::SessionFinished, None, Some(outcome), None) => {
                 Ok(Self::SessionFinished { outcome })
             }
@@ -634,6 +632,16 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .collect(),
                 wallet_pin: Some(invocation_wallet_pin_to_proto(*wallet_pin)),
             }),
+            OplogEntry::AgentInvocationReturned {
+                invocation_id, result, method_name, component_revision, ..
+            } => Entry::AgentInvocationReturned(
+                golem_api_grpc::proto::golem::worker::RawAgentInvocationReturnedParameters {
+                    invocation_id: Some(invocation_id.into()),
+                    result: Some(oplog_payload_to_proto(result)?),
+                    method_name,
+                    component_revision: component_revision.into(),
+                }
+            ),
             OplogEntry::AgentInvocationFinished {
                 invocation_id,
                 result,
@@ -644,7 +652,12 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
                 invocation_id: Some(invocation_id.into()),
-                result: Some(oplog_payload_to_proto(result)?),
+                result: Some(golem_api_grpc::proto::golem::worker::RawFinishedResult {
+                    result: Some(match result {
+                        FinishedResult::Payload(payload) => golem_api_grpc::proto::golem::worker::raw_finished_result::Result::Payload(oplog_payload_to_proto(payload)?),
+                        FinishedResult::Returned(index) => golem_api_grpc::proto::golem::worker::raw_finished_result::Result::Returned(index.into()),
+                    }),
+                }),
                 method_name,
                 consumed_fuel,
                 component_revision: component_revision.into(),
@@ -1326,8 +1339,27 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     )?),
                 })
             }
+            Entry::AgentInvocationReturned(p) => Ok(OplogEntry::AgentInvocationReturned {
+                timestamp,
+                invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
+                result: oplog_payload_from_proto(p.result.ok_or("Missing returned value")?)?,
+                method_name: p.method_name,
+                component_revision: p.component_revision.try_into()?,
+            }),
             Entry::AgentInvocationFinished(p) => {
-                let result = oplog_payload_from_proto(p.result.ok_or("Missing result payload")?)?;
+                let result = match p
+                    .result
+                    .ok_or("Missing result")?
+                    .result
+                    .ok_or("Missing finished result")?
+                {
+                    golem_api_grpc::proto::golem::worker::raw_finished_result::Result::Payload(
+                        payload,
+                    ) => FinishedResult::Payload(oplog_payload_from_proto(payload)?),
+                    golem_api_grpc::proto::golem::worker::raw_finished_result::Result::Returned(
+                        index,
+                    ) => FinishedResult::Returned(OplogIndex::from_u64(index)),
+                };
                 let component_revision: crate::model::component::ComponentRevision =
                     p.component_revision.try_into().map_err(|e: String| e)?;
                 Ok(OplogEntry::AgentInvocationFinished {

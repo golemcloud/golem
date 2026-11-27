@@ -224,6 +224,14 @@ object OplogApi {
     caller: Option[PublicCaller] = None
   )
 
+  final case class AgentInvocationReturnedParameters(
+    timestamp: ContextApi.DateTime,
+    invocationId: UUID,
+    result: TypedSchemaValue,
+    methodName: Option[String],
+    componentRevision: Long
+  )
+
   final case class AgentInvocationFinishedParameters(
     timestamp: ContextApi.DateTime,
     invocationId: UUID,
@@ -459,6 +467,9 @@ object OplogApi {
     final case class AgentInvocationStarted(params: AgentInvocationStartedParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class AgentInvocationReturned(params: AgentInvocationReturnedParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
     final case class AgentInvocationFinished(params: AgentInvocationFinishedParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -619,6 +630,17 @@ object OplogApi {
         case "agent-invocation-started" | "exported-function-invoked" =>
           AgentInvocationStarted(
             parseAgentInvocationStartedParameters(v.asInstanceOf[JsAgentInvocationStartedParameters])
+          )
+        case "agent-invocation-returned" =>
+          val p = v.asInstanceOf[JsAgentInvocationReturnedParameters]
+          AgentInvocationReturned(
+            AgentInvocationReturnedParameters(
+              timestamp = parseDateTime(p.timestamp),
+              invocationId = JsUuid.toUuid(p.invocationId),
+              result = typedFromJs(p.result),
+              methodName = p.methodName.toOption,
+              componentRevision = BigInt(p.componentRevision.toString).toLong
+            )
           )
         case "agent-invocation-finished" | "exported-function-completed" =>
           AgentInvocationFinished(

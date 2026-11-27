@@ -53,22 +53,23 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle,
     InputStreamHighWater, LocalStreamReaderId, MAX_NEW_STREAM_HANDLES_PER_VALUE,
-    MAX_PACKED_U8_STREAM_ITEM_SIZE, STREAM_CONSUMER_RECORD_FORMAT_VERSION, SessionStreamRole,
-    StreamAttachmentKey, StreamBindingRecord, StreamCallerAttemptRecord, StreamCancellationRequest,
-    StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
+    MAX_PACKED_U8_STREAM_ITEM_SIZE, STREAM_CONSUMER_RECORD_FORMAT_VERSION, SessionFailure,
+    SessionStreamRole, StreamAttachmentKey, StreamBindingRecord, StreamCallerAttemptRecord,
+    StreamCancellationRequest, StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
     StreamConsumerItemValueRecord, StreamConsumerObservation, StreamConsumerTerminalRecord,
     StreamEndpointSide, StreamError, StreamInvocationId, StreamItemsPayload, StreamOffset,
     StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
     StreamReaderForwardPublication, StreamRecordReference, StreamRegistrationCoordinate,
     StreamRegistrationInvocation, StreamResumeOperation, StreamRootKind,
-    StreamSessionDetachedRecord, StreamSessionInvocationResultRecord, StreamSessionKey,
-    StreamSessionMapping, StreamSessionMappingRecord, StreamSessionMappingUpdateRecord,
-    StreamSessionRecord, StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord,
+    StreamSessionDetachedRecord, StreamSessionKey, StreamSessionMapping,
+    StreamSessionMappingRecord, StreamSessionMappingUpdateRecord, StreamSessionRecord,
+    StreamSessionRemoteResultRecord, StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord,
     StreamSourceKind, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
     StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
     ToolByteStreamRole,
 };
 use golem_common::base_model::oplog::OplogEntry;
+use golem_common::model::InterruptKind;
 use golem_common::model::Timestamp;
 use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::OplogIndex;
@@ -83,7 +84,7 @@ use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
 use golem_schema::schema::{SchemaValue, SchemaValueStream, TypedSchemaValue};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::any::{Any, TypeId};

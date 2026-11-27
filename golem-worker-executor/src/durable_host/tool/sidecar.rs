@@ -667,7 +667,8 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 admission_refusal: None,
                 result: Err(SerializableToolRpcError::RemoteInternalError(
                     details.clone(),
-                )),
+                ))
+                .into(),
             },
             "failed to encode trapped tool terminal",
         )

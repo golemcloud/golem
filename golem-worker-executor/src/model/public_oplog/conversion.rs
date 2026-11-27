@@ -13,18 +13,167 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::durable_stream::StreamSessionRecord;
+use golem_common::model::oplog::payload::types::{
+    PublicRpcResponse, PublicToolOperationTerminal, RecordedRpcResult, RecordedToolResult,
+    RemoteResultReference, SerializableCustomToolError, SerializableToolError,
+    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
+    SerializableToolStructuredResult,
+};
+use golem_common::schema::FromSchema;
+use prost::Message;
 
 pub(super) fn host_response_to_public_value(
     response: HostResponse,
 ) -> Result<TypedSchemaValue, String> {
     match response {
+        HostResponse::GolemRpcInvokeAndAwait(response) => PublicRpcResponse {
+            result: response.result.into_inline()?,
+        }
+        .into_typed_schema_value()
+        .map_err(|error| error.to_string()),
         HostResponse::EntityInvocation(HostResponseEntityInvocation { result: Ok(value) }) => {
-            Ok(value)
+            let terminal = SerializableToolOperationTerminal::from_value(value.value())
+                .map_err(|error| error.to_string())?;
+            PublicToolOperationTerminal {
+                body_execution: terminal.body_execution,
+                result: terminal.result.into_inline()?,
+                admission_refusal: terminal.admission_refusal,
+            }
+            .into_typed_schema_value()
+            .map_err(|error| error.to_string())
         }
         response => response
             .into_typed_schema_value()
             .map_err(|error| error.to_string()),
     }
+}
+
+async fn public_remote_result(
+    reference: &RemoteResultReference,
+    terminal: OplogIndex,
+    parent: Option<OplogIndex>,
+    oplog_service: &Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+) -> Result<SchemaValue, String> {
+    if reference.index >= terminal {
+        return Err("remote result reference must precede its terminal".into());
+    }
+    let entry = oplog_service
+        .read_exact(owned_agent_id, agent_mode, reference.index, 1)
+        .await
+        .map_err(|error| error.to_string())?
+        .remove(&reference.index)
+        .ok_or_else(|| format!("missing remote result {}", reference.index))?;
+    let OplogEntry::StreamSession {
+        record,
+        entity_parent_start_index,
+        ..
+    } = entry
+    else {
+        return Err("remote result reference is not a session record".into());
+    };
+    if entity_parent_start_index != parent {
+        return Err("remote result reference names another entity".into());
+    }
+    let record: StreamSessionRecord = oplog_service
+        .download_payload(owned_agent_id, agent_mode, record)
+        .await?;
+    if !record.has_supported_format() {
+        return Err("unsupported remote result format".into());
+    }
+    let StreamSessionRecord::RemoteResult(record) = record else {
+        return Err("remote result reference is not RemoteResult".into());
+    };
+    if record.session_key != reference.session_key {
+        return Err("remote result reference names another session".into());
+    }
+    let value = golem_schema::proto::golem::schema::SchemaValue::decode(record.result.as_slice())
+        .map_err(|error| error.to_string())?;
+    let value =
+        golem_common::schema::streaming::decode_recursive_stream_value(value, |handle, _| {
+            if handle as u128 >= record.stream_mappings.len() as u128 {
+                return Err(format!("unknown remote result stream binding {handle}"));
+            }
+            Ok(golem_common::schema::stream::SchemaValueStream::from_host_endpoint(()))
+        })?;
+    Ok(crate::durable_host::durable_session::strip_streams(value))
+}
+
+async fn public_host_response(
+    mut response: HostResponse,
+    terminal: OplogIndex,
+    start: OplogIndex,
+    oplog_service: &Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+) -> Result<TypedSchemaValue, String> {
+    match &mut response {
+        HostResponse::GolemRpcInvokeAndAwait(response) => {
+            if let RecordedRpcResult::Remote(reference) = &response.result {
+                let entry = oplog_service
+                    .read_exact(owned_agent_id, agent_mode, start, 1)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .remove(&start);
+                let Some(OplogEntry::Start {
+                    parent_start_index, ..
+                }) = entry
+                else {
+                    return Err("remote result response has no Start".into());
+                };
+                response.result = RecordedRpcResult::Inline(Ok(public_remote_result(
+                    reference,
+                    terminal,
+                    parent_start_index,
+                    oplog_service,
+                    owned_agent_id,
+                    agent_mode,
+                )
+                .await?));
+            }
+        }
+        HostResponse::EntityInvocation(HostResponseEntityInvocation { result: Ok(value) }) => {
+            let mut tool = SerializableToolOperationTerminal::from_value(value.value())
+                .map_err(|error| error.to_string())?;
+            if let RecordedToolResult::Remote {
+                reference,
+                graph,
+                custom_error,
+            } = tool.result
+            {
+                let result = TypedSchemaValue::new(
+                    graph,
+                    public_remote_result(
+                        &reference,
+                        terminal,
+                        Some(start),
+                        oplog_service,
+                        owned_agent_id,
+                        agent_mode,
+                    )
+                    .await?,
+                );
+                tool.result = RecordedToolResult::Inline(match custom_error {
+                    Some(name) => Err(SerializableToolRpcError::RemoteToolError(Box::new(
+                        SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                            name,
+                            payload: result,
+                        })),
+                    ))),
+                    None => Ok(SerializableToolStructuredResult {
+                        result: Some(SerializableToolResultValue::from_typed(&result)?),
+                    }),
+                });
+                *value = tool
+                    .into_typed_schema_value()
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        _ => {}
+    }
+    host_response_to_public_value(response)
 }
 
 #[async_trait]
@@ -178,7 +327,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     let host_response: HostResponse = oplog_service
                         .download_payload(owned_agent_id, agent_mode, response_payload)
                         .await?;
-                    Some(host_response_to_public_value(host_response)?)
+                    Some(
+                        public_host_response(
+                            host_response,
+                            oplog_index,
+                            start_index,
+                            &oplog_service,
+                            owned_agent_id,
+                            agent_mode,
+                        )
+                        .await?,
+                    )
                 } else {
                     None
                 };
@@ -202,7 +361,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     let host_response: HostResponse = oplog_service
                         .download_payload(owned_agent_id, agent_mode, partial_payload)
                         .await?;
-                    Some(host_response_to_public_value(host_response)?)
+                    Some(
+                        public_host_response(
+                            host_response,
+                            oplog_index,
+                            start_index,
+                            &oplog_service,
+                            owned_agent_id,
+                            agent_mode,
+                        )
+                        .await?,
+                    )
                 } else {
                     None
                 };
@@ -278,6 +447,28 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     },
                 ))
             }
+            OplogEntry::AgentInvocationReturned {
+                timestamp,
+                invocation_id,
+                result,
+                method_name,
+                component_revision,
+            } => {
+                let result = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, result)
+                    .await?;
+                Ok(PublicOplogEntry::AgentInvocationReturned(
+                    golem_common::model::oplog::public_oplog_entry::AgentInvocationReturnedParams {
+                        timestamp,
+                        invocation_id,
+                        result: result
+                            .into_typed_schema_value()
+                            .map_err(|error| error.to_string())?,
+                        method_name,
+                        component_revision,
+                    },
+                ))
+            }
             OplogEntry::AgentInvocationFinished {
                 timestamp,
                 invocation_id,
@@ -287,9 +478,36 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 component_revision: entry_component_revision,
                 awaits_settlement: _,
             } => {
-                let invocation_result: AgentInvocationResult = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, result)
-                    .await?;
+                let invocation_result = crate::services::oplog::resolve_finished_result(
+                    oplog_index,
+                    invocation_id,
+                    result,
+                    |index| {
+                        let oplog_service = &oplog_service;
+                        async move {
+                            oplog_service
+                                .read_exact(owned_agent_id, agent_mode, index, 1)
+                                .await
+                                .map_err(|error| error.to_string())?
+                                .remove(&index)
+                                .ok_or_else(|| format!("missing invocation return {index}"))
+                        }
+                    },
+                    |payload| async {
+                        oplog_service
+                            .download_payload(owned_agent_id, agent_mode, payload)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    |payload| async {
+                        oplog_service
+                            .download_payload(owned_agent_id, agent_mode, payload)
+                            .await
+                            .map_err(|error| error.to_string())
+                    },
+                    std::convert::identity,
+                )
+                .await?;
 
                 let public_result = agent_invocation_result_to_public(
                     components.clone(),

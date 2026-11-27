@@ -27,15 +27,14 @@ use crate::services::agent_filesystem_snapshots::SnapshotsDisabled;
 use crate::worker::RetryDecision;
 use crate::worker::instance::{InstanceCreationFailure, InstanceCreationStage};
 use crate::worker::snapshot_selection::SourceFound;
+use golem_common::model::InterruptKind;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     AgentError, FailedSnapshotAssistedUpdateDetails, OplogEntry, OplogIndex, ReplayDivergence,
     SnapshotAssistedUpdateDetails, SnapshotFault, UpdateFailureClass,
 };
 use golem_common::model::{AgentId, PendingUpdateKind, PendingUpdateRef, Timestamp};
-use golem_service_base::error::worker_executor::{
-    ComponentServiceRefusal, InterruptKind, WorkerExecutorError,
-};
+use golem_service_base::error::worker_executor::{ComponentServiceRefusal, WorkerExecutorError};
 use golem_service_base::storage::blob::BlobRefusal;
 use std::sync::Arc;
 

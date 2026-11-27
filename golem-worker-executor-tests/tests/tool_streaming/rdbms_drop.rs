@@ -163,7 +163,7 @@ async fn transaction_drop_disposal(
             _ => None,
         })
         .expect("isolated tool terminal");
-    let trapped = SerializableToolOperationTerminal::from_value(trapped.value())?;
+    let trapped = PublicToolOperationTerminal::from_value(trapped.value())?;
     assert_eq!(
         trapped.body_execution,
         SerializableEntityBodyExecution::Trapped

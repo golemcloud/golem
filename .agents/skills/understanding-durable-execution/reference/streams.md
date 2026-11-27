@@ -312,7 +312,7 @@ are still being produced and consumed. Three crash windows follow:
    operations can hold producer/session locks across pending polls, so awaiting cleanup outside
    the event loop can deadlock and prevent the next queued invocation from starting.
 
-Live and replay materialize streaming results inside `invoke_observed`, before clearing the principal, read-only mode and deadline or ending the primary owner-lane registration. Returning a stream handle is not parent completion: its producer can still admit and await tools. After production and positional tail work settle, prepare parent end, release the primary permit, then settle children; holding that permit through child settlement blocks capable children. Materialization failures use the existing invocation cleanup and failure selection. Keep schema-level `uses_streams` detection for input-only methods and absent optional outputs; snapshot calls pass no stream session.
+Live and replay materialize declared streaming results inside `invoke_observed`, before clearing the principal, read-only mode and deadline or ending the primary owner-lane registration. Returning a stream handle is not parent completion: its producer can still admit and await tools. After production and positional tail work settle, prepare parent end, release the primary permit, then settle children; holding that permit through child settlement blocks capable children. Materialization failures use the existing invocation cleanup and failure selection. Session admission uses schema-level stream detection for inputs and outputs, including absent optional outputs. Result recording classifies only the declared output: input-only methods record a scalar terminal at the export's return and drain background readers before settlement. Snapshot calls pass no stream session.
 
 Provider reconstruction drains terminal outputs against their committed records without waiting
 for a consumer attachment; the consumer may already have finished and detached permanently.
@@ -466,6 +466,10 @@ writer becomes `Abandoned`; an agent writer still becomes `Finished` because its
 does not distinguish close from drop. Session finalization closes unread inputs and open outputs
 before appending its `Finished` record. A stream failing locally does not fail sibling streams or the invocation
 (`tests/rpc.rs::stream_local_output_failure_does_not_fail_sibling_or_invocation`).
+
+The session's `Finished` stores `Result<(), SessionFailure>`, separate from each stream's terminal. `Invocation` carries no text and is valid only when `lookup_invocation_result` returns `Complete(Err(..))`; resume and joined observers read that authoritative failure. `Interrupted(kind)` retains the interrupt kind, including entity cancellation for a cancelled tool body. `Protocol(text)` retains the message because no invocation record holds it. Start-side failure observers check the invocation lookup before choosing `Invocation`, since admission or startup can fail without an invocation failure record. The first session terminal wins across reconstruction.
+
+`on_invocation_failure` commits the session terminal after the invocation's durable failure record and before publishing its completion. The loop and recovery pass their existing stream-terminal details through the required optional session argument; they do not finish the session again afterward. Completion events retain their existing errors, including the runtime error for an interrupt.
 
 The resident live bus carries `Item` or `Terminal { authored_by, terminal }`. It forwards the
 same typed terminal through projections and output drains. Consumer terminal observations retain

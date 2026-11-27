@@ -567,9 +567,8 @@ mod tests {
     async fn pending_stdio_result_observes_typed_stop_without_cancelling_task() {
         let (result_tx, result_rx) = oneshot::channel();
         let (stop, signal) = oneshot::channel();
-        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-            golem_common::model::Timestamp::now_utc(),
-        );
+        let kind =
+            golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         let mut result = Box::pin(wait_stdio_task_result(
             result_rx,
             Box::pin(async move { signal.await.unwrap() }),
@@ -582,7 +581,7 @@ mod tests {
             .expect("pending stdio result must observe the published stop")
             .unwrap_err();
         assert_eq!(
-            observed.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>(),
+            observed.downcast_ref::<golem_common::model::InterruptKind>(),
             Some(&kind)
         );
         // The task still owns completion after its observer is gone.
@@ -619,9 +618,8 @@ mod tests {
         let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel();
         let pending = std::sync::Arc::new(tokio::sync::Notify::new());
         let (stop, signal) = oneshot::channel();
-        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-            golem_common::model::Timestamp::now_utc(),
-        );
+        let kind =
+            golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         let mut input = vec![b'a'; STDIO_LOG_CHUNK_MAX_BYTES - 1];
         input.extend_from_slice("é!".as_bytes());
         let mut first = None;
@@ -650,7 +648,7 @@ mod tests {
             .await;
         let error = observed.expect_err("pending acknowledgement must observe the published stop");
         assert_eq!(
-            error.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>(),
+            error.downcast_ref::<golem_common::model::InterruptKind>(),
             Some(&kind)
         );
         drop(store);
@@ -669,9 +667,8 @@ mod tests {
     async fn ready_stdio_result_keeps_completion_before_stop() {
         let (result_tx, result_rx) = oneshot::channel();
         result_tx.send(Ok(Err(ErrorCode::Pipe))).unwrap();
-        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-            golem_common::model::Timestamp::now_utc(),
-        );
+        let kind =
+            golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         assert!(matches!(
             wait_stdio_task_result(result_rx, Box::pin(std::future::ready(kind)))
                 .await

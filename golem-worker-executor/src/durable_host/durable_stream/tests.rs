@@ -229,7 +229,7 @@ async fn local_registration_rejects_foreign_coordinate_without_committing() {
     );
     assert_eq!(
         store
-            .register_result_streams(
+            .register_invocation_return(
                 None,
                 identity.invocation,
                 vec![],
@@ -240,6 +240,8 @@ async fn local_registration_rejects_foreign_coordinate_without_committing() {
                     role: SessionStreamRole::Output,
                 }],
                 None,
+                None,
+                ComponentRevision::INITIAL,
             )
             .await,
         Err(StreamStoreError::RegistrationDivergence),
@@ -1226,7 +1228,10 @@ async fn session_finish_holds_its_lock_and_reserves_terminal_batch_bytes() {
     );
     let lock = live.session_lock(&identity.invocation);
     let guard = lock.lock().await;
-    let mut finish = Box::pin(session.fail("x".repeat(300 * 1024)));
+    let mut finish = Box::pin(session.fail(
+        golem_common::model::durable_stream::SessionFailure::Invocation,
+        "x".repeat(300 * 1024),
+    ));
     assert!(futures::poll!(finish.as_mut()).is_pending());
     // A 300 KiB error copied across the maximum terminal batch exhausts the byte lane.
     assert_eq!(live.lifecycle_operation_bytes.available_permits(), 0);
@@ -6686,30 +6691,101 @@ async fn protocol_terminalization_closes_an_open_stream_once() {
 
 #[test]
 async fn empty_invocation_result_replays_exactly_and_rejects_conflicts() {
+    use prost::Message;
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
     let producer = producer(oplog.clone(), &identity, None).await;
+    // A declared option<stream> result can return none without any stream registrations.
+    let value = golem_common::schema::streaming::encode_recursive_stream_value(
+        &golem_common::schema::SchemaValue::Option { inner: None },
+        |_, _| panic!("none contains no stream"),
+    )
+    .unwrap()
+    .encode_to_vec();
 
-    producer
-        .register_result_streams(None, identity.invocation.clone(), vec![1], Vec::new(), None)
+    assert!(matches!(producer.register_invocation_return(
+        None,
+        identity.invocation.clone(),
+        value.clone(),
+        Vec::new(),
+        Some(OplogIndex::INITIAL),
+        None,
+        ComponentRevision::INITIAL,
+    ).await, Err(StreamStoreError::CorruptHistory(details)) if details.contains("entity attribution")));
+    assert_eq!(oplog.committed_length(), 0);
+    let returned = producer
+        .register_invocation_return(
+            None,
+            identity.invocation.clone(),
+            value.clone(),
+            Vec::new(),
+            None,
+            None,
+            ComponentRevision::INITIAL,
+        )
         .await
         .unwrap();
     let committed = oplog.committed_length();
+    assert_eq!(committed, 1);
+    assert!(returned.returned_value.stream_bindings.is_empty());
+    assert!(matches!(
+        oplog.read(returned.oplog_index).await.unwrap(),
+        OplogEntry::AgentInvocationReturned { .. }
+    ));
 
     producer
-        .register_result_streams(None, identity.invocation.clone(), vec![1], Vec::new(), None)
+        .register_invocation_return(
+            None,
+            identity.invocation.clone(),
+            value.clone(),
+            Vec::new(),
+            None,
+            None,
+            ComponentRevision::INITIAL,
+        )
         .await
         .unwrap();
     assert_eq!(oplog.committed_length(), committed);
 
     assert_eq!(
         producer
-            .register_result_streams(None, identity.invocation.clone(), vec![2], Vec::new(), None)
+            .register_invocation_return(
+                None,
+                identity.invocation.clone(),
+                vec![2],
+                Vec::new(),
+                None,
+                None,
+                ComponentRevision::INITIAL
+            )
             .await
             .unwrap_err(),
         StreamStoreError::RegistrationDivergence
     );
     assert_eq!(oplog.committed_length(), committed);
+    for (method_name, revision) in [
+        (
+            Some("another-method".to_string()),
+            ComponentRevision::INITIAL,
+        ),
+        (None, ComponentRevision::INITIAL.next().unwrap()),
+    ] {
+        assert_eq!(
+            producer
+                .register_invocation_return(
+                    None,
+                    identity.invocation.clone(),
+                    value.clone(),
+                    Vec::new(),
+                    None,
+                    method_name,
+                    revision,
+                )
+                .await
+                .unwrap_err(),
+            StreamStoreError::RegistrationDivergence
+        );
+    }
 }
 
 #[test]
@@ -6748,29 +6824,26 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
         ]
     };
     let registered = producer
-        .register_result_streams(
+        .register_invocation_return(
             None,
             identity.invocation.clone(),
             vec![4, 5],
             outputs(),
             None,
+            None,
+            ComponentRevision::INITIAL,
         )
         .await
         .unwrap();
     let owned = registered.handles;
-    let record = registered.session_record;
+    let result_index = registered.oplog_index;
+    let record = registered.returned_value;
     assert_eq!(owned.len(), 1);
-    let StreamSessionRecord::InvocationResult(result) = &record else {
-        unreachable!();
-    };
-    assert_eq!(
-        result.session_key,
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key)
-    );
-    assert_eq!(result.result, vec![4, 5]);
+    let result = &record;
+    assert_eq!(result.value, vec![4, 5]);
     assert_eq!(
         producer
-            .materialize_bindings(&result.stream_mappings)
+            .materialize_bindings(&result.stream_bindings)
             .await
             .unwrap(),
         vec![
@@ -6788,7 +6861,7 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
     );
     assert_eq!(
         result
-            .stream_mappings
+            .stream_bindings
             .iter()
             .map(|mapping| mapping.transport_stream_id)
             .collect::<Vec<_>>(),
@@ -6796,12 +6869,14 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
     );
     let committed = oplog.committed_length();
     let replay = producer
-        .register_result_streams(
+        .register_invocation_return(
             None,
             identity.invocation.clone(),
             vec![4, 5],
             outputs(),
             None,
+            None,
+            ComponentRevision::INITIAL,
         )
         .await
         .unwrap();
@@ -6809,7 +6884,8 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
         replay,
         ResultStreamRegistration {
             handles: owned,
-            session_record: record,
+            returned_value: record,
+            oplog_index: result_index,
         }
     );
     assert_eq!(oplog.committed_length(), committed);
@@ -6858,12 +6934,14 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
                 outputs
             };
             let original = live
-                .register_result_streams(
+                .register_invocation_return(
                     None,
                     identity.invocation.clone(),
                     vec![4, 5],
                     outputs(stale.clone(), None),
                     None,
+                    None,
+                    ComponentRevision::INITIAL,
                 )
                 .await
                 .unwrap();
@@ -6901,17 +6979,19 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
             let tip = oplog.current_oplog_index().await;
             let commits = oplog.commit_count();
             let result = recovered
-                .register_result_streams(
+                .register_invocation_return(
                     None,
                     identity.invocation.clone(),
                     vec![4, 5],
                     outputs(stale.clone(), Some(7)),
                     None,
+                    None,
+                    ComponentRevision::INITIAL,
                 )
                 .await;
             if retained_stage == 2 {
                 let replay = result.unwrap();
-                assert_eq!(replay.session_record, original.session_record);
+                assert_eq!(replay.returned_value, original.returned_value);
                 assert_eq!(replay.handles.len(), usize::from(mixed));
                 for handle in replay.handles {
                     assert_eq!(handle.producer_generation, recovered.generation());
@@ -6919,12 +6999,14 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
                 }
                 assert_eq!(
                     recovered
-                        .register_result_streams(
+                        .register_invocation_return(
                             None,
                             identity.invocation.clone(),
                             vec![4, 5],
                             outputs(stale.clone(), Some(0)),
                             None,
+                            None,
+                            ComponentRevision::INITIAL,
                         )
                         .await
                         .unwrap_err(),
@@ -6932,12 +7014,14 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
                 );
                 assert_eq!(
                     recovered
-                        .register_result_streams(
+                        .register_invocation_return(
                             None,
                             identity.invocation.clone(),
                             vec![9, 5],
                             outputs(stale.clone(), None),
                             None,
+                            None,
+                            ComponentRevision::INITIAL,
                         )
                         .await
                         .unwrap_err(),
@@ -6950,12 +7034,14 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
                     .unwrap();
                 assert_eq!(
                     recovered
-                        .register_result_streams(
+                        .register_invocation_return(
                             None,
                             identity.invocation.clone(),
                             vec![4, 5],
                             outputs(refreshed.clone(), None),
                             None,
+                            None,
+                            ComponentRevision::INITIAL,
                         )
                         .await
                         .unwrap_err(),
@@ -6965,12 +7051,14 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
                 changed_mapping.last_mut().unwrap().transport_stream_id = 13;
                 assert_eq!(
                     recovered
-                        .register_result_streams(
+                        .register_invocation_return(
                             None,
                             identity.invocation.clone(),
                             vec![4, 5],
                             changed_mapping,
                             None,
+                            None,
+                            ComponentRevision::INITIAL,
                         )
                         .await
                         .unwrap_err(),
@@ -6985,12 +7073,14 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
                     request.element_schema_fingerprint = SchemaFingerprintV1([99; 32]);
                     assert_eq!(
                         recovered
-                            .register_result_streams(
+                            .register_invocation_return(
                                 None,
                                 identity.invocation.clone(),
                                 vec![4, 5],
                                 changed_registration,
                                 None,
+                                None,
+                                ComponentRevision::INITIAL,
                             )
                             .await
                             .unwrap_err(),
@@ -7020,12 +7110,14 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
             let commits = oplog.commit_count();
             assert_eq!(
                 recovered
-                    .register_result_streams(
+                    .register_invocation_return(
                         None,
                         identity.invocation.clone(),
                         vec![4, 5],
                         outputs(stale, Some(7)),
                         None,
+                        None,
+                        ComponentRevision::INITIAL,
                     )
                     .await
                     .unwrap_err(),
@@ -7100,12 +7192,18 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
             ]
         };
         let registered = producer
-            .register_result_streams(None, identity.invocation.clone(), vec![3], outputs(), None)
+            .register_invocation_return(
+                None,
+                identity.invocation.clone(),
+                vec![3],
+                outputs(),
+                None,
+                None,
+                ComponentRevision::INITIAL,
+            )
             .await
             .unwrap();
-        let StreamSessionRecord::InvocationResult(result) = &registered.session_record else {
-            unreachable!()
-        };
+        let result = &registered.returned_value;
         let result_index = oplog.current_oplog_index().await;
         let recovered = DurableStreamStore::load(
             oplog.clone(),
@@ -7117,7 +7215,7 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
         .await
         .unwrap();
         let mappings = recovered
-            .materialize_bindings(&result.stream_mappings)
+            .materialize_bindings(&result.stream_bindings)
             .await
             .unwrap();
         for (position, mapping) in mappings.iter().enumerate() {
@@ -7139,12 +7237,14 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
         }
         assert_eq!(
             recovered
-                .register_result_streams(
+                .register_invocation_return(
                     None,
                     identity.invocation.clone(),
                     vec![3],
                     outputs(),
-                    None
+                    None,
+                    None,
+                    ComponentRevision::INITIAL,
                 )
                 .await
                 .unwrap(),
@@ -7177,7 +7277,15 @@ async fn result_plan_rejects_duplicate_new_coordinates_before_committing() {
 
     assert_eq!(
         producer
-            .register_result_streams(None, identity.invocation.clone(), vec![1], outputs, None)
+            .register_invocation_return(
+                None,
+                identity.invocation.clone(),
+                vec![1],
+                outputs,
+                None,
+                None,
+                ComponentRevision::INITIAL
+            )
             .await,
         Err(StreamStoreError::RegistrationDivergence)
     );
@@ -9051,7 +9159,11 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
             None,
             identity.invocation.clone(),
             None,
-            Err(error.clone()),
+            Err(
+                golem_common::model::durable_stream::SessionFailure::Protocol(
+                    String::from_utf8_lossy(&error).into_owned(),
+                ),
+            ),
             StreamTerminalAuthor::Host,
             StreamTerminal::Failed(StreamError::Trapped(
                 String::from_utf8_lossy(&error).into_owned(),
@@ -9078,7 +9190,11 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
                 session_key: StreamRegistrationInvocation::Local(
                     identity.invocation.idempotency_key,
                 ),
-                result: Err(error.clone()),
+                result: Err(
+                    golem_common::model::durable_stream::SessionFailure::Protocol(
+                        String::from_utf8_lossy(&error).into_owned()
+                    )
+                ),
             })
         );
         assert!(
@@ -9112,7 +9228,11 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
                     None,
                     identity.invocation.clone(),
                     None,
-                    Err(vec![99; error_len]),
+                    Err(
+                        golem_common::model::durable_stream::SessionFailure::Protocol(
+                            "c".repeat(error_len),
+                        ),
+                    ),
                     StreamTerminalAuthor::Host,
                     StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
                 ),
@@ -9163,7 +9283,7 @@ async fn session_finish_reserves_batch_memory_for_maximum_stream_count() {
         None,
         identity.invocation.clone(),
         None,
-        Err(vec![83; 128]),
+        Err(golem_common::model::durable_stream::SessionFailure::Protocol("S".repeat(128))),
         StreamTerminalAuthor::Host,
         StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
     ));
@@ -9261,7 +9381,7 @@ async fn multistream_lifecycle_batches_release_admission_before_delivery() {
                         None,
                         session,
                         None,
-                        Err(vec![19, 31]),
+                        Err(golem_common::model::durable_stream::SessionFailure::Invocation),
                         StreamTerminalAuthor::Host,
                         StreamTerminal::Failed(StreamError::Trapped(
                             String::from_utf8_lossy(&[19, 31]).into_owned(),
@@ -9854,7 +9974,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
                     None,
                     session_key,
                     None,
-                    Err(b"failed".to_vec()),
+                    Err(golem_common::model::durable_stream::SessionFailure::Invocation),
                     StreamTerminalAuthor::Host,
                     StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
                 )
@@ -10421,7 +10541,7 @@ async fn session_finish_retains_exact_terminal_fences_and_item_retries() {
                 None,
                 identity.invocation.clone(),
                 None,
-                Err(b"failed".to_vec()),
+                Err(golem_common::model::durable_stream::SessionFailure::Invocation),
                 StreamTerminalAuthor::Host,
                 StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
             )

@@ -489,10 +489,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         }
                                     }
                                     Some(trap_type) => {
+                                        let streaming_session = (uses_streams
+                                            && (store.as_context().data().agent_mode() == AgentMode::Ephemeral
+                                                || !matches!(trap_type, TrapType::Interrupt(InterruptKind::Suspend(_) | InterruptKind::Restart)))
+                                            && (matches!(trap_type, TrapType::Interrupt(_))
+                                                || store.as_context().data().durable_ctx().is_live()
+                                                || store.as_context().data().durable_ctx().state.authoritative_replay_failure.load(Ordering::Acquire)))
+                                            .then_some((&idempotency_key, details));
                                         let decision = match store
                                             .as_context_mut()
                                             .data_mut()
-                                            .on_invocation_failure(&full_function_name, &trap_type)
+                                            .on_invocation_failure(
+                                                &full_function_name,
+                                                &trap_type,
+                                                streaming_session,
+                                            )
                                             .await
                                         {
                                             InvocationFailureDecision::Retry(decision) => decision,
@@ -505,36 +516,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         };
 
                                         if decision == RetryDecision::None {
-                                            // Like the invocation loop, permanently fail the
-                                            // durable Stream Session of an invocation that was
-                                            // interrupted by a crash and cannot be retried.
-                                            // A fresh interrupt is authoritative even before live
-                                            // publication; already-finished sessions stay unchanged.
-                                            // Not for a lost shard, however the loss
-                                            // reached the trap: the shard's new owner resumes that
-                                            // invocation.
-                                            let shard_lost = matches!(
-                                                trap_type,
-                                                TrapType::Interrupt(InterruptKind::ShardLost)
-                                            );
-                                            if uses_streams
-                                                && !shard_lost
-                                                && (matches!(trap_type, TrapType::Interrupt(_))
-                                                    || store.as_context().data().durable_ctx().is_live()
-                                                    || store.as_context().data().durable_ctx().state.authoritative_replay_failure.load(Ordering::Acquire))
-                                            {
-                                                // A refused write means the shard has moved:
-                                                // record it before the startup result is published.
-                                                if let Err(error) = worker
-                                                    .fail_durable_streaming_session(
-                                                        &idempotency_key,
-                                                        details,
-                                                    )
-                                                    .await
-                                                {
-                                                    worker.retire_if_shard_lost(&error);
-                                                }
-                                            }
                                             // Cannot retry so we need to fail
                                             match trap_type {
                                                 TrapType::Interrupt(_interrupt_kind) => {

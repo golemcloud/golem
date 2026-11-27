@@ -14,7 +14,7 @@
 
 use golem_common::model::InvocationId;
 use golem_common::model::caller::{Caller, Principal};
-use golem_common::model::durable_stream::StreamInvocationId;
+use golem_common::model::durable_stream::{SessionFailure, StreamInvocationId};
 
 use crate::worker::*;
 
@@ -213,7 +213,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
             for (index, entry) in entries {
-                if let OplogEntry::StreamSession { record, .. } = entry {
+                if let OplogEntry::AgentInvocationReturned {
+                    invocation_id,
+                    result,
+                    ..
+                } = &entry
+                    && *invocation_id == session_key.idempotency_key
+                    && StreamRegistrationInvocation::Local(*invocation_id).qualify(
+                        self.owned_agent_id.environment_id,
+                        &self.owned_agent_id.agent_id,
+                        self.initial_worker_metadata.fingerprint,
+                    ) == *session_key
+                {
+                    let result = self
+                        .oplog
+                        .download_payload(result.clone())
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?;
+                    metadata.apply_invocation_returned(index, &result.stream_bindings);
+                } else if let OplogEntry::AgentInvocationFinished { invocation_id, .. } = &entry
+                    && *invocation_id == session_key.idempotency_key
+                    && StreamRegistrationInvocation::Local(*invocation_id).qualify(
+                        self.owned_agent_id.environment_id,
+                        &self.owned_agent_id.agent_id,
+                        self.initial_worker_metadata.fingerprint,
+                    ) == *session_key
+                {
+                    metadata.apply_invocation_returned(index, &[]);
+                } else if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self
                         .oplog
                         .download_payload(record)
@@ -498,7 +525,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: &InvocationId,
         details: String,
     ) -> Result<(), WorkerExecutorError> {
-        self.finish_durable_streaming_session(idempotency_key, Err(details))
+        let cause = match self.lookup_invocation_result(idempotency_key).await {
+            LookupResult::Complete(Err(_)) => SessionFailure::Invocation,
+            _ => SessionFailure::Protocol(details.clone()),
+        };
+        self.finish_durable_streaming_session(idempotency_key, Err((cause, details)))
             .await
     }
     /// Records a successful terminal for the invocation's durable stream session.
@@ -509,10 +540,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.finish_durable_streaming_session(idempotency_key, Ok(()))
             .await
     }
-    pub(in crate::worker) async fn finish_durable_streaming_session(
+    pub(crate) async fn finish_durable_streaming_session(
         &self,
         idempotency_key: &InvocationId,
-        result: Result<(), String>,
+        result: Result<(), (SessionFailure, String)>,
     ) -> Result<(), WorkerExecutorError> {
         let Some(status) = self.durable_stream_session_status(idempotency_key).await? else {
             return Ok(());
@@ -531,14 +562,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
         let result_mappings = match status.invocation_result {
-            Some(index) => match self.read_stream_session_record(index).await? {
-                StreamSessionRecord::InvocationResult(record) => record.stream_mappings,
-                _ => {
-                    return Err(WorkerExecutorError::runtime(
-                        "stream session index does not refer to InvocationResult",
-                    ));
-                }
-            },
+            Some(index) => {
+                self.durable_stream_producer()
+                    .await?
+                    .read_invocation_result_value(index, *idempotency_key)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                    .stream_bindings
+            }
             None => Vec::new(),
         };
         let mappings = prepared
@@ -559,7 +590,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         match result {
             Ok(()) => streams.complete_or_defer_for_forwarded_inputs().await,
-            Err(details) => streams.fail(details).await,
+            Err((cause, details)) => streams.fail(cause, details).await,
         }
         .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         Ok(())
@@ -572,7 +603,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if session.prepared.is_none() || session.finished.is_some() {
                 continue;
             }
-            match self.lookup_invocation_result(&idempotency_key).await {
+            let result = self.lookup_invocation_result(&idempotency_key).await;
+            // Lookup can observe a return committed after the maintenance snapshot.
+            let latest = self.get_repaired_status().await?;
+            if latest.settling_invocation == Some(idempotency_key)
+                && let Some(prepared) = self.prepared_stream_session(&idempotency_key).await?
+                && prepared
+                    .stream_mappings
+                    .iter()
+                    .any(|binding| binding.role.direction() == SessionStreamRole::Input)
+            {
+                // Reconstruction must replay the background readers before it closes inputs.
+                continue;
+            }
+            match result {
                 LookupResult::Complete(Ok(_)) => {
                     self.complete_durable_streaming_session(&idempotency_key)
                         .await?;
@@ -1084,7 +1128,7 @@ pub(crate) fn stream_session_record_key(
             owner,
             owner_fingerprint,
         )),
-        StreamSessionRecord::InvocationResult(record) => Some(record.session_key.qualify(
+        StreamSessionRecord::RemoteResult(record) => Some(record.session_key.qualify(
             owner_environment_id,
             owner,
             owner_fingerprint,
@@ -1155,9 +1199,7 @@ pub(crate) fn stream_session_record_reference(
         StreamSessionRecord::Mapping(record) => {
             (&record.session_key, std::slice::from_ref(&record.mapping))
         }
-        StreamSessionRecord::InvocationResult(record) => {
-            (&record.session_key, &record.stream_mappings)
-        }
+        StreamSessionRecord::RemoteResult(record) => (&record.session_key, &record.stream_mappings),
         StreamSessionRecord::ConsumerItemValue(record) if record.reobserves.is_none() => {
             (&record.session_key, &record.recursive_mappings)
         }

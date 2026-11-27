@@ -421,6 +421,7 @@ pub trait OplogOps: Oplog {
         &self,
         invocation_id: golem_common::model::InvocationId,
         result: &AgentInvocationResult,
+        returned: Option<OplogIndex>,
         method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
@@ -432,11 +433,16 @@ pub trait OplogOps: Oplog {
             consumed_fuel as i64
         };
 
-        let payload = self.upload_payload(result).await?;
+        let result = match returned {
+            Some(index) => golem_common::model::oplog::FinishedResult::Returned(index),
+            None => golem_common::model::oplog::FinishedResult::Payload(
+                self.upload_payload(result).await?,
+            ),
+        };
         let entry = OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
             invocation_id,
-            result: payload,
+            result,
             method_name,
             consumed_fuel,
             component_revision,

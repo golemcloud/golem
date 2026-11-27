@@ -2,9 +2,9 @@ mod history;
 
 use super::*;
 use anyhow::{Context as _, ensure};
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind};
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor_test_utils::callers;

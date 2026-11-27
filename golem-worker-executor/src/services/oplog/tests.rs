@@ -3217,6 +3217,105 @@ async fn retried_append_many_accepts_only_the_same_serialized_batch(_tracing: &T
 }
 
 #[test]
+async fn invocation_return_and_registrations_survive_indeterminate_batch_writes(
+    _tracing: &Tracing,
+) {
+    use crate::durable_host::durable_stream::{
+        DurableStreamStore, ProducerOutputRegistration, ProducerOutputSource,
+        ProducerRegistrationRequest,
+    };
+    use golem_common::model::durable_stream::{
+        SessionStreamRole, StreamInvocationId, StreamRegistrationCoordinate,
+        StreamRegistrationInvocation, StreamRootKind, StreamSessionMapping, StreamSourceKind,
+    };
+    use golem_schema::schema::SchemaFingerprintV1;
+
+    for (failure, attempts) in [
+        (InjectedAppendFailure::IndeterminateBeforeWrite, 2),
+        (InjectedAppendFailure::CommitThenIndeterminate, 1),
+    ] {
+        let storage = Arc::new(ReadCountingIndexedStorage::new());
+        let service = append_reconciliation_service(storage.clone()).await;
+        let oplog = create_append_reconciliation_oplog(&service, "return-registration-batch").await;
+        let invocation = StreamInvocationId {
+            callee_environment_id: EnvironmentId::new(),
+            callee: crate::test_agent_id("return-registration-batch"),
+            callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
+            idempotency_key: test_invocation_id("return-registration-batch".to_string()),
+        };
+        let producer = DurableStreamStore::load(
+            oplog.clone(),
+            invocation.callee_environment_id,
+            invocation.callee,
+            invocation.callee_fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        storage.reset();
+        storage.reset_append_observations();
+        storage.inject_append_many_failure(failure);
+        let registered = producer
+            .register_invocation_return(
+                None,
+                invocation.clone(),
+                vec![17; 256],
+                vec![ProducerOutputRegistration {
+                    transport_stream_id: 7,
+                    source: ProducerOutputSource::New(ProducerRegistrationRequest {
+                        coordinate: StreamRegistrationCoordinate::Root {
+                            invocation_id: invocation.clone(),
+                            root_kind: StreamRootKind::MethodResult,
+                            recursive_value_path: vec![],
+                        },
+                        source_invocation: StreamRegistrationInvocation::Local(
+                            invocation.idempotency_key,
+                        ),
+                        entity_parent_start_index: None,
+                        component_revision: ComponentRevision::INITIAL,
+                        element_schema_fingerprint: SchemaFingerprintV1([3; 32]),
+                        source_kind: StreamSourceKind::InvocationOutput,
+                        session_mapping: Some(StreamSessionMapping {
+                            session_key: invocation.clone(),
+                            attachment_id:
+                                golem_common::model::durable_stream::AttachmentId::primary(
+                                    invocation.callee_environment_id,
+                                    &invocation.callee,
+                                    &invocation.idempotency_key,
+                                )
+                                .unwrap(),
+                            role: SessionStreamRole::Output,
+                        }),
+                    }),
+                    cancellation_epoch: None,
+                    role: SessionStreamRole::Output,
+                }],
+                None,
+                Some("produce".into()),
+                ComponentRevision::INITIAL,
+            )
+            .await
+            .unwrap();
+        assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(3));
+        let entries = oplog.read_exact(OplogIndex::from_u64(2), 2).await.unwrap();
+        assert!(matches!(
+            entries[&OplogIndex::from_u64(2)],
+            OplogEntry::StreamRegistered { .. }
+        ));
+        assert!(
+            matches!(entries[&registered.oplog_index], OplogEntry::AgentInvocationReturned { invocation_id, .. } if invocation_id == invocation.idempotency_key)
+        );
+        assert_eq!(registered.returned_value.stream_bindings.len(), 1);
+        assert!(storage.append_many_reused_batch());
+        assert_eq!(
+            storage.append_many_attempts(),
+            attempts,
+            "registration and return must commit as one batch, even when the first attempt is indeterminate"
+        );
+    }
+}
+
+#[test]
 async fn indeterminate_append_before_write_retries_after_empty_read_back(_tracing: &Tracing) {
     let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
     let service = append_reconciliation_service(indexed_storage.clone()).await;
@@ -3884,7 +3983,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                         session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
                             invocation_id.idempotency_key,
                         ),
-                        result: Err(vec![57; 1024]),
+                        result: Err(golem_common::model::durable_stream::SessionFailure::Protocol("9".repeat(1024))),
                     })),
                 ),
             ]
@@ -3931,7 +4030,14 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                 else {
                     panic!("expected finished session");
                 };
-                assert_eq!(record.result, Err(vec![57; 1024]));
+                assert_eq!(
+                    record.result,
+                    Err(
+                        golem_common::model::durable_stream::SessionFailure::Protocol(
+                            "9".repeat(1024)
+                        )
+                    )
+                );
             }
             _ => panic!("durable stream batch appended a non-stream entry"),
         }
@@ -4021,7 +4127,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
                     Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                         format_version: 1,
                         session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(session_key.idempotency_key),
-                        result: Err(vec![91; 1024]),
+                        result: Err(golem_common::model::durable_stream::SessionFailure::Protocol("[".repeat(1024))),
                     })),
                 ),
             ]
@@ -4062,7 +4168,10 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     else {
         panic!("persisted terminal batch must end with Finished");
     };
-    assert_eq!(finished.result, Err(vec![91; 1024]));
+    assert_eq!(
+        finished.result,
+        Err(golem_common::model::durable_stream::SessionFailure::Protocol("[".repeat(1024)))
+    );
     assert!(matches!(
         &added[0].1,
         OplogEntry::StreamTerminal {
@@ -4082,7 +4191,10 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     else {
         panic!("expected finished session");
     };
-    assert_eq!(finished.result, Err(vec![91; 1024]));
+    assert_eq!(
+        finished.result,
+        Err(golem_common::model::durable_stream::SessionFailure::Protocol("[".repeat(1024)))
+    );
 }
 
 #[test]
@@ -4193,7 +4305,7 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
                                 session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
                                     session_key.idempotency_key,
                                 ),
-                                result: Err(vec![73; 1024]),
+                                result: Err(golem_common::model::durable_stream::SessionFailure::Protocol("I".repeat(1024))),
                             })),
                         )
                     }))
@@ -5297,6 +5409,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                     fields: vec![SchemaValue::String("response".to_string())],
                 },
             },
+            None,
             Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
@@ -5424,7 +5537,10 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         _ => panic!("unexpected entry"),
     };
     let p3 = match entry3 {
-        OplogEntry::AgentInvocationFinished { result, .. } => {
+        OplogEntry::AgentInvocationFinished {
+            result: golem_common::model::oplog::FinishedResult::Payload(result),
+            ..
+        } => {
             let result: AgentInvocationResult = oplog_service
                 .download_payload(&owned_agent_id, AgentMode::Durable, result)
                 .await
@@ -6354,6 +6470,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                     })],
                 },
             },
+            None,
             Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
@@ -6481,7 +6598,10 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         _ => panic!("unexpected entry"),
     };
     let p3 = match entry3 {
-        OplogEntry::AgentInvocationFinished { result, .. } => {
+        OplogEntry::AgentInvocationFinished {
+            result: golem_common::model::oplog::FinishedResult::Payload(result),
+            ..
+        } => {
             let result: AgentInvocationResult = oplog_service
                 .download_payload(&owned_agent_id, AgentMode::Durable, result)
                 .await

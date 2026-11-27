@@ -203,7 +203,11 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
         if !handle.is_live() {
             match handle.replay(ctx).await? {
                 CallReplayOutcome::Replayed(persisted) => {
-                    break 'result persisted.result.map_err(Into::into);
+                    break 'result persisted
+                        .result
+                        .into_inline()
+                        .map_err(anyhow::Error::msg)?
+                        .map_err(Into::into);
                 }
                 CallReplayOutcome::Incomplete(live) => handle = live,
             }
@@ -300,7 +304,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
             .complete_with_span(
                 ctx,
                 HostResponseGolemRpcInvokeAndAwait {
-                    result: result.clone().map_err(Into::into),
+                    result: result.clone().map_err(Into::into).into(),
                 },
                 span_finished,
             )

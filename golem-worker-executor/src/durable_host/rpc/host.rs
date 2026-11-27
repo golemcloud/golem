@@ -824,7 +824,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
                 let start_index = handle.start_index();
                 let response = replay_rpc_denial(self, handle).await?;
-                return Ok(Err(denied_rpc_failure(start_index, response.result)?.into()));
+                return Ok(Err(denied_rpc_failure(
+                    start_index,
+                    response
+                        .result
+                        .into_inline()
+                        .map_err(WorkerExecutorError::runtime)?,
+                )?
+                .into()));
             }
             let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
@@ -891,7 +898,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         self,
                         handle,
                         HostResponseGolemRpcInvokeAndAwait {
-                            result: Err(error.clone().into()),
+                            result: Err(error.clone().into()).into(),
                         },
                         finished,
                     )
@@ -928,14 +935,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(persisted) => {
-                        let result = match persisted.result {
-                            Ok(scalar) => Ok(streams
-                                .replay_remote_result()
-                                .await
-                                .map_err(SessionError::into_trap)?
-                                .unwrap_or(scalar)),
-                            Err(error) => Err(InternalRpcError::from(error)),
-                        };
+                        let result = streams
+                            .resolve_rpc_result(persisted.result)
+                            .await
+                            .map_err(SessionError::into_trap)?
+                            .map_err(InternalRpcError::from);
                         finish_span_in_memory(self, span.span_id())?;
                         return match result {
                             Ok(value) => Ok(Ok(InvocationResultWithMetadata {
@@ -1042,11 +1046,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 Err(error) => Err(error),
             };
             let span_finished = rpc_span_finished(span.span_id(), &result);
+            let recorded_result = streams
+                .record_rpc_result(result.clone().map_err(Into::into))
+                .await
+                .map_err(SessionError::into_trap)?;
             handle
                 .complete_with_span(
                     self,
                     HostResponseGolemRpcInvokeAndAwait {
-                        result: result.clone().map(strip_streams).map_err(Into::into),
+                        result: recorded_result,
                     },
                     span_finished,
                 )
@@ -1111,7 +1119,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 if recorded_rpc_denial(self, &handle).await?.is_some() {
                     let start_index = handle.start_index();
                     let response = replay_rpc_denial(self, handle).await?;
-                    return Ok(Err(denied_rpc_failure(start_index, response.result)?.into()));
+                    return Ok(Err(denied_rpc_failure(
+                        start_index,
+                        response
+                            .result
+                            .into_inline()
+                            .map_err(WorkerExecutorError::runtime)?,
+                    )?
+                    .into()));
                 }
                 handle
             }
@@ -1156,7 +1171,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self,
                     handle,
                     HostResponseGolemRpcInvokeAndAwait {
-                        result: Err(error.clone().into()),
+                        result: Err(error.clone().into()).into(),
                     },
                     finished,
                 )
@@ -1580,7 +1595,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         self,
                         handle,
                         HostResponseGolemRpcInvokeAndAwait {
-                            result: Err(error.clone().into()),
+                            result: Err(error.clone().into()).into(),
                         },
                         finished,
                     )
@@ -1805,7 +1820,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self,
                     handle,
                     HostResponseGolemRpcInvokeAndAwait {
-                        result: Err(error.clone().into()),
+                        result: Err(error.clone().into()).into(),
                     },
                     finished,
                 )

@@ -3272,7 +3272,7 @@ async fn interrupt_a_held_manual_update(
         executor
             .interrupt_loaded_worker(
                 &agent.worker_id.agent_id,
-                golem_service_base::error::worker_executor::InterruptKind::Interrupt(
+                golem_common::model::InterruptKind::Interrupt(
                     golem_common::model::Timestamp::now_utc(),
                 ),
             )

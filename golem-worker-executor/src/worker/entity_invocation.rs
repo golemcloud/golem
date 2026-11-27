@@ -324,7 +324,7 @@ pub(crate) async fn await_component_entity_body<R>(
                     None => std::future::pending().await,
                 }
             } => (Err(WorkerExecutorError::Interrupted {
-                kind: golem_service_base::error::worker_executor::InterruptKind::Interrupt(
+                kind: golem_common::model::InterruptKind::Interrupt(
                     golem_common::model::Timestamp::now_utc(),
                 ),
             }), None),
@@ -1204,7 +1204,7 @@ where
                     Some(ticket) => match tokio::select! {
                         biased;
                         _ = lifecycle_cancellation.cancelled() => Err(WorkerExecutorError::Interrupted {
-                            kind: golem_service_base::error::worker_executor::InterruptKind::Interrupt(
+                            kind: golem_common::model::InterruptKind::Interrupt(
                                 golem_common::model::Timestamp::now_utc(),
                             ),
                         }),
@@ -1395,8 +1395,8 @@ mod tests {
     async fn retained_cleanup_failure_preserves_lifecycle_and_existing_winner() {
         use crate::durable_host::tool::operation::OwnerFailureWinner;
         use crate::model::TrapType;
+        use golem_common::model::InterruptKind;
         use golem_common::model::agent::AgentMode;
-        use golem_service_base::error::worker_executor::InterruptKind;
 
         for kind in [InterruptKind::Jump, InterruptKind::ShardLost] {
             let (owner, operation) = cleanup_operation();
@@ -1493,7 +1493,7 @@ mod tests {
             let response = HostResponseEntityInvocation {
                 result: Ok(SerializableToolOperationTerminal {
                     body_execution: execution,
-                    result: Err(SerializableToolRpcError::Denied("denied".into())),
+                    result: Err(SerializableToolRpcError::Denied("denied".into())).into(),
                     admission_refusal: None,
                 }
                 .into_typed_schema_value()

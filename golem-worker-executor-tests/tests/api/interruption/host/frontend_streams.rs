@@ -460,7 +460,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
                             record.consumer_read_ordinal,
                             record.source_offset,
                         ),
-                        StreamSessionRecord::InvocationResult(record) => eprintln!(
+                        StreamSessionRecord::RemoteResult(record) => eprintln!(
                             "STDIN_COMMITTED index={index} kind=InvocationResult key={:?}",
                             record.session_key,
                         ),

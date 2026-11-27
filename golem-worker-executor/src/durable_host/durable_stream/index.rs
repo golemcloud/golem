@@ -196,7 +196,7 @@ impl ProducerStreamIndex {
         owner: &AgentId,
         owner_fingerprint: AgentFingerprint,
     ) {
-        if let StreamSessionRecord::InvocationResult(record) = record {
+        if let StreamSessionRecord::RemoteResult(record) = record {
             let session_key =
                 record
                     .session_key
@@ -234,7 +234,7 @@ impl ProducerStreamIndex {
         self.apply_consumer_journal_record(record, owner_environment_id, owner, owner_fingerprint)?;
         let bindings: &[StreamBindingRecord] = match record {
             StreamSessionRecord::Mapping(record) => std::slice::from_ref(&record.mapping),
-            StreamSessionRecord::InvocationResult(record) => &record.stream_mappings,
+            StreamSessionRecord::RemoteResult(record) => &record.stream_mappings,
             StreamSessionRecord::Prepared(record) => &record.stream_mappings,
             _ => return Ok(()),
         };
@@ -243,9 +243,20 @@ impl ProducerStreamIndex {
             .expect("binding records have a session");
         if matches!(
             record,
-            StreamSessionRecord::Prepared(_) | StreamSessionRecord::InvocationResult(_)
+            StreamSessionRecord::Prepared(_) | StreamSessionRecord::RemoteResult(_)
         ) && bindings.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE
         {
+            return Err(StreamStoreError::ValueStreamLimit);
+        }
+        self.apply_returned_bindings(session_key, bindings)
+    }
+
+    pub(super) fn apply_returned_bindings(
+        &mut self,
+        session_key: &StreamSessionKey,
+        bindings: &[StreamBindingRecord],
+    ) -> Result<(), StreamStoreError> {
+        if bindings.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
             return Err(StreamStoreError::ValueStreamLimit);
         }
         let existing_mappings = self.session_stream_mappings.get(session_key);
