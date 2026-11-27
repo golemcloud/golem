@@ -265,7 +265,9 @@ mod supported_settings {
         #[tagged_as("supported_postgres")] deps: &EnvBasedTestDependencies,
         tracing: &Tracing,
     ) -> anyhow::Result<()> {
-        super::worker::counter_resource_test_1(deps, tracing).await
+        let port =
+            config(DbType::Postgres, 12000, |key| std::env::var(key).ok()).compilation_http_port;
+        super::worker::counter_resource_test_1(deps, tracing, port).await
     }
 
     #[test]
@@ -275,7 +277,9 @@ mod supported_settings {
         #[tagged_as("supported_sqlite")] deps: &EnvBasedTestDependencies,
         tracing: &Tracing,
     ) -> anyhow::Result<()> {
-        super::worker::counter_resource_test_1(deps, tracing).await
+        let port =
+            config(DbType::Sqlite, 13000, |key| std::env::var(key).ok()).compilation_http_port;
+        super::worker::counter_resource_test_1(deps, tracing, port).await
     }
 
     #[cfg(target_os = "linux")]
@@ -377,6 +381,7 @@ mod supported_settings {
         };
         let http = config.executor_base_http_port;
         let grpc = config.executor_base_grpc_port;
+        let compilation_http_port = config.compilation_http_port;
         let owner = EnvBasedTestDependencies::new(config).await?;
         let registry = owner.registry_service();
         assert_eq!(
@@ -491,7 +496,7 @@ mod supported_settings {
             .await
             .context("executor did not register after shard restart")?
             .context("registration polling ended")??;
-        super::worker::counter_resource_test_1(&owner, tracing).await
+        super::worker::counter_resource_test_1(&owner, tracing, compilation_http_port).await
     }
 
     #[test]

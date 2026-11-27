@@ -283,7 +283,7 @@ async fn paired(
                 );
                 command.env(
                     format!(
-                        "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__{}__URL",
+                        "GOLEM_ADVANCED__REGISTRY_SERVICE__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__{}__URL",
                         name.to_uppercase()
                     ),
                     reqwest::Url::from_file_path(path)

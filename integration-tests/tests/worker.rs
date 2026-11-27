@@ -19,6 +19,7 @@ use axum::extract::Query;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use bytes::Bytes;
+use futures::{StreamExt, TryStreamExt};
 use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_client::api::{AgentClient, AgentError, RegistryServiceClient};
@@ -40,6 +41,7 @@ use golem_common::model::{
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_key, data_value};
+use golem_service_base::storage::blob::BlobStorageNamespace;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerLogEventStream, update_counts};
 use golem_test_framework::model::IFSEntry;
@@ -560,10 +562,8 @@ async fn dynamic_worker_creation(
 pub(crate) async fn counter_resource_test_1(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
+    compilation_http_port: u16,
 ) -> anyhow::Result<()> {
-    use futures::{StreamExt, TryStreamExt};
-    use golem_service_base::storage::blob::BlobStorageNamespace;
-
     if std::env::var("GOLEM_TEST_GATEWAY_SESSION_STORAGE").as_deref() == Ok("sqlite") {
         let data_dir = match deps.rdb().info() {
             golem_test_framework::components::rdb::DbInfo::Sqlite(path) => path,
@@ -588,38 +588,70 @@ pub(crate) async fn counter_resource_test_1(
 
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
+    // A unique custom section prevents a cache hit from hiding the compiler's write.
+    let fixture = deps.temp_directory().join(format!("counter-{}", env.id));
+    let mut wasm = tokio::fs::read(
+        deps.component_directory()
+            .join("golem_it_agent_rpc_rust_release.wasm"),
+    )
+    .await?;
+    wasm.extend_from_slice(&[0, 18, 1, b'x']);
+    wasm.extend_from_slice(Uuid::new_v4().as_bytes());
+    tokio::fs::write(fixture.with_extension("wasm"), wasm).await?;
     let component = user
-        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .component(&env.id, fixture.to_str().context("fixture path")?)
         .name("golem-it:agent-rpc-rust")
         .unique()
         .store()
         .await?;
 
-    // Observe the compiler's write before an executor can compile the component itself.
-    let blobs = deps.blob_storage();
-    let namespace = BlobStorageNamespace::CompilationCache {
-        environment_id: env.id,
-    };
-    let compiled_path = PathBuf::from(format!("{}/{}", component.id, component.revision));
-    let artifacts = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+    // The compiler increments this counter only after the blob write finishes.
+    let http = reqwest::Client::new();
+    let metrics_url = format!("http://127.0.0.1:{compilation_http_port}/metrics");
+    let environment_label = format!("environment_id=\"{}\"", env.id);
+    let completed = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
         Duration::from_millis(50),
     ))
-    .then(|_| {
-        blobs.list_blobs_below(
-            "settings-test",
-            "compiler-write",
-            namespace.clone(),
-            &compiled_path,
+    .then(|_| async {
+        Ok::<_, anyhow::Error>(
+            http.get(&metrics_url)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?,
         )
     })
-    .try_filter(|blobs| std::future::ready(!blobs.is_empty()));
-    futures::pin_mut!(artifacts);
-    let artifacts = tokio::time::timeout(Duration::from_secs(90), artifacts.next())
+    .try_filter(|metrics| {
+        std::future::ready(metrics.lines().any(|line| {
+            line.starts_with("golem_compilation_cache_objects_written_total{")
+                && line.contains(&environment_label)
+                && line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .is_some_and(|count| count > 0.0)
+        }))
+    });
+    futures::pin_mut!(completed);
+    tokio::time::timeout(Duration::from_secs(90), completed.next())
         .await
-        .map_err(|_| {
-            anyhow!("compiler did not write the selected blob root for {compiled_path:?}")
-        })?
-        .expect("artifact polling stream ended")?;
+        .context("compiler did not finish the selected blob write")?
+        .context("compilation polling stream ended")??;
+    let compiled_path = PathBuf::from(component.wasm_hash.to_string());
+    let artifacts = deps
+        .blob_storage()
+        .list_blobs_below(
+            "settings-test",
+            "compiler-write",
+            BlobStorageNamespace::CompilationCache,
+            &compiled_path,
+        )
+        .await?;
+    assert!(
+        !artifacts.is_empty(),
+        "compiler did not write the selected blob root"
+    );
     assert!(artifacts.iter().all(|blob| blob.size > 0));
 
     let parsed_agent_id = agent_key!("RpcCounter", "counter1");

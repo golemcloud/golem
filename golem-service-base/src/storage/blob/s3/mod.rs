@@ -41,7 +41,6 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use aws_smithy_runtime_api::client::auth::AuthSchemeId;
 use aws_smithy_runtime_api::client::retries::ErrorKind;
-use aws_smithy_runtime_api::http::HttpError;
 use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
 use futures::{Stream, TryFutureExt, TryStreamExt};
@@ -545,31 +544,6 @@ fn cut_range(mut blob: Vec<u8>, start: u64, end: u64) -> Result<Vec<u8>, BlobRan
     Ok(blob)
 }
 
-fn received_unrepresentable_headers(error: &SdkError<ListObjectsV2Error>) -> bool {
-    use std::error::Error as _;
-    let SdkError::DispatchFailure(failure) = error else {
-        return false;
-    };
-    let Some(connector) = failure
-        .as_connector_error()
-        .filter(|error| error.is_other())
-    else {
-        return false;
-    };
-    let Some(error) = connector
-        .source()
-        .and_then(|error| error.downcast_ref::<HttpError>())
-    else {
-        return false;
-    };
-    // The pinned connector rejects these received headers before interceptors run.
-    // HttpError exposes its kind only through its diagnostic.
-    let diagnostic = error.to_string();
-    error.source().is_none()
-        && diagnostic.starts_with("header `")
-        && diagnostic.contains("` contains non-UTF8 octet at index ")
-}
-
 async fn check_startup_access(
     client: &Client,
     config: &S3BlobStorageConfig,
@@ -601,9 +575,7 @@ async fn check_startup_access(
                     .interceptor(status.clone())
                     .send()
                     .await;
-                if status.get().is_some()
-                    || result.as_ref().is_err_and(received_unrepresentable_headers)
-                {
+                if status.get().is_some() {
                     Ok(())
                 } else {
                     result.map(|_| ())

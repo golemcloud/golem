@@ -49,6 +49,7 @@ use axum::http::{Response, StatusCode as ServerStatus};
 use axum::routing::put;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId};
@@ -138,6 +139,7 @@ struct Answer {
     transport_error: Option<ConnectorError>,
     pending: bool,
     pending_body: bool,
+    response_headers: Option<http::HeaderMap>,
 }
 
 impl Answer {
@@ -153,6 +155,7 @@ impl Answer {
             transport_error: None,
             pending: false,
             pending_body: false,
+            response_headers: None,
         }
     }
 
@@ -208,11 +211,12 @@ impl Answer {
         }
     }
 
-    fn into_http_response(self) -> HttpResponse {
+    fn into_http_response(mut self) -> HttpResponse {
         let status = StatusCode::try_from(self.status).unwrap();
         let content_range = self.content_range;
         let content_length = self.content_length;
         let last_modified = self.last_modified;
+        let response_headers = self.response_headers.take();
         let mut response = HttpResponse::new(status, self.into_body());
         response
             .headers_mut()
@@ -231,6 +235,11 @@ impl Answer {
             response
                 .headers_mut()
                 .insert("last-modified", last_modified);
+        }
+        if let Some(headers) = response_headers {
+            let mut response = response.try_into_http1x().unwrap();
+            response.headers_mut().extend(headers);
+            return HttpResponse::try_from(response).unwrap();
         }
         response
     }
@@ -547,39 +556,27 @@ fn startup_treats_any_response_as_reachable() {
 }
 
 #[test]
-fn startup_recognizes_only_received_header_conversion_failures() {
-    ["received", "nested", "request"]
-        .into_iter()
-        .for_each(|kind| {
-            with_startup_constructor(
-                move |_, _| {
-                    let response = http::Response::builder()
-                        .status(403)
-                        .header(
-                            "x-object-store",
-                            http::HeaderValue::from_bytes(b"\xff").unwrap(),
-                        )
-                        .body(SdkBody::empty())
-                        .unwrap();
-                    let error = HttpResponse::try_from(response).unwrap_err();
-                    Answer::transport_error(match kind {
-                        "received" => ConnectorError::other(Box::new(error), None),
-                        "nested" => {
-                            ConnectorError::other(Box::new(std::io::Error::other(error)), None)
-                        }
-                        "request" => ConnectorError::user(Box::new(error)),
-                        _ => unreachable!(),
-                    })
-                },
-                |config, loader, requests| async move {
-                    let result = ConfiguredS3BlobStorageFactory { loader }
-                        .create(config, &[S3StartupNamespace::CompilationCache])
-                        .await;
-                    assert_eq!(result.is_ok(), kind == "received", "{result:?}");
-                    assert_eq!(sent(&requests).len(), 1);
-                },
+fn startup_accepts_received_non_utf8_headers() {
+    with_startup_constructor(
+        |_, _| {
+            let mut headers = http::HeaderMap::new();
+            headers.insert(
+                "x-object-store",
+                http::HeaderValue::from_bytes(b"\xff").unwrap(),
             );
-        });
+            Answer {
+                response_headers: Some(headers),
+                ..Answer::new(403, "")
+            }
+        },
+        |config, loader, requests| async move {
+            ConfiguredS3BlobStorageFactory { loader }
+                .create(config, &[S3StartupNamespace::CompilationCache])
+                .await
+                .expect("a received response establishes reachability with non-UTF8 headers");
+            assert_eq!(sent(&requests).len(), 1);
+        },
+    );
 }
 
 #[test]
@@ -980,8 +977,8 @@ async fn construction_success_contract(
         .get_raw(
             "construction-contract",
             "read",
-            BlobStorageNamespace::Components {
-                environment_id: EnvironmentId(Uuid::nil()),
+            BlobStorageNamespace::ComponentUploads {
+                account_id: AccountId::SYSTEM,
             },
             Path::new("after-startup"),
         )
@@ -996,7 +993,7 @@ fn construction_returns_usable_storage() {
         |request, _| {
             let uri = url::Url::parse(&request.uri).unwrap();
             match uri.path() {
-                "/component-objects-only/objects-not-the-startup-bucket/00000000-0000-0000-0000-000000000000/after-startup" => {
+                "/component-objects-only/objects-not-the-startup-bucket/component_uploads/00000000-0000-0000-0000-000000000000/after-startup" => {
                     Answer::new(200, "factory bytes")
                 }
                 "/startup-probe-only/" => Answer::new(
@@ -1040,8 +1037,8 @@ fn in_memory_construction_returns_usable_storage() {
                     .put_raw(
                         "construction-contract",
                         "seed",
-                        BlobStorageNamespace::Components {
-                            environment_id: EnvironmentId(Uuid::nil()),
+                        BlobStorageNamespace::ComponentUploads {
+                            account_id: AccountId::SYSTEM,
                         },
                         Path::new("after-startup"),
                         b"factory bytes",

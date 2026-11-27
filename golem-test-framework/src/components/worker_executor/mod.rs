@@ -239,7 +239,7 @@ async fn env_vars(
 
     if std::env::var_os("GOLEM_BENCH_SOCKETS_ENABLED").is_some() {
         env.insert(
-            "GOLEM__AGENT_SOCKETS__ENABLED".to_string(),
+            "GOLEM__OUTBOUND_SOCKETS__ENABLED".to_string(),
             crate::benchmark::benchmark_sockets_enabled().to_string(),
         );
     }
