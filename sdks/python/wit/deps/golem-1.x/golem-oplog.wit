@@ -1,0 +1,1511 @@
+package golem:api@1.5.0;
+
+/// Host interface for enumerating and searching for agent oplogs
+interface oplog {
+    use wasi:clocks/system-clock@0.3.0.{instant as datetime};
+    use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value, tool-rpc-error};
+
+    use host.{component-revision, oplog-index, environment-id, uuid, agent-id};
+    use wasi:clocks/types@0.3.0.{duration};
+
+    /// Whether an agent is durable (persistent oplog) or ephemeral.
+    /// This mirrors the agent-mode enum in golem:agent/common@1.5.0; it is duplicated here to avoid
+    /// a circular WIT package dependency between golem:api and golem:agent.
+    enum agent-mode {
+        durable,
+        ephemeral
+    }
+
+    use context.{attribute, attribute-value, span-id, trace-id};
+    use retry.{retry-predicate, retry-policy, named-retry-policy};
+
+    /// Index into a retry-policy-state's node list
+    type state-node-index = s32;
+
+    /// Persistent state of a retry policy across retry attempts.
+    /// Root is nodes[0]. Children referenced by state-node-index.
+    record retry-policy-state {
+        nodes: list<state-node>,
+    }
+
+    variant state-node {
+        /// Counter-based state (e.g. periodic, exponential, fibonacci).
+        counter(u32),
+        /// Terminal state — policy has given up.
+        terminal,
+        /// Wrapper state delegating to an inner policy state.
+        wrapper(state-node-index),
+        /// Count-box state with attempt tracking.
+        count-box(count-box-state),
+        /// And-then sequential composition state.
+        and-then(and-then-state),
+        /// Pair state for union/intersect composition.
+        pair(pair-state),
+    }
+
+    record count-box-state {
+        attempts: u32,
+        inner: state-node-index,
+    }
+
+    record and-then-state {
+        left: state-node-index,
+        right: state-node-index,
+        on-right: bool,
+    }
+
+    record pair-state {
+        left: state-node-index,
+        right: state-node-index,
+    }
+
+    record environment-plugin-grant-id {
+        uuid: uuid,
+    }
+
+    variant wrapped-function-type {
+        /// The side-effect reads from the agent's local state (for example local file system,
+        /// random generator, etc.)
+        read-local,
+        /// The side-effect writes to the agent's local state (for example local file system)
+        write-local,
+        /// The side-effect reads from external state (for example a key-value store)
+        read-remote,
+        /// The side-effect manipulates external state (for example an RPC call)
+        write-remote,
+    }
+
+    record plugin-installation-description {
+        environment-plugin-grant-id: environment-plugin-grant-id,
+        plugin-priority: s32,
+        plugin-name: string,
+        plugin-version: string,
+        parameters: list<tuple<string, string>>
+    }
+
+    record raw-local-agent-config-entry {
+        path: list<string>,
+        value: schema-value-tree
+    }
+
+    record local-agent-config-entry {
+        path: list<string>,
+        value: typed-schema-value
+    }
+
+    record create-parameters {
+        timestamp: datetime,
+        agent-id: agent-id,
+        /// The name of the agent's type. Owners without an agent type have none.
+        agent-type-name: option<string>,
+        owner-kind: owner-kind,
+        agent-mode: agent-mode,
+        component-revision: component-revision,
+        env: list<tuple<string, string>>,
+        created-by: account-id,
+        environment-id: environment-id,
+        parent: option<agent-id>,
+        component-size: u64,
+        initial-total-linear-memory-size: u64,
+        initial-active-plugins: list<plugin-installation-description>,
+        local-agent-config: list<local-agent-config-entry>,
+        instance-id: uuid,
+        /// Whether the agent is a never-live sandbox. A marked agent reports the
+        /// `sandboxed` status.
+        never-live: bool
+    }
+
+    enum owner-kind {
+        component-agent,
+        ephemeral-external-tool,
+        oplog-processor,
+    }
+
+    /// Identifies a durable call by its place in a call order.
+    ///
+    /// `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+    /// entity invocation or the parent custom durable invocation that made it. `ordinal` is the
+    /// place of the call among the calls numbered under `anchor`, starting at 0.
+    record durable-invocation-id {
+        anchor: oplog-index,
+        ordinal: u64,
+    }
+
+    /// Parameters of an enriched durable host-call `start` entry.
+    ///
+    /// The recorded `request` payload of every durable host call — including
+    /// durable P3 async calls such as HTTP send/consume-body, sockets, keyvalue,
+    /// and blobstore operations — surfaces as a generic `typed-schema-value`
+    /// tree, identified by `function-name`; there are no per-interface named WIT
+    /// variants for the payload shapes.
+    ///
+    /// `denial` is the reason the host denied the call before it ran. A denied
+    /// call never runs its operation, and its `end` holds the denied response.
+    ///
+    /// `driver` is the oplog index of the agent invocation whose settlement waits
+    /// for this call. It is present in two cases: a store task that records after
+    /// its spawning invocation closed records the invocation that resumed it, and
+    /// agent-level work recorded while an invocation runs records that invocation,
+    /// even when the call's invocation id is anchored at the same invocation.
+    record start-parameters {
+        timestamp: datetime,
+        parent-start-index: option<oplog-index>,
+        function-name: string,
+        invocation-id: option<durable-invocation-id>,
+        observational-owner: option<oplog-index>,
+        driver: option<oplog-index>,
+        request: option<typed-schema-value>,
+        durable-function-type: wrapped-function-type,
+        span-started: option<span-started>,
+        denial: option<string>,
+    }
+
+    /// Parameters of an enriched durable host-call `end` entry. Like the
+    /// `start` `request`, the recorded `response` payload surfaces as a generic
+    /// `typed-schema-value` tree (no per-interface named WIT variants).
+    record end-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        response: option<typed-schema-value>,
+        forced-commit: bool,
+        span-finished: option<span-finished>,
+        span-attributes: option<span-attributes>,
+    }
+
+    /// Parameters of an enriched durable host-call `cancelled` entry. Like the
+    /// `start` `request`, the optional recorded `partial` result surfaces as a
+    /// generic `typed-schema-value` tree (no per-interface named WIT variants).
+    record cancelled-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        partial: option<typed-schema-value>,
+        span-finished: option<span-finished>,
+    }
+
+    enum span-kind {
+        internal,
+        client,
+        server,
+    }
+
+    enum span-outcome {
+        completed,
+        failed,
+        cancelled,
+        abandoned,
+        denied,
+    }
+
+    record span-link {
+        trace-id: trace-id,
+        span-id: span-id,
+        trace-states: list<string>,
+    }
+
+    /// The span name remains in the `name` attribute. An embedded opening must
+    /// be explicitly closed; invocation boundaries do not close it automatically.
+    record span-started {
+        span-id: span-id,
+        trace-id: trace-id,
+        trace-states: list<string>,
+        parent-span-id: option<span-id>,
+        links: list<span-link>,
+        started-at: datetime,
+        attributes: list<attribute>,
+        kind: span-kind,
+    }
+
+    /// A compact close records the outcome but no error-message payload. Consumers
+    /// must not decode the opaque host request to manufacture one.
+    record span-finished {
+        span-id: span-id,
+        finished-at: datetime,
+        outcome: span-outcome,
+    }
+
+    /// Attributes applied by `end` before the span is closed.
+    record span-attributes {
+        span-id: span-id,
+        attributes: list<attribute>,
+    }
+
+    /// Parameters of a `completion-discarded` entry: the durable host call started at
+    /// `start-index` completed successfully (its `end` entry was persisted) but the response
+    /// was never delivered to the agent, because the agent dropped the call's completion
+    /// future after the `end` was already recorded.
+    record completion-discarded-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    /// Parameters of a `completion-delivered` entry: the successful result of the durable host
+    /// call started at `start-index` was handed to the agent at this point in the recorded
+    /// execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+    /// agent until this marker and prevents later oplog entries from advancing until that handoff.
+    record completion-delivered-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    record local-span-data {
+        span-id: span-id,
+        start: datetime,
+        parent: option<span-id>,
+        /// Optionally an index of the invocation-context field within agent-invocation
+        linked-context: option<u64>,
+        attributes: list<attribute>,
+        inherited: bool
+    }
+
+    record external-span-data {
+        span-id: span-id
+    }
+
+    variant span-data {
+        local-span(local-span-data),
+        external-span(external-span-data)
+    }
+
+    record wallet-version-token {
+        wallet-id-hash: list<u8>,
+        generation: u64,
+    }
+
+    record public-invocation-wallet-pin {
+        wallet-token: wallet-version-token,
+        scope-card-id: option<card-id>,
+    }
+
+    record raw-invocation-wallet-pin {
+        wallet-token: wallet-version-token,
+        pinned-card-ids: list<card-id>,
+        scope-card-id: option<card-id>,
+    }
+
+    record agent-invocation-started-parameters {
+        timestamp: datetime,
+        invocation: agent-invocation,
+        wallet-pin: public-invocation-wallet-pin,
+    }
+
+    record agent-invocation-finished-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        %result: agent-invocation-result,
+        method-name: option<string>,
+        consumed-fuel: s64,
+        component-revision: u64,
+    }
+
+    record agent-invocation-failed-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        error: string,
+        start-index: oplog-index,
+    }
+
+    record agent-invocation-settled-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        consumed-fuel: s64,
+    }
+
+    enum oplog-error-kind {
+        invocation,
+        recovery
+    }
+
+    record error-parameters {
+        timestamp: datetime,
+        kind: oplog-error-kind,
+        /// The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs.
+        invocation-id: option<uuid>,
+        error: string,
+        retry-from: oplog-index,
+        /// Persistent retry policy state, if a semantic retry policy is active.
+        retry-policy-state: option<retry-policy-state>,
+        /// When the failed host call retries, for an in-function retry.
+        retry-at: option<datetime>,
+        /// The start of the host call that waits until `retry-at`.
+        retrying-start-index: option<oplog-index>,
+    }
+
+    record oplog-region {
+        start: oplog-index,
+        end: oplog-index
+    }
+
+    record jump-parameters {
+        timestamp: datetime,
+        jump: oplog-region
+    }
+
+    /// Parameters for a set-retry-policy oplog entry.
+    record set-retry-policy-parameters {
+        timestamp: datetime,
+        policy: named-retry-policy,
+    }
+
+    /// Parameters for a remove-retry-policy oplog entry.
+    record remove-retry-policy-parameters {
+        timestamp: datetime,
+        name: string,
+    }
+
+    record queued-card-event-install {
+        card-id: card-id,
+    }
+
+    record queued-card-event-revoke {
+        card-id: card-id,
+    }
+
+    variant queued-card-event {
+        install(queued-card-event-install),
+        revoke(queued-card-event-revoke),
+    }
+
+    /// Parameters for a card-event-queued oplog entry.
+    record card-event-queued-parameters {
+        timestamp: datetime,
+        event: queued-card-event,
+    }
+
+    /// Parameters for a card-installed oplog entry.
+    record card-installed-parameters {
+        timestamp: datetime,
+        queued-event-index: option<oplog-index>,
+        card-id: card-id,
+        wallet-generation: u64,
+    }
+
+    /// Raw parameters for a card-installed oplog entry.
+    record raw-card-installed-parameters {
+        timestamp: datetime,
+        queued-event-index: option<oplog-index>,
+        card: list<u8>,
+        wallet-generation: u64,
+    }
+
+    enum card-install-failure {
+        card-revoked,
+        not-found,
+        recipient-mismatch,
+        not-permitted,
+    }
+
+    /// Parameters for a card-install-failed oplog entry.
+    record card-install-failed-parameters {
+        timestamp: datetime,
+        queued-event-index: oplog-index,
+        card-id: card-id,
+        reason: card-install-failure,
+    }
+
+    /// Parameters for a card-revoked oplog entry.
+    record card-revoked-parameters {
+        timestamp: datetime,
+        queued-event-index: oplog-index,
+        card-id: card-id,
+        wallet-generation: u64,
+    }
+
+    /// Parameters for a card-expired oplog entry.
+    record card-expired-parameters {
+        timestamp: datetime,
+        card-id: card-id,
+        wallet-generation: u64,
+    }
+
+    /// Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
+    /// The kind determines how the entry's payload is interpreted.
+    enum host-stream-kind {
+        /// A frame of the outgoing request body of a P3 HTTP client send.
+        p3-http-request-body,
+    }
+
+    /// Parameters for a host-stream-frame oplog entry: a durably recorded frame of a
+    /// host-owned stream (e.g. the outgoing request body of a P3 HTTP client send),
+    /// attached to the durable host call identified by its start entry's index.
+    record host-stream-frame-parameters {
+        timestamp: datetime,
+        parent-start-index: oplog-index,
+        kind: host-stream-kind,
+        payload: typed-schema-value,
+    }
+
+    /// A consumed attachment read with inline observation metadata.
+    record tool-attachment-read-parameters {
+        timestamp: datetime,
+        observation: typed-schema-value,
+        payload: option<list<u8>>,
+    }
+
+    /// An effective attachment control transition without a byte payload.
+    record tool-attachment-control-parameters {
+        timestamp: datetime,
+        attachment: typed-schema-value,
+        transition: typed-schema-value,
+    }
+
+    /// A public durable-stream producer record rendered as a typed schema value.
+    record durable-stream-record-parameters {
+        timestamp: datetime,
+        %record: typed-schema-value,
+    }
+
+    /// The (issuer, subject) pair of a principal. golem:agent imports golem:api, so this
+    /// interface cannot use golem:agent/common.principal-ref; this record has the same fields.
+    record public-principal-ref {
+        issuer: string,
+        subject: string,
+    }
+
+    enum public-account-authentication {
+        api-token,
+        bootstrap-token,
+        sign-in,
+    }
+
+    /// A user, authenticated by a sign-in provider: the provider's pair. The oplog never gives
+    /// a user's claims to a guest.
+    record public-user-principal {
+        pair: public-principal-ref,
+        authenticated-at: datetime,
+    }
+
+    /// An account: (Golem issuer, "account:<account-id>").
+    record public-account-principal {
+        pair: public-principal-ref,
+        account-id: account-id,
+        authentication: public-account-authentication,
+    }
+
+    /// An agent: (Golem issuer, "agent:<agent-id>/<fingerprint>").
+    record public-agent-principal {
+        pair: public-principal-ref,
+        agent-id: agent-id,
+        agent-type: string,
+        environment-id: environment-id,
+    }
+
+    /// A tool: (Golem issuer, "tool:<environment-id>/<tool-name>").
+    record public-tool-principal {
+        pair: public-principal-ref,
+        environment-id: environment-id,
+        tool-name: string,
+    }
+
+    /// One principal, as Golem verified it. Every kind except anonymous has a pair.
+    variant public-principal {
+        user(public-user-principal),
+        account(public-account-principal),
+        agent(public-agent-principal),
+        tool(public-tool-principal),
+        anonymous,
+    }
+
+    /// A token that the request presented, and the pair of its maker. It never holds the
+    /// token's value.
+    record public-token-provenance {
+        id: uuid,
+        maker: option<public-principal-ref>,
+    }
+
+    /// Who started the chain, who made this call, and the tokens presented at the entry point.
+    /// Both roles are always present, also when they are the same principal.
+    record public-caller {
+        original: public-principal,
+        immediate: public-principal,
+        tokens: list<public-token-provenance>,
+    }
+
+    record agent-initialization-parameters {
+        invocation-id: uuid,
+        constructor-parameters: typed-schema-value,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<list<span-data>>,
+        caller: public-caller,
+    }
+
+    record agent-method-invocation-parameters {
+        invocation-id: uuid,
+        method-name: string,
+        /// Component-independent original-method-input diagnostic envelope, not the
+        /// executed method's input schema. Includes rejected captured JSON fields;
+        /// native values are typed and host capabilities are redacted before encoding.
+        function-input: typed-schema-value,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<list<span-data>>,
+        caller: public-caller,
+    }
+
+    record save-snapshot-parameters {
+        caller: public-caller,
+    }
+
+    record load-snapshot-parameters {
+        snapshot: snapshot-data,
+        caller: public-caller,
+    }
+
+    record process-oplog-entries-parameters {
+        invocation-id: uuid,
+        caller: public-caller,
+    }
+
+    record manual-update-parameters {
+        target-revision: component-revision,
+        /// Who requested the update. It is not the caller of the update's snapshot save.
+        requester: public-caller,
+    }
+
+    record external-tool-invocation-parameters {
+        invocation-id: uuid,
+        tool-name: string,
+        command-path: list<string>,
+        input: typed-schema-value,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<list<span-data>>,
+        caller: public-caller,
+    }
+
+    variant agent-invocation {
+        agent-initialization(agent-initialization-parameters),
+        agent-method-invocation(agent-method-invocation-parameters),
+        external-tool(external-tool-invocation-parameters),
+        save-snapshot(save-snapshot-parameters),
+        load-snapshot(load-snapshot-parameters),
+        process-oplog-entries(process-oplog-entries-parameters),
+        manual-update(manual-update-parameters),
+    }
+
+    variant agent-invocation-result {
+        agent-initialization(agent-invocation-output-parameters),
+        agent-method(agent-invocation-output-parameters),
+        external-tool(external-tool-result-parameters),
+        manual-update,
+        load-snapshot(fallible-result-parameters),
+        save-snapshot(save-snapshot-result-parameters),
+        process-oplog-entries(fallible-result-parameters),
+    }
+
+    record external-tool-result-parameters {
+        %result: result<tool-invocation-result, tool-rpc-error>,
+    }
+
+    record tool-invocation-result {
+        %result: option<typed-schema-value>,
+    }
+
+    record agent-invocation-output-parameters {
+        output: typed-schema-value,
+    }
+
+    record fallible-result-parameters {
+        error: option<string>,
+    }
+
+    record save-snapshot-result-parameters {
+        snapshot: snapshot-data,
+    }
+
+    record pending-agent-invocation-parameters {
+        timestamp: datetime,
+        invocation: agent-invocation,
+        not-before: option<datetime>,
+    }
+
+    variant update-description {
+        /// Automatic update by replaying the oplog on the new version
+        auto-update,
+        /// Automatic update assisted by the latest eligible periodic snapshot
+        snapshot-assisted-automatic,
+        /// Custom update by loading a given snapshot on the new version
+        snapshot-based(snapshot-based-update-parameters)
+    }
+
+    record snapshot-based-update-parameters {
+        payload: list<u8>,
+        mime-type: string,
+        /// The filesystem snapshot taken with the application snapshot, if any
+        filesystem-snapshot: option<string>,
+    }
+
+    record pending-update-parameters {
+        timestamp: datetime,
+        target-revision: component-revision,
+        description: update-description,
+        update-attempt-index: oplog-index,
+        /// Who requested the update. It is never the caller of the update's snapshot save or load.
+        requester: public-caller,
+    }
+
+    record successful-update-parameters {
+        timestamp: datetime,
+        target-revision: component-revision,
+        new-component-size: u64,
+        new-active-plugins: list<plugin-installation-description>,
+        snapshot-assisted-details: option<snapshot-assisted-update-details>,
+        /// The entries of the durable calls that the target revision's initializer made, if any
+        bootstrap: option<oplog-region>,
+    }
+
+    record snapshot-assisted-update-details {
+        pending-update-index: oplog-index,
+        source-component-revision: component-revision,
+        source-revision-start-index: oplog-index,
+        snapshot-index: oplog-index,
+    }
+
+    record failed-update-parameters {
+        timestamp: datetime,
+        target-revision: component-revision,
+        details: option<string>,
+        snapshot-assisted-details: option<failed-snapshot-assisted-update-details>,
+        update-attempt-index: option<oplog-index>,
+        /// Why the update failed
+        failure-class: update-failure-class,
+        /// The first divergence from the recorded history, when the replay of the target diverged
+        /// at a recorded entry
+        divergence: option<replay-divergence>,
+    }
+
+    /// Why an update failed
+    enum update-failure-class {
+        /// The history did not replay on the target
+        divergence,
+        /// The target code trapped, panicked or returned an agent error on recorded inputs
+        target-trap,
+        /// Replaying needs a peer effect
+        not-replayable,
+        /// The target revision was missing, refused or unsupported, or changes the agent's mode
+        target-rejected,
+        /// The replay was interrupted
+        interrupted,
+        /// An operational failure, such as storage, load or quota
+        operational,
+        /// Snapshot, restore and other failures
+        other,
+    }
+
+    /// The first entry at which a replay did not reproduce the recorded execution
+    record replay-divergence {
+        /// The oplog index of the first divergence
+        oplog-index: oplog-index,
+        /// What the oplog holds at the index
+        expected: replay-step,
+        /// What the replay did at the index
+        actual: replay-step,
+        /// The identity fields on which the two steps differ; empty when the steps differ in kind
+        mismatched: list<start-identity-field>,
+        /// Where the replay that diverged started; none for a divergence outside a recovery replay
+        replay-start: option<replay-start>,
+    }
+
+    /// Where a recovery replay started
+    variant replay-start {
+        /// From a loaded snapshot
+        snapshot(replay-snapshot-start),
+        /// Without a snapshot, after the recovery rejected the automatic snapshots at these oplog
+        /// indexes, in ascending order; empty when no snapshot was involved
+        full-replay(list<oplog-index>),
+    }
+
+    /// A recovery replay from a loaded snapshot
+    record replay-snapshot-start {
+        /// The oplog index of the loaded snapshot
+        snapshot-index: oplog-index,
+        /// The oplog indexes of the automatic snapshots that the recovery rejected before it, in
+        /// ascending order
+        rejected-snapshots: list<oplog-index>,
+    }
+
+    /// One step of a replay
+    variant replay-step {
+        /// A host call
+        host-call(replay-host-call),
+        /// The end of an invocation
+        invocation-end,
+        /// The end of the recorded history
+        end-of-history,
+        /// Another step, which the text describes
+        other(string),
+    }
+
+    /// The identity of a recorded `Start`, or of the call that a replay made in its place
+    record replay-host-call {
+        function-name: string,
+        durable-function-type: wrapped-function-type,
+        parent-start-index: option<oplog-index>,
+        invocation-id: option<durable-invocation-id>,
+        observational-owner: option<oplog-index>,
+        /// The invocation that drives the call when it is not the invocation the call belongs to
+        driver: option<oplog-index>,
+        /// Whether the call carries a request: true for a durable call, false for a durable scope
+        carries-request: bool,
+        /// The request of the call, when it is known
+        request: option<typed-schema-value>,
+    }
+
+    /// An identity field of a recorded `Start`, which a replayed host call must match
+    enum start-identity-field {
+        function-name,
+        function-type,
+        invocation-id,
+        observational-owner,
+        request-presence,
+        parent,
+        driver,
+    }
+
+    record failed-snapshot-assisted-update-details {
+        pending-update-index: oplog-index,
+        source-component-revision: component-revision,
+        source-revision-start-index: oplog-index,
+        snapshot-index: oplog-index,
+    }
+
+    record grow-memory-parameters {
+        timestamp: datetime,
+        delta: u64
+    }
+
+    record memory-size-reconciled-parameters {
+        timestamp: datetime,
+        bytes: u64
+    }
+
+    type agent-resource-id = u64;
+
+    record create-resource-parameters {
+        timestamp: datetime,
+        id: agent-resource-id,
+        name: string,
+        owner: string
+    }
+
+    record drop-resource-parameters {
+        timestamp: datetime,
+        id: agent-resource-id,
+        name: string,
+        owner: string
+    }
+
+    enum log-level {
+        stdout,
+        stderr,
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+        critical
+    }
+
+    record log-parameters {
+        timestamp: datetime,
+        level: log-level,
+        context: string,
+        message: string,
+        trace-context: option<log-trace-context>,
+    }
+
+    record log-trace-context {
+        trace-id: trace-id,
+        span-id: span-id,
+    }
+
+    record activate-plugin-parameters {
+        timestamp: datetime,
+        plugin: plugin-installation-description
+    }
+
+    record deactivate-plugin-parameters {
+        timestamp: datetime,
+        plugin: plugin-installation-description
+    }
+
+    record revert-parameters {
+        timestamp: datetime,
+        dropped-region: oplog-region
+    }
+
+    record cancel-pending-invocation-parameters {
+        timestamp: datetime,
+        invocation-id: uuid
+    }
+
+    record begin-remote-transaction-parameters {
+        timestamp: datetime,
+        transaction-id: string
+    }
+
+    record remote-transaction-parameters {
+        timestamp: datetime,
+        begin-index: oplog-index
+    }
+
+    record snapshot-data {
+        data: list<u8>,
+        mime-type: string,
+    }
+
+    record snapshot-parameters {
+        timestamp: datetime,
+        data: snapshot-data,
+        /// The filesystem snapshot taken with the application snapshot, if any
+        filesystem-snapshot: option<string>,
+        /// The entries of the durable calls that the running revision's initializer made, if any
+        bootstrap: option<oplog-region>,
+    }
+
+    /// The store holds the named filesystem snapshot from this point
+    record snapshot-confirmed-parameters {
+        timestamp: datetime,
+        filesystem-snapshot: string,
+    }
+
+    /// The agent released a host resource whose only durable content is its span, and the
+    /// span closed. `resource-start-index` is the `start` that opened the span.
+    record span-closed-parameters {
+        timestamp: datetime,
+        resource-start-index: option<oplog-index>,
+        span-finished: span-finished,
+    }
+
+    record oplog-processor-checkpoint-parameters {
+        timestamp: datetime,
+        plugin: plugin-installation-description,
+        source-component-revision: component-revision,
+        target-agent-id: agent-id,
+        confirmed-up-to: oplog-index,
+        sending-up-to: oplog-index,
+        last-batch-start: oplog-index,
+    }
+
+    record timestamp {
+        timestamp: datetime
+    }
+
+    /// Opaque oplog payload, which can either be serialized inline or stored externally
+    variant oplog-payload {
+        inline(list<u8>),
+        external(oplog-external-payload)
+    }
+
+    record oplog-external-payload {
+        payload-id: uuid,
+        md5-hash: list<u8>
+    }
+
+    record agent-terminated-by-quota-error {
+        environment-id: environment-id,
+        resource-name: string
+    }
+
+    record ephemeral-sleep-too-long {
+        requested-nanos: u64,
+        max-nanos: u64
+    }
+
+    record ephemeral-fuel-exhausted {
+        overdraft-limit: u64
+    }
+
+    record ephemeral-cannot-suspend {
+        reason: string
+    }
+
+    record read-only-violation {
+        method: string,
+        host-function: string
+    }
+
+    /// Describes the error that occurred in the agent
+    variant worker-error {
+        unknown(string),
+        invalid-request(string),
+        stack-overflow,
+        out-of-memory,
+        exceeded-memory-limit,
+        internal-error(string),
+        deterministic-trap(string),
+        transient-error(string),
+        permanent-error(string),
+        exceeded-table-limit,
+        exceeded-http-call-limit,
+        exceeded-rpc-call-limit,
+        agent-terminated-by-quota(agent-terminated-by-quota-error),
+        ephemeral-sleep-too-long(ephemeral-sleep-too-long),
+        ephemeral-fuel-exhausted(ephemeral-fuel-exhausted),
+        ephemeral-cannot-suspend(ephemeral-cannot-suspend),
+        read-only-violation(read-only-violation)
+    }
+
+    record raw-create-parameters {
+        timestamp: datetime,
+        agent-id: agent-id,
+        /// The name of the agent's type. Owners without an agent type have none.
+        agent-type-name: option<string>,
+        owner-kind: owner-kind,
+        agent-mode: agent-mode,
+        component-revision: component-revision,
+        env: list<tuple<string, string>>,
+        environment-id: environment-id,
+        created-by: account-id,
+        parent: option<agent-id>,
+        component-size: u64,
+        initial-total-linear-memory-size: u64,
+        initial-active-plugins: list<environment-plugin-grant-id>,
+        local-agent-config: list<raw-local-agent-config-entry>,
+        instance-id: uuid,
+        /// Whether the agent is a never-live sandbox. A marked agent reports the
+        /// `sandboxed` status.
+        never-live: bool
+    }
+
+    record raw-start-parameters {
+        timestamp: datetime,
+        parent-start-index: option<oplog-index>,
+        function-name: string,
+        invocation-id: option<durable-invocation-id>,
+        observational-owner: option<oplog-index>,
+        driver: option<oplog-index>,
+        request: option<oplog-payload>,
+        durable-function-type: wrapped-function-type,
+        span-started: option<span-started>,
+        denial: option<string>,
+    }
+
+    record raw-end-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        response: option<oplog-payload>,
+        forced-commit: bool,
+        span-finished: option<span-finished>,
+        span-attributes: option<span-attributes>,
+    }
+
+    record raw-cancelled-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        partial: option<oplog-payload>,
+        span-finished: option<span-finished>,
+    }
+
+    record raw-completion-discarded-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    record raw-completion-delivered-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    /// Parameters for a host-stream-frame oplog entry, with the frame payload in raw
+    /// (possibly externally stored) form.
+    record raw-host-stream-frame-parameters {
+        timestamp: datetime,
+        parent-start-index: oplog-index,
+        kind: host-stream-kind,
+        payload: oplog-payload,
+    }
+
+    /// A consumed attachment read; only original data observations own payloads.
+    record raw-tool-attachment-read-parameters {
+        timestamp: datetime,
+        entity-parent-start-index: option<oplog-index>,
+        observation: typed-schema-value,
+        payload: option<oplog-payload>,
+    }
+
+    /// A released host resource whose span closed, attributed to the entity scope it ran in.
+    record raw-span-closed-parameters {
+        timestamp: datetime,
+        entity-parent-start-index: option<oplog-index>,
+        resource-start-index: option<oplog-index>,
+        span-finished: span-finished,
+    }
+
+    /// An effective attachment control transition without a byte payload.
+    record raw-tool-attachment-control-parameters {
+        timestamp: datetime,
+        entity-parent-start-index: option<oplog-index>,
+        attachment: typed-schema-value,
+        transition: typed-schema-value,
+    }
+
+    /// A raw durable-stream producer record, stored inline or in external payload storage.
+    record raw-durable-stream-record-parameters {
+        timestamp: datetime,
+        %record: oplog-payload,
+        summary: option<durable-stream-event-summary>,
+    }
+
+    enum durable-stream-outcome {
+        success,
+        error,
+    }
+
+    enum durable-stream-terminal-outcome {
+        finished,
+        failed,
+        consumer-cancelled,
+    }
+
+    enum stream-terminal-origin {
+        source,
+        control,
+    }
+
+    record durable-stream-terminal-summary {
+        outcome: durable-stream-terminal-outcome,
+        origin: stream-terminal-origin,
+    }
+
+    variant durable-stream-event-summary {
+        registered,
+        items(u64),
+        terminal(durable-stream-terminal-summary),
+        session-result,
+        session-finished(durable-stream-outcome),
+        session-cancellation,
+        session-expired,
+    }
+
+    /// The command of an external tool that a request runs
+    record raw-external-tool-operation {
+        tool-name: string,
+        command-path: list<string>,
+    }
+
+    /// What an accepted request runs. The request entries store it next to the payload, which
+    /// does not repeat it.
+    variant raw-invocation-request-operation {
+        manual-update(component-revision),
+        agent-initialization,
+        agent-method(string),
+        external-tool(raw-external-tool-operation),
+        load-snapshot,
+        save-snapshot,
+        process-oplog-entries,
+    }
+
+    record raw-agent-invocation-started-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        operation: raw-invocation-request-operation,
+        payload: oplog-payload,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<span-data>,
+        wallet-pin: raw-invocation-wallet-pin,
+    }
+
+    record raw-agent-invocation-finished-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        %result: oplog-payload,
+        method-name: option<string>,
+        consumed-fuel: s64,
+        component-revision: u64,
+    }
+
+    record raw-agent-invocation-failed-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        error: worker-error,
+        start-index: oplog-index,
+    }
+
+    record raw-agent-invocation-settled-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        consumed-fuel: s64,
+    }
+
+    record raw-error-parameters {
+        timestamp: datetime,
+        kind: oplog-error-kind,
+        /// The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs.
+        invocation-id: option<uuid>,
+        error: worker-error,
+        retry-from: oplog-index,
+        /// Persistent retry policy state, if a semantic retry policy is active.
+        retry-policy-state: option<retry-policy-state>,
+        /// When the failed host call retries, for an in-function retry.
+        retry-at: option<datetime>,
+        /// The start of the host call that waits until `retry-at`.
+        retrying-start-index: option<oplog-index>,
+    }
+
+    record raw-pending-agent-invocation-parameters {
+        timestamp: datetime,
+        not-before: option<datetime>,
+        invocation-id: uuid,
+        operation: raw-invocation-request-operation,
+        payload: oplog-payload,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<span-data>,
+    }
+
+    /// Raw update description used in oplog entries
+    variant raw-update-description {
+        /// Automatic update by replaying the oplog on the new version
+        automatic(component-revision),
+        /// Automatic update assisted by the latest eligible periodic snapshot
+        snapshot-assisted-automatic(raw-snapshot-assisted-automatic-update),
+        /// Custom update by loading a given snapshot on the new version
+        snapshot-based(raw-snapshot-based-update)
+    }
+
+    record raw-snapshot-assisted-automatic-update {
+        target-revision: component-revision,
+        source-component-revision: component-revision,
+        source-revision-start-index: oplog-index,
+        snapshot-index: oplog-index,
+        snapshot-revision: component-revision,
+        /// The filesystem snapshot of the selected record, if it has one
+        filesystem-snapshot: option<string>,
+        /// The bootstrap range of the selected record, if it has one
+        snapshot-bootstrap: option<oplog-region>,
+    }
+
+    record raw-snapshot-based-update {
+        target-revision: component-revision,
+        payload: oplog-payload,
+        mime-type: string,
+        filesystem-snapshot: option<string>,
+    }
+
+    record raw-pending-update-parameters {
+        timestamp: datetime,
+        description: raw-update-description,
+        update-attempt-index: option<oplog-index>,
+        /// Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
+        /// caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+        requester: list<u8>,
+    }
+
+    record raw-successful-update-parameters {
+        timestamp: datetime,
+        target-revision: component-revision,
+        new-component-size: u64,
+        new-active-plugins: list<environment-plugin-grant-id>,
+        snapshot-assisted-details: option<snapshot-assisted-update-details>,
+        /// The entries of the durable calls that the target revision's initializer made, if any
+        bootstrap: option<oplog-region>,
+    }
+
+    record resource-type-id {
+        name: string,
+        owner: string,
+    }
+
+    record raw-create-resource-parameters {
+        timestamp: datetime,
+        id: agent-resource-id,
+        resource-type-id: resource-type-id,
+    }
+
+    record raw-drop-resource-parameters {
+        timestamp: datetime,
+        id: agent-resource-id,
+        resource-type-id: resource-type-id,
+    }
+
+    record raw-activate-plugin-parameters {
+        timestamp: datetime,
+        plugin-grant-id: environment-plugin-grant-id
+    }
+
+    record raw-deactivate-plugin-parameters {
+        timestamp: datetime,
+        plugin-grant-id: environment-plugin-grant-id
+    }
+
+    record raw-begin-remote-transaction-parameters {
+        timestamp: datetime,
+        transaction-id: string,
+        original-begin-index: oplog-index
+    }
+
+    record raw-snapshot-parameters {
+        timestamp: datetime,
+        data: oplog-payload,
+        mime-type: string,
+        active-cards: list<list<u8>>,
+        wallet-generation: u64,
+        filesystem-snapshot: option<string>,
+        /// The entries of the durable calls that the running revision's initializer made, if any
+        bootstrap: option<oplog-region>,
+    }
+
+    record raw-oplog-processor-checkpoint-parameters {
+        timestamp: datetime,
+        plugin-grant-id: environment-plugin-grant-id,
+        source-component-revision: component-revision,
+        target-agent-id: agent-id,
+        confirmed-up-to: oplog-index,
+        sending-up-to: oplog-index,
+        last-batch-start: oplog-index,
+        delivery: option<list<u8>>,
+    }
+
+    variant oplog-entry {
+        /// The initial agent oplog entry
+        create(raw-create-parameters),
+        /// Marks the start of a durable host call (or scope such as a batched-write).
+        start(raw-start-parameters),
+        /// Marks the successful completion of a durable host call (or scope) started by a matching `Start`.
+        end(raw-end-parameters),
+        /// Marks that a durable host call started by a matching `Start` was cancelled
+        /// (e.g. dropped from a `select!`) before producing a final response.
+        cancelled(raw-cancelled-parameters),
+        /// The agent has been invoked
+        agent-invocation-started(raw-agent-invocation-started-parameters),
+        /// The agent has completed an invocation
+        agent-invocation-finished(raw-agent-invocation-finished-parameters),
+        agent-invocation-failed(raw-agent-invocation-failed-parameters),
+        /// The background work of an agent invocation ended after its result was recorded
+        agent-invocation-settled(raw-agent-invocation-settled-parameters),
+        /// Agent suspended
+        suspend(timestamp),
+        /// Agent failed
+        error(raw-error-parameters),
+        /// A previously failed startup or replay completed successfully.
+        recovery-succeeded(timestamp),
+        /// The agent needs to recover up to the given target oplog index and continue running from
+        /// the source oplog index from there
+        /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+        /// ignore all recorded operations in between.
+        jump(jump-parameters),
+        /// Indicates that the agent has been interrupted at this point.
+        /// Only used to recompute the agent's (cached) status, has no effect on execution.
+        interrupted(timestamp),
+        /// Indicates that the agent has been exited using WASI's exit function.
+        exited(timestamp),
+        /// An invocation request arrived while the agent was busy
+        pending-agent-invocation(raw-pending-agent-invocation-parameters),
+        /// An update request arrived and will be applied as soon the agent restarts
+        pending-update(raw-pending-update-parameters),
+        /// An update was successfully applied
+        successful-update(raw-successful-update-parameters),
+        /// An update failed to be applied
+        failed-update(failed-update-parameters),
+        /// Increased total linear memory size
+        grow-memory(grow-memory-parameters),
+        memory-size-reconciled(memory-size-reconciled-parameters),
+        /// Created a resource instance
+        create-resource(raw-create-resource-parameters),
+        /// Dropped a resource instance
+        drop-resource(raw-drop-resource-parameters),
+        /// The agent emitted a log message
+        log(log-parameters),
+        /// The agent has been restarted, forgetting all its history
+        restart(timestamp),
+        /// An unfinished durable invocation was admitted to resume
+        resumed(timestamp),
+        /// Activates a plugin
+        activate-plugin(raw-activate-plugin-parameters),
+        /// Deactivates a plugin
+        deactivate-plugin(raw-deactivate-plugin-parameters),
+        /// Revert an agent to a previous state
+        revert(revert-parameters),
+        /// Cancel a pending invocation
+        cancel-pending-invocation(cancel-pending-invocation-parameters),
+        /// Begins a transaction operation
+        begin-remote-transaction(raw-begin-remote-transaction-parameters),
+        /// Pre-Commit of the transaction, indicating that the transaction will be committed
+        pre-commit-remote-transaction(remote-transaction-parameters),
+        /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
+        pre-rollback-remote-transaction(remote-transaction-parameters),
+        /// Committed transaction operation, indicating that the transaction was committed
+        committed-remote-transaction(remote-transaction-parameters),
+        /// Rolled back transaction operation, indicating that the transaction was rolled back
+        rolled-back-remote-transaction(remote-transaction-parameters),
+        /// A snapshot of the agent's state
+        snapshot(raw-snapshot-parameters),
+        /// Checkpoint for oplog processor plugin delivery tracking
+        oplog-processor-checkpoint(raw-oplog-processor-checkpoint-parameters),
+        /// Sets or overwrites a named retry policy
+        set-retry-policy(set-retry-policy-parameters),
+        /// Removes a named retry policy by name
+        remove-retry-policy(remove-retry-policy-parameters),
+        /// Durable queue entry for pending permission-card work
+        card-event-queued(card-event-queued-parameters),
+        /// Records successful installation of a permission card into the agent wallet
+        card-installed(raw-card-installed-parameters),
+        /// Records failed installation of a permission card into the agent wallet
+        card-install-failed(card-install-failed-parameters),
+        /// Records that a permission card used by the agent has been revoked
+        card-revoked(card-revoked-parameters),
+        /// Records that a permission card used by the agent has expired
+        card-expired(card-expired-parameters),
+        /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+        /// attached to the durable host call identified by its start entry's index
+        host-stream-frame(raw-host-stream-frame-parameters),
+        tool-attachment-read(raw-tool-attachment-read-parameters),
+        tool-attachment-control(raw-tool-attachment-control-parameters),
+        /// Registers a durable stream before exposing its handle
+        stream-registered(raw-durable-stream-record-parameters),
+        /// Records committed durable stream values or a packed-u8 batch
+        stream-items(raw-durable-stream-record-parameters),
+        /// Records the unique outcome or consumer cancellation of a durable stream
+        stream-terminal(raw-durable-stream-record-parameters),
+        /// Records durable Stream Session state and consumer-journal facts
+        stream-session(raw-durable-stream-record-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was persisted, but its response was never delivered to the agent (the agent dropped
+        /// the completion future after the `end` was recorded)
+        completion-discarded(raw-completion-discarded-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was delivered to the agent at this point in the recorded execution
+        completion-delivered(raw-completion-delivered-parameters),
+        /// The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable
+        snapshot-confirmed(snapshot-confirmed-parameters),
+        /// The agent released a host resource and its span closed; the release is not a durable call
+        span-closed(raw-span-closed-parameters)
+    }
+
+    variant public-oplog-entry {
+        /// The initial agent oplog entry
+        create(create-parameters),
+        /// Marks the start of a durable host call (or scope such as a batched-write).
+        start(start-parameters),
+        /// Marks the successful completion of a durable host call (or scope) started by a matching `Start`.
+        end(end-parameters),
+        /// Marks that a durable host call started by a matching `Start` was cancelled
+        /// (e.g. dropped from a `select!`) before producing a final response.
+        cancelled(cancelled-parameters),
+        /// The agent has been invoked
+        agent-invocation-started(agent-invocation-started-parameters),
+        /// The agent has completed an invocation
+        agent-invocation-finished(agent-invocation-finished-parameters),
+        agent-invocation-failed(agent-invocation-failed-parameters),
+        /// The background work of an agent invocation ended after its result was recorded
+        agent-invocation-settled(agent-invocation-settled-parameters),
+        /// Agent suspended
+        suspend(timestamp),
+        /// Agent failed
+        error(error-parameters),
+        /// A previously failed startup or replay completed successfully.
+        recovery-succeeded(timestamp),
+        /// The agent needs to recover up to the given target oplog index and continue running from
+        /// the source oplog index from there
+        /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+        /// ignore all recorded operations in between.
+        jump(jump-parameters),
+        /// Indicates that the agent has been interrupted at this point.
+        /// Only used to recompute the agent's (cached) status, has no effect on execution.
+        interrupted(timestamp),
+        /// Indicates that the agent has been exited using WASI's exit function.
+        exited(timestamp),
+        /// An invocation request arrived while the agent was busy
+        pending-agent-invocation(pending-agent-invocation-parameters),
+        /// An update request arrived and will be applied as soon the agent restarts
+        pending-update(pending-update-parameters),
+        /// An update was successfully applied
+        successful-update(successful-update-parameters),
+        /// An update failed to be applied
+        failed-update(failed-update-parameters),
+        /// Increased total linear memory size
+        grow-memory(grow-memory-parameters),
+        memory-size-reconciled(memory-size-reconciled-parameters),
+        /// Created a resource instance
+        create-resource(create-resource-parameters),
+        /// Dropped a resource instance
+        drop-resource(drop-resource-parameters),
+        /// The agent emitted a log message
+        log(log-parameters),
+        /// The agent's has been restarted, forgetting all its history
+        restart(timestamp),
+        /// An unfinished durable invocation was admitted to resume
+        resumed(timestamp),
+        /// Activates a plugin
+        activate-plugin(activate-plugin-parameters),
+        /// Deactivates a plugin
+        deactivate-plugin(deactivate-plugin-parameters),
+        /// Revert an agent to a previous state
+        revert(revert-parameters),
+        /// Cancel a pending invocation
+        cancel-pending-invocation(cancel-pending-invocation-parameters),
+        /// Begins a transaction operation
+        begin-remote-transaction(begin-remote-transaction-parameters),
+        /// Pre-Commit of the transaction, indicating that the transaction will be committed
+        pre-commit-remote-transaction(remote-transaction-parameters),
+        /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
+        pre-rollback-remote-transaction(remote-transaction-parameters),
+        /// Committed transaction operation, indicating that the transaction was committed
+        committed-remote-transaction(remote-transaction-parameters),
+        /// Rolled back transaction operation, indicating that the transaction was rolled back
+        rolled-back-remote-transaction(remote-transaction-parameters),
+        /// A snapshot of the worker's state
+        snapshot(snapshot-parameters),
+        /// Checkpoint for oplog processor plugin delivery tracking
+        oplog-processor-checkpoint(oplog-processor-checkpoint-parameters),
+        /// Sets or overwrites a named retry policy
+        set-retry-policy(set-retry-policy-parameters),
+        /// Removes a named retry policy by name
+        remove-retry-policy(remove-retry-policy-parameters),
+        /// Durable queue entry for pending permission-card work
+        card-event-queued(card-event-queued-parameters),
+        /// Records successful installation of a permission card into the agent wallet
+        card-installed(card-installed-parameters),
+        /// Records failed installation of a permission card into the agent wallet
+        card-install-failed(card-install-failed-parameters),
+        /// Records that a permission card used by the agent has been revoked
+        card-revoked(card-revoked-parameters),
+        /// Records that a permission card used by the agent has expired
+        card-expired(card-expired-parameters),
+        /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+        /// attached to the durable host call identified by its start entry's index
+        host-stream-frame(host-stream-frame-parameters),
+        tool-attachment-read(tool-attachment-read-parameters),
+        tool-attachment-control(tool-attachment-control-parameters),
+        /// Registers a durable stream before exposing its handle
+        stream-registered(durable-stream-record-parameters),
+        /// Records committed durable stream values or a packed-u8 batch
+        stream-items(durable-stream-record-parameters),
+        /// Records the unique outcome or consumer cancellation of a durable stream
+        stream-terminal(durable-stream-record-parameters),
+        /// Records durable Stream Session state and consumer-journal facts
+        stream-session(durable-stream-record-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was persisted, but its response was never delivered to the agent (the agent dropped
+        /// the completion future after the `end` was recorded)
+        completion-discarded(completion-discarded-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was delivered to the agent at this point in the recorded execution
+        completion-delivered(completion-delivered-parameters),
+        /// The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable
+        snapshot-confirmed(snapshot-confirmed-parameters),
+        /// The agent released a host resource and its span closed; the release is not a durable call
+        span-closed(span-closed-parameters)
+    }
+
+    /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads
+    /// and augmenting entries with component metadata.
+    enrich-oplog-entries: func(environment-id: environment-id, agent-id: agent-id, entries: list<tuple<oplog-index, oplog-entry>>, component-revision: component-revision) -> result<list<public-oplog-entry>, string>;
+
+    variant oplog-read-error {
+        permission-denied,
+        internal-error(string),
+    }
+
+    resource get-oplog {
+        constructor(agent-id: agent-id, start: oplog-index);
+        get-next: func() -> result<option<list<public-oplog-entry>>, oplog-read-error>;
+    }
+
+    resource search-oplog {
+        constructor(agent-id: agent-id, text: string);
+        get-next: func() -> result<option<list<tuple<oplog-index, public-oplog-entry>>>, oplog-read-error>;
+    }
+}

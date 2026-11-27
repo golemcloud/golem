@@ -1,0 +1,208 @@
+package golem:agent@2.0.0;
+
+interface host {
+    use golem:core/types@2.0.0.{agent-id, promise-id, schema-graph, schema-value-tree, permission-card, invocation-id};
+    use wasi:clocks/system-clock@0.3.0.{instant as datetime};
+    use common.{agent-error, agent-type, registered-agent-type, typed-agent-config-value};
+
+    /// Gets all the registered agent types
+    get-all-agent-types: func() -> list<registered-agent-type>;
+
+    /// Get a specific registered agent type by name
+    get-agent-type: func(agent-type-name: string) -> option<registered-agent-type>;
+
+    /// Gets the deployed agent type that the type tag of an agent ID names. Returns `none`
+    /// when no deployed agent type has that tag.
+    get-agent-type-by-agent-id: func(agent-id: agent-id) -> option<registered-agent-type>;
+
+    /// Creates a webhook that can be used to integrate with webhook driven apis.
+    /// When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
+    /// Note the following behaviours:
+    /// * Only agents whoose agent types are _currently_ deployed via an http api are allowed to create a webhook. Calling this function while the agent
+    ///    is not deployed via an http api will trap.
+    /// * Only the agent type that created the promise is allowed to create a webhook for it. Using this host function
+    ///   from a different agent type will trap.
+    variant webhook-error {
+      permission-denied,
+      internal-error(string),
+    }
+
+    create-webhook: func(promise-id: promise-id) -> result<string, webhook-error>;
+
+    /// Possible failures of an RPC call
+    variant rpc-error {
+      /// Protocol level error
+      protocol-error(string),
+      /// Access denied
+      denied(string),
+      /// Target agent or function not found
+      not-found(string),
+      /// Internal error on the remote side
+      remote-internal-error(string),
+      /// The remote endpoint returned an agent-domain error
+      remote-agent-error(agent-error),
+      /// A keyed create found an agent that already has the key, or the agent at the ID
+      /// that a key derives has another key
+      conflict(string)
+    }
+
+    /// Gets the ID of the keyed agent of the given type and constructor parameters, or
+    /// `none` when no such agent exists. Never creates the agent.
+    ///
+    /// `input` is a value tree whose root encodes the constructor's parameter list.
+    lookup-agent-id: func(agent-type-name: string, input: schema-value-tree) -> result<option<agent-id>, rpc-error>;
+
+    /// Options of `wasm-rpc.create`
+    record create-options {
+      /// Creates the keyed agent of the constructor parameters, and fails with `conflict`
+      /// when it already exists. Otherwise the new agent has no key and a new ID.
+      keyed: bool,
+      /// Overrides of the agent type's local configuration values
+      agent-config: list<typed-agent-config-value>,
+      /// Environment variables added to the ones the manifest defines
+      env: list<tuple<string, string>>,
+    }
+
+    /// An agent created by `wasm-rpc.create`
+    record created {
+      client: wasm-rpc,
+      agent-id: agent-id,
+    }
+
+    /// Final identity allocated for one remote invocation. For an ephemeral
+    /// target, `agent-id` is the ID of the one-shot instance that ran it.
+    record invocation-metadata {
+      agent-id: agent-id,
+      invocation-id: invocation-id,
+    }
+
+    /// Result of an awaited invocation together with its final identity.
+    record invocation-result-with-metadata {
+      metadata: invocation-metadata,
+      %result: option<schema-value-tree>,
+    }
+
+    /// Asynchronous invocation handle together with its final identity, when
+    /// preparation succeeded. Rejected calls report their error through the future.
+    record async-invocation-with-metadata {
+      metadata: option<invocation-metadata>,
+      %future: future-invoke-result,
+    }
+
+    /// Receipt returned when an invocation has been scheduled.
+    record scheduled-invocation-receipt {
+      metadata: invocation-metadata,
+    }
+
+    /// Receipt for a scheduled invocation that can still be cancelled.
+    record cancelable-scheduled-invocation-receipt {
+      metadata: invocation-metadata,
+      cancellation-token: cancellation-token,
+    }
+
+    /// An RPC client for invoking remote agents
+    resource wasm-rpc {
+      /// Creates an RPC client connecting to the keyed agent of the given type and
+      /// constructor parameters.
+      ///
+      /// For durable targets, creates the target if missing and returns after successful
+      /// initialization. An initialized target is reused without rerunning its constructor.
+      /// Use `bind-self` to schedule on self from inside an unfinished constructor.
+      /// For ephemeral targets, each invocation runs on a new one-shot instance.
+      ///
+      /// `constructor` is a value tree whose root encodes the target agent
+      /// constructor's parameter list.
+      upsert: static func(agent-type-name: string, %constructor: schema-value-tree) -> result<wasm-rpc, rpc-error>;
+
+      /// Creates an RPC client connecting to the existing agent with the given ID. Never
+      /// creates the agent. Fails with `not-found` when no agent of the given type has the ID.
+      get-by-id: static func(agent-type-name: string, agent-id: agent-id) -> result<wasm-rpc, rpc-error>;
+
+      /// Creates a durable agent of the given type, and returns after its successful
+      /// initialization. The creation is durable: replay returns the same agent.
+      ///
+      /// `constructor` is a value tree whose root encodes the target agent
+      /// constructor's parameter list.
+      create: static async func(agent-type-name: string, %constructor: schema-value-tree, options: create-options) -> result<created, rpc-error>;
+
+      /// The ID of the agent this client connects to. On a client of `upsert` it creates the
+      /// agent when it is missing, without invoking a method.
+      agent-id: async func() -> result<agent-id, rpc-error>;
+
+      /// Binds the current durable agent incarnation without creating it or waiting
+      /// for its constructor to finish.
+      ///
+      /// Use this to schedule work on self from inside the constructor. The agent's
+      /// identity already exists then, but initialization is still in progress.
+      /// Normal RPC client construction reuses an initialized agent without running
+      /// its constructor again, but waits if initialization is still in progress.
+      /// Calling it on self from the constructor would therefore deadlock.
+      ///
+      /// Binding does not make awaited self-calls reentrant. Scheduled work runs
+      /// after construction finishes. Method calls still require method authority.
+      /// Typed clients must validate the returned agent type. The returned ID and
+      /// connection preserve the recorded incarnation during replay.
+      bind-self: static func() -> result<tuple<agent-id, wasm-rpc>, rpc-error>;
+
+      /// Invokes a remote method with the given parameters, and awaits the result.
+      ///
+      /// `input` encodes the method's parameter list. The returned result is
+      /// `none` for a `unit` output and `some(value)` for a `single` output.
+      invoke-and-await: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<invocation-result-with-metadata, rpc-error>;
+
+      /// Triggers the invocation of a remote method with the given parameters,
+      /// and returns its final identity immediately.
+      /// Scope lending is not supported: `scope-card` must be `none`.
+      invoke: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<invocation-metadata, rpc-error>;
+
+      /// Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
+      /// be polled for the result together with the final invocation identity.
+      ///
+      /// With this function it is possible to call multiple (different) agents simultaneously.
+      async-invoke-and-await: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> async-invocation-with-metadata;
+
+      /// Schedules an invocation for later and returns its final identity.
+      /// Scope lending is not supported: `scope-card` must be `none`.
+      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<scheduled-invocation-receipt, rpc-error>;
+
+      /// Schedules an invocation for later and returns its final identity and
+      /// cancellation capability. Call cancel on the returned resource to
+      /// cancel the invocation before the scheduled time.
+      /// Scope lending is not supported: `scope-card` must be `none`.
+      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<cancelable-scheduled-invocation-receipt, rpc-error>;
+    }
+
+    /// Represents an asynchronous invocation result
+    resource future-invoke-result {
+      /// Awaits the result of the invocation.
+      get: async func() -> result<option<schema-value-tree>, rpc-error>;
+      /// Best-effort attempt to cancel the remote invocation by idempotency key.
+      /// If the invocation has already started or completed, this is a no-op.
+      cancel: func();
+    }
+
+    /// Cancellation token for scheduled invocations
+    resource cancellation-token {
+      /// Cancel the scheduled invocation
+      cancel: func();
+    }
+
+    /// Get the current value of the config key.
+    ///
+    /// The expected schema is a hint to the host what type of value is expected by the guest and can be used
+    /// by the host to automatically migrate config values to fit the expected schema.
+    ///
+    /// Only keys that are declared by the agent-type are allowed to be accessed. Trying
+    /// to access an undeclared key will trap, unless the expected type is an option. In that case
+    /// none is returned.
+    ///
+    /// Getting a local key will get values defined as part of the current
+    /// component revision + overrides declared during agent creation.
+    ///
+    /// Getting a shared key will get the current value of the key in the environment.
+    variant config-value-error {
+      permission-denied,
+    }
+
+    get-config-value: func(key: list<string>, expected: schema-graph) -> result<schema-value-tree, config-value-error>;
+}

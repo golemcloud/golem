@@ -135,6 +135,7 @@ args = [
     "--src", "wit/deps", "--dst", "sdks/scala/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/moonbit/golem_sdk/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/go/golem/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/python/wit/deps",
 ]
 
 [tasks.wit-golem-cli]
@@ -3302,4 +3303,19 @@ end
 if ${failed}
     trigger_error "Cleanup finished with failures; see the errors above"
 end
+'''
+
+# Prepares the Python SDK's runtime and bindings for `golem-python-assembler`.
+# Installs componentize-py from the fork revision that the workspace's
+# `componentize-py` dependency pins; keep the two revisions equal. Building it
+# compiles CPython for WASI and needs `WASI_SDK_PATH`.
+[tasks.python-sdk-prepare]
+description = "Prepares the Python SDK runtime and bindings in sdks/python/target/prepared"
+script_runner = "@duckscript"
+script = '''
+rev = set cad25eefaa090c158bca5ba5882c389eade4bcac
+tools = set sdks/python/target/tools
+exec --fail-on-error cargo install --locked --git https://github.com/golemcloud/componentize-py --rev ${rev} --root ${tools} componentize-py
+rm -r sdks/python/target/prepared
+exec --fail-on-error ${tools}/bin/componentize-py -d sdks/python/wit -w agent-guest prepare sdks/python/target/prepared
 '''
