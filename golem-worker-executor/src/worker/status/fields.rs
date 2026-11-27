@@ -1061,6 +1061,8 @@ fn apply_plugin_entry(
     match entry {
         OplogEntry::Create { parameters, .. } => {
             active = parameters.initial_active_plugins.clone();
+            checkpoints
+                .retain(|grant_id, state| keeps_processor_checkpoint(&active, grant_id, state));
         }
         OplogEntry::ActivatePlugin {
             plugin_grant_id, ..
@@ -1074,11 +1076,19 @@ fn apply_plugin_entry(
             plugin_grant_id, ..
         } => {
             active.remove(plugin_grant_id);
+            if checkpoints
+                .get(plugin_grant_id)
+                .is_some_and(|state| !keeps_processor_checkpoint(&active, plugin_grant_id, state))
+            {
+                checkpoints.remove(plugin_grant_id);
+            }
         }
         OplogEntry::SuccessfulUpdate {
             new_active_plugins, ..
         } => {
             active = new_active_plugins.clone();
+            checkpoints
+                .retain(|grant_id, state| keeps_processor_checkpoint(&active, grant_id, state));
             new_active_plugins.iter().for_each(|grant_id| {
                 checkpoints
                     .entry(*grant_id)
@@ -1094,20 +1104,21 @@ fn apply_plugin_entry(
             delivery,
             ..
         } => {
-            checkpoints.insert(
-                *plugin_grant_id,
-                OplogProcessorCheckpointState {
-                    target_agent_id: Some(*target_agent_id),
-                    confirmed_up_to: *confirmed_up_to,
-                    sending_up_to: *sending_up_to,
-                    last_batch_start: *last_batch_start,
-                    delivery: delivery.clone(),
-                },
-            );
+            let state = OplogProcessorCheckpointState {
+                target_agent_id: Some(*target_agent_id),
+                confirmed_up_to: *confirmed_up_to,
+                sending_up_to: *sending_up_to,
+                last_batch_start: *last_batch_start,
+                delivery: delivery.clone(),
+            };
+            if keeps_processor_checkpoint(&active, plugin_grant_id, &state) {
+                checkpoints.insert(*plugin_grant_id, state);
+            } else {
+                checkpoints.remove(plugin_grant_id);
+            }
         }
         _ => {}
     }
-    checkpoints.retain(|grant_id, state| keeps_processor_checkpoint(&active, grant_id, state));
     (active, checkpoints)
 }
 
@@ -1126,19 +1137,18 @@ fn apply_plugin_entry(
 /// activation.
 pub(super) fn calculate_plugin_status(
     active_plugins: HashSet<EnvironmentPluginGrantId>,
-    checkpoints: HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
+    mut checkpoints: HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> PluginStatus {
-    let kept = checkpoints
-        .into_iter()
-        .filter(|(grant_id, state)| keeps_processor_checkpoint(&active_plugins, grant_id, state))
-        .collect();
+    checkpoints
+        .retain(|grant_id, state| keeps_processor_checkpoint(&active_plugins, grant_id, state));
     // Replay does not apply the entries of a deleted region.
     entries
         .iter()
         .filter(|(idx, _)| !deleted_regions.is_in_deleted_region(**idx))
-        .fold((active_plugins, kept), |plugin_status, (idx, entry)| {
-            apply_plugin_entry(plugin_status, *idx, entry)
-        })
+        .fold(
+            (active_plugins, checkpoints),
+            |plugin_status, (idx, entry)| apply_plugin_entry(plugin_status, *idx, entry),
+        )
 }

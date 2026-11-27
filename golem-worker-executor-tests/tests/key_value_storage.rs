@@ -38,16 +38,22 @@ use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use url::Url;
 use uuid::{Uuid, uuid};
 
+struct KeyValueStorageFixture {
+    storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    redis: Option<RedisPool>,
+}
+
 #[async_trait]
 trait GetKeyValueStorage: Debug {
     async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync>;
 
     /// A new storage, and the Redis pool of its Redis backend when it has one. The pool has the
     /// key prefix of the storage.
-    async fn get_key_value_storage_and_redis(
-        &self,
-    ) -> (Arc<dyn KeyValueStorage + Send + Sync>, Option<RedisPool>) {
-        (self.get_key_value_storage().await, None)
+    async fn get_key_value_storage_and_redis(&self) -> KeyValueStorageFixture {
+        KeyValueStorageFixture {
+            storage: self.get_key_value_storage().await,
+            redis: None,
+        }
     }
 
     fn observes_expiry(&self) -> bool {
@@ -95,12 +101,10 @@ impl Debug for RedisKeyValueStorageWrapper {
 #[async_trait]
 impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
     async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
-        self.get_key_value_storage_and_redis().await.0
+        self.get_key_value_storage_and_redis().await.storage
     }
 
-    async fn get_key_value_storage_and_redis(
-        &self,
-    ) -> (Arc<dyn KeyValueStorage + Send + Sync>, Option<RedisPool>) {
+    async fn get_key_value_storage_and_redis(&self) -> KeyValueStorageFixture {
         let random_prefix = Uuid::new_v4();
         let redis_pool = RedisPool::configured(&RedisConfig {
             host: self.redis.public_host(),
@@ -117,7 +121,10 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
         .await
         .unwrap();
         let kvs = RedisKeyValueStorage::new(redis_pool.clone());
-        (Arc::new(kvs), Some(redis_pool))
+        KeyValueStorageFixture {
+            storage: Arc::new(kvs),
+            redis: Some(redis_pool),
+        }
     }
 
     fn observes_expiry(&self) -> bool {
@@ -290,12 +297,10 @@ impl Debug for NamespaceRoutedKeyValueStorageWrapper {
 #[async_trait]
 impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
     async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
-        self.get_key_value_storage_and_redis().await.0
+        self.get_key_value_storage_and_redis().await.storage
     }
 
-    async fn get_key_value_storage_and_redis(
-        &self,
-    ) -> (Arc<dyn KeyValueStorage + Send + Sync>, Option<RedisPool>) {
+    async fn get_key_value_storage_and_redis(&self) -> KeyValueStorageFixture {
         let random_prefix = Uuid::new_v4();
         let redis_pool = RedisPool::configured(&RedisConfig {
             host: self.redis.public_host(),
@@ -346,13 +351,13 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
                 .expect("Cannot create postgres key value storage for routed kvs"),
         );
 
-        (
-            Arc::new(NamespaceRoutedKeyValueStorage::new(
+        KeyValueStorageFixture {
+            storage: Arc::new(NamespaceRoutedKeyValueStorage::new(
                 redis_storage,
                 postgres_storage,
             )),
-            Some(redis_pool),
-        )
+            redis: Some(redis_pool),
+        }
     }
 
     fn observes_expiry(&self) -> bool {
@@ -1754,7 +1759,7 @@ async fn the_status_baseline_outlives_the_expiry_of_the_status_cache(
     _deps: &WorkerExecutorTestDependencies,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
 ) {
-    let (storage, redis) = kvs.get_key_value_storage_and_redis().await;
+    let KeyValueStorageFixture { storage, redis } = kvs.get_key_value_storage_and_redis().await;
     let owned_agent_id = crate::fresh_owned_agent_id();
     let fingerprint = AgentFingerprint::new();
     let baseline_key = format!(

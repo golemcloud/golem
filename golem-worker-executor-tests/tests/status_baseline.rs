@@ -22,16 +22,20 @@ use anyhow::Context;
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{AgentStatus, OwnedAgentId, ShardAssignment, ShardId};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{AgentStatusCheckpointConfig, OplogConfig};
+use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
-    scheduler_sqlite_storage_config, start_with_overrides, truncate_archived_oplog_chunk,
+    scheduler_sqlite_storage_config, sqlite_storage_config, start_with_overrides,
+    truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -219,8 +223,8 @@ async fn a_restart_after_a_completed_archive_folds_the_status_from_the_baseline(
     Ok(())
 }
 
-/// The deletion of an agent removes its status baseline, and the re-created agent of the same
-/// name folds its status from its own oplog and baseline only.
+/// The deletion of an agent removes its status baseline. A re-created agent of the same name
+/// ignores that baseline even if a stale writer restores it after deletion.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -246,44 +250,106 @@ async fn a_re_created_agent_never_reads_the_baseline_of_the_deleted_one(
         .status_checkpoint_of(&agent_id, deleted)
         .await?
         .ok_or_else(|| anyhow::anyhow!("the agent wrote no status baseline"))?;
+    let kv = SqliteKeyValueStorage::configured(&sqlite_storage_config(deps, &context)).await?;
+    let deleted_namespace = KeyValueStorageNamespace::AgentStatusCheckpoint {
+        owned_agent_id: owned_agent_id.clone(),
+        fingerprint: deleted,
+    };
+    let stale_fields = kv
+        .get_all(
+            "test",
+            "recreate",
+            "agent_status",
+            deleted_namespace.clone(),
+        )
+        .await?;
+    assert!(
+        !stale_fields.is_empty(),
+        "the old baseline must exist in storage"
+    );
 
     executor.delete_worker(&owned_agent_id).await?;
-    let removed = executor.status_checkpoint_of(&agent_id, deleted).await?;
+    assert_eq!(
+        executor.status_checkpoint_of(&agent_id, deleted).await?,
+        None
+    );
 
     executor.start_agent(&component.id, agent.clone()).await?;
     let first = executor
         .invoke_and_await_agent(&component, &agent, "increment", data_value!())
         .await?
         .into_typed::<u32>()?;
+    increment(&executor, &component, &agent, 3).await?;
     let re_created = executor.agent_fingerprint(&agent_id).await?;
     stop_when_idle(&executor, &owned_agent_id).await?;
+    assert!(
+        executor.last_oplog_index(&agent_id).await? >= deleted_baseline.oplog_idx,
+        "the old baseline must be within the new oplog so its index does not invalidate it"
+    );
     executor.remove_cached_status(&agent_id).await?;
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
 
-    let executor = start(deps, &context).await?;
-    let metadata = executor.get_worker_metadata(&owned_agent_id).await?;
-    let second = executor
-        .invoke_and_await_agent(&component, &agent, "increment", data_value!())
-        .await?
-        .into_typed::<u32>()?;
-    let baseline = executor.status_checkpoint(&agent_id).await?;
+    // Model a late write from the deleted incarnation. Leave no new baseline that could hide
+    // the stale one from an incorrect read that selects a baseline by agent ID alone.
+    let recreated_namespace = KeyValueStorageNamespace::AgentStatusCheckpoint {
+        owned_agent_id: owned_agent_id.clone(),
+        fingerprint: re_created,
+    };
+    let recreated_fields = kv
+        .keys("test", "recreate", recreated_namespace.clone())
+        .await?;
+    kv.del_many(
+        "test",
+        "recreate",
+        recreated_namespace,
+        recreated_fields.into(),
+    )
+    .await?;
+    let stale_fields = stale_fields
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_ref()))
+        .collect::<Vec<_>>();
+    kv.set_many(
+        "test",
+        "recreate",
+        "agent_status",
+        deleted_namespace,
+        &stale_fields,
+    )
+    .await?;
 
-    assert_eq!(removed, None);
+    let executor = start(deps, &context).await?;
+    let status = executor
+        .folded_status(&agent_id)
+        .await?
+        .context("missing recreated agent status")?;
     assert_ne!(re_created, deleted);
-    assert_eq!((first, second), (1, 2));
-    assert_eq!(metadata.status, AgentStatus::Idle);
+    assert_eq!(status.status, AgentStatus::Idle);
     assert_eq!(
         deleted_baseline.export_fork_admissions.owner_fingerprint,
         Some(deleted)
     );
     assert_eq!(
-        baseline.and_then(|baseline| baseline.export_fork_admissions.owner_fingerprint),
-        Some(re_created)
+        status.export_fork_admissions.owner_fingerprint,
+        Some(re_created),
+        "the cold fold used the stale incarnation's baseline"
     );
+
+    let after_restart = executor
+        .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    stop_when_idle(&executor, &owned_agent_id).await?;
+    let oplog = executor.stored_oplog(&agent_id).await;
+
+    assert_eq!((first, after_restart), (1, 5));
     assert_eq!(
-        executor.status_checkpoint_of(&agent_id, deleted).await?,
-        None
+        oplog.iter()
+            .filter(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { method_name: Some(name), .. } if name == "increment"))
+            .count(),
+        5,
+        "the replacement oplog must contain one result per increment"
     );
     Ok(())
 }

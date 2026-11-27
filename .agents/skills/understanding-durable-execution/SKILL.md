@@ -86,7 +86,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Durable-call `Start`/`End`/`Cancelled` and `CompletionDelivered`/`CompletionDiscarded` markers | `DurableCallSession`, `ReplayableOneshot`, spawned store tasks |
 | `PendingUpdate` / `SuccessfulUpdate` / `FailedUpdate`, `Snapshot` hints, snapshot blobs | In-flight update decision, loaded snapshot bytes |
 | Validated operator revert/fork cuts and retained history | Replay cursor and runtime handles |
-| Agent status **folded from the durable status baseline and the oplog after it** (`worker/status/`, `AgentStatusCheckpoint`) | Status cache (a disposable start status of the fold) |
+| Agent status **folded from a usable baseline and the oplog after it, or from readable history from index 1** (`worker/status/`, `AgentStatusCheckpoint`) | Status cache (a disposable start status of the fold) |
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 The executor resolves metadata by component ID and revision before loading code. It shares loaded code for the same Wasm hash within one engine instance. The executor and compilation service share serialized artifacts by Wasm hash and the Wasmtime artifact fingerprint. Neither cache changes which metadata or deployment a worker uses.
@@ -134,8 +134,11 @@ writer from a deleted incarnation therefore cannot mix fields into its replaceme
 The status cache, the invocation-result index and the durable-stream index have a renewable
 expiry and are rebuilt after expiry or cache loss. The clean checkpoint is the durable status
 baseline: it has no expiry, a completed archive keeps it, namespace routing stores it in the
-persistent backend, and only agent deletion removes it. A fold starts from it when the status
-cache is gone. Metadata compare-and-set operations (for the baseline, which has no expiry) and
+persistent backend, and only agent deletion removes it. When the status cache is gone, the fold
+starts from a usable baseline or needs readable history from index 1. A stream attachment can
+still require the pending invocation that it references before the baseline. A cold metadata
+load rebuilds the invocation-result index separately from index 1. Metadata compare-and-set
+operations (for the baseline, which has no expiry) and
 compare-and-mutate operations (for the caches) make each multi-field publication atomic. The flat cached
 agent mode only chooses which oplog namespace to probe first and never proves existence or identity.
 `RunningWorkers` entries also include the fingerprint, so shard recovery admits only the recorded
@@ -340,8 +343,9 @@ Rules that follow from it:
   by fingerprint; the agent-mode hint has one key per agent and carries the fingerprint in its
   value. Archiving removes all three once the whole oplog is in the last layer
   (`worker/persistence.rs` → `WorkerService::remove_cached_status`). The durable status baseline
-  (the clean checkpoint) is also scoped by fingerprint, but archiving keeps it. The next load folds
-  the status from the baseline and the oplog, and the next resolution writes the hint again. Test:
+  (the clean checkpoint) is also scoped by fingerprint, but archiving keeps it. The next load
+  folds the status from a usable baseline and the oplog after it, or needs readable history from
+  index 1. The next resolution writes the hint again. Test:
   `oplog_unreadable.rs::archived_keyed_agents_resolve_by_key_and_by_id_from_their_oplog`.
 
 ## Component map

@@ -212,10 +212,11 @@ pub trait WorkerService: Send + Sync {
         on_stale: OnStale<'_>,
     ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    /// Deletes the worker in this order: its invocation result index, its cached status, its
-    /// agent mode hint, its status baseline, its durable stream session index, its rejected
-    /// periodic snapshots, its oplog, the delete request of its filesystem snapshots, its promises
-    /// and its entry in the recovery index.
+    /// Removes the specified incarnation's invocation result index, cached status, agent mode
+    /// hint, status baseline, durable stream session index and rejected periodic snapshots, in
+    /// that order. It then deletes the oplog unless it belongs to another incarnation. It
+    /// requests deletion of the specified incarnation's filesystem snapshots, then removes its
+    /// promises and its entry in the recovery index.
     ///
     /// Returns `Err` when the storage could not be reached. Safe to run again, and it is: by
     /// `Worker::delete`'s staged deletion and by the worker service's re-dispatch. The oplog goes
