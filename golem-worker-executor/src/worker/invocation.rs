@@ -506,6 +506,12 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let manages_owner_execution_status = primary_body.is_some();
     if manages_owner_execution_status {
         store.data_mut().set_running();
+        store
+            .data()
+            .get_public_state()
+            .worker()
+            .publish_interrupt_queued_before_running()
+            .await;
     }
 
     // Arm the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`).

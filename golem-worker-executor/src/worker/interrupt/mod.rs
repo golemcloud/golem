@@ -299,6 +299,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .publish_interrupt(interrupt_kind, receipt, signal.as_ref())
             .then_some(receiver)
     }
+    /// Publishes to the Store that just started running an interrupt queued while it was
+    /// suspended: the signal sent then reached no Store, so the guest would never observe it.
+    pub(crate) async fn publish_interrupt_queued_before_running(&self) {
+        let queued = match &*self.interrupt_signal.lock().await {
+            WorkerInterruptState::Pending(pending) => Some(pending.kind),
+            _ => None,
+        };
+        if let Some(kind) = queued {
+            let mut status = self.execution_status.write().unwrap();
+            let signal = match &*status {
+                ExecutionStatus::Running {
+                    interrupt_signal, ..
+                } => Some(interrupt_signal.clone()),
+                _ => None,
+            };
+            if signal.is_some() {
+                let receipt = Arc::new(tokio::sync::broadcast::channel(1).0);
+                status.publish_interrupt(kind, receipt, signal.as_ref());
+            }
+        }
+    }
     pub(in crate::worker) async fn queue_interrupt(
         &self,
         interrupt_kind: InterruptKind,

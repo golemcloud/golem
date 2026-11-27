@@ -964,6 +964,23 @@ impl TestWorkerExecutor {
         &self,
         agent_id: &AgentId,
     ) -> anyhow::Result<Vec<StreamExportForkAdmittedRecord>> {
+        Ok(self
+            .stored_stream_session_records(agent_id)
+            .await?
+            .into_iter()
+            .filter_map(|record| match record {
+                StreamSessionRecord::ExportForkAdmitted(record) => Some(record),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// The durable agent's stream-session records, read from oplog storage. Unlike the oplog API,
+    /// this also reads the oplog of an agent whose shard this executor no longer owns.
+    pub async fn stored_stream_session_records(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Vec<StreamSessionRecord>> {
         use golem_worker_executor::services::HasOplogService;
         use golem_worker_executor::services::oplog::OplogServiceOps;
 
@@ -987,13 +1004,12 @@ impl TestWorkerExecutor {
         let mut records = Vec::new();
         for entry in entries.into_values() {
             if let OplogEntry::StreamSession { record, .. } = entry {
-                let record = oplog
-                    .download_payload(&owned_agent_id, AgentMode::Durable, record)
-                    .await
-                    .map_err(Error::msg)?;
-                if let StreamSessionRecord::ExportForkAdmitted(record) = record {
-                    records.push(record);
-                }
+                records.push(
+                    oplog
+                        .download_payload(&owned_agent_id, AgentMode::Durable, record)
+                        .await
+                        .map_err(Error::msg)?,
+                );
             }
         }
         Ok(records)
