@@ -40,7 +40,7 @@ pub enum InvocationState {
     Cancelled,
 }
 
-pub(crate) enum ObservedInvocationResult {
+pub enum ObservedInvocationResult {
     /// The agent no longer has the invocation: a revert removed it during the wait.
     NotFound,
     Invocation(AgentInvocationOutput),
@@ -136,7 +136,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// identity that scheduled cancellation compares: the principal's pair, which names the
     /// starter's incarnation. The caller comes from the authenticated calling host; guest input
     /// must not supply it.
-    pub(crate) async fn invocation_was_started_by(
+    pub async fn invocation_was_started_by(
         &self,
         key: &InvocationId,
         caller: &golem_common::model::caller::Principal,
@@ -157,7 +157,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The wait follows the agent across its generations: when the observed generation retires
     /// for an interrupt or a revert, the wait goes on in the generation that replaces it, which
     /// is loaded suspended, as this incarnation, once the retiring one has left the cache.
-    pub(crate) async fn observe_invocation_result(
+    pub async fn observe_invocation_result(
         self: &Arc<Self>,
         key: &InvocationId,
     ) -> Result<Result<ObservedInvocationResult, WorkerExecutorError>, WorkerExecutorError> {

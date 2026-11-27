@@ -33,7 +33,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// A deletion whose last attempt failed leaves the agent in place until a retry or an
     /// eviction replaces its generation, so the refusal it gives is not the answer to the
     /// request: the error becomes a runtime error and the caller tries again.
-    pub(crate) async fn failed_deletion_as_retryable<T>(
+    pub async fn failed_deletion_as_retryable<T>(
         &self,
         result: Result<T, WorkerExecutorError>,
     ) -> Result<T, WorkerExecutorError> {

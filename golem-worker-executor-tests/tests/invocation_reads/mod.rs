@@ -61,7 +61,14 @@ mod lifecycle_boundaries;
 
 /// Grants the management permissions of invocation handles while its flag is set, and denies
 /// every check otherwise.
-pub(crate) struct HandleManagementAuth(pub(crate) std::sync::Arc<std::sync::atomic::AtomicBool>);
+pub struct HandleManagementAuth(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl HandleManagementAuth {
+    /// Grants the permissions while `management` is set.
+    pub fn new(management: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self(management)
+    }
+}
 
 #[async_trait::async_trait]
 impl golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService
@@ -97,7 +104,7 @@ impl golem_worker_executor::services::direct_invocation_auth::DirectInvocationAu
 /// The principal that the executor gives the current incarnation of `agent` as a caller: the
 /// pair of its address and fingerprint, which is what a starter check compares. An agent that
 /// does not exist gets the principal of no incarnation.
-pub(crate) async fn agent_principal(
+pub async fn agent_principal(
     executor: &TestWorkerExecutor,
     agent: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<golem_common::model::caller::Principal> {
@@ -114,7 +121,7 @@ pub(crate) async fn agent_principal(
     .immediate)
 }
 
-pub(crate) async fn handle_operation(
+pub async fn handle_operation(
     executor: &TestWorkerExecutor,
     target: &golem_common::model::OwnedAgentId,
     caller: &golem_common::model::AgentId,
@@ -169,7 +176,7 @@ async fn invocation_handles_observe_schedules_and_authorize_the_persisted_starte
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new({
                 let management = management.clone();
-                move || Arc::new(HandleManagementAuth(management.clone()))
+                move || Arc::new(HandleManagementAuth::new(management.clone()))
             })),
             ..Default::default()
         },
@@ -385,7 +392,7 @@ async fn invocation_handle_wait_does_not_resume_an_interrupted_target(
         &context,
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new(|| {
-                Arc::new(HandleManagementAuth(Arc::new(AtomicBool::new(true))))
+                Arc::new(HandleManagementAuth::new(Arc::new(AtomicBool::new(true))))
             })),
             ..Default::default()
         },
@@ -985,7 +992,7 @@ async fn cancelling_a_failed_invocation_handle_preserves_its_recorded_failure(
         &context,
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new(|| {
-                Arc::new(HandleManagementAuth(Arc::new(AtomicBool::new(true))))
+                Arc::new(HandleManagementAuth::new(Arc::new(AtomicBool::new(true))))
             })),
             ..Default::default()
         },

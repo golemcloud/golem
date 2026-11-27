@@ -62,7 +62,7 @@ use wasmtime::component::{Accessor, HasSelf, Resource};
 
 /// Decodes guest-owned config overrides into the plain JSON that the creation request carries.
 /// Every value is drained, so no handle in a later value leaks when an earlier one is rejected.
-pub(super) fn decode_rpc_config<Ctx: WorkerCtx>(
+fn decode_rpc_config<Ctx: WorkerCtx>(
     config: Vec<TypedAgentConfigValue>,
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<Vec<AgentConfigEntryDto>, String> {

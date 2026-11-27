@@ -56,7 +56,7 @@ use wasmtime::component::{Accessor, HasSelf, Resource};
 
 type InvokeAndAwaitCall = DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>;
 
-pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
+pub async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     this: Resource<WasmRpcEntry>,
     method_name: String,

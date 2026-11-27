@@ -249,7 +249,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(entry.map(summary))
     }
 
-    pub(super) async fn invocation_handle_internal(
+    pub async fn invocation_handle_internal(
         &self,
         request: golem::workerexecutor::v1::InvocationHandleRequest,
     ) -> Result<golem::workerexecutor::v1::InvocationHandleSuccess, WorkerExecutorError> {

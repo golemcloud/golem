@@ -255,7 +255,7 @@ where
     }
 }
 
-pub(super) fn wire_invocation_id(id: &OwnedInvocationId) -> core_wire::InvocationId {
+pub fn wire_invocation_id(id: &OwnedInvocationId) -> core_wire::InvocationId {
     core_wire::InvocationId {
         owner: match id.owner() {
             golem_common::model::InvocationOwner::Agent(agent) => {

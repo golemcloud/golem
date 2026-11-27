@@ -265,7 +265,7 @@ enum AccessRequest<
 }
 
 /// The request a live call's `Start` records, resolved after the call's admission.
-pub(super) enum StartRequest<Req> {
+pub enum StartRequest<Req> {
     Ready(Req),
     Indexed(BuildIndexedRequestCallback<Req>),
 }
@@ -274,7 +274,7 @@ pub(super) enum StartRequest<Req> {
 /// oplog's serialized writer step. The flag tells whether the `Start` records a denial, so a
 /// denied call can leave out its input. A replaying call claims its recorded `Start` and never
 /// builds them.
-pub(crate) type BuildIndexedRequestCallback<Req> = Box<
+type BuildIndexedRequestCallback<Req> = Box<
     dyn FnOnce(
             OplogIndex,
             bool,
@@ -658,7 +658,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     /// The request recorded in the claimed `Start`, read through an accessor.
-    pub(crate) async fn recorded_request_access<T, D, Ctx>(
+    pub async fn recorded_request_access<T, D, Ctx>(
         &self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -737,7 +737,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// Whether the claimed `Start` records a denial: the call was refused before it did
     /// anything.
-    pub(crate) async fn recorded_denial_access<T, D, Ctx>(
+    pub async fn recorded_denial_access<T, D, Ctx>(
         &self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,

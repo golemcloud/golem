@@ -32,7 +32,7 @@ fn denied_management_with_small_recent_index() -> TestExecutorOverrides {
             config.invocation_results.recent_capacity = 1;
         })),
         create_direct_invocation_auth: Some(Arc::new(|| {
-            Arc::new(HandleManagementAuth(Arc::new(AtomicBool::new(false))))
+            Arc::new(HandleManagementAuth::new(Arc::new(AtomicBool::new(false))))
         })),
         ..Default::default()
     }
@@ -450,7 +450,7 @@ async fn a_failed_terminal_retains_its_starter_after_eviction_and_reconstruction
     let mut overrides = denied_management_with_small_recent_index();
     overrides.create_direct_invocation_auth = Some(Arc::new({
         let management = management.clone();
-        move || Arc::new(HandleManagementAuth(management.clone()))
+        move || Arc::new(HandleManagementAuth::new(management.clone()))
     }));
     let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
@@ -595,7 +595,7 @@ fn handle_management(management: &Arc<AtomicBool>) -> TestExecutorOverrides {
     let management = management.clone();
     TestExecutorOverrides {
         create_direct_invocation_auth: Some(Arc::new(move || {
-            Arc::new(HandleManagementAuth(management.clone()))
+            Arc::new(HandleManagementAuth::new(management.clone()))
         })),
         ..Default::default()
     }
@@ -923,7 +923,7 @@ async fn an_await_across_an_operator_interrupt_ends_with_the_resumed_result(
         &context,
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new(|| {
-                Arc::new(HandleManagementAuth(Arc::new(AtomicBool::new(true))))
+                Arc::new(HandleManagementAuth::new(Arc::new(AtomicBool::new(true))))
             })),
             ..Default::default()
         },
@@ -1032,7 +1032,7 @@ async fn an_await_across_an_operator_interrupt_ends_as_not_found_when_the_owner_
         &context,
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new(|| {
-                Arc::new(HandleManagementAuth(Arc::new(AtomicBool::new(true))))
+                Arc::new(HandleManagementAuth::new(Arc::new(AtomicBool::new(true))))
             })),
             ..Default::default()
         },
@@ -1374,7 +1374,7 @@ async fn an_await_of_a_background_failed_invocation_returns_its_result_with_the_
         &context,
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new(|| {
-                Arc::new(HandleManagementAuth(Arc::new(AtomicBool::new(true))))
+                Arc::new(HandleManagementAuth::new(Arc::new(AtomicBool::new(true))))
             })),
             ..Default::default()
         },

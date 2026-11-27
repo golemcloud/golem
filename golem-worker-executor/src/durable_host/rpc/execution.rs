@@ -67,7 +67,7 @@ use tracing::Level;
 use wasmtime::component::Accessor;
 use wasmtime::component::HasSelf;
 
-pub(super) fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
+pub fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
     match err {
         InternalRpcError::ProtocolError { .. }
         | InternalRpcError::Denied { .. }
@@ -82,7 +82,7 @@ pub(super) fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
 
 /// Splits the result of a remote step that does not retry in the call: a permanent refusal is
 /// the call's result, and a transient failure traps the call, which a repair retries.
-pub(super) fn permanent_refusal<Pair: HostPayloadPair, T>(
+pub fn permanent_refusal<Pair: HostPayloadPair, T>(
     handle: &mut DurableCallSession<Pair, Cancellable>,
     result: Result<T, InternalRpcError>,
 ) -> anyhow::Result<Result<T, InternalRpcError>> {
@@ -95,7 +95,7 @@ pub(super) fn permanent_refusal<Pair: HostPayloadPair, T>(
     }
 }
 
-pub(super) fn current_streaming_origin<Ctx: WorkerCtx>(
+pub fn current_streaming_origin<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     idempotency_key: golem_common::model::InvocationId,
 ) -> StreamInvocationId {
@@ -110,7 +110,7 @@ pub(super) fn current_streaming_origin<Ctx: WorkerCtx>(
 
 /// What a caller's stream session of a streaming RPC needs from the calling Store, read
 /// synchronously so the session can be opened after an await.
-pub(super) struct CallerStreamsContext<Ctx: WorkerCtx> {
+pub struct CallerStreamsContext<Ctx: WorkerCtx> {
     worker: Arc<crate::worker::Worker<Ctx>>,
     parent_key: golem_common::model::InvocationId,
     entity_parent_start_index: Option<OplogIndex>,
@@ -118,7 +118,7 @@ pub(super) struct CallerStreamsContext<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> CallerStreamsContext<Ctx> {
-    pub(super) fn capture(ctx: &DurableWorkerCtx<Ctx>) -> Result<Self, Error> {
+    pub fn capture(ctx: &DurableWorkerCtx<Ctx>) -> Result<Self, Error> {
         Ok(Self {
             worker: ctx.public_state.worker(),
             parent_key: ctx.state.get_current_idempotency_key().ok_or_else(|| {
@@ -130,7 +130,7 @@ impl<Ctx: WorkerCtx> CallerStreamsContext<Ctx> {
     }
 }
 
-pub(super) async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
+pub async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     context: CallerStreamsContext<Ctx>,
     remote_agent_id: &OwnedAgentId,
     remote_fingerprint: AgentFingerprint,
@@ -208,11 +208,11 @@ fn classify_rpc_task_error(err: &RpcTaskError) -> HostFailureKind {
     }
 }
 
-pub(super) fn classified_host_error(kind: HostFailureKind, message: String) -> Error {
+pub fn classified_host_error(kind: HostFailureKind, message: String) -> Error {
     Error::new(ClassifiedHostError { kind, message })
 }
 
-pub(super) fn take_dispatch_freshness(
+pub fn take_dispatch_freshness(
     known_fresh_dispatch_available: &std::sync::atomic::AtomicBool,
 ) -> InvocationFreshnessDisposition {
     if known_fresh_dispatch_available.swap(false, std::sync::atomic::Ordering::SeqCst) {
@@ -222,11 +222,11 @@ pub(super) fn take_dispatch_freshness(
     }
 }
 
-pub(super) fn known_fresh_dispatch_allowed(is_live: bool, is_ephemeral: bool) -> bool {
+pub fn known_fresh_dispatch_allowed(is_live: bool, is_ephemeral: bool) -> bool {
     is_live && is_ephemeral
 }
 
-pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
+pub fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     activity: Option<crate::worker::suspension::RpcActivity>,
     rpc: Arc<dyn Rpc>,
     remote_target: ResolvedTarget,
@@ -403,7 +403,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     RpcTask { task, revoker }
 }
 
-pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
+pub fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_target: &ResolvedTarget,
     idempotency_key: IdempotencyKey,
@@ -470,7 +470,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
 /// Awaits a streaming RPC and settles the inputs it did not bind. The outer error is this caller's
 /// own session write refused by the fence, or its own oplog unreadable, which traps rather than
 /// reaching the guest as an RPC failure; the inner result is the RPC's.
-pub(super) async fn await_streaming_rpc_acceptance(
+pub async fn await_streaming_rpc_acceptance(
     streams: &StreamSession,
     activity: Option<&crate::worker::suspension::RpcActivityRevoker>,
     mut acceptance: tokio::sync::oneshot::Receiver<
@@ -525,7 +525,7 @@ pub(super) async fn await_streaming_rpc_acceptance(
     })
 }
 
-pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
+pub fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_target: ResolvedTarget,
     idempotency_key: IdempotencyKey,
@@ -663,7 +663,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
 /// here, through the runtime timer of the call: the `Error` entry records when it retries, and the
 /// suspension coordinator can suspend the agent meanwhile. The new attempt uses the same key.
 /// Otherwise the failure stays the recorded result, as before.
-pub(super) async fn retry_after_backoff<U, Ctx>(
+pub async fn retry_after_backoff<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     handle: &mut DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>,
     mut properties: golem_common::model::RetryProperties,
@@ -714,7 +714,7 @@ impl std::future::Future for RpcTask {
     }
 }
 
-pub(super) async fn admit_rpc_result_secret_holds<U, Ctx>(
+pub async fn admit_rpc_result_secret_holds<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     result: Result<SchemaValue, InternalRpcError>,
 ) -> Result<Result<SchemaValue, InternalRpcError>, WorkerExecutorError>

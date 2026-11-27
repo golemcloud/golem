@@ -531,7 +531,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// [`Self::start_access_with_options`] for a call that acts with the agent's authority. The
     /// session holds the authority captured at admission, or when an incomplete call is repaired.
-    pub(crate) async fn start_access_with_agent_authority<T, D, Ctx>(
+    pub async fn start_access_with_agent_authority<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,

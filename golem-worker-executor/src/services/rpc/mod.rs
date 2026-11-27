@@ -113,7 +113,7 @@ where
 }
 
 /// The environment an invocation handle resolves its invocation in: the calling agent's or tool's.
-pub(crate) fn invocation_handle_environment(
+pub fn invocation_handle_environment(
     caller: &Principal,
 ) -> Result<golem_common::model::environment::EnvironmentId, WorkerExecutorError> {
     match caller {
@@ -127,7 +127,7 @@ pub(crate) fn invocation_handle_environment(
 
 /// The agent that owns the invocation a handle addresses. Handles address agent method
 /// invocations only, so a tool-owned ID is refused before any authority or storage read.
-pub(crate) fn invocation_handle_owner(
+pub fn invocation_handle_owner(
     invocation_id: &golem_common::model::OwnedInvocationId,
 ) -> Result<&AgentId, WorkerExecutorError> {
     invocation_id.agent_id().ok_or_else(|| {

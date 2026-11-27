@@ -45,14 +45,14 @@ use golem_schema::schema::wit::wire as core_wire;
 use std::collections::BTreeMap;
 use wasmtime::component::{Accessor, HasSelf, Resource};
 
-pub(super) fn discard_owned_rpc_input<D>(input: core_wire::SchemaValueTree, dropper: &mut D)
+pub fn discard_owned_rpc_input<D>(input: core_wire::SchemaValueTree, dropper: &mut D)
 where
     D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
 {
     let _ = reject_quota_handles_in_value_tree(input, dropper);
 }
 
-pub(super) fn discard_owned_rpc_config<D>(
+pub fn discard_owned_rpc_config<D>(
     config: Vec<golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue>,
     dropper: &mut D,
 ) where
@@ -64,7 +64,7 @@ pub(super) fn discard_owned_rpc_config<D>(
 }
 
 impl PreparedRpcInvocation {
-    pub(super) fn invoke_request(
+    pub fn invoke_request(
         &self,
         remote_agent_id: &OwnedAgentId,
         idempotency_key: &IdempotencyKey,
@@ -84,7 +84,7 @@ impl PreparedRpcInvocation {
     }
 
     /// The retry properties of a dispatch of this invocation to `remote_agent_id`.
-    pub(super) fn retry_properties(
+    pub fn retry_properties(
         &self,
         verb: &str,
         remote_agent_id: &OwnedAgentId,
@@ -98,16 +98,16 @@ impl PreparedRpcInvocation {
         )
     }
 
-    pub(super) fn is_ephemeral(&self) -> bool {
+    pub fn is_ephemeral(&self) -> bool {
         self.ephemeral.is_some()
     }
 
-    pub(super) fn is_streaming(&self) -> bool {
+    pub fn is_streaming(&self) -> bool {
         self.streaming
     }
 }
 
-pub(super) fn rpc_input_root(prepared: &PreparedRpcInvocation) -> SchemaType {
+pub fn rpc_input_root(prepared: &PreparedRpcInvocation) -> SchemaType {
     let method = prepared
         .remote_agent_type
         .methods
@@ -129,7 +129,7 @@ pub(super) fn rpc_input_root(prepared: &PreparedRpcInvocation) -> SchemaType {
     )
 }
 
-pub(super) fn rpc_output_root(prepared: &PreparedRpcInvocation) -> SchemaType {
+pub fn rpc_output_root(prepared: &PreparedRpcInvocation) -> SchemaType {
     prepared
         .remote_agent_type
         .methods
@@ -142,7 +142,7 @@ pub(super) fn rpc_output_root(prepared: &PreparedRpcInvocation) -> SchemaType {
         .unwrap_or_else(|| SchemaType::tuple(Vec::new()))
 }
 
-pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
+pub fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WasmRpcEntry>,
     kind: RpcCallKind,
@@ -232,7 +232,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     }))
 }
 
-pub(super) fn remote_method_uses_streams(
+fn remote_method_uses_streams(
     methods: &BTreeMap<String, bool>,
     method_name: &str,
 ) -> anyhow::Result<bool> {
@@ -258,7 +258,7 @@ pub(super) fn remote_method_uses_streams(
 /// [`SchemaValue::QuotaToken`] snapshot via the `QuotaTokenResolver`, so the
 /// capability travels across the RPC hop as an unforgeable host snapshot rather
 /// than a guest-visible handle.
-pub(super) fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
+fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
     agent_type: &AgentTypeSchema,
     method_name: &str,
     input: core_wire::SchemaValueTree,
@@ -309,7 +309,7 @@ pub(super) fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
 /// `quota-token` handle for every [`SchemaValue::QuotaToken`] snapshot via the
 /// `QuotaTokenResolver`, so a capability returned from an RPC call reaches the
 /// caller's guest as an opaque, unforgeable resource handle.
-pub(super) fn schema_value_to_wire_output<Ctx: WorkerCtx>(
+pub fn schema_value_to_wire_output<Ctx: WorkerCtx>(
     value: &SchemaValue,
     resolver: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<Option<core_wire::SchemaValueTree>, EncodeError> {
@@ -319,7 +319,7 @@ pub(super) fn schema_value_to_wire_output<Ctx: WorkerCtx>(
     }
 }
 
-pub(super) fn invoke_and_await_response_to_wire<Ctx: WorkerCtx>(
+pub fn invoke_and_await_response_to_wire<Ctx: WorkerCtx>(
     result: Result<SchemaValue, SerializableRpcError>,
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
@@ -335,7 +335,7 @@ pub(super) fn invoke_and_await_response_to_wire<Ctx: WorkerCtx>(
 /// Returns a recorded RPC result to the guest at the call's delivery boundary. A completion that
 /// the recorded run discarded parks instead, so the deterministic guest drops the call at the
 /// same point again. The call's span, when it has one, is finished first in both cases.
-pub(super) async fn deliver_rpc_result<U, Ctx, T>(
+pub async fn deliver_rpc_result<U, Ctx, T>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     delivery: CompletionDelivery,
     span_id: Option<&SpanId>,

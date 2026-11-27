@@ -32,7 +32,7 @@ enum HandleAccess<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     /// Answers a handle operation on an invocation whose owner this executor hosts.
-    pub(super) async fn local_invocation_handle(
+    pub async fn local_invocation_handle(
         &self,
         target: &OwnedAgentId,
         invocation_id: &golem_common::model::OwnedInvocationId,

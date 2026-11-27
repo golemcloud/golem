@@ -109,7 +109,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// The ID of the keyed agent of the constructor, when that agent exists. The type lookup and
     /// the existence check are durable, so replay sees the answer that the live call saw.
-    pub(crate) async fn lookup_keyed_agent_id(
+    pub async fn lookup_keyed_agent_id(
         &mut self,
         agent_type_name: String,
         constructor: core_wire::SchemaValueTree,
@@ -696,7 +696,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(super) fn record_outbound_rpc_call(&mut self) -> anyhow::Result<()> {
+    pub fn record_outbound_rpc_call(&mut self) -> anyhow::Result<()> {
         if self.state.is_live() {
             self.state
                 .check_and_increment_rpc_call_count()

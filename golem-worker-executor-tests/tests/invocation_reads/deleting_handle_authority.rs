@@ -68,7 +68,7 @@ async fn deleting_cached_handle_requires_authority_before_disclosing_not_found(
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new({
                 let management = management.clone();
-                move || Arc::new(HandleManagementAuth(management.clone()))
+                move || Arc::new(HandleManagementAuth::new(management.clone()))
             })),
             ..Default::default()
         },

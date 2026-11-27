@@ -92,7 +92,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Snapshot of the two teardown signals (process-equivalent executor shutdown and the
     /// owning runtime's store teardown) for guards and delivery tokens that may outlive the
     /// session.
-    pub(crate) fn teardown_probe(&self) -> TeardownProbe {
+    pub fn teardown_probe(&self) -> TeardownProbe {
         TeardownProbe::new(
             self.executor_shutdown.clone(),
             self.runtime_teardown.clone(),

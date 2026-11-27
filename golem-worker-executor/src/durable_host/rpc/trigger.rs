@@ -39,7 +39,7 @@ use wasmtime::component::{Accessor, HasSelf, Resource};
 
 type TriggerCall = DurableCallSession<GolemRpcWasmRpcTrigger, Cancellable>;
 
-pub(super) async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
+pub async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     this: Resource<WasmRpcEntry>,
     method_name: String,

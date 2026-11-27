@@ -55,7 +55,7 @@ use wasmtime::component::{Accessor, HasSelf, Resource};
 
 /// The host function that makes an RPC call.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum RpcCallKind {
+pub enum RpcCallKind {
     /// `invoke-and-await`: a synchronous call that can use live streams.
     Awaited,
     /// `trigger`: an asynchronous call that returns the invocation's handle.
@@ -66,7 +66,7 @@ pub(super) enum RpcCallKind {
 }
 
 impl RpcCallKind {
-    pub(super) fn verb(self) -> &'static str {
+    pub fn verb(self) -> &'static str {
         match self {
             Self::Awaited => "invoke-and-await",
             Self::Triggered => "trigger",
@@ -74,7 +74,7 @@ impl RpcCallKind {
         }
     }
 
-    pub(super) fn host_function_name(self) -> &'static str {
+    pub fn host_function_name(self) -> &'static str {
         match self {
             Self::Awaited => "golem::rpc::wasm-rpc::invoke-and-await",
             Self::Triggered => "golem::rpc::wasm-rpc::trigger",
@@ -88,7 +88,7 @@ impl RpcCallKind {
 /// Transient: the host function matches on it at once, so the size difference between the
 /// variants never outlives the opening.
 #[allow(clippy::large_enum_variant)]
-pub(super) enum RpcCallOpening<Pair: HostPayloadPair> {
+pub enum RpcCallOpening<Pair: HostPayloadPair> {
     /// The request is invalid. The call has no `Start`.
     Rejected(RpcError),
     /// The live permission check refused the call. The guest gets the denial as the call's
@@ -108,7 +108,7 @@ pub(super) enum RpcCallOpening<Pair: HostPayloadPair> {
 
 /// What an open RPC call resolved: the validated request, its span, and the target that its
 /// `Start` index derives.
-pub(super) struct RpcCall {
+pub struct RpcCall {
     prepared: PreparedRpcInvocation,
     span_id: SpanId,
     start_index: OplogIndex,
@@ -133,7 +133,7 @@ struct RpcCallRequest<SpanBuilder> {
     streaming_origin: Option<StreamInvocationId>,
 }
 
-pub(super) async fn open_rpc_call<U, Ctx, Pair>(
+pub async fn open_rpc_call<U, Ctx, Pair>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     this: &Resource<WasmRpcEntry>,
     kind: RpcCallKind,
@@ -345,7 +345,7 @@ where
 ///
 /// Transient: callers match on it at once, as on [`CallReplayOutcome`].
 #[allow(clippy::large_enum_variant)]
-pub(super) enum CallResolution<Pair: HostPayloadPair, Recorded> {
+pub enum CallResolution<Pair: HostPayloadPair, Recorded> {
     /// The call completed in the recorded run: its recorded result.
     Recorded(Recorded),
     /// The call runs now: a first execution, or the repair of an incomplete `Start`.
@@ -354,7 +354,7 @@ pub(super) enum CallResolution<Pair: HostPayloadPair, Recorded> {
 
 /// Replays the recorded result of a completed call. A call that started now, or whose `Start`
 /// has no `End`, continues live.
-pub(super) async fn replay_call<U, Ctx, Pair>(
+pub async fn replay_call<U, Ctx, Pair>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     handle: DurableCallSession<Pair, Cancellable>,
 ) -> anyhow::Result<CallResolution<Pair, Pair::Resp>>
@@ -375,7 +375,7 @@ where
 }
 
 /// [`replay_call`] for a call whose result reaches the guest at a recorded delivery boundary.
-pub(super) async fn replay_call_deferred<U, Ctx, Pair>(
+pub async fn replay_call_deferred<U, Ctx, Pair>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     handle: DurableCallSession<Pair, Cancellable>,
 ) -> anyhow::Result<CallResolution<Pair, (Pair::Resp, CompletionDelivery)>>
@@ -402,7 +402,7 @@ where
 
 /// What the replay of a completed call claims after the call's `End`: the recorded preparation
 /// of an ephemeral target. A call refused at its `Start` prepared nothing.
-pub(super) struct CompletedReplay {
+pub struct CompletedReplay {
     denied: bool,
     preparation: Option<(HostInternalCallOwner, HostRequestGolemRpcPrepareInvocation)>,
     known_fingerprint: Option<AgentFingerprint>,
@@ -410,13 +410,13 @@ pub(super) struct CompletedReplay {
 
 impl CompletedReplay {
     /// Whether the live permission check refused the call at its `Start`.
-    pub(super) fn is_denied(&self) -> bool {
+    pub fn is_denied(&self) -> bool {
         self.denied
     }
 
     /// Claims the recorded preparation and returns the fingerprint of the target that the call
     /// reached, if it reached one. A completed call repeats no preparation.
-    pub(super) async fn claim_preparation<U: Send + 'static, Ctx: WorkerCtx>(
+    pub async fn claim_preparation<U: Send + 'static, Ctx: WorkerCtx>(
         self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> anyhow::Result<Option<AgentFingerprint>> {
@@ -431,37 +431,37 @@ impl CompletedReplay {
 }
 
 impl RpcCall {
-    pub(super) fn prepared(&self) -> &PreparedRpcInvocation {
+    pub fn prepared(&self) -> &PreparedRpcInvocation {
         &self.prepared
     }
 
-    pub(super) fn span_id(&self) -> &SpanId {
+    pub fn span_id(&self) -> &SpanId {
         &self.span_id
     }
 
-    pub(super) fn idempotency_key(&self) -> &IdempotencyKey {
+    pub fn idempotency_key(&self) -> &IdempotencyKey {
         &self.idempotency_key
     }
 
     /// The agent that the call dispatches to.
-    pub(super) fn remote_agent_id(&self) -> &OwnedAgentId {
+    pub fn remote_agent_id(&self) -> &OwnedAgentId {
         &self.remote_agent_id
     }
 
     /// The target that the executor dispatches the call to.
-    pub(super) fn dispatch_target(&self) -> ResolvedTarget {
+    pub fn dispatch_target(&self) -> ResolvedTarget {
         dispatch_target(&self.remote_agent_id, self.prepared.ephemeral.as_ref())
     }
 
     /// How the call retries a transient failure of its dispatch.
-    pub(super) fn retry_properties(&self, kind: RpcCallKind) -> RetryProperties {
+    pub fn retry_properties(&self, kind: RpcCallKind) -> RetryProperties {
         self.prepared
             .retry_properties(kind.verb(), &self.remote_agent_id)
     }
 
     /// The scope card that the call lends and the logical origin of a streaming call. A live
     /// call lends the card it was given; a replay or repair reuses what its `Start` recorded.
-    pub(super) async fn lending<U, Ctx, Pair>(
+    pub async fn lending<U, Ctx, Pair>(
         &self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
         handle: &mut DurableCallSession<Pair, Cancellable>,
@@ -487,7 +487,7 @@ impl RpcCall {
     }
 
     /// The error for a streaming call whose `Start` recorded no logical origin.
-    pub(super) fn missing_streaming_origin(&self) -> WorkerExecutorError {
+    pub fn missing_streaming_origin(&self) -> WorkerExecutorError {
         let start_index = self.start_index;
         WorkerExecutorError::unexpected_oplog_entry(
             start_index,
@@ -497,7 +497,7 @@ impl RpcCall {
     }
 
     /// The ID of the target's invocation, once the target's fingerprint is known.
-    pub(super) fn final_id(&self, fingerprint: AgentFingerprint) -> OwnedInvocationId {
+    pub fn final_id(&self, fingerprint: AgentFingerprint) -> OwnedInvocationId {
         InvocationRequestKey::Internal(self.idempotency_key.clone()).finalize(
             self.remote_agent_id.agent_id(),
             fingerprint,
@@ -508,7 +508,7 @@ impl RpcCall {
     /// Replays a completed call and returns its recorded response, with what its replay claims
     /// after the response. A call that started now, or whose `Start` has no `End`, continues
     /// live.
-    pub(super) async fn replay<U, Ctx, Pair>(
+    pub async fn replay<U, Ctx, Pair>(
         &self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
         handle: DurableCallSession<Pair, Cancellable>,
@@ -530,7 +530,7 @@ impl RpcCall {
 
     /// [`Self::replay`] for a call whose result reaches the guest at a recorded delivery
     /// boundary.
-    pub(super) async fn replay_deferred<U, Ctx, Pair>(
+    pub async fn replay_deferred<U, Ctx, Pair>(
         &self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
         handle: DurableCallSession<Pair, Cancellable>,
@@ -589,7 +589,7 @@ impl RpcCall {
     /// The fingerprint of the target that a live call dispatches to: the known one, or the one
     /// of the ephemeral instance that the call prepares now. Only the first live dispatch to an
     /// ephemeral target may create it fresh.
-    pub(super) async fn target_fingerprint<U, Ctx, Pair>(
+    pub async fn target_fingerprint<U, Ctx, Pair>(
         &self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
         handle: &mut DurableCallSession<Pair, Cancellable>,

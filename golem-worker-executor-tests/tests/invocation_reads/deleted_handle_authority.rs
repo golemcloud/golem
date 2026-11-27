@@ -23,7 +23,7 @@ async fn deleted_handle_requires_surviving_authority_and_never_reaches_the_succe
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new({
                 let management = management.clone();
-                move || Arc::new(HandleManagementAuth(management.clone()))
+                move || Arc::new(HandleManagementAuth::new(management.clone()))
             })),
             ..Default::default()
         },

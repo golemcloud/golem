@@ -39,7 +39,7 @@ use std::sync::Arc;
 use wasmtime::component::{Accessor, HasSelf};
 
 /// What a live remote step sends on behalf of the calling agent.
-pub(super) struct RemoteCall {
+pub struct RemoteCall {
     rpc: Arc<dyn Rpc>,
     created_by: AccountId,
     agent_id: AgentId,
@@ -49,7 +49,7 @@ pub(super) struct RemoteCall {
 }
 
 impl RemoteCall {
-    pub(super) fn of<Ctx: WorkerCtx>(ctx: &mut DurableWorkerCtx<Ctx>, span_id: &SpanId) -> Self {
+    pub fn of<Ctx: WorkerCtx>(ctx: &mut DurableWorkerCtx<Ctx>, span_id: &SpanId) -> Self {
         Self {
             rpc: ctx.rpc(),
             created_by: ctx.created_by(),
@@ -59,7 +59,7 @@ impl RemoteCall {
         }
     }
 
-    pub(super) fn capture<U: Send + 'static, Ctx: WorkerCtx>(
+    pub fn capture<U: Send + 'static, Ctx: WorkerCtx>(
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
         span_id: &SpanId,
     ) -> Self {
@@ -69,7 +69,7 @@ impl RemoteCall {
     /// Creates or finds the instance of the target and returns its demand. The `invocation`
     /// is the first invocation that the target receives, so an ephemeral instance starts with
     /// it.
-    pub(super) async fn create_demand(
+    pub async fn create_demand(
         &self,
         prepared: &PreparedRpcInvocation,
         remote_agent_id: &OwnedAgentId,
@@ -99,7 +99,7 @@ impl RemoteCall {
     /// Delivers the call's invocation to its target with the call's idempotency key, and
     /// returns once the target accepted it. The target already exists: a durable target always
     /// does, and preparation created an ephemeral one.
-    pub(super) async fn invoke(
+    pub async fn invoke(
         &self,
         call: &RpcCall,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -128,7 +128,7 @@ impl RemoteCall {
     /// Schedules the invocation `invocation_id` of `method_name` at the target's incarnation
     /// `target_fingerprint`, to run at `scheduled_at` in `invocation_context`, on behalf of the
     /// calling agent.
-    pub(super) async fn schedule(
+    pub async fn schedule(
         &self,
         remote_agent_id: &OwnedAgentId,
         target_fingerprint: AgentFingerprint,
@@ -165,7 +165,7 @@ impl RemoteCall {
 
 /// Waits for a short remote step of a live call, such as the target's acceptance. An interrupt
 /// of the agent traps the call and leaves its `Start` incomplete for repair.
-pub(super) async fn interruptible<U, Ctx, Pair, T>(
+pub async fn interruptible<U, Ctx, Pair, T>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     handle: &mut DurableCallSession<Pair, Cancellable>,
     step: impl Future<Output = T>,
@@ -187,7 +187,7 @@ where
 
 /// Waits for a long remote step, such as an invocation's result. The wait is an RPC wait, so
 /// the agent can suspend while it lasts; an interrupt or a suspension ends it with its kind.
-pub(super) async fn suspendable<U, Ctx, T>(
+pub async fn suspendable<U, Ctx, T>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     step: impl Future<Output = T>,
 ) -> Result<T, InterruptKind>

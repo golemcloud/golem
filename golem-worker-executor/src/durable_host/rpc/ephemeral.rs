@@ -41,7 +41,7 @@ type PrepareCall = DurableCallSession<GolemRpcWasmRpcPrepareInvocation, Cancella
 
 /// The recorded request of the host-internal call that creates the instance of an ephemeral
 /// target for one invocation.
-pub(super) fn preparation_request(
+pub fn preparation_request(
     start_index: OplogIndex,
     prepared: &PreparedRpcInvocation,
     remote_agent_id: &OwnedAgentId,
@@ -57,7 +57,7 @@ pub(super) fn preparation_request(
 
 /// Replays the recorded preparation of a completed call to an ephemeral target. The completed
 /// call repeats no preparation, so there is no live action.
-pub(super) async fn claim_completed_preparation<U: Send + 'static, Ctx: WorkerCtx>(
+pub async fn claim_completed_preparation<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     owner: HostInternalCallOwner,
     request: HostRequestGolemRpcPrepareInvocation,
@@ -81,7 +81,7 @@ pub(super) async fn claim_completed_preparation<U: Send + 'static, Ctx: WorkerCt
 /// Creates the ephemeral instance that runs the invocation and records its fingerprint as a
 /// host-internal call of the calling host function, so repair and replay keep the instance.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn prepare_ephemeral_identity<
+pub async fn prepare_ephemeral_identity<
     U: Send + 'static,
     Ctx: WorkerCtx,
     Pair: HostPayloadPair,
@@ -161,7 +161,7 @@ pub(super) async fn prepare_ephemeral_identity<
 /// schedule's key derives from its `Start` index, and the target deduplicates the creation by
 /// that key, so a repair finds the same instance again. A transient failure traps, and the repair
 /// creates the instance again. A permanent refusal is the schedule's result.
-pub(super) async fn create_scheduled_ephemeral_target<U, Ctx, Pair>(
+pub async fn create_scheduled_ephemeral_target<U, Ctx, Pair>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     handle: &mut DurableCallSession<Pair, Cancellable>,
     prepared: &PreparedRpcInvocation,

@@ -152,7 +152,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     /// Authorizes a local call to `target` against the component and agent type of the agent's
     /// Create entry, or, when the agent does not exist yet, of the owner the call creates. A call
     /// that neither finds nor creates the agent fails with not found only after it is authorized.
-    pub(super) async fn authorize(
+    pub async fn authorize(
         &self,
         caller_account_id: AccountId,
         target: &ResolvedTarget,

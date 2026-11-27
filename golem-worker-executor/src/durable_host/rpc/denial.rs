@@ -18,7 +18,7 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::oplog::HostRequestGolemRpcInvoke;
 use golem_common::schema::schema_value::SchemaValue;
 
-pub(super) fn denied_rpc_request(
+pub fn denied_rpc_request(
     remote_agent_id: &OwnedAgentId,
     idempotency_key: &IdempotencyKey,
     method_name: String,

@@ -10602,9 +10602,9 @@ async fn scheduled_cancellation_by_another_agent_is_refused(
         &context,
         TestExecutorOverrides {
             create_direct_invocation_auth: Some(Arc::new(|| {
-                Arc::new(crate::invocation_reads::HandleManagementAuth(Arc::new(
-                    AtomicBool::new(false),
-                )))
+                Arc::new(crate::invocation_reads::HandleManagementAuth::new(
+                    Arc::new(AtomicBool::new(false)),
+                ))
             })),
             ..Default::default()
         },

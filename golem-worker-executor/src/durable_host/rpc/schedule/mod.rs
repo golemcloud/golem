@@ -61,7 +61,7 @@ struct PreparedSchedule {
     remote: RemoteCall,
 }
 
-pub(super) async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
+pub async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     this: Resource<WasmRpcEntry>,
     datetime: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,

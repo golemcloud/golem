@@ -70,7 +70,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use wasmtime::component::{Accessor, HasSelf, Resource};
 
-pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
+pub fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: OwnedAgentId,
     ephemeral: EphemeralRpcTarget,
@@ -100,7 +100,7 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
 
 /// The agent that one invocation of a client dispatches to: the client's agent, or for a client
 /// of an ephemeral agent type, the one-shot instance of the invocation.
-pub(super) fn invocation_target_agent_id(
+pub fn invocation_target_agent_id(
     logical_remote_agent_id: &OwnedAgentId,
     ephemeral: Option<&EphemeralRpcTarget>,
     idempotency_key: &IdempotencyKey,
@@ -122,7 +122,7 @@ pub(super) fn invocation_target_agent_id(
 /// The target that a call to `remote_agent_id`, from [`invocation_target_agent_id`], carries.
 /// A client of an ephemeral agent type creates the invocation's one-shot instance; any other
 /// client reaches only the agent it is bound to.
-pub(super) fn dispatch_target(
+pub fn dispatch_target(
     remote_agent_id: &OwnedAgentId,
     ephemeral: Option<&EphemeralRpcTarget>,
 ) -> ResolvedTarget {
@@ -142,7 +142,7 @@ pub(super) fn dispatch_target(
 /// index is known, [`Self::at`] gives its idempotency key and the agent it dispatches to. A live
 /// call uses it in the `Start` writer step; replay and repair use it with the recorded index.
 #[derive(Clone)]
-pub(super) struct RpcCallTarget {
+pub struct RpcCallTarget {
     key_position: IdempotencyKeyPosition,
     logical_remote_agent_id: OwnedAgentId,
     ephemeral: Option<EphemeralRpcTarget>,
@@ -150,7 +150,7 @@ pub(super) struct RpcCallTarget {
 }
 
 impl RpcCallTarget {
-    pub(super) fn new(
+    pub fn new(
         key_position: IdempotencyKeyPosition,
         logical_remote_agent_id: &OwnedAgentId,
         ephemeral: Option<&EphemeralRpcTarget>,
@@ -164,7 +164,7 @@ impl RpcCallTarget {
         }
     }
 
-    pub(super) fn at(
+    pub fn at(
         &self,
         start_index: OplogIndex,
     ) -> Result<(IdempotencyKey, OwnedAgentId), WorkerExecutorError> {
@@ -308,7 +308,7 @@ where
     Ok(Ok(entry))
 }
 
-pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
+pub async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: AgentId,
     target_environment_id: EnvironmentId,
@@ -350,7 +350,7 @@ pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
 /// never runs on another incarnation. Without one, it creates a demand, and `idempotency_key`
 /// identifies that create. A `create_demand` failure is returned as a [`ClassifiedHostError`]
 /// with the transient/permanent kind from [`classify_rpc_error`].
-pub(super) async fn activate_rpc_target(
+pub async fn activate_rpc_target(
     rpc: &dyn Rpc,
     remote_agent_id: &OwnedAgentId,
     method_name: &str,
@@ -388,7 +388,7 @@ pub(super) async fn activate_rpc_target(
 }
 
 impl WasmRpcTargetActivation {
-    pub(super) fn target_creation_data(&self) -> (Vec<(String, String)>, Vec<AgentConfigEntryDto>) {
+    pub fn target_creation_data(&self) -> (Vec<(String, String)>, Vec<AgentConfigEntryDto>) {
         match self {
             WasmRpcTargetActivation::DeferredEphemeral { env, config }
             | WasmRpcTargetActivation::Activated { env, config, .. }
@@ -401,7 +401,7 @@ impl WasmRpcTargetActivation {
     /// The activation a spawned call rebuilds before it dispatches. Only a target whose activation
     /// was recorded before the Store was replaced has one; it is rebuilt from the recorded
     /// fingerprint and creates nothing.
-    pub(super) fn deferred_activation(&self) -> Option<RpcTargetActivation> {
+    pub fn deferred_activation(&self) -> Option<RpcTargetActivation> {
         match self {
             WasmRpcTargetActivation::ReplayPending {
                 target_fingerprint,
@@ -417,7 +417,7 @@ impl WasmRpcTargetActivation {
         }
     }
 
-    pub(super) fn target_fingerprint(&self) -> Option<AgentFingerprint> {
+    pub fn target_fingerprint(&self) -> Option<AgentFingerprint> {
         match self {
             WasmRpcTargetActivation::Activated {
                 target_fingerprint, ..
@@ -430,7 +430,7 @@ impl WasmRpcTargetActivation {
     }
 }
 
-pub(super) fn rpc_connection_function_type(with_agent_authority: bool) -> DurableFunctionType {
+pub fn rpc_connection_function_type(with_agent_authority: bool) -> DurableFunctionType {
     if with_agent_authority {
         DurableFunctionType::WriteRemote
     } else {
@@ -438,7 +438,7 @@ pub(super) fn rpc_connection_function_type(with_agent_authority: bool) -> Durabl
     }
 }
 
-pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx, F>(
+pub async fn start_rpc_connection_call<Ctx: WorkerCtx, F>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     request: HostRequestGolemRpcCreate,
     with_agent_authority: bool,
@@ -462,7 +462,7 @@ where
     Ok((handle, span))
 }
 
-pub(super) async fn start_rpc_binding_call<Ctx, F>(
+pub async fn start_rpc_binding_call<Ctx, F>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     request: F::Req,
     target_agent_id: &AgentId,
@@ -554,7 +554,7 @@ where
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(super) fn outbound_agent_method_target(
+    pub fn outbound_agent_method_target(
         &mut self,
         rpc_resource: &Resource<WasmRpcEntry>,
         remote_agent_id: &OwnedAgentId,
@@ -591,7 +591,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
 /// The fingerprint of the target's incarnation that the client already knows: every target but
 /// an ephemeral one, whose instance each invocation creates.
-pub(super) fn recorded_target_fingerprint<U: Send + 'static, Ctx: WorkerCtx>(
+pub fn recorded_target_fingerprint<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     this: &Resource<WasmRpcEntry>,
 ) -> anyhow::Result<Option<AgentFingerprint>> {
@@ -608,7 +608,7 @@ pub(super) fn recorded_target_fingerprint<U: Send + 'static, Ctx: WorkerCtx>(
 
 /// Marks a durable target as activated at the incarnation the client recorded, without a remote
 /// call, and returns that incarnation's fingerprint.
-pub(super) fn activate_known_target<U: Send + 'static, Ctx: WorkerCtx>(
+pub fn activate_known_target<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     this: &Resource<WasmRpcEntry>,
 ) -> anyhow::Result<AgentFingerprint> {
