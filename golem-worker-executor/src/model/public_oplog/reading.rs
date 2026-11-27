@@ -145,9 +145,8 @@ pub async fn get_public_oplog_chunk(
 /// Reads an oplog page for a remote reader. The page omits entries that are larger than
 /// `limits.max_entry_bytes`, and ends early when the next entry does not fit in `limits.max_bytes`.
 /// The entries hold claims only with `ClaimVisibility::Shown`, so only claims that the reader asked
-/// for count against the limits. The page reads from the first index of `range`, and reads no
-/// entry after its end. Its `last_index` is the last index of the range in the oplog. That is the
-/// last index of the oplog, or the end of the range when that is earlier.
+/// for count against the limits. The page reads from the first index of `range`. It reports the
+/// last index of the oplog. Use [`get_public_oplog_range_page`] for a read with an end.
 pub async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -161,9 +160,7 @@ pub async fn get_public_oplog_page(
     limits: PublicOplogPageLimits,
     claims: ClaimVisibility,
 ) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
-    let start = range.first_index_in(OplogIndex::INITIAL);
-    let count = range.page_count(start, u64::try_from(limits.count).unwrap_or(u64::MAX));
-    let (mut chunk, _) = read_public_oplog_chunk(
+    let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
         owned_agent_id,
@@ -172,14 +169,13 @@ pub async fn get_public_oplog_page(
         owner_kind,
         agent_type_name,
         initial_component_revision,
-        start,
-        count,
+        range.first_index_in(OplogIndex::INITIAL),
+        limits.count,
         None,
         claims,
         &mut RemotePage::new(limits),
     )
     .await?;
-    chunk.last_index = range.last_index_in(chunk.last_index);
     Ok(chunk)
 }
 

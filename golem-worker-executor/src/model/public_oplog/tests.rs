@@ -2915,8 +2915,8 @@ async fn oplog_pages_end_at_the_byte_budget_and_resume_at_the_next_entry() {
 }
 
 #[test]
-async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the_oplog() {
-    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("page-range").await;
+async fn oplog_searches_read_only_their_range_and_clamp_its_end_to_the_oplog() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("search-range").await;
     let needle = || OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
@@ -2932,83 +2932,12 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
     ))
     .await;
     oplog.commit(CommitLevel::Always).await.unwrap();
-    let limits = |count| PublicOplogPageLimits {
-        count,
+    let limits = || PublicOplogPageLimits {
+        count: 100,
         max_bytes: 1_000_000,
         max_entry_bytes: 1_000_000,
     };
 
-    let read_page = |from: OplogIndex, to: OplogIndex, count: usize| {
-        get_public_oplog_page(
-            Arc::new(PanicComponentService),
-            oplog_service.clone(),
-            &owned_agent_id,
-            AgentMode::Durable,
-            test_component_id(),
-            OwnerKind::ComponentAgent,
-            None,
-            ComponentRevision::INITIAL,
-            OplogRange::new(Some(from), Some(to)).unwrap(),
-            limits(count),
-            ClaimVisibility::Hidden,
-        )
-    };
-
-    let whole = read_page(indices[1], indices[3], 100).await.unwrap();
-    assert_eq!(
-        page_indices(&whole.entries),
-        vec![(indices[1], true), (indices[2], true), (indices[3], true)]
-    );
-    assert_eq!(whole.last_index, indices[3]);
-    assert!(
-        oplog_page_cursor(
-            whole.next_oplog_index,
-            whole.current_component_revision,
-            whole.last_index,
-            None
-        )
-        .is_none()
-    );
-
-    // A page that ends before `to` has a cursor, and the page after it ends at `to`.
-    let first = read_page(indices[1], indices[3], 2).await.unwrap();
-    assert_eq!(
-        page_indices(&first.entries),
-        vec![(indices[1], true), (indices[2], true)]
-    );
-    assert!(
-        oplog_page_cursor(
-            first.next_oplog_index,
-            first.current_component_revision,
-            first.last_index,
-            None
-        )
-        .is_some()
-    );
-    let second = read_page(first.next_oplog_index, indices[3], 2)
-        .await
-        .unwrap();
-    assert_eq!(page_indices(&second.entries), vec![(indices[3], true)]);
-
-    let past_the_end = read_page(indices[3], OplogIndex::from_u64(1_000), 100)
-        .await
-        .unwrap();
-    assert_eq!(
-        page_indices(&past_the_end.entries),
-        vec![(indices[3], true), (indices[4], true)]
-    );
-    assert_eq!(past_the_end.last_index, indices[4]);
-    // An end at the largest index does not overflow the count of the page.
-    let at_the_largest_index = read_page(indices[3], OplogIndex::from_u64(u64::MAX), 100)
-        .await
-        .unwrap();
-    assert_eq!(
-        page_indices(&at_the_largest_index.entries),
-        vec![(indices[3], true), (indices[4], true)]
-    );
-    assert_eq!(at_the_largest_index.last_index, indices[4]);
-
-    // The range drops the matches before and after it.
     let search = search_public_oplog_remote(
         Arc::new(PanicComponentService),
         oplog_service.clone(),
@@ -3019,7 +2948,7 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
         None,
         None,
         OplogRange::new(Some(indices[1]), Some(indices[3])).unwrap(),
-        limits(100),
+        limits(),
         "needle",
         ScanBudget::default(),
         ClaimVisibility::Hidden,
@@ -3040,7 +2969,7 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
         None,
         None,
         OplogRange::new(Some(indices[3]), Some(OplogIndex::from_u64(u64::MAX))).unwrap(),
-        limits(100),
+        limits(),
         "needle",
         ScanBudget::default(),
         ClaimVisibility::Hidden,
