@@ -102,7 +102,7 @@ harness = false
 
 [[test]]
 name = "sharding"
-path = "tests/sharding.rs"
+path = "tests/sharding/mod.rs"
 harness = false
 
 [[test]]
