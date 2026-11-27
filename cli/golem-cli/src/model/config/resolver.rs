@@ -726,8 +726,76 @@ fn merge_config(
     }
     origins.retain(|key, _| !key.starts_with(path));
     record_origins(&layer, path, origin, origins);
-    let layer = evaluate(&layer, origin)?;
-    let value = schema.descriptor_json(ty, layer, true, origin, Some(catalogs))?;
+    let mut value = layer;
+    let mut resolve_member = |ty: &SchemaType, member: &mut Value, segments: &[&str]| {
+        let mut child_path = path.to_vec();
+        child_path.extend(segments.iter().map(|segment| (*segment).to_string()));
+        let child_origin = segments
+            .iter()
+            .fold(origin.clone(), |origin, segment| origin.child(segment));
+        *member = merge_config(
+            schema,
+            ty,
+            None,
+            member.take(),
+            &child_path,
+            &child_origin,
+            origins,
+            catalogs,
+            evaluate,
+        )?;
+        Ok::<_, ConfigError>(())
+    };
+    match (ty, &mut value) {
+        (SchemaType::Tuple { elements, .. }, Value::Array(array)) => {
+            for (index, (ty, member)) in elements.iter().zip(array).enumerate() {
+                resolve_member(ty, member, &[&index.to_string()])?;
+            }
+        }
+        (
+            SchemaType::Map {
+                key,
+                value: member_type,
+                ..
+            },
+            Value::Array(entries),
+        ) => {
+            for (index, entry) in entries.iter_mut().enumerate() {
+                if let Some(pair) = entry.as_array_mut() {
+                    for (position, (ty, member)) in [key.as_ref(), member_type.as_ref()]
+                        .into_iter()
+                        .zip(pair)
+                        .enumerate()
+                    {
+                        resolve_member(ty, member, &[&index.to_string(), &position.to_string()])?;
+                    }
+                }
+            }
+        }
+        (SchemaType::Variant { cases, .. }, Value::Object(object)) => {
+            for case in cases {
+                if let (Some(ty), Some(member)) = (&case.payload, object.get_mut(&case.name)) {
+                    resolve_member(ty, member, &[&case.name])?;
+                }
+            }
+        }
+        (SchemaType::Result { spec, .. }, Value::Object(object)) => {
+            for (key, ty) in [("ok", &spec.ok), ("err", &spec.err)] {
+                if let (Some(ty), Some(member)) = (ty, object.get_mut(key)) {
+                    resolve_member(ty, member, &[key])?;
+                }
+            }
+        }
+        _ => {
+            value = schema.descriptor_json(
+                ty,
+                evaluate(&value, origin)?,
+                true,
+                origin,
+                Some(catalogs),
+            )?;
+        }
+    }
     if !contains_secret(graph, ty, &mut HashSet::new()) {
         let decoded = from_json_value(graph, ty, &value)
             .map_err(|error| origin.error(format!("invalid supplied config value: {error}")))?;

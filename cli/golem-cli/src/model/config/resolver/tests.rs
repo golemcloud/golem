@@ -17,8 +17,8 @@ use golem_common::model::agent::AgentConfigSource;
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::config::*;
 use golem_common::schema::{
-    DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaGraph, SchemaTypeDef, SecretSpec,
-    TypeId, UnionBranch, UnionSpec,
+    DiscriminatorRule, FieldDiscriminator, NamedFieldType, ResultSpec, SchemaGraph, SchemaTypeDef,
+    SecretSpec, TypeId, UnionBranch, UnionSpec, VariantCaseType,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -863,6 +863,226 @@ fn catalog_lists_replace_and_resolve_positional_selectors() {
             .origins
             .contains_key(&vec!["setting".into(), "3".into()])
     );
+}
+
+#[test]
+fn catalog_containers_replace_and_resolve_nested_selectors() {
+    let payload = record(vec![
+        ("label", SchemaType::string()),
+        ("count", SchemaType::u32()),
+    ]);
+    let sources = catalog(json!({"label":"selected","count":29,"key":"chosen","last":47}));
+    let result = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(payload.clone())),
+        err: Some(Box::new(payload.clone())),
+    });
+    let mut failures = Vec::new();
+    for (name, ty, previous, input, expected, selected_path, obsolete_path, invalid) in [
+        (
+            "tuple",
+            SchemaType::tuple(vec![payload.clone(), SchemaType::u32()]),
+            json!([{"label":"old","count":7},31]),
+            json!([{"label":{"$config":"label"},"count":{"$config":"count"}},{"$config":"last"}]),
+            json!([{"label":"selected","count":29},47]),
+            vec!["0", "label"],
+            None,
+            vec![
+                json!([{"label":{"$config":"label"}},47]),
+                json!([{"label":"x","count":1},47,99]),
+            ],
+        ),
+        (
+            "map",
+            SchemaType::map(SchemaType::string(), payload.clone()),
+            json!([["old",{"label":"old","count":7}],["stale",{"label":"stale","count":3}]]),
+            json!([[{"$config":"key"},{"label":{"$config":"label"},"count":{"$config":"count"}}]]),
+            json!([["chosen",{"label":"selected","count":29}]]),
+            vec!["0", "1", "label"],
+            Some(vec!["1"]),
+            vec![
+                json!([["chosen",{"label":{"$config":"label"}}]]),
+                json!([["chosen",{"label":"x","count":1},99]]),
+            ],
+        ),
+        (
+            "variant",
+            SchemaType::variant(vec![
+                VariantCaseType {
+                    name: "before".into(),
+                    payload: Some(payload.clone()),
+                    metadata: Default::default(),
+                },
+                VariantCaseType {
+                    name: "after".into(),
+                    payload: Some(payload.clone()),
+                    metadata: Default::default(),
+                },
+            ]),
+            json!({"before":{"label":"old","count":7}}),
+            json!({"after":{"label":{"$config":"label"},"count":{"$config":"count"}}}),
+            json!({"after":{"label":"selected","count":29}}),
+            vec!["after", "label"],
+            Some(vec!["before"]),
+            vec![
+                json!({"before":{"label":{"$config":"label"}}}),
+                json!({"after":{"label":"x","count":1},"before":{"label":"x","count":1}}),
+            ],
+        ),
+        (
+            "result ok",
+            result.clone(),
+            json!({"err":{"label":"old","count":7}}),
+            json!({"ok":{"label":{"$config":"label"},"count":{"$config":"count"}}}),
+            json!({"ok":{"label":"selected","count":29}}),
+            vec!["ok", "label"],
+            Some(vec!["err"]),
+            vec![
+                json!({"err":{"label":{"$config":"label"}}}),
+                json!({"ok":{"label":"x","count":1},"err":{"label":"x","count":1}}),
+            ],
+        ),
+        (
+            "result err",
+            result,
+            json!({"ok":{"label":"old","count":7}}),
+            json!({"err":{"label":{"$config":"label"},"count":{"$config":"count"}}}),
+            json!({"err":{"label":"selected","count":29}}),
+            vec!["err", "label"],
+            Some(vec!["ok"]),
+            vec![
+                json!({"ok":{"label":{"$config":"label"}}}),
+                json!({"unknown":{"label":"x","count":1}}),
+            ],
+        ),
+    ] {
+        let schema = schema(ConfigFieldKind::Static, ty);
+        let literal = schema
+            .resolve(
+                &sources,
+                &layers(vec![json!({"setting":expected})]),
+                &origin("code"),
+            )
+            .unwrap();
+        let ConfigSourcePlan::Static(value) = &literal[0].source else {
+            panic!("expected static {name}")
+        };
+        assert_eq!(
+            to_json_value(&schema.graph, &schema.fields[0].value_type, value).unwrap(),
+            expected,
+            "{name} literal control"
+        );
+        for invalid in invalid {
+            assert!(
+                schema
+                    .resolve(
+                        &sources,
+                        &layers(vec![
+                            json!({"setting":previous}),
+                            json!({"setting":invalid})
+                        ]),
+                        &origin("code")
+                    )
+                    .is_err(),
+                "{name} must not merge payloads or accept malformed containers"
+            );
+        }
+        let plan = match schema.resolve(
+            &sources,
+            &layers(vec![json!({"setting":previous}), json!({"setting":input})]),
+            &origin("code"),
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                failures.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        let ConfigSourcePlan::Static(value) = &plan[0].source else {
+            panic!("expected static {name}")
+        };
+        assert_eq!(
+            to_json_value(&schema.graph, &schema.fields[0].value_type, value).unwrap(),
+            expected,
+            "{name}"
+        );
+        let selected_path: Vec<String> = std::iter::once("setting")
+            .chain(selected_path)
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            plan[0].origins[&selected_path],
+            origin("catalog").child("label"),
+            "{name} selector origin"
+        );
+        if let Some(obsolete_path) = obsolete_path {
+            let obsolete_path: Vec<String> = std::iter::once("setting")
+                .chain(obsolete_path)
+                .map(str::to_string)
+                .collect();
+            assert!(
+                !plan[0]
+                    .origins
+                    .keys()
+                    .any(|path| path.starts_with(&obsolete_path)),
+                "{name} must discard replaced origins"
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn catalog_container_selectors_preserve_descriptor_encoding() {
+    let id = TypeId::new("File");
+    let file = SchemaType::ref_to(id.clone());
+    let sources = catalog(json!({"file":"prompts/system.txt"}));
+    for (ty, input, expected) in [
+        (
+            SchemaType::tuple(vec![file.clone()]),
+            json!([{"$config":"file"}]),
+            json!(["prompts/system.txt"]),
+        ),
+        (
+            SchemaType::map(SchemaType::string(), file.clone()),
+            json!([["prompt",{"$config":"file"}]]),
+            json!([["prompt", "prompts/system.txt"]]),
+        ),
+        (
+            SchemaType::variant(vec![VariantCaseType {
+                name: "prompt".into(),
+                payload: Some(file.clone()),
+                metadata: Default::default(),
+            }]),
+            json!({"prompt":{"$config":"file"}}),
+            json!({"prompt":"prompts/system.txt"}),
+        ),
+        (
+            SchemaType::result(ResultSpec {
+                ok: Some(Box::new(file.clone())),
+                err: None,
+            }),
+            json!({"ok":{"$config":"file"}}),
+            json!({"ok":"prompts/system.txt"}),
+        ),
+    ] {
+        let mut schema = schema(ConfigFieldKind::Static, ty);
+        schema.graph.defs.push(SchemaTypeDef {
+            id: id.clone(),
+            name: None,
+            body: SchemaType::string(),
+        });
+        schema
+            .descriptors
+            .insert(id.clone(), ConfigDescriptorKind::File);
+        let plan = schema
+            .resolve(
+                &sources,
+                &layers(vec![json!({"setting":input})]),
+                &origin("code"),
+            )
+            .unwrap();
+        assert_eq!(plan[0].source, ConfigSourcePlan::Descriptor(expected));
+    }
 }
 
 #[test]
