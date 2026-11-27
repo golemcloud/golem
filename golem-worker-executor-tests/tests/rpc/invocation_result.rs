@@ -14,6 +14,9 @@
 
 use super::*;
 use golem_common::model::oplog::{FinishedResult, OplogEntry};
+use golem_worker_executor::storage::keyvalue::fault_injecting::{
+    FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+};
 use pretty_assertions::assert_eq;
 use test_r::test;
 
@@ -143,6 +146,97 @@ async fn read_result(
             _ => (),
         }
     }
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn stream_free_returns_do_not_look_up_sessions_after_stream_history(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let reads = KeyValueStorageFaults::default();
+    let storage_reads = reads.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new(move |inner| {
+                Arc::new(FaultInjectingKeyValueStorage::new(
+                    inner,
+                    storage_reads.clone(),
+                ))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let key = agent_key!("RustMethodFailure", "scalar-after-session");
+    let agent = executor.start_agent(&component.id, key.clone()).await?;
+    let (_requests, mut responses, _) =
+        start_input(&executor, &component, &agent, "fail_input", vec![]).await?;
+    loop {
+        let response = responses
+            .message()
+            .await?
+            .expect("stream session completion");
+        if let Some(invocation_response::Response::Finished(finished)) = response.response {
+            assert!(matches!(
+                finished.outcome,
+                Some(invocation_session_completion::Outcome::Failure(_))
+            ));
+            break;
+        }
+    }
+    executor
+        .wait_for_status(&agent, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+    for _ in 0..8 {
+        for method in ["fail", "increment"] {
+            let mut gate = executor
+                .gate_after_next_append(&agent.agent_id, |entry| {
+                    matches!(
+                        entry,
+                        OplogEntry::AgentInvocationFinished { .. }
+                            | OplogEntry::AgentInvocationFailed { .. }
+                    )
+                })
+                .await;
+            let invocation =
+                executor.invoke_and_await_agent(&component, &key, method, data_value!());
+            tokio::pin!(invocation);
+            tokio::select! {
+                _ = gate.entered() => (),
+                result = &mut invocation => anyhow::bail!("{method} bypassed terminal gate: {result:?}"),
+            }
+            let before = reads.calls("lookup");
+            drop(gate);
+            let result = invocation.await;
+            assert_eq!(result.is_err(), method == "fail");
+            executor
+                .wait_for_status(&agent, AgentStatus::Idle, Duration::from_secs(30))
+                .await?;
+            assert_eq!(
+                reads.calls("lookup"),
+                before,
+                "{method}: stream-free drain must not look up an absent session"
+            );
+        }
+    }
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &key, "value", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        71
+    );
+    Ok(())
 }
 
 #[test]

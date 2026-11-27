@@ -525,6 +525,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: &InvocationId,
         details: String,
     ) -> Result<(), WorkerExecutorError> {
+        let Some(status) = self.durable_stream_session_status(idempotency_key).await? else {
+            return Ok(());
+        };
+        if status.finished.is_some() {
+            return Ok(());
+        }
         let cause = match self.lookup_invocation_result(idempotency_key).await {
             LookupResult::Complete(Err(_)) => SessionFailure::Invocation,
             _ => SessionFailure::Protocol(details.clone()),

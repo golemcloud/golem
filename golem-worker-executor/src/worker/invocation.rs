@@ -1603,6 +1603,8 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
 /// The invocation loop and the replay driver supply it. It keeps the outcome of the recording,
 /// which the caller reads after [`invoke_observed_and_traced`] returns.
 pub trait ReturnRecorder<Ctx: WorkerCtx>: Send {
+    fn uses_streams(&self) -> bool;
+
     /// Records `result`, a `Succeeded` or `MethodFailed` result, and gives it back. `true` means
     /// the result is recorded and the background work drains; `false` means it is not recorded,
     /// and the invocation returns `result` without a drain.
@@ -1855,7 +1857,9 @@ async fn record_at_return_and_drain<Ctx: WorkerCtx>(
             .durable_ctx_mut()
             .settle_schema_producers(Ok(()));
     }
-    if let Some(key) = store.data().get_current_idempotency_key().await {
+    if recorder.uses_streams()
+        && let Some(key) = store.data().get_current_idempotency_key().await
+    {
         let worker = store.data().get_public_state().worker();
         let failure = match &result {
             InvokeResult::Succeeded { .. } => None,

@@ -28,6 +28,10 @@ struct LoopRecorder<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
+    fn uses_streams(&self) -> bool {
+        self.uses_streams
+    }
+
     fn record<'a>(
         &'a mut self,
         store: &'a mut StoreContextMut<'_, Ctx>,
