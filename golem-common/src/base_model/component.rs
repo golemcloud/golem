@@ -123,6 +123,9 @@ declare_structs! {
         pub source: String,
         pub package_digest: String,
         pub layer_digest: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub tool_guest_names: BTreeMap<ToolName, ToolName>,
     }
 }
 

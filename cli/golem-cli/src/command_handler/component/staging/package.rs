@@ -42,6 +42,17 @@ impl ComponentCommandHandler {
         &self,
         app_ctx: &ApplicationContext,
     ) -> anyhow::Result<(PackageDigest, Vec<u8>)> {
+        ensure!(
+            !app_ctx.has_development_packages,
+            "Cannot pack an application with development path packages"
+        );
+        ensure!(
+            app_ctx
+                .installed_components
+                .values()
+                .all(|component| component.package_metadata.tool_guest_names.is_empty()),
+            "Cannot pack a component with renamed installed tools"
+        );
         let app = app_ctx.application();
         let mut config = PackageConfig {
             application: app.application_name().to_string(),
@@ -560,6 +571,7 @@ mod tests {
                         source: "fixture.tar".into(),
                         package_digest: "unused".into(),
                         layer_digest: "unused".into(),
+                        tool_guest_names: Default::default(),
                     },
                 },
             );

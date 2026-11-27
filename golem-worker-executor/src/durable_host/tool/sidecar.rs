@@ -479,6 +479,14 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     let invocation_key = store.data().durable_ctx().invocation_key();
     let mut result = match position.layer() {
         golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => {
+            let guest_tool_name = store
+                .data()
+                .durable_ctx()
+                .executable_component_metadata()
+                .and_then(|component| component.package_metadata.as_ref())
+                .and_then(|package| package.tool_guest_names.get(&tool_name))
+                .unwrap_or(&tool_name)
+                .to_string();
             let indices =
                 tool_guest_exports::GuestIndices::new(&instance_pre).map_err(|error| {
                     WorkerExecutorError::invalid_request(format!(
@@ -508,7 +516,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                             invocation_key,
                             guest.call_invoke(
                                 accessor,
-                                tool_name,
+                                guest_tool_name,
                                 command_path,
                                 input,
                                 stdin,
@@ -582,7 +590,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                             guest.call_invoke_tool_middleware(
                                 accessor,
                                 middleware_name,
-                                tool_name,
+                                tool_name.into_inner(),
                                 metadata,
                                 parameters,
                                 command_path,

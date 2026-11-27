@@ -170,14 +170,24 @@ pub(crate) fn plan_dependency_fixes(
     if selected_languages.contains(&GuestLanguage::TypeScript)
         || selected_languages.contains(&GuestLanguage::Effect)
     {
-        let package_step = ts::plan_package_json_fix_step(
-            ctx,
-            overrides,
-            &selected_languages,
-            &mut plan.warnings,
-        )?;
-        if let Some(step) = package_step {
-            plan.steps.push(step);
+        let mut npm_roots = BTreeMap::<&Path, BTreeSet<GuestLanguage>>::new();
+        for name in ctx.application_context().selected_component_names() {
+            let app = ctx.application();
+            if let Some(language @ (GuestLanguage::TypeScript | GuestLanguage::Effect)) =
+                app.component(name).guest_language()
+            {
+                npm_roots
+                    .entry(app.component_build_root(name))
+                    .or_default()
+                    .insert(language);
+            }
+        }
+        for (root, languages) in npm_roots {
+            if let Some(step) =
+                ts::plan_package_json_fix_step(root, overrides, &languages, &mut plan.warnings)?
+            {
+                plan.steps.push(step);
+            }
         }
         let tsconfig_steps = ts::plan_tsconfig_fix_steps(ctx)?;
         plan.steps.extend(tsconfig_steps);

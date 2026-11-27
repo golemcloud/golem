@@ -28,6 +28,7 @@ use crate::model::language::GuestLanguage;
 use crate::sdk_overrides::SdkOverrides;
 use crate::versions;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PackageJsonSection {
@@ -72,12 +73,12 @@ impl PackageJsonDependencyRequirement {
 }
 
 pub(super) fn plan_package_json_fix_step(
-    ctx: &BuildContext<'_>,
+    build_root: &Path,
     overrides: &SdkOverrides,
     selected_languages: &BTreeSet<GuestLanguage>,
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<Option<DependencyFixStep>> {
-    let package_json_path = ctx.application().app_root_dir().join("package.json");
+    let package_json_path = build_root.join("package.json");
     let package_json_str_contents = fs::read_to_string(&package_json_path)?;
     let requirements = selected_sdk_requirements(overrides, selected_languages)?;
     let names = requirements.iter().map(|r| r.name).collect::<Vec<_>>();

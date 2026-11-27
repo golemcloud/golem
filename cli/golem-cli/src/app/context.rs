@@ -39,7 +39,7 @@ use crate::model::language::GuestLanguage;
 use crate::model::text_format::DecoratedIndent;
 use crate::model::tool_release::ResolvedToolGrants;
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail, ensure};
 use colored::Colorize;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
@@ -329,6 +329,7 @@ pub struct ApplicationContext {
     pub(crate) js_compilation_cache_dir: PathBuf,
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     pub(crate) publisher_package: Option<golem_package::PackageIdentity>,
+    pub(crate) has_development_packages: bool,
     pub(crate) installed_components: BTreeMap<ComponentName, golem_package::InstalledComponent>,
     pub(crate) installed_package_calls: BTreeMap<String, BTreeSet<AgentTypeName>>,
     _package_dir: Option<crate::package::UnpackRoot>,
@@ -359,6 +360,7 @@ impl ApplicationContext {
                 false,
             ),
             publisher_package: None,
+            has_development_packages: false,
             installed_components: BTreeMap::new(),
             installed_package_calls: BTreeMap::new(),
             _package_dir: None,
@@ -479,10 +481,17 @@ impl ApplicationContext {
         config_dir: &Path,
     ) -> anyhow::Result<Option<ApplicationContext>> {
         let mut source_mode = source_mode;
+        let mut has_development_packages = false;
         let mut package_agent_defaults = BTreeMap::new();
         let (publisher_package, expanded, package_dir) = match &mut source_mode {
             ApplicationSourceMode::Preloaded(loaded) => {
                 let (publisher_package, pins, lock) = package_pins(loaded)?;
+                has_development_packages = package_root(loaded).is_some_and(|root| {
+                    root.packages
+                        .values()
+                        .any(|entry| matches!(entry, crate::package::PackageEntry::Path { .. }))
+                });
+                let selected_tools = package_tool_selections(loaded, &pins)?;
                 if pins.is_empty() {
                     (publisher_package, Default::default(), None)
                 } else {
@@ -491,8 +500,15 @@ impl ApplicationContext {
                         app_root: &loaded.app_root_dir,
                         cache_root: config_dir.join("package-cache"),
                     };
-                    let mut expanded =
-                        golem_package::expand(&pins, &lock, dir.path(), &mut effects).await?;
+                    let mut expanded = golem_package::expand(
+                        &pins,
+                        &lock,
+                        &selected_tools,
+                        dir.path(),
+                        &mut effects,
+                    )
+                    .await?;
+                    check_package_tool_collisions(&loaded.raw_apps, &expanded.declarations)?;
                     for installed in expanded.components.values_mut() {
                         if let golem_package::PackageSource::File(path) =
                             golem_package::PackageSource::parse(&installed.package_metadata.source)
@@ -551,6 +567,7 @@ impl ApplicationContext {
             }),
         )?;
         ctx.publisher_package = publisher_package;
+        ctx.has_development_packages = has_development_packages;
         ctx.installed_components = expanded.components;
         ctx.installed_package_calls = expanded.calls;
         ctx.application.package_agent_defaults = package_agent_defaults;
@@ -605,6 +622,7 @@ impl ApplicationContext {
                 application,
                 component_metadata,
                 publisher_package: None,
+                has_development_packages: false,
                 installed_components: BTreeMap::new(),
                 installed_package_calls: BTreeMap::new(),
                 _package_dir: None,
@@ -742,6 +760,24 @@ impl ApplicationContext {
 
     pub fn selected_component_names(&self) -> &BTreeSet<ComponentName> {
         &self.selected_component_names
+    }
+
+    pub(crate) fn ensure_component_npm_common(&self, name: &ComponentName) -> anyhow::Result<()> {
+        let root = self.application.component_build_root(name);
+        if root != self.application.app_root_dir()
+            && let Some(language @ (GuestLanguage::TypeScript | GuestLanguage::Effect)) =
+                self.application.component(name).guest_language()
+            && let Some(template) =
+                AppTemplateRepo::get(self.config.dev_mode)?.common_on_demand_template(language)?
+        {
+            // Node resolves the Rollup config's imports from its file location.
+            template.generate(
+                self.application.application_name(),
+                root,
+                &root.join(Application::on_demand_common_dir_for_language(language)),
+            )?;
+        }
+        Ok(())
     }
 
     pub fn component_names(&self) -> BTreeSet<ComponentName> {
@@ -1009,8 +1045,14 @@ fn preload_app(
     dev_mode: bool,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode, calling_working_dir).map(|loaded_raw_apps| {
-        loaded_raw_apps.and_then(|loaded_raw_apps| {
-            ValidatedResult::from_result(package_pins(&loaded_raw_apps)).and_then(|_| {
+        loaded_raw_apps.and_then(|mut loaded_raw_apps| {
+            ValidatedResult::from_result((|| -> anyhow::Result<()> {
+                package_pins(&loaded_raw_apps)?;
+                let development = development_manifests(&loaded_raw_apps)?;
+                loaded_raw_apps.raw_apps.extend(development);
+                Ok(())
+            })())
+            .and_then(|_| {
                 let referenced_template_names =
                     Application::referenced_template_names_from_raw_apps(&loaded_raw_apps.raw_apps);
 
@@ -1069,7 +1111,26 @@ fn package_manifest(
     Ok(app_raw::ApplicationWithSource {
         source,
         application: serde_json::from_str(&declarations)?,
+        development_root: None,
     })
+}
+
+fn check_package_tool_collisions(
+    apps: &[app_raw::ApplicationWithSource],
+    declarations: &golem_package::Declarations,
+) -> anyhow::Result<()> {
+    for app in apps {
+        let (tools, _) = app.application.tools.clone().into_tools_and_middleware();
+        for name in tools.keys() {
+            if let Some(package) = declarations.tool_package(name) {
+                bail!(
+                    "Tool {name:?} from package {package:?} conflicts with the local declaration tools.{name} in {}",
+                    app.source.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_agent_package_selectors(
@@ -1090,6 +1151,75 @@ fn validate_agent_package_selectors(
     Ok(())
 }
 
+fn package_tool_selections(
+    loaded: &mut LoadedRawApps,
+    pins: &golem_package::Pins,
+) -> anyhow::Result<BTreeMap<String, Vec<golem_package::ToolSelection>>> {
+    use golem_package::ToolSelection;
+
+    let path_packages = package_root(loaded)
+        .into_iter()
+        .flat_map(|root| &root.packages)
+        .filter(|(_, entry)| matches!(entry, crate::package::PackageEntry::Path { .. }))
+        .map(|(name, _)| name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut selections = BTreeMap::<String, Vec<ToolSelection>>::new();
+    let mut declarations = BTreeMap::new();
+    for app in &mut loaded.raw_apps {
+        for (name, value) in app.application.tools.extract_package_tools() {
+            let package = value["package"].as_str().with_context(|| {
+                format!(
+                    "tools.{name}.package in {} must name a file package",
+                    app.source.display()
+                )
+            })?;
+            ensure!(
+                !path_packages.contains(package),
+                "tools.{name} cannot select a tool from development package {package:?}; declare and bind its tools by their local names"
+            );
+            ensure!(
+                pins.contains_key(package),
+                "tools.{name} in {} selects unknown file package {package:?}",
+                app.source.display()
+            );
+            ensure!(
+                value.as_object().is_some_and(|fields| fields
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "package" | "tool"))),
+                "tools.{name} in {} must use only package and tool selectors",
+                app.source.display()
+            );
+            if let Some((previous_package, source)) =
+                declarations.insert(name.clone(), (package.to_owned(), app.source.as_path()))
+            {
+                bail!(
+                    "Tool {name:?} from package {previous_package:?} in {} conflicts with package {package:?} in {}",
+                    source.display(),
+                    app.source.display()
+                );
+            }
+            let published = value
+                .get("tool")
+                .map(|tool| {
+                    tool.as_str()
+                        .context("Expected a published tool name")?
+                        .parse()
+                        .map_err(anyhow::Error::msg)
+                })
+                .transpose()
+                .with_context(|| format!("tools.{name}.tool in {}", app.source.display()))?;
+            selections
+                .entry(package.to_owned())
+                .or_default()
+                .push(ToolSelection {
+                    published,
+                    local: name.parse().map_err(anyhow::Error::msg)?,
+                });
+        }
+    }
+    Ok(selections)
+}
+
 fn package_pins(
     loaded: &LoadedRawApps,
 ) -> anyhow::Result<(
@@ -1103,7 +1233,22 @@ fn package_pins(
         let raw = &app.application;
         if app.source == loaded.root_manifest {
             publisher = raw.package.clone();
-            pins.clone_from(&raw.packages);
+            pins.extend(raw.packages.iter().filter_map(|(name, entry)| match entry {
+                crate::package::PackageEntry::File {
+                    source,
+                    version,
+                    digest,
+                    ..
+                } => Some((
+                    name.clone(),
+                    golem_package::FilePin {
+                        source: source.clone(),
+                        version: version.clone(),
+                        digest: digest.clone(),
+                    },
+                )),
+                crate::package::PackageEntry::Path { .. } => None,
+            }));
         } else if raw.package.is_some() || !raw.packages.is_empty() {
             anyhow::bail!(
                 "Package declarations are only allowed in the root manifest, not {}",
@@ -1115,8 +1260,129 @@ fn package_pins(
         golem_package::validate_identity(identity)?;
     }
     let lock = crate::package::load_lock(&loaded.app_root_dir)?;
+    if let Some(root) = package_root(loaded) {
+        for (name, entry) in &root.packages {
+            ensure!(
+                !matches!(entry, crate::package::PackageEntry::Path { .. })
+                    || !lock.contains_key(name),
+                "Development package {name:?} must not have a lock entry; remove packages.{name} from golem.lock"
+            );
+        }
+    }
     golem_package::check_lock(&pins, &lock)?;
     Ok((publisher, pins, lock))
+}
+
+fn package_root(loaded: &LoadedRawApps) -> Option<&app_raw::Application> {
+    loaded
+        .raw_apps
+        .iter()
+        .find(|app| app.source == loaded.root_manifest)
+        .map(|app| &app.application)
+}
+
+fn development_manifests(
+    loaded: &LoadedRawApps,
+) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
+    let Some(root) = package_root(loaded) else {
+        return Ok(Vec::new());
+    };
+    if !root
+        .packages
+        .values()
+        .any(|entry| matches!(entry, crate::package::PackageEntry::Path { .. }))
+    {
+        return Ok(Vec::new());
+    }
+    let mut sources = loaded
+        .raw_apps
+        .iter()
+        .map(|app| std::fs::canonicalize(&app.source))
+        .collect::<std::io::Result<BTreeSet<_>>>()?;
+    let mut manifests = Vec::new();
+    for (name, entry) in &root.packages {
+        let crate::package::PackageEntry::Path { path } = entry else {
+            continue;
+        };
+        let directory = loaded.app_root_dir.join(path);
+        let manifest = directory.join(DEFAULT_CONFIG_FILE_NAME);
+        (|| -> anyhow::Result<()> {
+            ensure!(
+                !path.as_os_str().is_empty() && manifest.is_file(),
+                "Expected a directory containing golem.yaml"
+            );
+            let collected = validated_to_anyhow(
+                "Failed to collect development package manifests",
+                collect_sources_from(&directory, Some(&manifest)).context("No package manifest")?,
+                None,
+            )?;
+            validated_to_anyhow(
+                "Invalid development package manifest version",
+                validate_manifest_versions(&collected.sources),
+                None,
+            )?;
+            let producer_name =
+                app_raw::ApplicationWithSource::from_yaml_file(&collected.root_manifest)?
+                    .application
+                    .app;
+            for source in collected.sources {
+                ensure!(
+                    sources.insert(std::fs::canonicalize(&source)?),
+                    "Manifest {} is already loaded",
+                    source.display()
+                );
+                let mut raw = app_raw::ApplicationWithSource::from_yaml_file(&source)?.application;
+                ensure!(
+                    raw.packages.is_empty(),
+                    "Development package dependencies are not supported ({})",
+                    source.display()
+                );
+                if let Some((tool, _)) = raw.tools.extract_package_tools().next() {
+                    bail!(
+                        "Development package tool {tool} cannot select a file package ({})",
+                        source.display()
+                    );
+                }
+                if let Some((agent, _)) =
+                    raw.agents.iter().find(|(_, agent)| agent.package.is_some())
+                {
+                    bail!(
+                        "Development package agent {agent} cannot select a file package ({})",
+                        source.display()
+                    );
+                }
+                if source == collected.root_manifest {
+                    let identity = raw
+                        .package
+                        .as_ref()
+                        .context("Declare package identity in golem.yaml")?;
+                    golem_package::validate_identity(identity)?;
+                    ensure!(
+                        identity.name == *name,
+                        "Package declares name {:?}, not {name:?}",
+                        identity.name
+                    );
+                }
+                manifests.push(app_raw::ApplicationWithSource {
+                    source,
+                    development_root: Some((
+                        fs::normalize_path_lexically(&directory),
+                        producer_name.clone(),
+                    )),
+                    application: app_raw::Application {
+                        component_templates: raw.component_templates,
+                        components: raw.components,
+                        agents: raw.agents,
+                        tools: raw.tools,
+                        ..Default::default()
+                    },
+                });
+            }
+            Ok(())
+        })()
+        .with_context(|| format!("Development package {name:?} at {}", directory.display()))?;
+    }
+    Ok(manifests)
 }
 
 fn ensure_on_demand_commons(
@@ -1332,6 +1598,164 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn package_selection_is_manifest_only() {
+        use crate::model::app_raw::Application;
+
+        let pin = format!(
+            "source: tools.tar, version: 1.0.0, digest: sha256:{}",
+            "a".repeat(64)
+        );
+        for entry in [format!("{{{pin}}}"), "{path: ../tools}".into()] {
+            let manifest = format!("packages: {{tools: {entry}}}");
+            assert!(
+                Application::from_yaml_str(&manifest).is_ok_and(|app| app.packages.len() == 1),
+                "{manifest}"
+            );
+        }
+        for entry in [
+            format!("{{{pin}, path: ../tools}}"),
+            format!("{{{pin}, tool: echo}}"),
+            "{path: ../tools, digest: invalid}".into(),
+        ] {
+            let manifest = format!("packages: {{tools: {entry}}}");
+            assert!(Application::from_yaml_str(&manifest).is_err(), "{manifest}");
+        }
+    }
+
+    #[test]
+    async fn package_selection_reports_conflicting_and_unknown_tools() {
+        use crate::model::app_raw::ApplicationWithSource;
+        use golem_package::*;
+        use std::collections::BTreeMap;
+        use std::fs;
+
+        let app = tempfile::tempdir().unwrap();
+        let unpack = app.path().join("unpack");
+        let mut pins = Pins::new();
+        for (name, tools) in [
+            ("first", vec!["shared", "other"]),
+            ("second", vec!["shared"]),
+        ] {
+            let mut blobs = BTreeMap::new();
+            let wasm = add_blob(&mut blobs, WASM, vec![0]).digest;
+            let spec = PackageConfig {
+                application: name.into(),
+                package: PackageIdentity {
+                    name: name.into(),
+                    version: "1.0.0".into(),
+                    calls: Default::default(),
+                },
+                components: BTreeMap::from([(
+                    format!("{name}:tool").parse().unwrap(),
+                    PackageComponent {
+                        wasm,
+                        metadata:
+                            golem_common::model::agent::extraction::ExtractedComponentMetadata {
+                                agent_types: vec![],
+                                tools: vec![],
+                                tool_middlewares: vec![],
+                            },
+                        config_schema: Default::default(),
+                        provision: Default::default(),
+                        agents: BTreeMap::new(),
+                        tools: tools
+                            .into_iter()
+                            .map(|tool| (tool.parse().unwrap(), PackageProvision::default()))
+                            .collect(),
+                        tool_middlewares: BTreeMap::new(),
+                    },
+                )]),
+            };
+            let (digest, bytes) = pack(&spec, &blobs).unwrap();
+            let source = format!("{name}.tar");
+            fs::write(app.path().join(&source), bytes).unwrap();
+            pins.insert(
+                name.to_owned(),
+                FilePin {
+                    source,
+                    version: "1.0.0".into(),
+                    digest,
+                },
+            );
+        }
+        let mut effects = crate::package::LocalEffects {
+            app_root: app.path(),
+            cache_root: app.path().join("cache"),
+        };
+        let mut expected = BTreeMap::new();
+        for (first, fragments) in [
+            ("shared", ["shared", "first", "second"]),
+            ("missing", ["missing", "shared", "other"]),
+        ] {
+            expected.insert(
+                "first".into(),
+                vec![ToolSelection {
+                    published: Some(first.parse().unwrap()),
+                    local: first.parse().unwrap(),
+                }],
+            );
+            let unpack = app.path().join(first);
+            let error = expand(&pins, &pins, &expected, &unpack, &mut effects)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                fragments.iter().all(|fragment| error.contains(fragment)),
+                "{error}"
+            );
+        }
+        expected.insert(
+            "first".into(),
+            vec![ToolSelection {
+                published: Some("other".parse().unwrap()),
+                local: "other".parse().unwrap(),
+            }],
+        );
+        let expanded = expand(&pins, &pins, &expected, &unpack, &mut effects)
+            .await
+            .unwrap();
+        let manifest = ApplicationWithSource::from_yaml_string(
+            app.path().join("local.yaml"),
+            "tools: {shared: {}}",
+        )
+        .unwrap();
+        let error = super::check_package_tool_collisions(
+            std::slice::from_ref(&manifest),
+            &expanded.declarations,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            ["shared", "second", "local.yaml"]
+                .iter()
+                .all(|fragment| error.contains(fragment)),
+            "{error}"
+        );
+        expected.insert(
+            "second".into(),
+            vec![ToolSelection {
+                published: None,
+                local: "local-shared".parse().unwrap(),
+            }],
+        );
+        let expanded = expand(
+            &pins,
+            &pins,
+            &expected,
+            &app.path().join("renamed"),
+            &mut effects,
+        )
+        .await
+        .unwrap();
+        super::check_package_tool_collisions(&[manifest], &expanded.declarations).unwrap();
+        assert_eq!(
+            expanded.declarations.tool_package("local-shared"),
+            Some("second")
+        );
+        assert_eq!(expanded.declarations.tool_package("shared"), None);
+    }
+
+    #[test]
     fn agent_package_selector_requires_the_published_type_in_that_package() {
         use super::{AgentTypeName, BTreeMap, app_raw, validate_agent_package_selectors};
 
@@ -1347,6 +1771,7 @@ mod tests {
                     "agents:\n  {agent}:\n    package: {package}\n"
                 ))
                 .unwrap(),
+                development_root: None,
             };
             let result = validate_agent_package_selectors(&[app], &packages);
             if valid {
@@ -1444,7 +1869,9 @@ mod tests {
             app_root: app.path(),
             cache_root: app.path().join("cache"),
         };
-        let expanded = expand(&pins, &pins, &unpack, &mut effects).await.unwrap();
+        let expanded = expand(&pins, &pins, &BTreeMap::new(), &unpack, &mut effects)
+            .await
+            .unwrap();
         let installed = super::package_manifest(&unpack, &expanded.declarations).unwrap();
         let local_source = unpack.join("golem.yaml");
         fs::write(

@@ -256,8 +256,111 @@ impl CompilerFixture {
             environment,
             owner,
             &BTreeMap::new(),
+            &BTreeMap::new(),
             mode,
         )
+    }
+}
+
+#[test]
+fn package_tool_alias_applies_only_to_bound_same_package_occurrences() {
+    use crate::model::component::{ComponentId, ComponentPackageMetadata};
+
+    let mut fixture = CompilerFixture::new();
+    let leaf_id = ComponentId::new();
+    let middleware_id = ComponentId::new();
+    let other_middleware_id = ComponentId::new();
+    let external_id = ComponentId::new();
+    let local: ToolName = "local-leaf".parse().unwrap();
+    let package = ComponentPackageMetadata {
+        source: "package.tar".into(),
+        package_digest: "package".into(),
+        layer_digest: "layer".into(),
+        tool_guest_names: BTreeMap::from([(local.clone(), fixture.tool_name.clone())]),
+    };
+    let other_package = ComponentPackageMetadata {
+        package_digest: "other-package".into(),
+        tool_guest_names: BTreeMap::new(),
+        ..package.clone()
+    };
+    let packages = BTreeMap::from([
+        (leaf_id, &package),
+        (middleware_id, &package),
+        (other_middleware_id, &other_package),
+    ]);
+    for (id, wrapper_id, bound_name, presented, effective) in [
+        (
+            leaf_id,
+            middleware_id,
+            "local-leaf",
+            "leaf",
+            Some("local-leaf"),
+        ),
+        (
+            leaf_id,
+            middleware_id,
+            "local-leaf",
+            "custom",
+            Some("custom"),
+        ),
+        (external_id, middleware_id, "leaf", "leaf", Some("leaf")),
+        (external_id, middleware_id, "local-leaf", "leaf", None),
+        (leaf_id, other_middleware_id, "local-leaf", "leaf", None),
+    ] {
+        let mut middleware = registered_middleware(
+            "wrap",
+            ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                presented: simple_tool(presented),
+                expected: Some(simple_tool("leaf")),
+            })),
+        );
+        let ToolMiddlewareSource::Component { component_id, .. } = &mut middleware.source;
+        *component_id = wrapper_id;
+        if let ToolSource::Component { component_id, .. } = &mut fixture.tool.source {
+            *component_id = id;
+        }
+        fixture.tool.definition = simple_tool(bound_name);
+        fixture.binding.source = fixture.tool.source.clone();
+        fixture.binding.tool_name = bound_name.parse().unwrap();
+        let inputs = BTreeMap::from([(
+            fixture.binding.tool_name.clone(),
+            ToolBindingInput {
+                middleware: Some(vec![installation("wrap", 1)]),
+                ..Default::default()
+            },
+        )]);
+        let result = compile_tool_middleware_chains(
+            DeploymentRevision::INITIAL,
+            std::slice::from_ref(&fixture.tool),
+            std::slice::from_ref(&fixture.binding),
+            std::slice::from_ref(&middleware),
+            &[],
+            &inputs,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &packages,
+            ToolCompatibilityMode::StructuralSubtype,
+        );
+        if let Some(effective) = effective {
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+            let chain = &result.chains[0];
+            assert_eq!(chain.effective_definition.name(), Some(effective));
+            let occurrence = &chain.occurrences[0];
+            assert!(occurrence.compatibility.is_some());
+            assert_eq!(
+                occurrence.expected_definition.as_ref().unwrap().name(),
+                Some(bound_name)
+            );
+            assert_eq!(occurrence.middleware, middleware);
+        } else {
+            assert!(result.chains.is_empty());
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|error| error.message.contains("tool names differ"))
+            );
+        }
     }
 }
 
@@ -430,6 +533,7 @@ fn compile_registry_of(definition: Tool) -> CompiledToolMiddlewareChains {
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        &Default::default(),
         ToolCompatibilityMode::StructuralSubtype,
     )
 }
@@ -498,6 +602,7 @@ fn installed_parameters_are_validated_without_compiled_bindings() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &BTreeMap::new(),
         ToolCompatibilityMode::StructuralSubtype,
     );
 
@@ -515,6 +620,7 @@ fn unresolved_unselected_installation_is_not_reported_as_a_parameter_error() {
         &[],
         &[],
         &[installation("missing", 0)],
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -941,6 +1047,7 @@ fn compiler_rejects_pin_and_leaf_mismatches() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &BTreeMap::new(),
         ToolCompatibilityMode::StructuralSubtype,
     );
     assert!(result.errors[0].message.contains("no registered leaf tool"));
@@ -963,6 +1070,7 @@ fn compiler_rejects_environment_wide_monomorphic_middleware_without_selected_bin
         &[],
         &[monomorphic],
         &[installation("scoped", 1)],
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),

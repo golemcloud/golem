@@ -31,18 +31,30 @@
     },
     "packages": {
       "type": "object",
-      "description": "Installed packages by name. Only allowed in the root manifest. Use golem install to set these pins and golem.lock together.",
+      "description": "Packages by name. Only allowed in the root manifest. Use golem install to pin an archive and update golem.lock. Development paths are not locked.",
       "maxProperties": 64,
       "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,63}$" },
       "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["source", "version", "digest"],
-        "properties": {
-          "source": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Archive path, HTTP(S) URL, or oci:// registry reference." },
-          "version": { "type": "string", "maxLength": 128, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.-]+)?$" },
-          "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
-        }
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "version", "digest"],
+            "properties": {
+              "source": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Archive path, HTTP(S) URL, or oci:// registry reference." },
+              "version": { "type": "string", "maxLength": 128, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.-]+)?$" },
+              "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1, "description": "Development package directory, relative to this manifest or absolute." }
+            }
+          }
+        ]
       }
     },
     "includes": {
@@ -816,7 +828,7 @@
       }
     },
     "toolDeclaration": {
-      "description": "Canonical identity and consumer-owned provision properties for a tool. Omit both component and release for an implicitly discovered local implementation, select a local implementing component, or select an exact published release. Deploy automatically reconciles the required environment grant.",
+      "description": "Canonical identity and consumer-owned provision properties for a tool. Select a local implementation, an exact published release, or a tool from an installed file package. The declaration key is the local tool name.",
       "type": "object",
       "additionalProperties": false,
       "not": {
@@ -825,7 +837,19 @@
           "release"
         ]
       },
+      "if": { "required": ["package"] },
+      "then": { "propertyNames": { "enum": ["package", "tool"] } },
+      "else": { "not": { "required": ["tool"] } },
       "properties": {
+        "package": {
+          "type": "string",
+          "description": "Name of the installed file package."
+        },
+        "tool": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "description": "Published tool name. Required when the package contains several tools."
+        },
         "component": {
           "type": "string",
           "description": "Component implementing this local tool. Use this when multiple components export a tool with the same name or when referring to the declaration as a name-only component dependency."

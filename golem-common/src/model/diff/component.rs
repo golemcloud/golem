@@ -342,6 +342,7 @@ mod tests {
             source: "./fixture.tar".into(),
             package_digest: format!("sha256:{}", "12".repeat(32)),
             layer_digest: format!("sha256:{}", "34".repeat(32)),
+            tool_guest_names: BTreeMap::new(),
         });
         assert_ne!(local.hash().unwrap(), packaged.hash().unwrap());
         for (current, new) in [(local.clone(), packaged.clone()), (packaged, local)] {

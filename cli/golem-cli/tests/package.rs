@@ -27,12 +27,17 @@ use testcontainers::{
 use tokio::process::Command;
 
 async fn run_cli(dir: &Path, args: &[&str]) -> std::process::Output {
+    run_cli_with_env(dir, args, &[]).await
+}
+
+async fn run_cli_with_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_golem-cli"))
         .kill_on_drop(true)
         .current_dir(dir)
         .env("DOCKER_CONFIG", dir.join("isolated-docker-config"))
         .env("HTTP_PROXY", "http://127.0.0.1:1")
         .env("NO_PROXY", "")
+        .envs(env.iter().copied())
         .arg("--config-dir")
         .arg(dir.join("isolated-config"))
         .args(["--format", "json"])
@@ -372,6 +377,349 @@ async fn assert_cli_error(dir: &Path, args: &[&str], expected: &str) {
     );
 }
 
+#[test]
+#[timeout("45s")]
+async fn development_package_build_reads_its_current_component_without_a_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let dev = root.join("dev");
+    fs::create_dir(&dev).unwrap();
+    let version = versions::sdk::MANIFEST;
+    fs::write(
+        root.join("golem.yaml"),
+        format!("manifestVersion: {version}\napp: consumer\nenvironments:\n  local: {{server: local}}\npackages:\n  editable: {{path: ./dev}}\n"),
+    ).unwrap();
+    let copy = if cfg!(windows) {
+        "cmd /C copy /Y source.wasm guest.wasm"
+    } else {
+        "cp source.wasm guest.wasm"
+    };
+    fs::write(
+        dev.join("golem.yaml"),
+        format!("manifestVersion: {version}\napp: producer\npackage: {{name: editable, version: 1.0.0}}\ncomponents:\n  editable:guest:\n    componentWasm: guest.wasm\n    build:\n      - command: {copy}\n        sources: [source.wasm]\n        targets: [guest.wasm]\n"),
+    ).unwrap();
+    for source in ["(component)", "(component (core module))"] {
+        let wasm = wat::parse_str(source).unwrap();
+        fs::write(dev.join("source.wasm"), &wasm).unwrap();
+        assert_eq!(cli(root, &["build"]).await["built"], true);
+        assert_eq!(fs::read(dev.join("guest.wasm")).unwrap(), wasm);
+        assert!(!root.join("golem.lock").exists());
+    }
+    for command in [&["package", "pack"][..], &["publish", "--dry-run"][..]] {
+        assert_cli_error(
+            root,
+            command,
+            "Cannot pack an application with development path packages",
+        )
+        .await;
+    }
+    fs::write(
+        root.join("golem.lock"),
+        format!("packages:\n  editable:\n    source: old.tar\n    version: 1.0.0\n    digest: sha256:{}\n", "a".repeat(64)),
+    ).unwrap();
+    assert_cli_error(root, &["build"], "remove packages.editable from golem.lock").await;
+
+    fs::remove_file(root.join("golem.lock")).unwrap();
+    let wasm = wat::parse_str("(component)").unwrap();
+    write_install_fixture(&root.join("editable.tar"), "editable", wasm.clone());
+    let consumer_manifest = root.join("golem.yaml");
+    let original = fs::read(&consumer_manifest).unwrap();
+    assert_cli_error(
+        root,
+        &["install", "./editable.tar"],
+        "Remove the development path",
+    )
+    .await;
+    assert_eq!(fs::read(&consumer_manifest).unwrap(), original);
+    assert!(!root.join("golem.lock").exists());
+    write_install_fixture(&root.join("other.tar"), "other", wasm);
+    let result = run_cli(root, &["install", "./other.tar"]).await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let consumer = fs::read_to_string(&consumer_manifest).unwrap();
+    for (selector, error) in [
+        (
+            "{package: editable, tool: echo}",
+            "cannot select a tool from development package",
+        ),
+        (
+            "{package: other, tool: echo, component: 'pkg:other'}",
+            "must use only package and tool selectors",
+        ),
+    ] {
+        fs::write(
+            &consumer_manifest,
+            format!("{consumer}\ntools:\n  chosen: {selector}\n"),
+        )
+        .unwrap();
+        assert_cli_error(root, &["build"], error).await;
+    }
+    fs::write(&consumer_manifest, consumer).unwrap();
+    let manifest = dev.join("golem.yaml");
+    let base = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, base.replacen("name: editable", "name: wrong", 1)).unwrap();
+    assert_cli_error(
+        root,
+        &["build"],
+        "Package declares name \"wrong\", not \"editable\"",
+    )
+    .await;
+    for (selector, error) in [
+        (
+            "packages:\n  dependency: {path: ./missing}\n",
+            "Development package dependencies are not supported",
+        ),
+        (
+            "tools:\n  borrowed: {package: other, tool: echo}\n",
+            "Development package tool borrowed cannot select a file package",
+        ),
+        (
+            "agents:\n  Borrowed: {package: other}\n",
+            "Development package agent Borrowed cannot select a file package",
+        ),
+    ] {
+        fs::write(&manifest, format!("{base}\n{selector}")).unwrap();
+        assert_cli_error(root, &["build"], error).await;
+    }
+}
+
+#[test]
+#[timeout("5 minutes")]
+async fn development_package_build_uses_its_typescript_dependencies() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let producer = root.join("producer");
+    let consumer = root.join("consumer");
+    let sdk = crate::workspace_path().join("sdks/ts/packages");
+    let env = [("GOLEM_TS_PACKAGES_PATH", sdk.to_str().unwrap())];
+    let result = run_cli_with_env(
+        root,
+        &[
+            "new",
+            "producer",
+            "--template",
+            "ts",
+            "--component-name",
+            "editable:guest",
+            "--yes",
+        ],
+        &env,
+    )
+    .await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let manifest = producer.join("golem.yaml");
+    fs::write(
+        &manifest,
+        format!(
+            "{}\npackage: {{name: editable, version: 1.0.0}}\n",
+            fs::read_to_string(&manifest).unwrap()
+        ),
+    )
+    .unwrap();
+    fs::create_dir(&consumer).unwrap();
+    fs::write(consumer.join("golem.yaml"), format!("manifestVersion: {}\napp: consumer\nenvironments:\n  local: {{server: local, componentPresets: quick}}\npackages:\n  editable: {{path: ../producer}}\n", versions::sdk::MANIFEST)).unwrap();
+
+    let result = run_cli_with_env(&consumer, &["build", "--yes"], &env).await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        producer
+            .join("node_modules/@golemcloud/golem-ts-sdk")
+            .is_dir()
+    );
+    assert!(!consumer.join("package.json").exists());
+    assert!(!consumer.join("node_modules").exists());
+    assert!(
+        consumer
+            .join("golem-temp/agents/editable_guest.dynamic.wasm")
+            .is_file()
+    );
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn development_package_build_rebuilds_a_sibling_scala_producer() {
+    assert_sibling_producer_rebuild(
+        "scala",
+        "quick",
+        "src/main/scala/editable_guest/CounterAgentImpl.scala",
+        "count += 1",
+        "count += 7",
+        "golem-temp/agents/editable_guest.dynamic.wasm",
+    )
+    .await;
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn development_package_build_rebuilds_a_sibling_moonbit_producer() {
+    assert_sibling_producer_rebuild(
+        "moonbit",
+        "debug",
+        "counter.mbt",
+        "self.value += 1",
+        "self.value += 7",
+        "_build/wasm/debug/editable_guest.agent.wasm",
+    )
+    .await;
+}
+
+async fn assert_sibling_producer_rebuild(
+    language: &str,
+    preset: &str,
+    source: &str,
+    before: &str,
+    after: &str,
+    artifact: &str,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let producer = root.join("producer");
+    let consumer = root.join("consumer");
+    cli(
+        root,
+        &[
+            "new",
+            "producer",
+            "--template",
+            language,
+            "--component-name",
+            "editable:guest",
+            "--yes",
+        ],
+    )
+    .await;
+    let manifest = producer.join("golem.yaml");
+    let base = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        format!("{base}\npackage: {{name: editable, version: 1.0.0}}\n"),
+    )
+    .unwrap();
+    fs::create_dir(&consumer).unwrap();
+    fs::write(consumer.join("golem.yaml"), format!("manifestVersion: {}\napp: consumer\nenvironments:\n  local: {{server: local, componentPresets: {preset}}}\npackages:\n  editable: {{path: ../producer}}\n", versions::sdk::MANIFEST)).unwrap();
+
+    let build_file = producer.join(if language == "scala" {
+        "build.sbt"
+    } else {
+        "moon.mod"
+    });
+    let build_file_before = fs::read(&build_file).unwrap();
+    assert_eq!(cli(&consumer, &["build", "--yes"]).await["built"], true);
+    let artifact = if language == "scala" {
+        &consumer
+    } else {
+        &producer
+    }
+    .join(artifact);
+    let original = fs::read(&artifact).unwrap();
+    let source = walkdir::WalkDir::new(&producer)
+        .into_iter()
+        .filter_map(Result::ok)
+        .find(|entry| entry.path().ends_with(source))
+        .unwrap()
+        .into_path();
+    let text = fs::read_to_string(&source).unwrap();
+    assert!(text.contains(before));
+    fs::write(source, text.replacen(before, after, 1)).unwrap();
+    assert_eq!(cli(&consumer, &["build", "--yes"]).await["built"], true);
+    assert_ne!(fs::read(artifact).unwrap(), original);
+    assert_eq!(fs::read(build_file).unwrap(), build_file_before);
+    assert!(!consumer.join("golem.lock").exists());
+}
+
+#[test]
+#[timeout("120s")]
+async fn development_package_build_uses_its_rust_workspace_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let consumer = dir.path().join("consumer");
+    let producer = dir.path().join("producer");
+    let guest = producer.join("guest");
+    // This fixture needs the Rust template, not the guest SDK implementation.
+    let sdk = dir.path().join("sdk");
+    fs::create_dir_all(sdk.join("src")).unwrap();
+    fs::write(
+        sdk.join("Cargo.toml"),
+        "[package]\nname = 'golem-rust'\nversion = '0.0.0'\nedition = '2021'\n",
+    )
+    .unwrap();
+    fs::write(sdk.join("src/lib.rs"), "").unwrap();
+    fs::create_dir(&consumer).unwrap();
+    fs::create_dir_all(guest.join("src")).unwrap();
+    fs::write(consumer.join("Cargo.toml"), "[workspace]\nresolver = '2'\n").unwrap();
+    fs::write(
+        producer.join("Cargo.toml"),
+        "[workspace]\nresolver = '2'\nmembers = ['guest']\n",
+    )
+    .unwrap();
+    let guest_manifest = "[package]\nname = 'editable_guest'\nversion = '0.1.0'\nedition = '2021'\n[lib]\ncrate-type = ['cdylib']\n[dependencies]\ngolem-rust = { path = '../../sdk' }\n";
+    fs::write(guest.join("Cargo.toml"), guest_manifest).unwrap();
+    for workspace in [&consumer, &producer] {
+        fs::create_dir(workspace.join(".cargo")).unwrap();
+        fs::write(
+            workspace.join(".cargo/config.toml"),
+            "[build]\ntarget-dir = 'target'\n",
+        )
+        .unwrap();
+    }
+    let version = versions::sdk::MANIFEST;
+    fs::write(
+        consumer.join("golem.yaml"),
+        format!("manifestVersion: {version}\napp: consumer\nenvironments:\n  local: {{server: local}}\npackages:\n  editable: {{path: ../producer}}\n"),
+    ).unwrap();
+    fs::write(
+        producer.join("golem.yaml"),
+        format!("manifestVersion: {version}\napp: producer\npackage: {{name: editable, version: 1.0.0}}\ncomponents:\n  editable:guest:\n    dir: guest\n    templates: rust\n"),
+    ).unwrap();
+    let wasm = producer.join("target/wasm32-wasip2/debug/editable_guest.wasm");
+    let mut previous = Vec::new();
+    for value in [17, 42] {
+        fs::write(
+            guest.join("src/lib.rs"),
+            format!("#[no_mangle]\npub extern \"C\" fn version() -> u32 {{ {value} }}\n"),
+        )
+        .unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+            .kill_on_drop(true)
+            .current_dir(&consumer)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("CARGO_BUILD_TARGET_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("GOLEM_RUST_PATH", &sdk)
+            .arg("--config-dir")
+            .arg(consumer.join("isolated-config"))
+            .arg("build")
+            .arg("--yes")
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let bytes = fs::read(&wasm).unwrap();
+        assert_ne!(bytes, previous);
+        previous = bytes;
+        assert_eq!(
+            fs::read_to_string(guest.join("Cargo.toml")).unwrap(),
+            guest_manifest
+        );
+    }
+}
+
 // Assemble a package without a publisher-side build, which cannot extract these components.
 fn write_install_fixture(path: &Path, name: &str, wasm: Vec<u8>) -> String {
     use sha2::{Digest, Sha256};
@@ -530,10 +878,37 @@ tools:
             panic!("Only the declared File should be captured")
         };
         assert_eq!(file.path, ["file"]);
-        assert_eq!(
-            package.blob(&file.digest),
-            Some(&b"from the declaring manifest\n"[..])
-        );
+        let default = package.blob(&file.digest).unwrap();
+        assert_eq!(default, b"from the declaring manifest\n");
+        if results.is_empty() {
+            let consumer = tempfile::tempdir().unwrap();
+            let root = consumer.path();
+            fs::write(root.join("golem.yaml"), format!("manifestVersion: {}\napp: consumer\nenvironments:\n  local: {{server: local}}\n", versions::sdk::MANIFEST)).unwrap();
+            let archive_path = root.join("package.tar");
+            fs::write(&archive_path, &bytes).unwrap();
+            let installed = run_cli(root, &["install", "./package.tar"]).await;
+            assert!(
+                installed.status.success(),
+                "{}",
+                String::from_utf8_lossy(&installed.stderr)
+            );
+            let lock = fs::read(root.join("golem.lock")).unwrap();
+            let local = root.join("editable-default.txt");
+            let archive = package::read(Cursor::new(fs::read(&archive_path).unwrap())).unwrap();
+            fs::write(&local, archive.blob(&file.digest).unwrap()).unwrap();
+            fs::write(&local, b"edited in the application\n").unwrap();
+            assert_eq!(cli(root, &["build"]).await["built"], true);
+            assert_eq!(fs::read(local).unwrap(), b"edited in the application\n");
+            assert_eq!(fs::read(root.join("golem.lock")).unwrap(), lock);
+            let on_disk = fs::read(archive_path).unwrap();
+            assert_eq!(on_disk, bytes);
+            let archive = package::read(Cursor::new(&on_disk)).unwrap();
+            assert_eq!(archive.digest(), package.digest());
+            assert_eq!(
+                archive.blob(&file.digest).unwrap(),
+                b"from the declaring manifest\n"
+            );
+        }
         assert!(
             component
                 .metadata

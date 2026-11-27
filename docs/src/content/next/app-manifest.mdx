@@ -72,11 +72,13 @@ Available template variables:
 
 - `componentName` (alias `component_name`): the current component name.
 - `appRootDir`: the absolute application root directory.
+- `componentBuildRootDir`: in a component build template, the absolute package directory for a `path:` package, otherwise the application root.
 - `golemTempDir`: the absolute Golem temporary directory for this application.
 - `componentDir`: the absolute effective component directory, including its `dir` override.
 - `componentDirRel`: the component directory relative to the application root, with `/` separators; empty for the root or a component outside it.
 - `cargoTarget`: the Cargo target directory, resolved lazily using the application root in Cargo workspace mode, or the component directory otherwise.
-- `moonbitBuildPackagePath`: the artifact path below `_build/wasm/<profile>/build/`. For a root package it is `<application-name>.wasm` (the part of the component name before `:`); for a subpackage it is `<componentDirRel>/<last-directory-segment>.wasm`.
+- `moonbitBuildPackagePath`: the artifact path within the built MoonBit module. For a root package it is `<producer-app>.wasm` in a `path:` package, or the component namespace followed by `.wasm` in an ordinary application. For a subpackage it is the directory relative to the build root followed by `<last-directory-segment>.wasm`.
+- `moonbitProducerName`: the producer's application name in a MoonBit `path:` component build template. It is unset for ordinary application components.
 
 Available naming related string transforming functions:
 

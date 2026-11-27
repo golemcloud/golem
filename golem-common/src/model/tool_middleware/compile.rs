@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use crate::model::agent::AgentTypeName;
-use crate::model::component::{ComponentId, ComponentName};
+use crate::model::component::{ComponentId, ComponentName, ComponentPackageMetadata};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::tool::{
     CompiledToolBinding, SecretKeyScope, ToolBindingInput, ToolBindingOwner, ToolName,
-    ToolRegistration,
+    ToolRegistration, ToolSource,
 };
 use crate::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
-    ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
+    ToolMiddlewareInstallation, ToolMiddlewareMergeMode, ToolMiddlewareSource,
 };
 use crate::schema::tool::compatibility::{ToolCompatibilityMode, compile_tool_compatibility};
 use crate::schema::tool::validation::{validate_tool, validate_tool_middleware};
@@ -50,6 +50,7 @@ pub struct CompiledToolMiddlewareChains {
 struct ChainCompileContext<'a> {
     owner: &'a ToolBindingOwner,
     tool_name: &'a ToolName,
+    package_tool: Option<(&'a str, &'a ToolName)>,
     config_keys_readable: &'a crate::model::tool::ConfigKeyScope,
     secret_keys_readable: &'a crate::model::tool::SecretKeyScope,
     secret_keys_revealable: &'a crate::model::tool::SecretKeyScope,
@@ -60,6 +61,7 @@ impl<'a> From<&'a CompiledToolBinding> for ChainCompileContext<'a> {
         Self {
             owner: &binding.owner,
             tool_name: &binding.tool_name,
+            package_tool: None,
             config_keys_readable: &binding.config_keys_readable,
             secret_keys_readable: &binding.secret_keys_readable,
             secret_keys_revealable: &binding.secret_keys_revealable,
@@ -94,6 +96,7 @@ pub fn compile_tool_middleware_chain(
         environment_wide_installations,
         environment_binding,
         owner_binding,
+        &BTreeMap::new(),
         compatibility_mode,
         &mut warnings,
         &mut errors,
@@ -117,6 +120,7 @@ pub fn compile_tool_middleware_chains(
     environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
     agent_tool_binding_inputs: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
     component_names: &BTreeMap<ComponentId, ComponentName>,
+    component_packages: &BTreeMap<ComponentId, &ComponentPackageMetadata>,
     compatibility_mode: ToolCompatibilityMode,
 ) -> CompiledToolMiddlewareChains {
     let tools = registered_tools
@@ -269,14 +273,23 @@ pub fn compile_tool_middleware_chains(
                 .get(component_id)
                 .and_then(|name| tool.component_bindings.get(name)),
         };
+        let mut context = ChainCompileContext::from(binding);
+        if binding.release_id.is_none()
+            && let ToolSource::Component { component_id, .. } = &binding.source
+            && let Some(package) = component_packages.get(component_id)
+            && let Some(published) = package.tool_guest_names.get(&binding.tool_name)
+        {
+            context.package_tool = Some((&package.package_digest, published));
+        }
         if let Some(chain) = compile_one_chain(
             deployment_revision,
             &tool.definition,
-            &ChainCompileContext::from(binding),
+            &context,
             middleware_registrations,
             environment_wide_installations,
             environment,
             owner_binding,
+            component_packages,
             compatibility_mode,
             &mut warnings,
             &mut errors,
@@ -300,6 +313,7 @@ fn compile_one_chain(
     environment_wide_installations: &[ToolMiddlewareInstallation],
     environment: Option<&ToolBindingInput>,
     owner_binding: Option<&ToolBindingInput>,
+    component_packages: &BTreeMap<ComponentId, &ComponentPackageMetadata>,
     compatibility_mode: ToolCompatibilityMode,
     warnings: &mut Vec<ToolMiddlewareCompileDiagnostic>,
     errors: &mut Vec<ToolMiddlewareCompileDiagnostic>,
@@ -351,7 +365,26 @@ fn compile_one_chain(
         {
             ToolMiddlewareScope::Universal => (None, None, None, next.clone()),
             ToolMiddlewareScope::Monomorphic(scope) => {
-                let expected = scope.expected.clone();
+                let mut expected = scope.expected.clone();
+                let mut presented = scope.presented.clone();
+                // The archive descriptor has no target identity. Use the resolved sources of
+                // this binding and occurrence, without changing the shared registration.
+                if let Some((digest, published)) = binding.package_tool
+                    && registration.release_id.is_none()
+                    && let ToolMiddlewareSource::Component { component_id, .. } =
+                        &registration.source
+                    && component_packages
+                        .get(component_id)
+                        .is_some_and(|package| package.package_digest == digest)
+                    && next.name() == Some(binding.tool_name.as_str())
+                    && let Some(expected) = &mut expected
+                    && expected.name() == Some(published.as_str())
+                {
+                    expected.commands.nodes[0].name = binding.tool_name.to_string();
+                    if presented.name() == Some(published.as_str()) {
+                        presented.commands.nodes[0].name = binding.tool_name.to_string();
+                    }
+                }
                 let compatibility = match &expected {
                     Some(expected) => {
                         match compile_tool_compatibility(expected, &next, compatibility_mode) {
@@ -383,28 +416,20 @@ fn compile_one_chain(
                     }
                     None => None,
                 };
-                let synthesized = match synthesize_effective_definition(
-                    &scope.presented,
-                    expected.as_ref(),
-                    &next,
-                ) {
-                    Ok(tool) => tool,
-                    Err(message) => {
-                        errors.push(diagnostic(
-                            binding,
-                            Some(installation.name.to_string()),
-                            message,
-                        ));
-                        valid = false;
-                        scope.presented.clone()
-                    }
-                };
-                (
-                    expected,
-                    Some(scope.presented.clone()),
-                    compatibility,
-                    synthesized,
-                )
+                let synthesized =
+                    match synthesize_effective_definition(&presented, expected.as_ref(), &next) {
+                        Ok(tool) => tool,
+                        Err(message) => {
+                            errors.push(diagnostic(
+                                binding,
+                                Some(installation.name.to_string()),
+                                message,
+                            ));
+                            valid = false;
+                            presented.clone()
+                        }
+                    };
+                (expected, Some(presented), compatibility, synthesized)
             }
         };
         effective = next_effective;
@@ -511,6 +536,7 @@ pub fn compile_discovered_tool_middleware_chain(
     let context = ChainCompileContext {
         owner,
         tool_name,
+        package_tool: None,
         config_keys_readable,
         secret_keys_readable,
         secret_keys_revealable,
@@ -525,6 +551,7 @@ pub fn compile_discovered_tool_middleware_chain(
         environment_wide_installations,
         environment_binding,
         owner_binding,
+        &BTreeMap::new(),
         compatibility_mode,
         &mut warnings,
         &mut errors,

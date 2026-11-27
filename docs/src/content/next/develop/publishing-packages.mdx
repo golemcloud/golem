@@ -115,4 +115,71 @@ Deploying an installed package does not expose any of the publisher's HTTP
 routes or MCP endpoints by default. To expose an installed agent, declare the
 HTTP API or MCP deployment in your own `golem.yaml` and deploy the application.
 
+To select tools from an archive, add declarations under `tools:` after
+`golem install`. Reference the same package entry for each tool. The declaration
+key is the local name used in bindings and calls:
+
+```yaml
+tools:
+  local-echo:
+    package: my-package
+    tool: echo
+  local-search:
+    package: my-package
+    tool: search
+```
+
+If a package contains only one tool, you can omit `tool:`. If you do not declare
+any tools for a package, its tools keep their published names. Otherwise only the
+tools you declare are registered. Local names must be unique, and selecting tools
+does not change the archive pin in `golem.lock`.
+
+### Copy an embedded file default
+
+Do not edit files in `golem-temp`. To make an editable copy of a packaged `File`
+default, use the archive's `index.json` to find its manifest digest, then the
+manifest's `config.digest` to find its config blob. Each digest `sha256:<hex>`
+names an archive entry `blobs/sha256/<hex>`. In the config blob, find the
+`fileDefaults` entry for the field and take its `digest`. For a regular file,
+copy that blob into your application without extracting the archive in place:
+
+```shell
+mkdir -p config
+tar -xOf my-package.tar 'blobs/sha256/<file-default-hex>' > config/my-default.txt
+```
+
+Replace `<file-default-hex>` with the hexadecimal part of the file's digest.
+Edit `config/my-default.txt`, not the blob or the unpacked file. This creates
+only a local copy: it does not change the installed default or make the copied
+file visible to a deployed guest.
+
+## Work on a package locally
+
+Point to the package directory instead of an archive in the consuming
+application's root `golem.yaml`:
+
+```yaml
+packages:
+  my-package:
+    path: ../my-package
+```
+
+The directory must contain a `golem.yaml` with a `package:` identity that matches
+the entry name. Relative paths start at the consuming application's root.
+`golem build` uses the current source and builds its components as local code.
+Edit the files in that directory and rebuild; you do not need to pack or install
+the package after each edit. A development path has no entry in `golem.lock` and
+cannot be included in a published package.
+
+Development packages cannot select agents or tools from the consuming
+application's installed file packages.
+
+Scala and MoonBit builds use the producer's build files. Scala writes the final
+component to the consuming application's `golem-temp` directory. MoonBit keeps
+its build output in the producer's `_build` directory.
+
+TypeScript and Effect development packages need their own `package.json` in the
+package directory. The CLI installs npm dependencies there, not in the consuming
+application.
+
 Publishing to a registry is not available through `golem publish`.

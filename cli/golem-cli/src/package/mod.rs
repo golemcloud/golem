@@ -8,6 +8,7 @@ use crate::model::app_raw;
 use anyhow::{Context, ensure};
 pub use golem_package::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -84,18 +85,34 @@ struct Lock {
     packages: Pins,
 }
 
-pub(crate) fn deserialize_pins<'de, D: serde::Deserializer<'de>>(
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum PackageEntry {
+    File {
+        source: String,
+        version: String,
+        digest: String,
+    },
+    Path {
+        path: PathBuf,
+    },
+}
+
+pub(crate) fn deserialize_pins<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
-) -> Result<Pins, D::Error> {
-    struct Visitor;
-    impl<'de> serde::de::Visitor<'de> for Visitor {
-        type Value = Pins;
+) -> Result<BTreeMap<String, T>, D::Error> {
+    struct Visitor<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Visitor<T> {
+        type Value = BTreeMap<String, T>;
         fn expecting(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             fmt.write_str("package pins by unique package name")
         }
-        fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Pins, M::Error> {
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
             use serde::de::Error;
-            let mut pins = Pins::new();
+            let mut pins = BTreeMap::new();
             while let Some(name) = map.next_key::<String>()? {
                 if pins.len() >= MAX_PACKAGES {
                     return Err(M::Error::custom("Too many package pins"));
@@ -110,7 +127,7 @@ pub(crate) fn deserialize_pins<'de, D: serde::Deserializer<'de>>(
             Ok(pins)
         }
     }
-    deserializer.deserialize_map(Visitor)
+    deserializer.deserialize_map(Visitor(std::marker::PhantomData))
 }
 
 pub(crate) fn load_lock(root: &Path) -> anyhow::Result<Pins> {
@@ -181,18 +198,33 @@ pub(crate) async fn install(flags: &GolemCliGlobalFlags, source: &str) -> anyhow
 
     let manifest = fs::read_to_string(&manifest_path)?;
     let mut expected = app_raw::Application::from_yaml_str(&manifest)?.packages;
+    ensure!(
+        !matches!(
+            expected.get(&identity.name),
+            Some(PackageEntry::Path { .. })
+        ),
+        "Remove the development path for package {:?} before installing its archive",
+        identity.name
+    );
     let updated = set_package_pin(&manifest, &identity.name, &pin)?;
-    expected.insert(identity.name.clone(), pin.clone());
+    expected.insert(
+        identity.name.clone(),
+        PackageEntry::File {
+            source: pin.source.clone(),
+            version: pin.version.clone(),
+            digest: pin.digest.clone(),
+        },
+    );
     ensure!(
         app_raw::Application::from_yaml_str(&updated)?.packages == expected,
         "Could not update the package pins in the manifest"
     );
 
     let (Lock { packages: mut lock }, previous_lock) = read_lock(root)?;
-    lock.insert(identity.name.clone(), pin);
     // Validate the installed pin without requiring this command to repair unrelated pins.
-    let one = Pins::from([(identity.name.clone(), expected[&identity.name].clone())]);
+    let one = Pins::from([(identity.name.clone(), pin.clone())]);
     check_lock(&one, &one)?;
+    lock.insert(identity.name.clone(), pin);
     ensure!(
         lock.len() <= MAX_PACKAGES,
         "Too many packages in golem.lock"

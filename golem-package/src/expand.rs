@@ -3,6 +3,7 @@
 
 use super::*;
 use golem_common::model::component::ComponentName;
+use golem_common::model::tool::ToolName;
 use serde_json::Map;
 use std::path::{Path, PathBuf};
 
@@ -165,11 +166,26 @@ pub struct Declarations {
     components: Map<String, Value>,
     agents: Map<String, Value>,
     tools: Map<String, Value>,
+    #[serde(skip)]
+    tool_packages: BTreeMap<String, String>,
+}
+
+impl Declarations {
+    pub fn tool_package(&self, name: &str) -> Option<&str> {
+        self.tool_packages.get(name).map(String::as_str)
+    }
+}
+
+#[derive(Debug)]
+pub struct ToolSelection {
+    pub published: Option<ToolName>,
+    pub local: ToolName,
 }
 
 pub async fn expand(
     manifest: &Pins,
     lock: &Pins,
+    selected_tools: &BTreeMap<String, Vec<ToolSelection>>,
     unpack_root: &Path,
     effects: &mut impl PackageEffects,
 ) -> Result<ExpandedPackages, ExpandError> {
@@ -191,9 +207,16 @@ pub async fn expand(
 
     let mut expanded = ExpandedPackages::default();
     for (name, pin) in lock {
-        expand_one(&mut expanded, name, pin, unpack_root, effects)
-            .await
-            .map_err(|cause| entry_error(name, pin, cause))?;
+        expand_one(
+            &mut expanded,
+            name,
+            pin,
+            selected_tools.get(name).map(Vec::as_slice),
+            unpack_root,
+            effects,
+        )
+        .await
+        .map_err(|cause| entry_error(name, pin, cause))?;
     }
     Ok(expanded)
 }
@@ -202,6 +225,7 @@ async fn expand_one(
     output: &mut ExpandedPackages,
     name: &str,
     pin: &FilePin,
+    selections: Option<&[ToolSelection]>,
     root: &Path,
     effects: &mut impl PackageEffects,
 ) -> anyhow::Result<()> {
@@ -240,6 +264,49 @@ async fn expand_one(
         }
     };
 
+    let mut selected = BTreeMap::new();
+    if let Some(selections) = selections {
+        let available = package
+            .config()
+            .components
+            .values()
+            .flat_map(|component| component.tools.keys())
+            .collect::<BTreeSet<_>>();
+        let list = || {
+            available
+                .iter()
+                .map(|tool| tool.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        for selection in selections {
+            let published = if let Some(published) = &selection.published {
+                published
+            } else {
+                ensure!(
+                    available.len() == 1,
+                    "Set tools.{}.tool to select a member; available tools: {}",
+                    selection.local,
+                    list()
+                );
+                available.first().copied().expect("one published tool")
+            };
+            ensure!(
+                available.contains(published),
+                "Unknown tool {published:?}; available tools: {}",
+                list()
+            );
+            if let Some((_, previous)) =
+                selected.insert(published.as_str(), (published, &selection.local))
+            {
+                bail!(
+                    "Package {name:?} tool {published:?} is selected by both tools.{previous} and tools.{}",
+                    selection.local
+                );
+            }
+        }
+    }
+
     let config = package.config();
     for agent in config
         .components
@@ -272,6 +339,24 @@ async fn expand_one(
     };
     let mut middleware = Map::new();
     for (component, spec) in &package.config().components {
+        let mut metadata = spec.metadata.clone();
+        let mut tool_guest_names = BTreeMap::new();
+        if selections.is_some() {
+            metadata.tools.retain_mut(|tool| {
+                let Some(&(published, local)) = tool.name().and_then(|name| selected.get(name))
+                else {
+                    return false;
+                };
+                if !spec.tools.contains_key(published) {
+                    return false;
+                }
+                if local != published {
+                    tool_guest_names.insert(local.clone(), published.clone());
+                    tool.commands.nodes[0].name = local.to_string();
+                }
+                true
+            });
+        }
         let component = component.as_str();
         let wasm = unpack.blob(&spec.wasm, "wasm", false).await?;
         let mut declaration = unpack.provision(&spec.provision).await?;
@@ -285,11 +370,12 @@ async fn expand_one(
             ComponentName(component.into()),
             InstalledComponent {
                 wasm_path: root.join(wasm),
-                metadata: spec.metadata.clone(),
+                metadata,
                 package_metadata: golem_common::model::component::ComponentPackageMetadata {
                     source: pin.source.clone(),
                     package_digest: pin.digest.clone(),
                     layer_digest: spec.wasm.clone(),
+                    tool_guest_names,
                 },
             },
         );
@@ -300,14 +386,31 @@ async fn expand_one(
                 unpack.provision(provision).await?,
             )?;
         }
-        for (name, provision) in &spec.tools {
+        for (tool, provision) in &spec.tools {
+            let tool = if selections.is_some() {
+                let Some(&(_, local)) = selected.get(tool.as_str()) else {
+                    continue;
+                };
+                local
+            } else {
+                tool
+            };
             let mut declaration = unpack.provision(provision).await?;
             declaration.insert("component".into(), json!(component));
             ensure!(
-                name.as_str() != "middleware",
+                tool.as_str() != "middleware",
                 "Installed tool name 'middleware' is reserved"
             );
-            insert(&mut output.declarations.tools, name.as_str(), declaration)?;
+            if let Some(previous) = output.declarations.tool_package(tool.as_str()) {
+                bail!(
+                    "Tool {tool:?} is declared by both package {previous:?} and package {name:?}"
+                );
+            }
+            insert(&mut output.declarations.tools, tool.as_str(), declaration)?;
+            output
+                .declarations
+                .tool_packages
+                .insert(tool.to_string(), name.to_owned());
         }
         for (name, provision) in &spec.tool_middlewares {
             let mut declaration = unpack.provision(provision).await?;

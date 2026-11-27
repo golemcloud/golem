@@ -546,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn moonbit_embed_commands_run_from_app_root() {
+    fn moonbit_embed_commands_use_the_component_build_root() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("common");
         AppTemplateRepo::get(false)
@@ -609,7 +609,7 @@ mod tests {
             );
             assert_eq!(
                 embed_command.dir.as_deref(),
-                Some("{{ appRootDir }}"),
+                Some("{{ componentBuildRootDir }}"),
                 "{template_name}.{preset_name}"
             );
             let core_wasm = embed_command
@@ -626,7 +626,7 @@ mod tests {
                     .render_str(
                         core_wasm,
                         minijinja::context! {
-                            appRootDir => "/app",
+                            componentBuildRootDir => "/app",
                             componentName => "another-namespace:counter",
                             moonbitBuildPackagePath => package,
                         },
@@ -637,6 +637,21 @@ mod tests {
                     format!("/app/_build/{backend}/{profile}/build/demo/{package}")
                 );
             }
+            let rendered = minijinja::Environment::new()
+                .render_str(
+                    core_wasm,
+                    minijinja::context! {
+                        appRootDir => "/consumer",
+                        componentBuildRootDir => "/producer",
+                        moonbitProducerName => "source-app",
+                        moonbitBuildPackagePath => "source-app.wasm",
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                rendered,
+                format!("/producer/_build/{backend}/{profile}/build/source-app/source-app.wasm")
+            );
         }
     }
 

@@ -858,6 +858,7 @@ pub struct Application {
     app_root_dir_str: String,
     golem_temp_dir_str: String,
     cargo_workspace_mode: bool,
+    development_roots: BTreeMap<PathBuf, (PathBuf, Option<String>)>,
 
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
@@ -957,16 +958,23 @@ impl Application {
     /// Returns the cargo manifest directory used to resolve the `cargoTarget` template
     /// variable for a component located at `component_dir`.
     ///
-    /// In a cargo workspace the target directory is shared at the application root; otherwise
-    /// it is resolved relative to the component directory. The directory is only used to query
+    /// For the consuming app's workspace, resolve from its root. For a development package,
+    /// resolve from the component directory, where its Cargo build runs. The directory is only used to query
     /// cargo (see [`resolve_cargo_target_dir`]) lazily, when a template actually references
     /// `cargoTarget`.
-    fn cargo_manifest_dir_for(&self, component_dir: &str) -> String {
-        if self.cargo_workspace_mode {
+    fn cargo_manifest_dir_for(&self, source: &Path, component_dir: &str) -> String {
+        if self.cargo_workspace_mode && !self.development_roots.contains_key(source) {
             self.app_root_dir_str.clone()
         } else {
             component_dir.to_string()
         }
+    }
+
+    pub(crate) fn component_build_root(&self, name: &ComponentName) -> &Path {
+        self.development_roots
+            .get(self.component(name).source())
+            .map(|(root, _)| root.as_path())
+            .unwrap_or(&self.app_root_dir)
     }
 
     pub fn preload_from_raw_apps(
@@ -1484,7 +1492,9 @@ impl Application {
                     .map(|s| s.to_string()),
                 fs::path_to_str(component.component_dir())
                     .ok()
-                    .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
+                    .map(|component_dir| {
+                        self.cargo_manifest_dir_for(component.source(), component_dir)
+                    }),
             );
 
             let template_names = agent.templates.clone().into_vec();
@@ -1707,7 +1717,9 @@ impl Application {
                             .map(str::to_string),
                         fs::path_to_str(component.component_dir())
                             .ok()
-                            .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
+                            .map(|component_dir| {
+                                self.cargo_manifest_dir_for(component.source(), component_dir)
+                            }),
                     ),
                 )
             }
@@ -2311,11 +2323,13 @@ pub struct ComponentLayerApplyContext {
     env: minijinja::Environment<'static>,
     component_name: Option<ComponentName>,
     app_root_dir: Option<String>,
+    component_build_root_dir: Option<String>,
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
     component_dir_rel: Option<String>,
     cargo_manifest_dir: Option<String>,
     moonbit_build_package_path: Option<String>,
+    moonbit_producer_name: Option<String>,
 }
 
 impl ComponentLayerApplyContext {
@@ -2374,11 +2388,13 @@ impl ComponentLayerApplyContext {
             env: Self::new_template_env(),
             component_name,
             app_root_dir,
+            component_build_root_dir: None,
             golem_temp_dir,
             component_dir,
             component_dir_rel,
             cargo_manifest_dir,
             moonbit_build_package_path,
+            moonbit_producer_name: None,
         }
     }
 
@@ -2413,11 +2429,13 @@ impl ComponentLayerApplyContext {
         minijinja::Value::from_object(ComponentLayerTemplateContext {
             component_name: self.component_name.as_ref().map(|name| name.0.clone()),
             app_root_dir: self.app_root_dir.clone(),
+            component_build_root_dir: self.component_build_root_dir.clone(),
             golem_temp_dir: self.golem_temp_dir.clone(),
             component_dir: self.component_dir.clone(),
             component_dir_rel: self.component_dir_rel.clone(),
             cargo_manifest_dir: self.cargo_manifest_dir.clone(),
             moonbit_build_package_path: self.moonbit_build_package_path.clone(),
+            moonbit_producer_name: self.moonbit_producer_name.clone(),
         })
     }
 }
@@ -2432,11 +2450,13 @@ impl ComponentLayerApplyContext {
 struct ComponentLayerTemplateContext {
     component_name: Option<String>,
     app_root_dir: Option<String>,
+    component_build_root_dir: Option<String>,
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
     component_dir_rel: Option<String>,
     cargo_manifest_dir: Option<String>,
     moonbit_build_package_path: Option<String>,
+    moonbit_producer_name: Option<String>,
 }
 
 impl minijinja::value::Object for ComponentLayerTemplateContext {
@@ -2446,6 +2466,11 @@ impl minijinja::value::Object for ComponentLayerTemplateContext {
                 self.component_name.as_deref().map(minijinja::Value::from)
             }
             "appRootDir" => self.app_root_dir.as_deref().map(minijinja::Value::from),
+            "componentBuildRootDir" => self
+                .component_build_root_dir
+                .as_deref()
+                .or(self.app_root_dir.as_deref())
+                .map(minijinja::Value::from),
             "golemTempDir" => self.golem_temp_dir.as_deref().map(minijinja::Value::from),
             "componentDir" => self.component_dir.as_deref().map(minijinja::Value::from),
             "componentDirRel" => self
@@ -2460,6 +2485,10 @@ impl minijinja::value::Object for ComponentLayerTemplateContext {
                 .moonbit_build_package_path
                 .as_deref()
                 .map(minijinja::Value::from),
+            "moonbitProducerName" => self
+                .moonbit_producer_name
+                .as_deref()
+                .map(minijinja::Value::from),
             _ => None,
         }
     }
@@ -2469,11 +2498,13 @@ impl minijinja::value::Object for ComponentLayerTemplateContext {
             "componentName",
             "component_name",
             "appRootDir",
+            "componentBuildRootDir",
             "golemTempDir",
             "componentDir",
             "componentDirRel",
             "cargoTarget",
             "moonbitBuildPackagePath",
+            "moonbitProducerName",
         ])
     }
 }
@@ -4645,6 +4676,7 @@ mod app_builder {
         app_root_dir_str: String,
         golem_temp_dir_str: String,
         cargo_workspace_mode: bool,
+        development_roots: BTreeMap<PathBuf, (PathBuf, Option<String>)>,
 
         // For app build
         include: Vec<String>,
@@ -4759,6 +4791,7 @@ mod app_builder {
                 app_root_dir_str: builder.app_root_dir_str,
                 golem_temp_dir_str: builder.golem_temp_dir_str,
                 cargo_workspace_mode: builder.cargo_workspace_mode,
+                development_roots: builder.development_roots,
                 environments,
                 environment_sources: builder.environment_sources,
                 component_preset_selector: component_presets,
@@ -4917,6 +4950,9 @@ mod app_builder {
                 |validation| {
                     let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
                     self.all_sources.insert(app.source.clone());
+                    if let Some(root) = app.development_root {
+                        self.development_roots.insert(app.source.clone(), root);
+                    }
 
                     for environment_name in app.application.environments.keys() {
                         if let Ok(environment_name) = environment_name.parse::<EnvironmentName>() {
@@ -6007,17 +6043,48 @@ mod app_builder {
                     }
                 };
 
-            let ctx = ComponentLayerApplyContext::new(
+            let development_root = self.development_roots.get(&source);
+            let build_root = match development_root
+                .map(|(root, _)| fs::path_to_str(root))
+                .transpose()
+            {
+                Ok(root) => root.unwrap_or(&self.app_root_dir_str),
+                Err(err) => {
+                    validation.add_error(err.to_string());
+                    return;
+                }
+            };
+            let mut ctx = ComponentLayerApplyContext::new(
                 Some(component_name.clone()),
                 Some(self.app_root_dir_str.clone()),
                 Some(self.golem_temp_dir_str.clone()),
                 Some(component_dir_str.clone()),
-                Some(if self.cargo_workspace_mode {
+                Some(if self.cargo_workspace_mode && development_root.is_none() {
                     self.app_root_dir_str.clone()
                 } else {
                     component_dir_str.clone()
                 }),
             );
+            ctx.component_build_root_dir = Some(build_root.to_owned());
+            if let Some((_, producer_name)) = development_root {
+                let build_ctx = ComponentLayerApplyContext::new(
+                    Some(component_name.clone()),
+                    Some(build_root.to_owned()),
+                    None,
+                    Some(component_dir_str.clone()),
+                    None,
+                );
+                ctx.moonbit_build_package_path =
+                    if build_ctx.component_dir_rel.as_deref() == Some("") {
+                        producer_name
+                            .as_ref()
+                            .map(|name| format!("{name}.wasm"))
+                            .or(build_ctx.moonbit_build_package_path)
+                    } else {
+                        build_ctx.moonbit_build_package_path
+                    };
+                ctx.moonbit_producer_name = producer_name.clone();
+            }
 
             match self.component_layer_store.value(
                 &ComponentLayerId::ComponentCustomPresets(component_name.clone()),

@@ -511,7 +511,7 @@ enum ToolCallTarget {
 }
 
 struct ToolSidecarInvocation {
-    tool_name: String,
+    tool_name: ToolName,
     position: crate::durable_host::entity::ResolvedEntityInvocationPosition,
     command_path: Vec<String>,
     input: ModelTypedSchemaValue,
