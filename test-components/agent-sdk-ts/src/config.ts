@@ -9,6 +9,14 @@ import {
   isRemoteCallError,
 } from '@golemcloud/golem-ts-sdk';
 import type { PromiseId } from 'golem:api/host@1.5.0';
+import { getConfigValue } from 'golem:agent/host@2.0.0';
+import { reveal } from 'golem:secrets/reveal@0.1.0';
+import type { SecretError } from 'golem:secrets/types@0.1.0';
+import {
+  compileSchema,
+  schemaGraphToWit,
+  schemaValueFromWit,
+} from '@golemcloud/golem-ts-sdk/schema';
 
 // A `PromiseId` is a nested host record carrying bigints and a UUID; declare
 // it as an explicit Standard Schema so it can be returned / accepted by a
@@ -117,6 +125,10 @@ export const SharedConfigAgent = defineAgent({
       input: { promiseId: PromiseIdSchema },
       returns: z.string(),
     }),
+    revealHeldSecretAcrossReplayGates: method({
+      input: { beforeDelete: PromiseIdSchema, afterDelete: PromiseIdSchema },
+      returns: z.string(),
+    }),
   },
 });
 
@@ -152,6 +164,37 @@ export const SharedConfigAgentImpl = SharedConfigAgent.implement({
         },
       } as PromiseId);
       return secret;
+    },
+    async revealHeldSecretAcrossReplayGates({ beforeDelete, afterDelete }) {
+      const codec = compileSchema(z.string());
+      const tree = getConfigValue(
+        ['secret'],
+        schemaGraphToWit(compileSchema(s.secret(z.string())).graph),
+      );
+      const node = tree.valueNodes[tree.root];
+      if (node?.tag !== 'secret-value') throw new Error('expected a secret handle');
+      const handle = node.val;
+      try {
+        const before = codec.fromValue(
+          schemaValueFromWit(reveal(handle, schemaGraphToWit(codec.graph))),
+        );
+        await awaitPromise(beforeDelete as PromiseId);
+        let version: number[];
+        try {
+          reveal(handle, schemaGraphToWit(codec.graph));
+          throw new Error('held handle must fail after deletion');
+        } catch (error) {
+          const failure = (
+            error instanceof Error && 'payload' in error ? error.payload : error
+          ) as SecretError;
+          if (failure.tag !== 'version-not-found') throw error;
+          version = Array.from(failure.val.bytes);
+        }
+        await awaitPromise(afterDelete as PromiseId);
+        return JSON.stringify({ before, error: 'version-not-found', version });
+      } finally {
+        (handle as typeof handle & { [Symbol.dispose](): void })[Symbol.dispose]();
+      }
     },
   },
 });

@@ -143,14 +143,27 @@ impl EnvironmentStateService for FixedSecretsEnvironmentStateService {
     async fn get_agent_secret_revision(
         &self,
         _environment: golem_common::model::environment::EnvironmentId,
+        owner: golem_common::model::agent_secret::AgentSecretOwner,
         secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+        _mode: golem_common::model::agent_secret::AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
         Ok(self
             .secrets
             .get(&path)
-            .filter(|secret| secret.id == secret_id && secret.revision == revision)
+            .filter(|secret| {
+                secret.id == secret_id
+                    && secret.owner == owner
+                    && match selector {
+                        golem_common::model::agent_secret::AgentSecretRevisionSelector::Current => {
+                            true
+                        }
+                        golem_common::model::agent_secret::AgentSecretRevisionSelector::Fixed(
+                            revision,
+                        ) => secret.revision == revision,
+                    }
+            })
             .cloned())
     }
 
@@ -2333,6 +2346,8 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
                 secrets: HashMap::from([(
                     secret_path.clone(),
                     AgentSecret {
+                        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                        destinations: vec![],
                         id: secret_id,
                         environment_id: context.default_environment_id,
                         path: secret_path.clone(),
@@ -2624,6 +2639,8 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
                 secrets: HashMap::from([(
                     secret_path.clone(),
                     AgentSecret {
+                        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                        destinations: vec![],
                         id: secret_id,
                         environment_id: context.default_environment_id,
                         path: secret_path,
@@ -4558,6 +4575,8 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 id: AgentSecretId::new(),
                 environment_id,
                 path: secret_path,
+                owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                destinations: vec![],
                 revision: AgentSecretRevision::INITIAL,
                 secret_type: SchemaGraph::anonymous(SchemaType::string()),
                 secret_value: Some(SchemaValue::String("owner-secret".to_string())),
@@ -4569,6 +4588,8 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 id: AgentSecretId::new(),
                 environment_id,
                 path: nested_secret_path,
+                owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                destinations: vec![],
                 revision: AgentSecretRevision::INITIAL,
                 secret_type: SchemaGraph::anonymous(SchemaType::s32()),
                 secret_value: Some(SchemaValue::S32(42)),

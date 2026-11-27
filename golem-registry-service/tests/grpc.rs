@@ -514,3 +514,443 @@ async fn runtime_card_creation_rejects_an_expired_parent() {
 
     join_set.abort_all();
 }
+
+async fn start_secret_test_registry() -> (
+    TempDir,
+    RegistryServiceConfig,
+    golem_registry_service::bootstrap::Services,
+    JoinSet<Result<(), anyhow::Error>>,
+    u16,
+) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_config = DbSqliteConfig {
+        database: temp_dir
+            .path()
+            .join("registry.db")
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 4,
+        foreign_keys: true,
+    };
+    let config = RegistryServiceConfig {
+        db: DbConfig::Sqlite(db_config.clone()),
+        login: LoginConfig::Disabled(Empty {}),
+        blob_storage: BlobStorageConfig::default_in_memory(),
+        component_compilation: ComponentCompilationConfig::Disabled(Empty {}),
+        ..Default::default()
+    };
+    let mut join_set = JoinSet::new();
+    let services = golem_registry_service::bootstrap::Services::new_without_component_builtins(
+        &config,
+        &mut join_set,
+    )
+    .await
+    .unwrap();
+    let port = golem_registry_service::grpc::start_grpc_server(
+        "127.0.0.1:0".parse().unwrap(),
+        &config.grpc,
+        &services,
+        &mut join_set,
+    )
+    .await
+    .unwrap();
+    (temp_dir, config, services, join_set, port)
+}
+
+#[test]
+#[timeout("120s")]
+async fn agent_secret_grpc_revision_modes_and_environment_catalog() {
+    use golem_common::model::AgentFingerprint;
+    use golem_common::model::agent_secret::{
+        AgentSecretCreation, AgentSecretId, AgentSecretOwner, AgentSecretPath, AgentSecretReadMode,
+        AgentSecretRevision, AgentSecretRevisionSelector, AgentSecretUpdate,
+        CanonicalAgentSecretPath, SecretDestination,
+    };
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::card::owner::EnvironmentOwnerPattern;
+    use golem_common::model::card::{
+        ClassPermissionTarget, EffectiveSurface, EnvironmentAgentSecretResourcePattern,
+        EnvironmentAgentSecretVerb, GrantSurface, PermissionTarget,
+    };
+    use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::optional_field_update::OptionalFieldUpdate;
+    use golem_common::model::tool::ToolName;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_registry_service::repo::agent_secret::{AgentSecretRepo, DbAgentSecretRepo};
+    use golem_registry_service::repo::model::agent_secrets::AgentSecretCreationRecord;
+    use golem_registry_service::services::agent_secret::AgentSecretError;
+    use golem_service_base::model::auth::AuthCtx;
+
+    let (_temp_dir, config, services, mut join_set, port) = start_secret_test_registry().await;
+    let client = registry_client(port);
+    let DbConfig::Sqlite(db_config) = &config.db else {
+        unreachable!()
+    };
+    let pool = SqlitePool::configured(db_config).await.unwrap();
+    let account_id = config.initial_accounts["root"].id;
+    let application_id = uuid::Uuid::new_v4();
+    DbApplicationRepo::new(pool.clone())
+        .create(
+            account_id.0,
+            ApplicationRevisionRecord {
+                application_id,
+                revision_id: 0,
+                name: "secret-revisions".to_string(),
+                audit: DeletableRevisionAuditFields::new(account_id.0),
+            },
+        )
+        .await
+        .unwrap();
+    let environment_id = EnvironmentId::new();
+    DbEnvironmentRepo::new(pool.clone())
+        .create(
+            application_id,
+            EnvironmentRevisionRecord {
+                environment_id: environment_id.0,
+                revision_id: 0,
+                name: "test".to_string(),
+                audit: DeletableRevisionAuditFields::new(account_id.0),
+                compatibility_check: true,
+                tool_compatibility_mode: "structural-subtype".to_string(),
+                version_check: true,
+                security_overrides: true,
+                hash: SqlBlake3Hash::empty(),
+            },
+            crate::repo::test_environment_default_card_record(environment_id.0),
+        )
+        .await
+        .unwrap();
+
+    let auth = AuthCtx::system();
+    let service = &services.agent_secret_service;
+    let path = CanonicalAgentSecretPath(vec!["stripe".to_string()]);
+    let a: SecretDestination = "https://a.example.com".parse().unwrap();
+    let b: SecretDestination = "https://b.example.com".parse().unwrap();
+    let r1 = service
+        .create(
+            environment_id,
+            AgentSecretCreation {
+                path: AgentSecretPath(path.0.clone()),
+                secret_type: SchemaGraph::anonymous(SchemaType::string()),
+                secret_value: Some(SchemaValue::String("original".to_string())),
+            },
+            vec!["HTTPS://A.EXAMPLE.COM.:443/".parse().unwrap(), a.clone()],
+            &auth,
+        )
+        .await
+        .unwrap();
+    assert_eq!(r1.destinations, vec![a.clone()]);
+    let secret_auth = |verbs: Vec<EnvironmentAgentSecretVerb>| {
+        AuthCtx::agent_with_effective_surface(
+            account_id,
+            config.initial_accounts["root"].email.clone(),
+            EffectiveSurface {
+                source_card_ids: vec![],
+                lower: vec![GrantSurface {
+                    positive: verbs
+                        .into_iter()
+                        .map(|verb| {
+                            PermissionTarget::EnvironmentAgentSecret(ClassPermissionTarget {
+                                verb: Some(verb),
+                                owner: EnvironmentOwnerPattern::Environment {
+                                    account: config.initial_accounts["root"].email.clone(),
+                                    application: ApplicationName("secret-revisions".to_string()),
+                                    environment: EnvironmentName("test".to_string()),
+                                },
+                                resource: EnvironmentAgentSecretResourcePattern::Any,
+                            })
+                        })
+                        .collect(),
+                    negative: vec![],
+                }],
+                upper: vec![],
+            },
+        )
+    };
+    let view_only = secret_auth(vec![EnvironmentAgentSecretVerb::View]);
+    service.get(r1.id, &view_only).await.unwrap();
+    assert!(matches!(
+        service
+            .update_destinations(r1.id, r1.revision, vec![b.clone()], &view_only)
+            .await,
+        Err(AgentSecretError::Unauthorized(_))
+    ));
+    let writer = secret_auth(vec![
+        EnvironmentAgentSecretVerb::View,
+        EnvironmentAgentSecretVerb::Update,
+    ]);
+    let r2 = service
+        .update_destinations(r1.id, r1.revision, vec![b.clone(), b.clone()], &writer)
+        .await
+        .unwrap();
+    assert_eq!(r2.secret_value, r1.secret_value);
+    assert!(matches!(
+        service
+            .update_destinations(r1.id, r1.revision, vec![], &auth)
+            .await,
+        Err(AgentSecretError::ConcurrentModification)
+    ));
+    let r3 = service
+        .update(
+            r1.id,
+            AgentSecretUpdate {
+                current_revision: r2.revision,
+                secret_value: OptionalFieldUpdate::Set(SchemaValue::String("rotated".to_string())),
+            },
+            &auth,
+        )
+        .await
+        .unwrap();
+    assert_eq!(r3.destinations, vec![b.clone()]);
+    for (revision, value, destinations) in [
+        (r1.revision, "original", vec![a]),
+        (r2.revision, "original", vec![b.clone()]),
+        (r3.revision, "rotated", vec![b.clone()]),
+    ] {
+        let read = client
+            .get_agent_secret_revision(
+                environment_id,
+                AgentSecretOwner::Environment,
+                r1.id,
+                path.clone(),
+                AgentSecretRevisionSelector::Fixed(revision),
+                AgentSecretReadMode::Live,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.revision, revision);
+        assert_eq!(read.owner, AgentSecretOwner::Environment);
+        assert_eq!(read.destinations, destinations);
+        assert_eq!(
+            read.secret_value,
+            Some(SchemaValue::String(value.to_string()))
+        );
+    }
+    let current = client
+        .get_agent_secret_revision(
+            environment_id,
+            AgentSecretOwner::Environment,
+            r1.id,
+            path.clone(),
+            AgentSecretRevisionSelector::Current,
+            AgentSecretReadMode::Live,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.revision, r3.revision);
+    assert_eq!(current.secret_value, r3.secret_value);
+    assert_eq!(current.destinations, vec![b.clone()]);
+
+    let repo = DbAgentSecretRepo::new(pool);
+    let agent_id = AgentId::from_parts(7, 19);
+    let fingerprint = AgentFingerprint(uuid::Uuid::new_v4());
+    let principal_path = CanonicalAgentSecretPath(vec!["principalonly".to_string()]);
+    for owner in [
+        AgentSecretOwner::Agent {
+            agent_id,
+            fingerprint,
+        },
+        AgentSecretOwner::Tool {
+            tool_name: ToolName::try_from("test-tool").unwrap(),
+        },
+    ] {
+        let id = AgentSecretId::new();
+        let _ = repo
+            .create(AgentSecretCreationRecord::new(
+                id,
+                environment_id,
+                owner.clone(),
+                principal_path.clone(),
+                SchemaGraph::anonymous(SchemaType::string()),
+                Some(SchemaValue::String("private".to_string())),
+                vec![],
+                account_id,
+            ))
+            .await
+            .unwrap();
+        for requested_owner in [
+            AgentSecretOwner::Environment,
+            AgentSecretOwner::Agent {
+                agent_id,
+                fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+            },
+        ] {
+            assert!(
+                client
+                    .get_agent_secret_revision(
+                        environment_id,
+                        requested_owner,
+                        id,
+                        principal_path.clone(),
+                        AgentSecretRevisionSelector::Current,
+                        AgentSecretReadMode::Live
+                    )
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let read = client
+            .get_agent_secret_revision(
+                environment_id,
+                owner.clone(),
+                id,
+                principal_path.clone(),
+                AgentSecretRevisionSelector::Fixed(AgentSecretRevision::INITIAL),
+                AgentSecretReadMode::Live,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.owner, owner);
+        assert!(read.destinations.is_empty());
+        assert_eq!(
+            read.secret_value,
+            Some(SchemaValue::String("private".to_string()))
+        );
+        assert!(
+            matches!(service.get(id, &auth).await, Err(AgentSecretError::AgentSecretNotFound(found)) if found == id)
+        );
+        assert!(matches!(service.update(id, AgentSecretUpdate {
+            current_revision: AgentSecretRevision::INITIAL,
+            secret_value: OptionalFieldUpdate::Unset,
+        }, &auth).await, Err(AgentSecretError::AgentSecretNotFound(found)) if found == id));
+        assert!(
+            matches!(service.update_destinations(id, AgentSecretRevision::INITIAL, vec![], &auth).await,
+            Err(AgentSecretError::AgentSecretNotFound(found)) if found == id)
+        );
+        assert!(
+            matches!(service.delete(id, AgentSecretRevision::INITIAL, &auth).await,
+            Err(AgentSecretError::AgentSecretNotFound(found)) if found == id)
+        );
+    }
+    let state = client
+        .get_current_environment_state(environment_id)
+        .await
+        .unwrap();
+    assert_eq!(state.agent_secrets.len(), 1);
+    let listed = state.agent_secrets.get(&path).unwrap();
+    assert_eq!(listed.id, r1.id);
+    assert_eq!(listed.owner, AgentSecretOwner::Environment);
+    assert_eq!(listed.destinations, vec![b.clone()]);
+    assert_eq!(listed.secret_value, r3.secret_value);
+
+    let deleted = service.delete(r1.id, r3.revision, &auth).await.unwrap();
+    assert!(deleted.destinations.is_empty());
+    assert!(
+        client
+            .get_agent_secret_revision(
+                environment_id,
+                AgentSecretOwner::Environment,
+                r1.id,
+                path.clone(),
+                AgentSecretRevisionSelector::Fixed(r3.revision),
+                AgentSecretReadMode::Live
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let historical = client
+        .get_agent_secret_revision(
+            environment_id,
+            AgentSecretOwner::Environment,
+            r1.id,
+            path.clone(),
+            AgentSecretRevisionSelector::Fixed(r3.revision),
+            AgentSecretReadMode::Historical,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(historical.revision, r3.revision);
+    assert_eq!(historical.secret_value, r3.secret_value);
+    assert_eq!(historical.destinations, vec![b]);
+    for mode in [AgentSecretReadMode::Live, AgentSecretReadMode::Historical] {
+        assert!(
+            client
+                .get_agent_secret_revision(
+                    environment_id,
+                    AgentSecretOwner::Environment,
+                    r1.id,
+                    path.clone(),
+                    AgentSecretRevisionSelector::Current,
+                    mode
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    join_set.abort_all();
+}
+
+#[test]
+#[timeout("120s")]
+async fn agent_secret_grpc_rejects_missing_or_invalid_read_parameters() {
+    use golem_api_grpc::proto::golem::registry::v1::{
+        GetAgentSecretRevisionRequest, get_agent_secret_revision_request::Revision,
+        get_agent_secret_revision_response::Result as ReadResult,
+        registry_service_client::RegistryServiceClient, registry_service_error::Error,
+    };
+    use golem_api_grpc::proto::golem::registry::{
+        AgentSecretOwner, AgentSecretReadMode, agent_secret_owner::Owner,
+    };
+    let (_temp_dir, _config, _services, mut join_set, port) = start_secret_test_registry().await;
+    let mut client = RegistryServiceClient::connect(format!("http://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let valid = GetAgentSecretRevisionRequest {
+        environment_id: Some(EnvironmentId::new().into()),
+        agent_secret_id: Some(uuid::Uuid::new_v4().into()),
+        path: vec!["secret".to_string()],
+        owner: Some(AgentSecretOwner {
+            owner: Some(Owner::Environment(())),
+        }),
+        revision: Some(Revision::Current(())),
+        mode: AgentSecretReadMode::Live as i32,
+    };
+    let response = client
+        .get_agent_secret_revision(valid.clone())
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        matches!(response.result, Some(ReadResult::Success(success)) if success.agent_secret.is_none())
+    );
+    let mut invalid = vec![];
+    for mode in [AgentSecretReadMode::Unspecified as i32, 999] {
+        invalid.push(GetAgentSecretRevisionRequest {
+            mode,
+            ..valid.clone()
+        });
+    }
+    invalid.push(GetAgentSecretRevisionRequest {
+        owner: None,
+        ..valid.clone()
+    });
+    invalid.push(GetAgentSecretRevisionRequest {
+        owner: Some(AgentSecretOwner { owner: None }),
+        ..valid.clone()
+    });
+    invalid.push(GetAgentSecretRevisionRequest {
+        revision: None,
+        ..valid.clone()
+    });
+    invalid.push(GetAgentSecretRevisionRequest {
+        revision: Some(Revision::Fixed(u64::MAX)),
+        ..valid
+    });
+    for request in invalid {
+        let response = client
+            .get_agent_secret_revision(request)
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(matches!(response.result,
+            Some(ReadResult::Error(error)) if matches!(error.error, Some(Error::BadRequest(_)))));
+    }
+    join_set.abort_all();
+}

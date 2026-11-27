@@ -63,7 +63,8 @@ use golem_common::model::agent::{
     ResolvedAgentType,
 };
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevisionSelector,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
@@ -428,9 +429,11 @@ pub trait RegistryService: Send + Sync {
     async fn get_agent_secret_revision(
         &self,
         _environment_id: EnvironmentId,
+        _owner: AgentSecretOwner,
         _agent_secret_id: AgentSecretId,
         _path: CanonicalAgentSecretPath,
-        _revision: AgentSecretRevision,
+        _selector: AgentSecretRevisionSelector,
+        _mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, RegistryServiceError> {
         Err(RegistryServiceError::internal_client_error(
             "get_agent_secret_revision is not supported by this registry service",
@@ -1702,17 +1705,31 @@ impl RegistryService for GrpcRegistryService {
     async fn get_agent_secret_revision(
         &self,
         environment_id: EnvironmentId,
+        owner: AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, RegistryServiceError> {
+        use golem_api_grpc::proto::golem::registry::AgentSecretReadMode as ProtoReadMode;
+        use golem_api_grpc::proto::golem::registry::v1::get_agent_secret_revision_request::Revision;
         let response = self
             .client
             .call("get_agent_secret_revision", move |client| {
                 let request = GetAgentSecretRevisionRequest {
                     environment_id: Some(environment_id.into()),
+                    owner: Some(owner.clone().into()),
                     path: path.0.clone(),
-                    revision: revision.get(),
+                    revision: Some(match selector {
+                        AgentSecretRevisionSelector::Current => Revision::Current(()),
+                        AgentSecretRevisionSelector::Fixed(revision) => {
+                            Revision::Fixed(revision.get())
+                        }
+                    }),
+                    mode: match mode {
+                        AgentSecretReadMode::Live => ProtoReadMode::Live,
+                        AgentSecretReadMode::Historical => ProtoReadMode::Historical,
+                    } as i32,
                     agent_secret_id: Some(agent_secret_id.0.into()),
                 };
                 Box::pin(client.get_agent_secret_revision(request))
@@ -1722,13 +1739,11 @@ impl RegistryService for GrpcRegistryService {
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(get_agent_secret_revision_response::Result::Success(payload)) => {
-                let converted: EnvironmentState = payload
-                    .environment_state
-                    .ok_or("missing environment_state field")?
-                    .try_into()?;
-                Ok(converted.agent_secrets.into_values().next())
-            }
+            Some(get_agent_secret_revision_response::Result::Success(payload)) => payload
+                .agent_secret
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(Into::into),
             Some(get_agent_secret_revision_response::Result::Error(error)) => Err(error.into()),
         }
     }

@@ -130,6 +130,8 @@ async fn moonbit_generated_and_definition_owned_proxy_match_nested_error_princip
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     environment_state.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["secret".to_string()]),
@@ -351,6 +353,8 @@ async fn check_moonbit_resource_observation(
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     environment_state.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["secret".to_string()]),
@@ -525,6 +529,8 @@ async fn check_moonbit_existing_terminal_case(
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     environment_state.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["secret".to_string()]),

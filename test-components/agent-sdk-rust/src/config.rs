@@ -139,6 +139,12 @@ pub trait SharedConfigAgent {
     fn create_replay_gate(&self) -> PromiseId;
 
     fn reveal_secret_then_await_replay_gate(&self, promise_id: PromiseId) -> String;
+
+    fn reveal_held_secret_across_replay_gates(
+        &self,
+        before_delete: PromiseId,
+        after_delete: PromiseId,
+    ) -> String;
 }
 
 struct SharedConfigAgentImpl {
@@ -173,6 +179,36 @@ impl SharedConfigAgent for SharedConfigAgentImpl {
             .expect("secret reveal should be allowed");
         blocking_await_promise(&promise_id);
         secret
+    }
+
+    fn reveal_held_secret_across_replay_gates(
+        &self,
+        before_delete: PromiseId,
+        after_delete: PromiseId,
+    ) -> String {
+        let config = self.config.get().expect("config access should be allowed");
+        let secret = config
+            .secret
+            .handle()
+            .expect("secret handle access should be allowed");
+        let graph = golem_rust::schema::try_into_schema_graph::<String>().unwrap();
+        let expected = encode_schema_graph(&graph).unwrap();
+        let before = secret
+            .with_handle(|handle| reveal::reveal(handle, &expected))
+            .unwrap()
+            .expect("first reveal should succeed");
+        let before = String::from_value(&decode_schema_value(before).unwrap()).unwrap();
+        blocking_await_promise(&before_delete);
+        let error = secret
+            .with_handle(|handle| reveal::reveal(handle, &expected))
+            .unwrap()
+            .expect_err("held handle must fail after deletion");
+        let types::SecretError::VersionNotFound(version) = error else {
+            panic!("expected version-not-found, got {error:?}");
+        };
+        blocking_await_promise(&after_delete);
+        json!({"before": before, "error": "version-not-found", "version": version.bytes})
+            .to_string()
     }
 }
 
@@ -230,6 +266,8 @@ pub trait SecretHandleAgent {
     fn secret_metadata_result(&self) -> Result<String, String>;
 
     fn reveal_secret_result(&self) -> Result<String, String>;
+
+    fn reveal_secret_digest(&self) -> Result<String, String>;
 }
 
 struct SecretHandleAgentImpl {
@@ -274,6 +312,11 @@ impl SecretHandleAgent for SecretHandleAgentImpl {
             .map_err(|error| format!("{error:?}"))?;
         let value = decode_schema_value(value).map_err(|error| error.to_string())?;
         String::from_value(&value).map_err(|error| error.to_string())
+    }
+
+    fn reveal_secret_digest(&self) -> Result<String, String> {
+        self.reveal_secret_result()
+            .map(|value| blake3::hash(value.as_bytes()).to_hex().to_string())
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {

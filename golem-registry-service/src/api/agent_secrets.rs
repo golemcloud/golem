@@ -91,7 +91,7 @@ impl AgentSecretsApi {
     ) -> ApiResult<Json<AgentSecretDto>> {
         let result = self
             .agent_secret_service
-            .create(environment_id, payload.into(), &auth)
+            .create(environment_id, payload.into(), vec![], &auth)
             .await?;
 
         let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
