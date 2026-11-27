@@ -232,6 +232,7 @@ openidconnect = "4.0.1"
 opentelemetry = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
 opentelemetry_sdk = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "internal-logs"] }
+percent-encoding = "2.3.2"
 phf = { version = "0.12.1", features = ["macros"] }
 pin-project = "1.1.10"
 pgvector = { version = "=0.4.1", features = ["sqlx", "halfvec"] }

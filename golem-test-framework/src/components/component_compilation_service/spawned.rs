@@ -55,7 +55,7 @@ impl SpawnedComponentCompilationService {
         command
             .current_dir(working_directory)
             .envs(super::env_vars(http_port, grpc_port, verbosity, enable_fs_cache, otlp).await);
-        Self::start(command, grpc_port, out_level, err_level).await
+        Self::start(command, http_port, grpc_port, out_level, err_level).await
     }
 
     pub(crate) async fn new_supported(
@@ -63,12 +63,20 @@ impl SpawnedComponentCompilationService {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        let [_, grpc_port] = launch.listeners("component_compilation_service");
-        Self::start(launch.command(&[]), grpc_port, out_level, err_level).await
+        let [http_port, grpc_port] = launch.listeners("component_compilation_service");
+        Self::start(
+            launch.command(&[]),
+            http_port,
+            grpc_port,
+            out_level,
+            err_level,
+        )
+        .await
     }
 
     async fn start(
         mut command: Command,
+        http_port: u16,
         grpc_port: u16,
         out_level: Level,
         err_level: Level,

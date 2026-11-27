@@ -3976,6 +3976,7 @@ dependencies = [
  "hex",
  "opentelemetry",
  "opentelemetry_sdk",
+ "percent-encoding",
  "poem",
  "prometheus",
  "rand 0.9.5",
@@ -3994,6 +3995,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

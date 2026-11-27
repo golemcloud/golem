@@ -42,6 +42,7 @@ figment = { workspace = true }
 hex = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+percent-encoding = { workspace = true }
 poem = { workspace = true }
 prometheus = { workspace = true }
 rand = { workspace = true }
@@ -62,6 +63,7 @@ rustix = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 same-file = { workspace = true }
+windows-sys = { workspace = true }
 
 [dev-dependencies]
 figment = { workspace = true, features = ["test"] }

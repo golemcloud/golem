@@ -209,7 +209,7 @@ impl ServerCommandHandler {
 }
 
 fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
-    use golem_common::config::{DbConfig, DbSqliteConfig};
+    use golem_common::config::DbConfig;
     use golem_service_base::config::BlobStorageConfig;
     use golem_shard_manager::config::PersistenceConfig;
     use golem_worker_executor::services::golem_config::{
@@ -233,12 +233,73 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).context("Failed to create the server log directory")?;
     }
+    fn resolve_path(path: &Path, links: u8) -> std::io::Result<PathBuf> {
+        let path = std::path::absolute(path)?;
+        match std::fs::canonicalize(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::read_link(&path) {
+                    Ok(target) if links < 40 => {
+                        resolve_path(&path.parent().unwrap().join(target), links + 1)
+                    }
+                    Ok(_) => Err(std::io::Error::other("Too many symbolic links")),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        let mut parent = resolve_path(path.parent().unwrap(), links)?;
+                        match path.components().next_back().unwrap() {
+                            std::path::Component::ParentDir => {
+                                parent.pop();
+                            }
+                            component => parent.push(component),
+                        }
+                        Ok(parent)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            result => result,
+        }
+    }
+    let resolved_log =
+        resolve_path(&log_path, 0).context("Failed to resolve the server log path")?;
     let log_metadata = match std::fs::metadata(&log_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error).context("Failed to inspect the server log"),
     };
     let check_path = |path: &Path, description: &str| -> anyhow::Result<()> {
+        let resolved_path = resolve_path(path, 0)
+            .with_context(|| format!("Failed to resolve the {description}"))?;
+        #[cfg(unix)]
+        let same_path = resolved_path == resolved_log;
+        #[cfg(windows)]
+        let same_path = {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+            let left = resolved_path
+                .as_os_str()
+                .encode_wide()
+                .collect::<Box<[_]>>();
+            let right = resolved_log.as_os_str().encode_wide().collect::<Box<[_]>>();
+            // Both slices remain valid until the comparison returns.
+            let result = unsafe {
+                CompareStringOrdinal(
+                    left.as_ptr(),
+                    left.len().try_into()?,
+                    right.as_ptr(),
+                    right.len().try_into()?,
+                    1,
+                )
+            };
+            if result == 0 {
+                return Err(std::io::Error::last_os_error()).context("Failed to compare paths");
+            }
+            result == CSTR_EQUAL
+        };
+        if same_path {
+            bail!("The server log must not overwrite the {description}");
+        }
+        let Some(log_metadata) = &log_metadata else {
+            return Ok(());
+        };
         let metadata = match std::fs::metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -276,23 +337,13 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
         "retained repository key",
     )?;
     let check_sqlite_path = |path: &Path| -> anyhow::Result<()> {
-        fn resolve_database(path: &Path) -> std::io::Result<PathBuf> {
-            match std::fs::canonicalize(path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    match std::fs::read_link(path) {
-                        Ok(target) => resolve_database(&path.parent().unwrap().join(target)),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                            Ok(path.to_path_buf())
-                        }
-                        Err(error) => Err(error),
-                    }
-                }
-                result => result,
-            }
-        }
-
+        #[cfg(unix)]
         let database =
-            resolve_database(path).context("Failed to inspect selected SQLite database")?;
+            resolve_path(path, 0).context("Failed to inspect selected SQLite database")?;
+        // SQLite's Windows VFS appends recovery suffixes without following file symlinks.
+        #[cfg(windows)]
+        let database =
+            std::path::absolute(path).context("Failed to resolve selected SQLite database")?;
         ["", "-wal", "-shm", "-journal"]
             .into_iter()
             .try_for_each(|suffix| {
@@ -304,7 +355,69 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
                 )
             })
     };
-    let check_sqlite = |sqlite: &DbSqliteConfig| check_sqlite_path(Path::new(&sqlite.database));
+    let sqlite_path = |filename: &str| -> anyhow::Result<Option<PathBuf>> {
+        let Some(uri) = filename.strip_prefix("file:") else {
+            return if filename.is_empty() || filename == ":memory:" {
+                Ok(None)
+            } else {
+                Ok(Some(PathBuf::from(filename)))
+            };
+        };
+        let uri = if let Some(authority) = uri.strip_prefix("//") {
+            let slash = authority.find('/').unwrap_or(authority.len());
+            let host = &authority[..slash];
+            if !matches!(host, "" | "localhost") {
+                bail!("Invalid SQLite URI authority");
+            }
+            &authority[slash..]
+        } else {
+            uri
+        };
+        let uri = uri.split('#').next().unwrap();
+        let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
+        let decode = |part: &str| {
+            percent_encoding::percent_decode_str(part)
+                .take_while(|byte| *byte != 0)
+                .collect::<Vec<_>>()
+        };
+        if query
+            .split('&')
+            .filter_map(|option| option.split_once('='))
+            .rfind(|(key, _)| decode(key) == b"mode")
+            .is_some_and(|(_, value)| decode(value) == b"memory")
+        {
+            return Ok(None);
+        }
+        let path = decode(path);
+        if path.is_empty() || path == b":memory:" {
+            return Ok(None);
+        }
+        #[cfg(unix)]
+        let path = {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(std::ffi::OsString::from_vec(path))
+        };
+        #[cfg(windows)]
+        let path = {
+            let path = String::from_utf8(path).context("Invalid UTF-8 in SQLite URI")?;
+            let path = path
+                .strip_prefix('/')
+                .filter(|path| {
+                    (path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                        && path.as_bytes().get(1) == Some(&b':'))
+                        || path.starts_with(r"\\?\")
+                })
+                .unwrap_or(&path);
+            PathBuf::from(path)
+        };
+        Ok(Some(path))
+    };
+    let check_sqlite = |filename: &str| -> anyhow::Result<()> {
+        match sqlite_path(filename)? {
+            Some(path) => check_sqlite_path(&path),
+            None => Ok(()),
+        }
+    };
     let is_agent_file_key = |key: &str| {
         key.split_once('_').is_some_and(|(environment, agent)| {
             [environment, agent].into_iter().all(|id| {
@@ -344,27 +457,48 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
                             })
                     })
                 })
-                .is_some_and(is_agent_file_key)
+                .is_some()
     };
     let check_multi_sqlite = |root: &Path, selected: &dyn Fn(&str) -> bool| -> anyhow::Result<()> {
-        let entries = match std::fs::read_dir(root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error).context("Failed to inspect selected SQLite databases"),
+        let filename = root.to_string_lossy();
+        // These URI delimiters keep appended namespace names out of the database path.
+        if filename.starts_with("file:")
+            && (filename.contains(['?', '#']) || filename.contains("%00"))
+        {
+            return check_sqlite(&filename);
+        }
+        let directory = if filename.starts_with("file:") {
+            let Some(path) = sqlite_path(&root.join("kv-running_workers").to_string_lossy())?
+            else {
+                return Ok(());
+            };
+            path.parent().unwrap().to_path_buf()
+        } else {
+            root.to_path_buf()
         };
-        entries.into_iter().try_for_each(|entry| {
-            let entry = entry?;
-            let name = entry.file_name();
+        let check_name = |name: &std::ffi::OsStr| -> anyhow::Result<()> {
             if let Some(name) = name.to_str() {
                 let database = ["-wal", "-shm", "-journal"]
                     .into_iter()
                     .find_map(|suffix| name.strip_suffix(suffix))
                     .unwrap_or(name);
                 if selected(database) {
-                    check_sqlite_path(&root.join(database))?;
+                    check_sqlite(&root.join(database).to_string_lossy())?;
                 }
             }
             Ok(())
+        };
+        if let Some(name) = resolved_log.file_name() {
+            check_name(name)?;
+        }
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error).context("Failed to inspect selected SQLite databases"),
+        };
+        entries.into_iter().try_for_each(|entry| {
+            let entry = entry?;
+            check_name(&entry.file_name())
         })
     };
     [
@@ -391,7 +525,7 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     ]
     .into_iter()
     .flatten()
-    .try_for_each(check_sqlite)?;
+    .try_for_each(|sqlite| check_sqlite(&sqlite.database))?;
     [
         &config.registry_service.blob_storage,
         &config.worker_service.blob_storage,
@@ -400,11 +534,11 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     ]
     .into_iter()
     .try_for_each(|blob| match blob {
-        BlobStorageConfig::Sqlite(sqlite) => check_sqlite(sqlite),
+        BlobStorageConfig::Sqlite(sqlite) => check_sqlite(&sqlite.database),
         _ => Ok(()),
     })?;
     match &config.worker_executor.key_value_storage {
-        KeyValueStorageConfig::Sqlite(sqlite) => check_sqlite(sqlite)?,
+        KeyValueStorageConfig::Sqlite(sqlite) => check_sqlite(&sqlite.database)?,
         KeyValueStorageConfig::MultiSqlite(sqlite) => {
             check_multi_sqlite(&sqlite.root_dir, &|name| is_key_value_database(name, true))?
         }
@@ -412,7 +546,7 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
             [(&routed.cache, false), (&routed.persistent, true)]
                 .into_iter()
                 .try_for_each(|(inner, persistent)| match inner {
-                    KeyValueStorageInnerConfig::Sqlite(sqlite) => check_sqlite(sqlite),
+                    KeyValueStorageInnerConfig::Sqlite(sqlite) => check_sqlite(&sqlite.database),
                     KeyValueStorageInnerConfig::MultiSqlite(sqlite) => {
                         check_multi_sqlite(&sqlite.root_dir, &|name| {
                             is_key_value_database(name, persistent)
@@ -424,20 +558,21 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
         _ => {}
     }
     match &config.worker_executor.indexed_storage {
-        IndexedStorageConfig::Sqlite(sqlite) => check_sqlite(sqlite),
+        IndexedStorageConfig::Sqlite(sqlite) => check_sqlite(&sqlite.database),
         IndexedStorageConfig::MultiSqlite(sqlite) => {
-            check_multi_sqlite(&sqlite.root_dir, &is_indexed_database)
+            // Indexed storage canonicalizes its directory before forming SQLite filenames.
+            check_multi_sqlite(&resolve_path(&sqlite.root_dir, 0)?, &is_indexed_database)
         }
         IndexedStorageConfig::KVStoreSqlite(_) => match &config.worker_executor.key_value_storage {
             KeyValueStorageConfig::Sqlite(sqlite) => check_sqlite(
-                &golem_worker_executor::derive_disjoint_sqlite_config(sqlite, "indexed"),
+                &golem_worker_executor::derive_disjoint_sqlite_config(sqlite, "indexed").database,
             ),
             _ => Ok(()),
         },
         IndexedStorageConfig::KVStoreMultiSqlite(_) => {
             match &config.worker_executor.key_value_storage {
                 KeyValueStorageConfig::MultiSqlite(sqlite) => {
-                    check_multi_sqlite(&sqlite.root_dir, &is_indexed_database)
+                    check_multi_sqlite(&resolve_path(&sqlite.root_dir, 0)?, &is_indexed_database)
                 }
                 _ => Ok(()),
             }
