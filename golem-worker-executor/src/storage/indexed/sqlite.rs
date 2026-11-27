@@ -14,8 +14,8 @@
 
 use super::{
     AgentDataObservation, AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
-    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
-    UnsealAgentResult,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, KeyEpochChange, KeyEpochClaim,
+    ReleaseAgentResult, ScanResume, UnsealAgentResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,7 +23,6 @@ use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
-use golem_common::model::agent::AgentMode;
 use golem_common::model::{OwnedAgentId, ShardEpoch};
 use golem_service_base::db::sqlite::{SqliteLabelledTransaction, SqlitePool};
 use golem_service_base::db::{Pool, PoolApi};
@@ -436,27 +435,11 @@ impl IndexedStorage for SqliteIndexedStorage {
         api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
         _stage_id: uuid::Uuid,
-        epoch: Option<ShardEpoch>,
     ) -> Result<Option<i64>, IndexedStorageError> {
         let key = owned_agent_id.storage_key();
-        let primary = Self::namespace(IndexedStorageNamespace::OpLog {
-            owned_agent_id: owned_agent_id.clone(),
-            agent_mode: AgentMode::Durable,
-        });
         let token = super::fresh_stage_token();
-        let stored_epoch = epoch
-            .map(|epoch| Self::to_i64(epoch.0, "epoch"))
-            .transpose()?;
         self.pool.with_tx_err::<Option<i64>, FencedTxError, _>(svc_name, api_name, |tx| {
             Box::pin(async move {
-                if let Some(stored_epoch) = stored_epoch {
-                    let result = tx.execute(sqlx::query(
-                        "INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?) ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch WHERE epoch <= excluded.epoch;"
-                    ).bind(&primary).bind(&key).bind(stored_epoch)).await?;
-                    if result.rows_affected() == 0 {
-                        Self::check_epoch(tx, &primary, &key, epoch.unwrap()).await?;
-                    }
-                }
                 if Self::agent_has_data_in_tx(tx, &key).await? {
                     return Ok(None);
                 }
@@ -965,7 +948,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         new_epoch: ShardEpoch,
         presence_namespaces: &[IndexedStorageNamespace],
         remove_if_absent: bool,
-    ) -> Result<bool, IndexedStorageError> {
+    ) -> Result<KeyEpochClaim, IndexedStorageError> {
         let namespace = Self::namespace(namespace);
         // `i64`, not `u64`: sqlx has no `Encode<Sqlite>` for `u64`, which is why ids elsewhere in
         // this file go through `Json`. That encodes as TEXT, and comparison affinity is applied
@@ -979,8 +962,16 @@ impl IndexedStorage for SqliteIndexedStorage {
             .chain(std::iter::once(namespace.clone()))
             .collect();
         let key = key.to_string();
-        self.pool.with_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
+        self.pool.with_tx_err::<KeyEpochClaim, FencedTxError, _>(svc_name, api_name, |tx| {
             Box::pin(async move {
+                let stored: Option<(i64,)> = tx.fetch_optional_as(sqlx::query_as(
+                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;"
+                ).bind(&namespace).bind(&key)).await?;
+                let change = match stored {
+                    None => KeyEpochChange::Inserted,
+                    Some((stored,)) if stored < epoch => KeyEpochChange::Raised,
+                    Some(_) => KeyEpochChange::Unchanged,
+                };
                 let result = tx.execute(sqlx::query(
                     r#"INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?)
                        ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch
@@ -994,14 +985,14 @@ impl IndexedStorage for SqliteIndexedStorage {
                         "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN (?, ?) AND key = ?);",
                     ).bind(format!("{presence_namespace}-present")).bind(presence_namespace).bind(&key)).await?;
                     if present {
-                        return Ok(true);
+                        return Ok(KeyEpochClaim { has_data: true, change });
                     }
                 }
-                if remove_if_absent {
+                if remove_if_absent && change == KeyEpochChange::Inserted {
                     tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ? AND epoch = ?;")
                         .bind(namespace).bind(key).bind(epoch)).await?;
                 }
-                Ok(false)
+                Ok(KeyEpochClaim { has_data: false, change })
             })
         }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
     }
@@ -1793,7 +1784,6 @@ mod tests {
                 "reserve",
                 &state.owned_agent_id,
                 uuid::Uuid::from_u128(55),
-                Some(epoch),
             )
             .await
             .unwrap()
@@ -2268,7 +2258,7 @@ mod tests {
                 );
                 let stage_id = uuid::Uuid::new_v4();
                 let token = store
-                    .reserve_stage("test", "reserve", &owned, stage_id, None)
+                    .reserve_stage("test", "reserve", &owned, stage_id)
                     .await
                     .unwrap()
                     .unwrap();
@@ -2452,6 +2442,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
+                .has_data
         );
         assert_eq!(storage.empty_database_epochs().await.unwrap(), Some(vec![]));
         assert!(
@@ -2467,6 +2458,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
+                .has_data
         );
         assert_eq!(
             storage.empty_database_epochs().await.unwrap(),
@@ -2503,6 +2495,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
+                .has_data
         );
         assert!(
             storage
@@ -2517,6 +2510,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
+                .has_data
         );
         storage
             .delete("test", "delete", extra.clone(), key)
@@ -2550,6 +2544,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
+                .has_data
         );
         assert!(matches!(
             storage
@@ -2599,6 +2594,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
+                .has_data
         );
     }
 
@@ -2882,7 +2878,7 @@ mod tests {
                 );
 
                 let token = storage
-                    .reserve_stage("test", "reserve", agent, uuid::Uuid::from_u128(42), None)
+                    .reserve_stage("test", "reserve", agent, uuid::Uuid::from_u128(42))
                     .await
                     .unwrap()
                     .unwrap();

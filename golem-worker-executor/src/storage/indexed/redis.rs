@@ -14,8 +14,8 @@
 
 use crate::storage::indexed::{
     AgentDataObservation, AgentIndexedState, IndexedStorage, IndexedStorageError,
-    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
-    UnsealAgentResult,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, KeyEpochChange, KeyEpochClaim,
+    ReleaseAgentResult, ScanResume, UnsealAgentResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -103,8 +103,10 @@ return redis.status_reply('OK')
 local epoch = redis.call('HGET', KEYS[1], 'epoch')
 local higher = epoch ~= false and (#ARGV[1] > #epoch or (#ARGV[1] == #epoch and ARGV[1] > epoch))
 if epoch == false or higher or epoch == ARGV[1] then
+  local change = 0
+  if epoch == false then change = 2 elseif higher then change = 4 end
   redis.call('HSET', KEYS[1], 'epoch', ARGV[1])
-  return redis.call('EXISTS', KEYS[2])
+  return change + redis.call('EXISTS', KEYS[2])
 end
 return redis.error_reply('FENCED ' .. epoch)
 "#;
@@ -743,7 +745,7 @@ impl IndexedStorage for RedisIndexedStorage {
         epoch: ShardEpoch,
         _presence_namespaces: &[IndexedStorageNamespace],
         _remove_if_absent: bool,
-    ) -> Result<bool, IndexedStorageError> {
+    ) -> Result<KeyEpochClaim, IndexedStorageError> {
         self.redis
             .with(svc_name, api_name)
             .eval(
@@ -756,8 +758,20 @@ impl IndexedStorage for RedisIndexedStorage {
                 None,
             )
             .await
-            .map(|present| matches!(present, Value::Integer(1)))
             .map_err(|error| Self::classify_epoch_error(error, key, Some(epoch)))
+            .and_then(|result| match result {
+                Value::Integer(code @ 0..=5) => Ok(KeyEpochClaim {
+                    has_data: code % 2 == 1,
+                    change: match code / 2 {
+                        1 => KeyEpochChange::Inserted,
+                        2 => KeyEpochChange::Raised,
+                        _ => KeyEpochChange::Unchanged,
+                    },
+                }),
+                _ => Err(IndexedStorageError::Other(
+                    "invalid epoch claim result".into(),
+                )),
+            })
     }
 
     async fn delete_with_epoch(

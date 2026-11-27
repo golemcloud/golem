@@ -305,6 +305,7 @@ pub trait OplogService: Debug + Send + Sync {
     /// Creates an empty, hidden oplog with one writer and a fresh per-attempt stage id.
     /// It bypasses visible oplog caches, archives and derived session indexes. Payloads use
     /// the final agent's blob namespace so publication needs no payload rewrite.
+    /// Admission takes no lifecycle guard or shard-epoch claim.
     async fn create_staged(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -326,9 +327,10 @@ pub trait OplogService: Debug + Send + Sync {
     ) -> Result<bool, String>;
 
     /// Publishes a fully committed stage, the stage of `publication`, if no primary oplog exists.
-    /// The caller must stop and drop its staged writer first. `false` means a competing target
-    /// exists; errors may have indeterminate outcomes and must be reconciled using the target's
-    /// fork provenance.
+    /// The caller must stop and drop its staged writer first, then hold the target lifecycle
+    /// guard through publication and claim cleanup. `false` means publication was refused by
+    /// a competing or sealed target, or an invalidated stage. Errors may have indeterminate
+    /// outcomes and must be reconciled using the target's fork provenance.
     async fn publish_staged(
         &self,
         _owned_agent_id: &OwnedAgentId,

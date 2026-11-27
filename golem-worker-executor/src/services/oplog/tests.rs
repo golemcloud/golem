@@ -961,10 +961,9 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
         stage_id: uuid::Uuid,
-        epoch: Option<ShardEpoch>,
     ) -> Result<Option<i64>, IndexedStorageError> {
         self.inner
-            .reserve_stage(svc_name, api_name, owned_agent_id, stage_id, epoch)
+            .reserve_stage(svc_name, api_name, owned_agent_id, stage_id)
             .await
     }
 
@@ -1082,7 +1081,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         shard_epoch: ShardEpoch,
         presence_namespaces: &[IndexedStorageNamespace],
         remove_if_absent: bool,
-    ) -> Result<bool, IndexedStorageError> {
+    ) -> Result<crate::storage::indexed::KeyEpochClaim, IndexedStorageError> {
         if let (
             Some(error),
             IndexedStorageNamespace::CompressedOpLog { .. }

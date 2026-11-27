@@ -82,7 +82,8 @@ impl OplogConstructor for CreateOplogConstructor {
             {
                 let service = self.seal_service.as_ref().unwrap();
                 let result = async {
-                    let present = service.claim(&self.owned_agent_id, shard_epoch).await?;
+                    let claim = service.claim(&self.owned_agent_id, shard_epoch).await?;
+                    let present = claim.has_data;
                     if let Some(attempt) = lifecycle.read_attempt() {
                         attempt.assert_id(&self.owned_agent_id);
                         if present != attempt.is_present()
@@ -97,9 +98,11 @@ impl OplogConstructor for CreateOplogConstructor {
                     }
                     if !present {
                         if lifecycle.open_purpose() == super::super::OplogOpenPurpose::Archive {
-                            service
-                                .remove_claim(&self.owned_agent_id, shard_epoch)
-                                .await?;
+                            if claim.change == crate::storage::indexed::KeyEpochChange::Inserted {
+                                service
+                                    .remove_claim(&self.owned_agent_id, shard_epoch)
+                                    .await?;
+                            }
                             return Err(WorkerExecutorError::worker_not_found(
                                 self.owned_agent_id.agent_id,
                             ));
@@ -142,17 +145,16 @@ impl OplogConstructor for CreateOplogConstructor {
                 }
                 None
             }
-            (EpochRecord::Pending, Some(shard_epoch)) => {
-                record_owning_epoch(
-                    &*self.indexed_storage,
-                    &self.retry_config,
-                    PrimaryOplogService::namespace(&self.owned_agent_id, self.agent_mode),
-                    &self.owned_agent_id.agent_id,
-                    &self.key,
-                    shard_epoch,
-                )
-                .await
-            }
+            (EpochRecord::Pending, Some(shard_epoch)) => record_owning_epoch(
+                &*self.indexed_storage,
+                &self.retry_config,
+                PrimaryOplogService::namespace(&self.owned_agent_id, self.agent_mode),
+                &self.owned_agent_id.agent_id,
+                &self.key,
+                shard_epoch,
+            )
+            .await
+            .err(),
             (EpochRecord::Pending, None) => {
                 if self.agent_mode == AgentMode::Durable
                     && let Some(service) = &self.seal_service

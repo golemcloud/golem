@@ -62,8 +62,8 @@ where
     }
 }
 
-/// Records the epoch this executor is allowed to write `key` with, and reports the fence when
-/// the stored record is already ahead of it.
+/// Records the epoch this executor is allowed to write `key` with, and reports the claim change
+/// or the fence when the stored record is already ahead of it.
 ///
 /// Monotonic on the storage side once a record exists, so a re-grant at a higher epoch takes the
 /// key over while an executor holding a stale one cannot claim it back. A key with no record
@@ -78,7 +78,7 @@ pub(crate) async fn record_owning_epoch(
     agent_id: &AgentId,
     key: &str,
     shard_epoch: ShardEpoch,
-) -> Option<OplogFence> {
+) -> Result<crate::storage::indexed::KeyEpochClaim, OplogFence> {
     let svc_name = epoch_record_service(&namespace);
     let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
         let namespace = namespace.clone();
@@ -94,13 +94,20 @@ pub(crate) async fn record_owning_epoch(
                     false,
                 )
                 .await
-                .map(|_| ())
         }
     })
     .await;
-    match epoch_record_verdict(&namespace, agent_id, outcome) {
-        Ok(fence) => fence,
-        Err(error) => unreachable!("a fenceable storage write failed without a fence: {error}"),
+    match outcome {
+        Ok(claim) => {
+            epoch_record_verdict(&namespace, agent_id, Ok(()))
+                .expect("accepted epoch has no storage error");
+            Ok(claim)
+        }
+        Err(error) => match epoch_record_verdict(&namespace, agent_id, Err(error)) {
+            Ok(Some(fence)) => Err(fence),
+            Ok(None) => unreachable!("a refused epoch has no fence"),
+            Err(error) => unreachable!("a fenceable storage write failed without a fence: {error}"),
+        },
     }
 }
 

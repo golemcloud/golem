@@ -29,7 +29,7 @@ use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, MAX_INDEXED_ID, ScanResume,
+    IndexedStorageNamespace, KeyEpochChange, KeyEpochClaim, MAX_INDEXED_ID, ScanResume,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -45,6 +45,240 @@ type OpenIndexedStorage =
 
 #[test]
 #[test_r::timeout("120s")]
+async fn epoch_claim_reports_insert_raise_and_unchanged(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    let state = sealed_index_state(AgentMode::Durable);
+    let key = state.owned_agent_id.storage_key();
+    let ns = state.primary_namespace();
+    for (epoch, change) in [
+        (4, KeyEpochChange::Inserted),
+        (4, KeyEpochChange::Unchanged),
+        (5, KeyEpochChange::Raised),
+        (5, KeyEpochChange::Unchanged),
+    ] {
+        assert_eq!(
+            storage
+                .set_key_epoch(
+                    "test",
+                    "empty_claim",
+                    ns.clone(),
+                    &key,
+                    ShardEpoch(epoch),
+                    &[],
+                    false
+                )
+                .await
+                .unwrap(),
+            KeyEpochClaim {
+                has_data: false,
+                change
+            }
+        );
+    }
+    storage
+        .append(
+            "test",
+            "seed",
+            "entry",
+            ns.clone(),
+            &key,
+            1,
+            vec![1],
+            Some(ShardEpoch(5)),
+            None,
+        )
+        .await
+        .unwrap();
+    for (epoch, change) in [(5, KeyEpochChange::Unchanged), (6, KeyEpochChange::Raised)] {
+        assert_eq!(
+            storage
+                .set_key_epoch(
+                    "test",
+                    "present_claim",
+                    ns.clone(),
+                    &key,
+                    ShardEpoch(epoch),
+                    &[],
+                    false
+                )
+                .await
+                .unwrap(),
+            KeyEpochClaim {
+                has_data: true,
+                change
+            }
+        );
+    }
+    storage
+        .delete_with_epoch(
+            "test",
+            "retain",
+            ns.clone(),
+            &key,
+            Some(ShardEpoch(6)),
+            true,
+        )
+        .await
+        .unwrap();
+    // Multi-SQLite can serve these claims from its reclaimed database's epoch snapshot.
+    for (epoch, change) in [(6, KeyEpochChange::Unchanged), (7, KeyEpochChange::Raised)] {
+        assert_eq!(
+            storage
+                .set_key_epoch(
+                    "test",
+                    "retained_claim",
+                    ns.clone(),
+                    &key,
+                    ShardEpoch(epoch),
+                    &[],
+                    false
+                )
+                .await
+                .unwrap(),
+            KeyEpochClaim {
+                has_data: false,
+                change
+            }
+        );
+    }
+    assert_eq!(
+        storage
+            .set_key_epoch(
+                "test",
+                "new_snapshot_namespace",
+                state.marker_namespace(),
+                &key,
+                ShardEpoch(7),
+                &[],
+                true
+            )
+            .await
+            .unwrap(),
+        KeyEpochClaim {
+            has_data: false,
+            change: KeyEpochChange::Inserted
+        }
+    );
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn absent_lifecycle_claim_preserves_existing_deletion_fence(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let state = sealed_index_state(mode);
+        let key = state.owned_agent_id.storage_key();
+        let ns = state.primary_namespace();
+        storage
+            .set_key_epoch("test", "owner", ns.clone(), &key, ShardEpoch(8), &[], false)
+            .await
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "seed",
+                "entry",
+                ns.clone(),
+                &key,
+                1,
+                vec![1],
+                Some(ShardEpoch(8)),
+                None,
+            )
+            .await
+            .unwrap();
+        storage
+            .delete_with_epoch(
+                "test",
+                "delete",
+                ns.clone(),
+                &key,
+                Some(ShardEpoch(8)),
+                true,
+            )
+            .await
+            .unwrap();
+        for (epoch, change) in [
+            (8, KeyEpochChange::Unchanged),
+            (9, KeyEpochChange::Raised),
+            (9, KeyEpochChange::Unchanged),
+        ] {
+            assert_eq!(
+                storage
+                    .set_key_epoch(
+                        "test",
+                        "observe",
+                        ns.clone(),
+                        &key,
+                        ShardEpoch(epoch),
+                        &[],
+                        true
+                    )
+                    .await
+                    .unwrap(),
+                KeyEpochClaim {
+                    has_data: false,
+                    change
+                }
+            );
+            assert_fenced(
+                storage
+                    .append(
+                        "test",
+                        "stale",
+                        "entry",
+                        ns.clone(),
+                        &key,
+                        1,
+                        vec![1],
+                        Some(ShardEpoch(epoch - 1)),
+                        None,
+                    )
+                    .await,
+                epoch - 1,
+                Some(epoch),
+            );
+            // The surviving epoch is a real fence, not merely a reported claim outcome.
+            storage
+                .append(
+                    "test",
+                    "current",
+                    "entry",
+                    ns.clone(),
+                    &key,
+                    1,
+                    vec![1],
+                    Some(ShardEpoch(epoch)),
+                    None,
+                )
+                .await
+                .unwrap();
+            storage
+                .delete_with_epoch(
+                    "test",
+                    "delete_again",
+                    ns.clone(),
+                    &key,
+                    Some(ShardEpoch(epoch)),
+                    true,
+                )
+                .await
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("120s")]
 async fn absent_lifecycle_claim_removes_epoch(
     _deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
@@ -56,8 +290,8 @@ async fn absent_lifecycle_claim_removes_epoch(
     let state = sealed_index_state(AgentMode::Ephemeral);
     let key = state.owned_agent_id.storage_key();
     let ns = state.primary_namespace();
-    assert!(
-        !storage
+    assert_eq!(
+        storage
             .set_key_epoch(
                 "test",
                 "observe",
@@ -68,7 +302,11 @@ async fn absent_lifecycle_claim_removes_epoch(
                 true
             )
             .await
-            .unwrap()
+            .unwrap(),
+        KeyEpochClaim {
+            has_data: false,
+            change: KeyEpochChange::Inserted
+        }
     );
     let write = storage
         .append(
@@ -128,7 +366,10 @@ async fn lifecycle_claim_reports_explicit_namespace_presence(
         )
         .await
         .unwrap();
-    assert!(present, "the explicit presence namespace contains data");
+    assert!(
+        present.has_data,
+        "the explicit presence namespace contains data"
+    );
 }
 
 #[async_trait]
@@ -532,7 +773,7 @@ async fn reserve_test_stage(storage: &dyn IndexedStorage) -> (String, i64) {
     let owned = crate::fresh_owned_agent_id();
     let stage = Uuid::new_v4();
     let token = storage
-        .reserve_stage("test", "reserve", &owned, stage, None)
+        .reserve_stage("test", "reserve", &owned, stage)
         .await
         .unwrap()
         .unwrap();
@@ -590,7 +831,7 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
             let stage_id = Uuid::new_v4();
             assert!(
                 storage
-                    .reserve_stage("test", "refuse", &owned, stage_id, Some(ShardEpoch(8)))
+                    .reserve_stage("test", "refuse", &owned, stage_id)
                     .await
                     .unwrap()
                     .is_none()
@@ -621,23 +862,21 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
                     .unwrap(),
                 vec![(id, vec![71])]
             );
-            // Even refused admission claims the primary epoch. Lower epochs cannot erase it.
-            assert!(matches!(
+            // Refused admission leaves the data and does not claim an epoch.
+            assert!(
                 storage
-                    .reserve_stage("test", "stale", &owned, stage_id, Some(ShardEpoch(7)))
-                    .await,
-                Err(IndexedStorageError::Fenced {
-                    actual: Some(ShardEpoch(8)),
-                    ..
-                })
-            ));
+                    .reserve_stage("test", "repeat_refused", &owned, stage_id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
             storage
                 .delete("test", "clear", namespace, &key)
                 .await
                 .unwrap();
             assert!(
                 storage
-                    .reserve_stage("test", "admit", &owned, stage_id, Some(ShardEpoch(8)))
+                    .reserve_stage("test", "admit", &owned, stage_id)
                     .await
                     .unwrap()
                     .is_some()
@@ -649,8 +888,8 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
     let first = Uuid::new_v4();
     let second = Uuid::new_v4();
     let (a, b) = tokio::join!(
-        storage.reserve_stage("test", "race", &owned, first, None),
-        storage.reserve_stage("test", "race", &owned, second, None),
+        storage.reserve_stage("test", "race", &owned, first),
+        storage.reserve_stage("test", "race", &owned, second),
     );
     let a = a.unwrap().unwrap();
     let b = b.unwrap().unwrap();
@@ -684,32 +923,40 @@ async fn stage_reservation_admits_only_an_agent_without_any_data(
     );
     assert!(
         storage
-            .reserve_stage("test", "repeat", &owned, first, None)
+            .reserve_stage("test", "repeat", &owned, first)
             .await
             .unwrap()
             .is_some()
     );
-    // None must not claim a primary epoch. Tokens are not indexed data.
-    let primary = IndexedStorageNamespace::OpLog {
-        owned_agent_id: owned.clone(),
-        agent_mode: AgentMode::Durable,
-    };
-    assert!(matches!(
+    // Stage admission must not claim a primary epoch. Tokens are not indexed data.
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let primary = IndexedStorageNamespace::OpLog {
+            owned_agent_id: owned.clone(),
+            agent_mode: mode,
+        };
+        assert!(matches!(
+            storage
+                .append(
+                    "test",
+                    "no_epoch",
+                    "entry",
+                    primary,
+                    &owned.storage_key(),
+                    1,
+                    vec![1],
+                    Some(ShardEpoch(0)),
+                    None
+                )
+                .await,
+            Err(IndexedStorageError::Fenced { actual: None, .. })
+        ));
+    }
+    assert!(
         storage
-            .append(
-                "test",
-                "no_epoch",
-                "entry",
-                primary,
-                &owned.storage_key(),
-                1,
-                vec![1],
-                Some(ShardEpoch(0)),
-                None
-            )
-            .await,
-        Err(IndexedStorageError::Fenced { actual: None, .. })
-    ));
+            .remove_stage_reservation("test", "reservation_survives", &owned, None)
+            .await
+            .unwrap()
+    );
 }
 
 #[test]
@@ -751,7 +998,7 @@ async fn discarded_and_published_stages_cannot_be_recreated_by_old_writers(
             Err(IndexedStorageError::StageInvalidated { .. })
         ));
         let token = storage
-            .reserve_stage("test", "reserve", &owned, stage_id, Some(ShardEpoch(8)))
+            .reserve_stage("test", "reserve", &owned, stage_id)
             .await
             .unwrap()
             .unwrap();
@@ -915,7 +1162,7 @@ async fn stage_discard_only_mutates_the_current_admission(
             agent_mode: mode,
         };
         let a_token = storage
-            .reserve_stage("test", "admit_a", &owned, a, None)
+            .reserve_stage("test", "admit_a", &owned, a)
             .await
             .unwrap()
             .unwrap();
@@ -935,7 +1182,7 @@ async fn stage_discard_only_mutates_the_current_admission(
             .unwrap();
         assert!(
             storage
-                .reserve_stage("test", "refuse_b", &owned, b, None)
+                .reserve_stage("test", "refuse_b", &owned, b)
                 .await
                 .unwrap()
                 .is_none()
@@ -1005,12 +1252,12 @@ async fn stage_discard_only_mutates_the_current_admission(
             agent_mode: mode,
         };
         let a_token = storage
-            .reserve_stage("test", "empty_a", &owned, stage, None)
+            .reserve_stage("test", "empty_a", &owned, stage)
             .await
             .unwrap()
             .unwrap();
         let b_token = storage
-            .reserve_stage("test", "replacement_b", &owned, stage, None)
+            .reserve_stage("test", "replacement_b", &owned, stage)
             .await
             .unwrap()
             .unwrap();
@@ -1125,7 +1372,7 @@ async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
         agent_mode: AgentMode::Durable,
     };
     let first = storage
-        .reserve_stage("test", "first", &owned, stage_id, None)
+        .reserve_stage("test", "first", &owned, stage_id)
         .await
         .unwrap()
         .unwrap();
@@ -1151,7 +1398,7 @@ async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
     );
     // The same stage UUID gets a fresh token; it cannot identify the admission by itself.
     let second = storage
-        .reserve_stage("test", "replace", &owned, stage_id, None)
+        .reserve_stage("test", "replace", &owned, stage_id)
         .await
         .unwrap()
         .unwrap();
@@ -1227,7 +1474,7 @@ async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
         .unwrap();
     assert!(
         storage
-            .reserve_stage("test", "staged_data_refuses", &owned, Uuid::new_v4(), None)
+            .reserve_stage("test", "staged_data_refuses", &owned, Uuid::new_v4())
             .await
             .unwrap()
             .is_none()
@@ -1287,7 +1534,7 @@ async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
     let owned = crate::fresh_owned_agent_id();
     let stage_key = format!("{}#{stage_id}", owned.storage_key());
     let token = storage
-        .reserve_stage("test", "cleanup", &owned, stage_id, None)
+        .reserve_stage("test", "cleanup", &owned, stage_id)
         .await
         .unwrap()
         .unwrap();
@@ -1347,7 +1594,7 @@ async fn initial_append_invalidates_the_stage_token_atomically(
                     agent_mode: mode,
                 };
                 let token = storage
-                    .reserve_stage("test", "reserve", &owned, stage_id, epoch)
+                    .reserve_stage("test", "reserve", &owned, stage_id)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1448,7 +1695,7 @@ async fn stranded_stage_tokens_are_not_shard_epochs_or_transition_presence(
         let owned = &state.owned_agent_id;
         let stage_id = Uuid::new_v4();
         let token = storage
-            .reserve_stage("test", "stranded", owned, stage_id, None)
+            .reserve_stage("test", "stranded", owned, stage_id)
             .await
             .unwrap()
             .unwrap();
@@ -1474,7 +1721,7 @@ async fn stranded_stage_tokens_are_not_shard_epochs_or_transition_presence(
         );
 
         let token = storage
-            .reserve_stage("test", "stranded_again", owned, stage_id, None)
+            .reserve_stage("test", "stranded_again", owned, stage_id)
             .await
             .unwrap()
             .unwrap();
@@ -3678,7 +3925,7 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
     let first = format!("{}#{first_id}", owned.storage_key());
     let second = format!("{}#{second_id}", owned.storage_key());
     let first_token = storage
-        .reserve_stage("test", "reserve", &owned, first_id, None)
+        .reserve_stage("test", "reserve", &owned, first_id)
         .await
         .unwrap()
         .unwrap();
@@ -3729,7 +3976,7 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
         .await
         .unwrap();
     let second_token = storage
-        .reserve_stage("test", "reserve", &owned, second_id, None)
+        .reserve_stage("test", "reserve", &owned, second_id)
         .await
         .unwrap()
         .unwrap();
@@ -6193,13 +6440,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
         let key = state.owned_agent_id.storage_key();
         let stage_id = Uuid::new_v4();
         let stage_token = storage
-            .reserve_stage(
-                "test",
-                "reserve",
-                &state.owned_agent_id,
-                stage_id,
-                Some(ShardEpoch(6)),
-            )
+            .reserve_stage("test", "reserve", &state.owned_agent_id, stage_id)
             .await
             .unwrap()
             .unwrap();
@@ -6339,6 +6580,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                 )
                 .await
                 .unwrap()
+                .has_data
         );
         assert_eq!(
             storage
@@ -6383,6 +6625,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                 )
                 .await
                 .unwrap()
+                .has_data
         );
         for (level, entries) in &state.manifests {
             assert_eq!(
@@ -6436,6 +6679,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                 )
                 .await
                 .unwrap()
+                .has_data
         );
         assert_fenced(
             storage
@@ -7382,7 +7626,7 @@ async fn postgres_agent_transitions_serialize_fenced_writes_without_blocking_oth
     );
     assert_fenced(append.await.unwrap(), 6, None);
     assert!(
-        !claim.await.unwrap().unwrap(),
+        !claim.await.unwrap().unwrap().has_data,
         "the new owner must take the absent/unseal path"
     );
     let (rows,): (i64,) =

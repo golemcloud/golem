@@ -720,10 +720,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             "Copying source oplog of worker {fork_account_id}/{source_agent_id} to {target_agent_id} up to index {oplog_index_cut_off}"
         );
 
-        let mut source_lifecycle = self
-            .oplog_service
-            .lock_lifecycle(&source_agent_id.agent_id)
-            .await;
         let (owned_source_agent_id, owned_target_agent_id) = self
             .validate_worker_forking(
                 source_agent_id.environment_id,
@@ -753,17 +749,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 WorkerExecutorError::invalid_request("Only durable agents can be forked").into(),
             );
         }
-        let source_status = calculate_last_known_status_with_checkpoint(
-            self,
-            &owned_source_agent_id,
-            initial_source_worker_metadata.fingerprint,
-            agent_mode,
-            source.last_known_status,
-        )
-        .await
-        .map_err(WorkerExecutorError::from)?
-        .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id()))?;
-
         // The stage id also identifies the target incarnation while it is hidden. This lets
         // scheduled work for that incarnation distinguish publication in progress from a target
         // that genuinely does not exist.
@@ -795,6 +780,47 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             create_request: fork_request.clone(),
             standalone_tool: None,
         };
+
+        let new_oplog = match stage_admission(
+            &owned_target_agent_id,
+            self.oplog_service
+                .create_staged(
+                    &owned_target_agent_id,
+                    agent_mode,
+                    stage_id,
+                    target_worker_metadata,
+                )
+                .await,
+        )? {
+            StageAdmission::Created(oplog) => oplog,
+            StageAdmission::Refused => return Ok(StageAdmission::Refused),
+        };
+        *stage_token = new_oplog.stage_token();
+
+        let mut source_lifecycle = self
+            .oplog_service
+            .lock_lifecycle(&owned_source_agent_id.agent_id)
+            .await;
+        let source = self
+            .worker_service
+            .get(&owned_source_agent_id)
+            .await?
+            .ok_or_else(|| {
+                WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id())
+            })?;
+        if source.initial_worker_metadata.fingerprint != source_fingerprint {
+            return Err(WorkerExecutorError::invalid_request("Fork source was recreated").into());
+        }
+        let source_status = calculate_last_known_status_with_checkpoint(
+            self,
+            &owned_source_agent_id,
+            source_fingerprint,
+            agent_mode,
+            source.last_known_status,
+        )
+        .await
+        .map_err(WorkerExecutorError::from)?
+        .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id()))?;
 
         let source_oplog = self
             .oplog_service
@@ -910,21 +936,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .map_err(WorkerExecutorError::runtime)?
             .len() as u64;
 
-        let new_oplog = match stage_admission(
-            &owned_target_agent_id,
-            self.oplog_service
-                .create_staged(
-                    &owned_target_agent_id,
-                    agent_mode,
-                    stage_id,
-                    target_worker_metadata,
-                )
-                .await,
-        )? {
-            StageAdmission::Created(oplog) => oplog,
-            StageAdmission::Refused => return Ok(StageAdmission::Refused),
-        };
-        *stage_token = new_oplog.stage_token();
         new_oplog.add(target_initial_oplog_entry).await?;
 
         let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);

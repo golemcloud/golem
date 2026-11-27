@@ -14,8 +14,8 @@
 
 use super::{
     AgentDataObservation, AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
-    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
-    UnsealAgentResult,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, KeyEpochChange, KeyEpochClaim,
+    ReleaseAgentResult, ScanResume, UnsealAgentResult,
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
@@ -23,7 +23,6 @@ use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
-use golem_common::model::agent::AgentMode;
 use golem_common::model::{OwnedAgentId, ShardEpoch};
 use golem_service_base::db::postgres::{PostgresLabelledTransaction, PostgresPool};
 use golem_service_base::db::{Pool, PoolApi};
@@ -461,32 +460,14 @@ impl IndexedStorage for PostgresIndexedStorage {
         api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
         _stage_id: Uuid,
-        epoch: Option<ShardEpoch>,
     ) -> Result<Option<i64>, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let env = owned_agent_id.environment_id.0;
         let agent = owned_agent_id.agent_id.as_uuid();
-        let key = owned_agent_id.storage_key();
-        let primary = Self::namespace(IndexedStorageNamespace::OpLog {
-            owned_agent_id: owned_agent_id.clone(),
-            agent_mode: AgentMode::Durable,
-        });
         let token = super::fresh_stage_token();
-        let stored_epoch = epoch
-            .map(|epoch| Self::to_i64(epoch.0, "epoch"))
-            .transpose()?;
         self.pool.with_tx_err::<Option<i64>, FencedTxError, _>(svc_name, api_name, |tx| {
             async move {
                 Self::lock_agent(tx, env, agent).await?;
-                if let Some(stored_epoch) = stored_epoch {
-                    let result = tx.execute(sqlx::query(
-                        "INSERT INTO indexed_key_epoch (namespace, env, agent, epoch) VALUES ($1, $2, $3, $4) ON CONFLICT (namespace, env, agent) DO UPDATE SET epoch = EXCLUDED.epoch WHERE indexed_key_epoch.epoch <= EXCLUDED.epoch;"
-                    ).bind(&primary).bind(env).bind(agent).bind(stored_epoch)).await?;
-                    if result.rows_affected() == 0 {
-                        let stored = Self::stored_epoch(tx, &primary, env, agent).await?;
-                        FencedTxError::check_record(&key, epoch.unwrap(), stored, Self::negative_epoch_message)?;
-                    }
-                }
                 // Resident fenced writes hold their epoch row, not the advisory lock.
                 Self::locked_agent_epochs(tx, env, agent).await?;
                 let (present,): (bool,) = tx.fetch_one_as(sqlx::query_as(
@@ -1094,7 +1075,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         new_epoch: ShardEpoch,
         presence_namespaces: &[IndexedStorageNamespace],
         remove_if_absent: bool,
-    ) -> Result<bool, IndexedStorageError> {
+    ) -> Result<KeyEpochClaim, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let mut namespace = Self::namespace(namespace);
         let (env, agent) = Self::key(&mut namespace, key)?;
@@ -1112,9 +1093,15 @@ impl IndexedStorage for PostgresIndexedStorage {
             presence.push(candidate);
         }
         let key = key.to_string();
-        self.pool.with_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
+        self.pool.with_tx_err::<KeyEpochClaim, FencedTxError, _>(svc_name, api_name, |tx| {
             async move {
                 Self::lock_agent(tx, env, agent).await?;
+                let stored = Self::stored_epoch(tx, &namespace, env, agent).await?;
+                let change = match stored {
+                    None => KeyEpochChange::Inserted,
+                    Some(stored) if stored < epoch => KeyEpochChange::Raised,
+                    Some(_) => KeyEpochChange::Unchanged,
+                };
                 let result = tx.execute(sqlx::query(
                     "INSERT INTO indexed_key_epoch (namespace, env, agent, epoch) VALUES ($1, $2, $3, $4) ON CONFLICT (namespace, env, agent) DO UPDATE SET epoch = EXCLUDED.epoch WHERE indexed_key_epoch.epoch <= EXCLUDED.epoch;",
                 ).bind(&namespace).bind(env).bind(agent).bind(epoch)).await?;
@@ -1130,12 +1117,12 @@ impl IndexedStorage for PostgresIndexedStorage {
                 let (present,): (bool,) = tx.fetch_one_as(sqlx::query_as(
                     "SELECT EXISTS(SELECT 1 FROM index_storage WHERE env = $1 AND agent = $2 AND namespace = ANY($3));",
                 ).bind(env).bind(agent).bind(&presence)).await?;
-                if !present && remove_if_absent {
+                if !present && remove_if_absent && change == KeyEpochChange::Inserted {
                     tx.execute(sqlx::query(
                         "DELETE FROM indexed_key_epoch WHERE namespace = $1 AND env = $2 AND agent = $3 AND epoch = $4;",
                     ).bind(namespace).bind(env).bind(agent).bind(epoch)).await?;
                 }
-                Ok(present)
+                Ok(KeyEpochClaim { has_data: present, change })
             }.boxed()
         }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error_general))
     }

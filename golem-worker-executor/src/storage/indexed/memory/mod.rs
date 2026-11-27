@@ -14,8 +14,8 @@
 
 use crate::storage::indexed::{
     AgentDataObservation, AgentIndexedState, IndexedStorage, IndexedStorageError,
-    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
-    UnsealAgentResult,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, KeyEpochChange, KeyEpochClaim,
+    ReleaseAgentResult, ScanResume, UnsealAgentResult,
 };
 use async_trait::async_trait;
 use golem_common::model::{OwnedAgentId, ShardEpoch};
@@ -218,28 +218,9 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
         _stage_id: Uuid,
-        epoch: Option<ShardEpoch>,
     ) -> Result<Option<i64>, IndexedStorageError> {
         let mut state = self.state.lock().await;
         let key = owned_agent_id.storage_key();
-        if let Some(epoch) = epoch {
-            let primary = Self::composite_key(
-                IndexedStorageNamespace::OpLog {
-                    owned_agent_id: owned_agent_id.clone(),
-                    agent_mode: golem_common::model::agent::AgentMode::Durable,
-                },
-                &key,
-            );
-            let actual = state.key_epochs.get(&primary).copied();
-            if actual.is_some_and(|stored| stored > epoch) {
-                return Err(IndexedStorageError::Fenced {
-                    key,
-                    expected: epoch,
-                    actual,
-                });
-            }
-            state.key_epochs.insert(primary, epoch);
-        }
         if state
             .data
             .keys()
@@ -680,7 +661,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         epoch: ShardEpoch,
         presence_namespaces: &[IndexedStorageNamespace],
         remove_if_absent: bool,
-    ) -> Result<bool, IndexedStorageError> {
+    ) -> Result<KeyEpochClaim, IndexedStorageError> {
         let mut state = self.state.lock().await;
         let composite_key = Self::composite_key(namespace.clone(), key);
         let stored = state.key_epochs.get(&composite_key).copied();
@@ -698,12 +679,18 @@ impl IndexedStorage for InMemoryIndexedStorage {
                     .data
                     .contains_key(&Self::composite_key(namespace.clone(), key))
             });
-        if present || !remove_if_absent {
+        let change = match stored {
+            None => KeyEpochChange::Inserted,
+            Some(stored) if stored < epoch => KeyEpochChange::Raised,
+            Some(_) => KeyEpochChange::Unchanged,
+        };
+        if present || !remove_if_absent || change != KeyEpochChange::Inserted {
             state.key_epochs.insert(composite_key, epoch);
-        } else {
-            state.key_epochs.remove(&composite_key);
         }
-        Ok(present)
+        Ok(KeyEpochClaim {
+            has_data: present,
+            change,
+        })
     }
 
     async fn delete_with_epoch(

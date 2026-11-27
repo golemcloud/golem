@@ -377,16 +377,11 @@ impl OplogService for PrimaryOplogService {
         }
         let stage_token =
             if let Some(service) = self.seal_service().filter(|service| service.enabled()) {
-                let mut lifecycle = self.lock_lifecycle(&owned_agent_id.agent_id).await;
-                Some(
-                    service
-                        .admit_stage(&mut lifecycle, owned_agent_id, stage_id)
-                        .await?,
-                )
+                Some(service.admit_stage(owned_agent_id, stage_id).await?)
             } else {
                 Some(
                     self.indexed_storage
-                        .reserve_stage("oplog", "reserve_stage", owned_agent_id, stage_id, None)
+                        .reserve_stage("oplog", "reserve_stage", owned_agent_id, stage_id)
                         .await
                         .map_err(|error| {
                             crate::services::oplog::CreateStagedError::Storage(error.to_string())
@@ -450,9 +445,10 @@ impl OplogService for PrimaryOplogService {
         }
         let stage_key = Self::staged_oplog_key(owned_agent_id, stage_id);
         let target_key = Self::oplog_key(owned_agent_id);
-        if let Some(service) = self.seal_service().filter(|service| service.enabled()) {
+        let service = self.seal_service().filter(|service| service.enabled());
+        let inserted_claim = if let Some(service) = &service {
             match service.check_target(owned_agent_id).await {
-                Ok(()) => {}
+                Ok(inserted) => inserted,
                 Err(
                     crate::services::oplog::CreateStagedError::TargetPresent
                     | crate::services::oplog::CreateStagedError::TargetSealed,
@@ -464,8 +460,11 @@ impl OplogService for PrimaryOplogService {
                     return Err(error);
                 }
             }
-        }
-        self.indexed_storage
+        } else {
+            None
+        };
+        let result = self
+            .indexed_storage
             .with("oplog", "publish_staged")
             .move_if_absent(
                 IndexedStorageNamespace::StagedOpLog {
@@ -487,7 +486,16 @@ impl OplogService for PrimaryOplogService {
                 error => Err(format!(
                     "Failed publishing staged oplog {stage_key}: {error}"
                 )),
-            })
+            });
+        if !matches!(result, Ok(true))
+            && let (Some(service), Some(epoch)) = (service, inserted_claim)
+        {
+            service
+                .remove_claim(owned_agent_id, epoch)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        result
     }
 
     async fn discard_staged(
@@ -531,9 +539,10 @@ impl OplogService for PrimaryOplogService {
         // the initial append would then collide with it. If the claim is refused, this executor
         // has already lost the shard: it writes nothing, so whether the owner created the oplog
         // first is not its question, and `open` below hands back an oplog that refuses every write.
+        let mut inserted_claim = false;
         let fence_at_create = match shard_epoch {
             Some(epoch) => {
-                record_owning_epoch(
+                let claim = record_owning_epoch(
                     &*self.indexed_storage,
                     &self.retry_config,
                     Self::namespace(owned_agent_id, agent_mode),
@@ -541,7 +550,11 @@ impl OplogService for PrimaryOplogService {
                     &key,
                     epoch,
                 )
-                .await
+                .await;
+                inserted_claim = claim.as_ref().is_ok_and(|claim| {
+                    claim.change == crate::storage::indexed::KeyEpochChange::Inserted
+                });
+                claim.err()
             }
             None => None,
         };
@@ -598,7 +611,7 @@ impl OplogService for PrimaryOplogService {
                     .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
                     .is_some()
             {
-                if let Some(epoch) = shard_epoch {
+                if inserted_claim && let Some(epoch) = shard_epoch {
                     service.remove_claim(owned_agent_id, epoch).await?;
                 }
                 return Err(WorkerExecutorError::AgentAlreadyExists {
@@ -651,17 +664,16 @@ impl OplogService for PrimaryOplogService {
         // first - a fresh agent id does not mean a fresh shard.
         let key = Self::oplog_key(owned_agent_id);
         let fence_at_create = match shard_epoch {
-            Some(epoch) => {
-                record_owning_epoch(
-                    &*self.indexed_storage,
-                    &self.retry_config,
-                    Self::namespace(owned_agent_id, agent_mode),
-                    &owned_agent_id.agent_id,
-                    &key,
-                    epoch,
-                )
-                .await
-            }
+            Some(epoch) => record_owning_epoch(
+                &*self.indexed_storage,
+                &self.retry_config,
+                Self::namespace(owned_agent_id, agent_mode),
+                &owned_agent_id.agent_id,
+                &key,
+                epoch,
+            )
+            .await
+            .err(),
             None => None,
         };
 
@@ -766,8 +778,8 @@ impl OplogService for PrimaryOplogService {
         )
         .await
         {
-            None => Ok(()),
-            Some(fence) => Err(OplogError::Fenced(fence)),
+            Ok(_) => Ok(()),
+            Err(fence) => Err(OplogError::Fenced(fence)),
         }
     }
 

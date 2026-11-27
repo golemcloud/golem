@@ -14,8 +14,8 @@
 
 use super::{
     AgentDataObservation, AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
-    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
-    UnsealAgentResult,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, KeyEpochChange, KeyEpochClaim,
+    ReleaseAgentResult, ScanResume, UnsealAgentResult,
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
@@ -229,6 +229,7 @@ enum Access {
         namespace: String,
         key: String,
         epoch: i64,
+        change: Arc<OnceLock<KeyEpochChange>>,
     },
 }
 
@@ -266,6 +267,7 @@ impl Access {
                 namespace,
                 key,
                 epoch,
+                change,
             } => {
                 if let Some((_, _, stored)) = epochs
                     .iter_mut()
@@ -282,9 +284,15 @@ impl Access {
                             e.into_indexed_storage_error(SqliteIndexedStorage::classify_repo_error)
                         })?;
                     }
+                    let _ = change.set(if *stored < *epoch {
+                        KeyEpochChange::Raised
+                    } else {
+                        KeyEpochChange::Unchanged
+                    });
                     *stored = *epoch;
                 } else {
                     epochs.push((namespace.clone(), key.clone(), *epoch));
+                    let _ = change.set(KeyEpochChange::Inserted);
                 }
                 return Ok(());
             }
@@ -880,13 +888,15 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         new_epoch: ShardEpoch,
         _presence_namespaces: &[IndexedStorageNamespace],
         _remove_if_absent: bool,
-    ) -> Result<bool, IndexedStorageError> {
+    ) -> Result<KeyEpochClaim, IndexedStorageError> {
         let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
+        let change = Arc::new(OnceLock::new());
         let access = Access::SetEpoch {
             namespace: SqliteIndexedStorage::namespace(namespace.clone()),
             key: key.clone(),
             epoch: SqliteIndexedStorage::to_i64(new_epoch.0, "epoch")?,
+            change: change.clone(),
         };
         self.with_access(db, access, move |s| async move {
             // This backend records the fence even for an empty index. Presence is local to
@@ -903,7 +913,14 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await
         })
         .await
-        .map(|present| present.unwrap_or(false))
+        .map(|claim| {
+            claim.unwrap_or_else(|| KeyEpochClaim {
+                has_data: false,
+                change: *change
+                    .get()
+                    .expect("snapshot epoch claim records its change"),
+            })
+        })
     }
 
     async fn delete_with_epoch(

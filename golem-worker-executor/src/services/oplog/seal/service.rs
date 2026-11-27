@@ -23,8 +23,8 @@ use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
 use crate::storage::indexed::{
     AgentDataObservation, AgentIndexedState, IndexedStorage, IndexedStorageError,
-    IndexedStorageLabelledApi, IndexedStorageNamespace, MAX_INDEXED_ID, ReleaseAgentResult,
-    UnsealAgentResult,
+    IndexedStorageLabelledApi, IndexedStorageNamespace, KeyEpochChange, KeyEpochClaim,
+    MAX_INDEXED_ID, ReleaseAgentResult, UnsealAgentResult,
 };
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
@@ -124,15 +124,12 @@ impl SealService {
 
     pub(crate) async fn admit_stage(
         &self,
-        lifecycle: &mut OplogLifecycleGuard,
         id: &OwnedAgentId,
         stage: Uuid,
     ) -> Result<i64, CreateStagedError> {
-        lifecycle.assert_agent(&id.agent_id);
-        let epoch = self.target_epoch(id)?;
         let token = self
             .indexed
-            .reserve_stage("oplog_seal", "reserve_stage", id, stage, Some(epoch))
+            .reserve_stage("oplog_seal", "reserve_stage", id, stage)
             .await
             .map_err(|error| Self::indexed_error(id, error))?
             .ok_or(CreateStagedError::TargetPresent)?;
@@ -141,18 +138,10 @@ impl SealService {
             Ok(Some(_)) => CreateStagedError::TargetSealed,
             Err(error) => CreateStagedError::Retryable(error.to_string()),
         };
-        // Claim removal stays inside the lifecycle critical section. Cancellation leaves a
-        // bare fence and possibly a reservation; it must never start cleanup after releasing it.
-        if self
-            .indexed
+        self.indexed
             .remove_stage_reservation("oplog_seal", "refuse_stage", id, Some(token))
             .await
-            .map_err(|error| CreateStagedError::Retryable(error.to_string()))?
-        {
-            self.remove_claim(id, epoch)
-                .await
-                .map_err(|error| CreateStagedError::Retryable(error.to_string()))?;
-        }
+            .map_err(|error| CreateStagedError::Retryable(error.to_string()))?;
         Err(refusal)
     }
 
@@ -165,19 +154,23 @@ impl SealService {
             .ok_or(WorkerExecutorError::ShardingNotReady)?)
     }
 
-    pub(crate) async fn check_target(&self, id: &OwnedAgentId) -> Result<(), CreateStagedError> {
+    /// The publication caller holds the target lifecycle guard through any claim cleanup.
+    pub(crate) async fn check_target(
+        &self,
+        id: &OwnedAgentId,
+    ) -> Result<Option<ShardEpoch>, CreateStagedError> {
         let epoch = self.target_epoch(id)?;
-        self.claim(id, epoch).await?;
-        if self
-            .record(id)
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-            .is_some()
-        {
+        let claim = self.claim(id, epoch).await?;
+        let inserted = (claim.change == KeyEpochChange::Inserted).then_some(epoch);
+        let refusal = match self.record(id).await {
+            Ok(None) => return Ok(inserted),
+            Ok(Some(_)) => CreateStagedError::TargetSealed,
+            Err(error) => CreateStagedError::Retryable(error.to_string()),
+        };
+        if let Some(epoch) = inserted {
             self.remove_claim(id, epoch).await?;
-            return Err(CreateStagedError::TargetSealed);
         }
-        Ok(())
+        Err(refusal)
     }
 
     pub(crate) async fn record(
@@ -370,13 +363,12 @@ impl SealService {
             .filter(|candidate| mode.is_none_or(|mode| mode == *candidate))
         {
             let records = list_records(self.blobs.as_ref(), id, candidate, "read_attempt").await?;
-            if let Some(fingerprint) = fingerprint {
-                if let Some(record) = self
+            if let Some(fingerprint) = fingerprint
+                && let Some(record) = self
                     .record_for_fingerprint(id, candidate, fingerprint, &records)
                     .await?
-                {
-                    return Ok(Some(record));
-                }
+            {
+                return Ok(Some(record));
             }
         }
         Ok(None)
@@ -648,6 +640,7 @@ impl SealService {
             )
         })
         .await
+        .map(|claim| claim.has_data)
         .map_err(|error| Self::indexed_error(id, error))
     }
 
@@ -657,7 +650,7 @@ impl SealService {
         &self,
         id: &OwnedAgentId,
         epoch: ShardEpoch,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<KeyEpochClaim, WorkerExecutorError> {
         let namespaces = self.presence_namespaces(id);
         let key = id.storage_key();
         retry_storage_op_fenceable(&self.indexed_retry, "seal_claim", &key, || {

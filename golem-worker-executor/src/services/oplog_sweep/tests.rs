@@ -537,10 +537,9 @@ impl IndexedStorage for FixedPages {
         api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
         stage_id: uuid::Uuid,
-        epoch: Option<ShardEpoch>,
     ) -> Result<Option<i64>, IndexedStorageError> {
         self.inner
-            .reserve_stage(svc_name, api_name, owned_agent_id, stage_id, epoch)
+            .reserve_stage(svc_name, api_name, owned_agent_id, stage_id)
             .await
     }
 
@@ -806,7 +805,7 @@ impl IndexedStorage for FixedPages {
         epoch: golem_common::model::ShardEpoch,
         presence_namespaces: &[IndexedStorageNamespace],
         remove_if_absent: bool,
-    ) -> Result<bool, IndexedStorageError> {
+    ) -> Result<crate::storage::indexed::KeyEpochClaim, IndexedStorageError> {
         self.inner
             .set_key_epoch(
                 svc_name,

@@ -114,7 +114,7 @@ async fn gc_trimmed_marker_pin_preserves_moved_data_in_both_modes() {
             seal.remove_moved_copies(&pending).await.unwrap();
             f.register(7, true);
             match mode {
-                AgentMode::Durable => seal.claim(&f.id(), ShardEpoch(7)).await.unwrap(),
+                AgentMode::Durable => seal.claim(&f.id(), ShardEpoch(7)).await.unwrap().has_data,
                 AgentMode::Ephemeral => seal.claim_ephemeral(&f.id(), ShardEpoch(7)).await.unwrap(),
             };
             assert_eq!(f.service().indexed_identity(&f.id()).await.unwrap(), None);

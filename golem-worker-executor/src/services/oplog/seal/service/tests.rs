@@ -1167,10 +1167,14 @@ async fn release_and_new_epoch_unseal_preserve_frozen_history_and_restore_author
         ));
         f.assert_history(&pending.record).await;
         // Creation and fork publication must not overwrite a released incarnation.
-        assert!(matches!(
-            service.check_target(&f.id()).await,
-            Err(CreateStagedError::TargetSealed)
-        ));
+        {
+            let oplog = f.oplog_service().await;
+            let _lifecycle = oplog.lock_lifecycle(&f.id().agent_id).await;
+            assert!(matches!(
+                service.check_target(&f.id()).await,
+                Err(CreateStagedError::TargetSealed)
+            ));
+        }
         f.assert_epoch(&pending.state, None).await;
         // A different executor really holds the stale epoch; lease validation alone must not
         // explain the refusal. The record's writer epoch is the lower bound on restoration.
@@ -1376,10 +1380,14 @@ async fn unbounded_lease_and_changed_manifest_refuse_lifecycle_writes() {
         );
         f.assert_history(&pending.record).await;
         // The record alone must also reserve the name before a release completes.
-        assert!(matches!(
-            service.check_target(&f.id()).await,
-            Err(CreateStagedError::TargetSealed)
-        ));
+        {
+            let oplog = f.oplog_service().await;
+            let _lifecycle = oplog.lock_lifecycle(&f.id().agent_id).await;
+            assert!(matches!(
+                service.check_target(&f.id()).await,
+                Err(CreateStagedError::TargetSealed)
+            ));
+        }
         f.register(9, false);
         assert!(matches!(
             service.unseal(&f.id(), ShardEpoch(9)).await,
@@ -1925,6 +1933,30 @@ async fn plain_initial_create_invalidates_an_admitted_stages_first_write_before_
             Err(OplogError::StageInvalidated { .. })
         ));
         stage.stop_and_wait().await.unwrap();
+        let token = stage.stage_token();
+        drop(stage);
+        f.assert_epoch(&pending.state, None).await;
+        {
+            let _lifecycle = service.lock_lifecycle(&target.agent_id).await;
+            assert!(
+                !service
+                    .publish_staged(
+                        &target,
+                        AgentMode::Durable,
+                        crate::services::oplog::StagePublication::for_tests(stage_id, token),
+                        OplogIndex::INITIAL,
+                    )
+                    .await
+                    .unwrap()
+            );
+        }
+        // Publication inserted a claim after release, then removed only that claim on refusal.
+        assert!(
+            !f.indexed
+                .remove_stage_reservation("test", "released_reservation", &target, None)
+                .await
+                .unwrap()
+        );
         assert!(
             !f.indexed
                 .observe_agent("test", "after_stale_stage", &target)
@@ -1994,7 +2026,7 @@ async fn staging_reservation_keeps_sealed_history_readable_during_admission() {
 
 #[test]
 #[test_r::timeout("30s")]
-async fn failed_admission_cleans_its_claim_but_cancellation_leaves_only_fences() {
+async fn failed_admission_removes_its_token_and_cancellation_leaves_no_shard_epoch() {
     let root = tempfile::TempDir::new().unwrap();
     for indexed in storages(&root).await {
         for cancel in [false, true] {
@@ -2048,26 +2080,14 @@ async fn failed_admission_cleans_its_claim_but_cancellation_leaves_only_fences()
                     .unwrap()
                     .has_data
             );
+            f.assert_epoch(&pending.state, None).await;
             if cancel {
-                assert!(matches!(
+                assert!(
                     f.indexed
-                        .append(
-                            "test",
-                            "cancelled_claim",
-                            "entry",
-                            pending.state.primary_namespace(),
-                            &f.id().storage_key(),
-                            1000,
-                            vec![],
-                            Some(ShardEpoch(1)),
-                            None,
-                        )
-                        .await,
-                    Err(IndexedStorageError::Fenced {
-                        actual: Some(ShardEpoch(6)),
-                        ..
-                    })
-                ));
+                        .remove_stage_reservation("test", "cancelled_reservation", &f.id(), None)
+                        .await
+                        .unwrap()
+                );
             } else {
                 assert!(
                     !f.indexed
@@ -2075,7 +2095,6 @@ async fn failed_admission_cleans_its_claim_but_cancellation_leaves_only_fences()
                         .await
                         .unwrap()
                 );
-                f.assert_epoch(&pending.state, None).await;
             }
             assert_eq!(
                 service
@@ -2147,7 +2166,13 @@ async fn stale_seal_cleanup_preserves_rejections_persisted_by_a_new_owner() {
             // The old owner pauses after snapshotting. A new owner extends the rejection field
             // through the same compare-and-set boundary as the worker service.
             f.register(7, true);
-            assert!(service.claim(&f.id(), ShardEpoch(7)).await.unwrap());
+            assert!(
+                service
+                    .claim(&f.id(), ShardEpoch(7))
+                    .await
+                    .unwrap()
+                    .has_data
+            );
             let namespace = KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
                 owned_agent_id: f.id(),
             };
@@ -2240,33 +2265,40 @@ async fn failed_stage_admission_does_not_fence_a_competing_create() {
                 f.metadata.clone(),
             );
             tokio::pin!(creating, admission);
-            if create_first {
+            let oplog = if create_first {
                 tokio::select! {
                     result = &mut creating => panic!("create did not pause: {result:?}"),
                     _ = probed => {}
                 }
-                assert!(futures::poll!(&mut admission).is_pending());
+                // Admission can fail while create holds its lifecycle guard and epoch.
+                f.blobs.fail_next_seal_list();
+                assert!(matches!(
+                    (&mut admission).await,
+                    Err(CreateStagedError::Retryable(_))
+                ));
                 resume.send(()).unwrap();
+                creating.await.unwrap()
             } else {
                 tokio::select! {
                     result = &mut admission => panic!("admission did not pause: {result:?}"),
                     _ = probed => {}
                 }
-                assert!(futures::poll!(&mut creating).is_pending());
+                // Create must finish before the admission LIST is allowed to resume.
+                let oplog = creating.await.unwrap();
                 f.blobs.fail_next_seal_list();
                 resume.send(()).unwrap();
                 assert!(matches!(
                     (&mut admission).await,
                     Err(CreateStagedError::Retryable(_))
                 ));
-            }
-            let oplog = creating.await.unwrap();
-            if create_first {
-                assert!(matches!(
-                    admission.await,
-                    Err(CreateStagedError::TargetPresent)
-                ));
-            }
+                oplog
+            };
+            assert!(
+                !f.indexed
+                    .remove_stage_reservation("test", "failed_admission_token", &target, None)
+                    .await
+                    .unwrap()
+            );
             oplog.add(OplogEntry::exited()).await.unwrap();
             let committed = oplog.commit(CommitLevel::Always).await;
             assert!(

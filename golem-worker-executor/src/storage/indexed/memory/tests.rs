@@ -48,7 +48,7 @@ async fn reserve(storage: &super::InMemoryIndexedStorage) -> (String, i64) {
     let owned = OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 1));
     let stage = Uuid::new_v4();
     let token = storage
-        .reserve_stage("test", "reserve", &owned, stage, None)
+        .reserve_stage("test", "reserve", &owned, stage)
         .await
         .unwrap()
         .unwrap();

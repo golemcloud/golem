@@ -41,6 +41,20 @@ fn fresh_stage_token() -> i64 {
     rand::random::<i64>() & i64::MAX
 }
 
+/// The epoch change made by a successful claim, before optional absent-insert cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyEpochChange {
+    Inserted,
+    Raised,
+    Unchanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyEpochClaim {
+    pub has_data: bool,
+    pub change: KeyEpochChange,
+}
+
 /// Typed error for [`IndexedStorage`] operations.
 ///
 /// `Transient` errors are safe to retry. `Indeterminate` errors can only be retried by callers
@@ -484,8 +498,8 @@ pub trait IndexedStorage: Debug + Sync {
     /// Whether whole-agent transitions are atomic on this backend. Callers skip seal otherwise.
     fn supports_release(&self) -> bool;
 
-    /// Claims the optional primary shard epoch and replaces the agent's stage token if no data
-    /// exists. Tokens are not data presence or shard epochs. Refused admission returns `None`.
+    /// Replaces the agent's stage token if no data exists, without claiming a shard epoch.
+    /// Tokens are not data presence or shard epochs. Refused admission returns `None`.
     /// Backends without release support return `Some(0)` without writing a reservation.
     async fn reserve_stage(
         &self,
@@ -493,7 +507,6 @@ pub trait IndexedStorage: Debug + Sync {
         _api_name: &'static str,
         _owned_agent_id: &OwnedAgentId,
         _stage_id: Uuid,
-        _epoch: Option<ShardEpoch>,
     ) -> Result<Option<i64>, IndexedStorageError> {
         if self.supports_release() {
             Err(IndexedStorageError::Other(
@@ -818,8 +831,9 @@ pub trait IndexedStorage: Debug + Sync {
     /// otherwise. Inserts the record if the key has none. On backends with [`Self::supports_release`],
     /// returns data presence across the claimed namespace and `presence_namespaces`, checked
     /// atomically with the claim. Epoch rows do not
-    /// count as presence. When `remove_if_absent` is set, an absent claim removes its epoch in the
-    /// same transaction; observation-only ephemeral opens use this instead of restoring presence.
+    /// count as presence. Reports whether the claim inserted, raised or left the epoch unchanged.
+    /// When `remove_if_absent` is set, an absent claim removes only an epoch inserted by this
+    /// call, in the same transaction. Existing fences survive, including those raised by this call.
     /// Backends without release support retain their namespace-local claim behavior, ignore
     /// these two lifecycle options, and must not be used to open a sealed agent.
     async fn set_key_epoch(
@@ -831,7 +845,7 @@ pub trait IndexedStorage: Debug + Sync {
         epoch: ShardEpoch,
         presence_namespaces: &[IndexedStorageNamespace],
         remove_if_absent: bool,
-    ) -> Result<bool, IndexedStorageError>;
+    ) -> Result<KeyEpochClaim, IndexedStorageError>;
 
     /// Deletes the index of the given key, as [`Self::delete`] does, together with the writer
     /// generation recorded for it, in one step. When `retain_epoch` is true, keeps the asserted
@@ -907,17 +921,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         &self,
         owned_agent_id: &OwnedAgentId,
         stage_id: Uuid,
-        epoch: Option<ShardEpoch>,
     ) -> Result<Option<i64>, IndexedStorageError> {
         self.record("reserve_stage");
         self.storage
-            .reserve_stage(
-                self.svc_name,
-                self.api_name,
-                owned_agent_id,
-                stage_id,
-                epoch,
-            )
+            .reserve_stage(self.svc_name, self.api_name, owned_agent_id, stage_id)
             .await
     }
 

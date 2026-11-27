@@ -207,6 +207,115 @@ async fn write_primary_entry(
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn refused_create_and_publication_preserve_equal_epoch_deletion_fence_before_gc() {
+    use crate::services::oplog::tests::{default_execution_status, default_last_known_status};
+    use crate::services::oplog::{OplogOpenPurpose, StagePublication};
+
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        for publication in [false, true] {
+            let mut f = Fixture::new(indexed.clone()).await;
+            let pending = seal_fixture(&f).await;
+            // Keep an independently leased old owner and its selected seal across deletion.
+            let stale = f.service();
+            f.shard = Arc::new(ShardServiceDefault::new());
+            f.register(7, true);
+            let oplog = f.oplog_service().await;
+            oplog
+                .delete(
+                    &mut oplog.lock_lifecycle(&f.id().agent_id).await,
+                    &f.id(),
+                    AgentMode::Durable,
+                    f.metadata.fingerprint,
+                    Some(ShardEpoch(7)),
+                )
+                .await
+                .unwrap();
+            let records = list_records(f.blobs.as_ref(), &f.id(), AgentMode::Durable, "test")
+                .await
+                .unwrap();
+            assert_eq!(records.len(), 1);
+            let tombstone = records[0].key;
+            assert_eq!(tombstone.kind, SealRecordKind::Deleted);
+            assert_fence(&f, pending.state.fence_namespace(), Some(ShardEpoch(7))).await;
+
+            let stage_id = Uuid::new_v4();
+            let token = if publication {
+                let stage = oplog
+                    .create_staged(&f.id(), AgentMode::Durable, stage_id, f.metadata.clone())
+                    .await
+                    .unwrap();
+                stage.stop_and_wait().await.unwrap();
+                let token = stage.stage_token();
+                drop(stage);
+                token
+            } else {
+                None
+            };
+            // A newer sealed target appears after admission, before publication or create.
+            let newer = put_seal(&f, &pending.record, AgentFingerprint::new(), 8, 0).await;
+            let before = record_bytes(&f, &newer.path()).await.unwrap();
+            {
+                let mut lifecycle = oplog.lock_lifecycle(&f.id().agent_id).await;
+                if publication {
+                    assert!(
+                        !oplog
+                            .publish_staged(
+                                &f.id(),
+                                AgentMode::Durable,
+                                StagePublication::for_tests(stage_id, token),
+                                OplogIndex::INITIAL,
+                            )
+                            .await
+                            .unwrap()
+                    );
+                } else {
+                    assert!(matches!(
+                        oplog
+                            .create(
+                                &mut lifecycle,
+                                &f.id(),
+                                AgentMode::Durable,
+                                create_entry(&f, f.metadata.fingerprint),
+                                f.metadata.clone(),
+                                default_last_known_status(),
+                                default_execution_status(AgentMode::Durable),
+                                Some(ShardEpoch(7)),
+                            )
+                            .await,
+                        Err(WorkerExecutorError::AgentAlreadyExists { .. })
+                    ));
+                }
+            }
+            assert_fence(&f, pending.state.fence_namespace(), Some(ShardEpoch(7))).await;
+            assert!(stale.deadline(&f.id(), ShardEpoch(6)).is_some());
+            assert!(matches!(
+                stale
+                    .unseal_record(
+                        &f.id(),
+                        ShardEpoch(6),
+                        &pending.record,
+                        OplogOpenPurpose::Activation,
+                    )
+                    .await,
+                Err(WorkerExecutorError::OplogFenced { .. })
+            ));
+            assert!(
+                !f.indexed
+                    .observe_agent("test", "refused_target", &f.id())
+                    .await
+                    .unwrap()
+                    .has_data
+            );
+            assert_fence(&f, pending.state.fence_namespace(), Some(ShardEpoch(7))).await;
+            assert!(record_bytes(&f, &tombstone.path()).await.is_some());
+            assert_eq!(record_bytes(&f, &newer.path()).await, Some(before));
+        }
+    }
+}
+
+#[test]
 async fn stale_deletion_refuses_every_newer_listed_key_before_claim_or_tombstone() {
     let root = tempfile::TempDir::new().unwrap();
     for indexed in storages(&root).await {
