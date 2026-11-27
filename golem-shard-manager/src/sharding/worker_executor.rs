@@ -41,6 +41,30 @@ use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::{info, warn};
 
+pub(crate) fn assignment_to_proto(
+    assignment: &ShardAssignmentPush,
+    incarnation_id: String,
+) -> Result<golem::workerexecutor::v1::AssignShardsRequest, String> {
+    let executor_count = executor_count_to_proto(
+        assignment.executor_count,
+        "AssignShardsRequest.executor_count",
+    )?;
+    Ok(golem::workerexecutor::v1::AssignShardsRequest {
+        shard_epochs: assignment
+            .shard_epochs
+            .iter()
+            .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
+                shard_id: Some((*shard_id).into()),
+                epoch: epoch.0,
+            })
+            .collect(),
+        revision: assignment.revision.0,
+        number_of_shards: assignment.number_of_shards as u32,
+        executor_count,
+        incarnation_id,
+    })
+}
+
 #[async_trait]
 pub trait WorkerExecutorService: Send + Sync {
     /// Tells an executor the complete set of shards it holds. This is a full replace: the executor
@@ -262,7 +286,8 @@ impl WorkerExecutorServiceDefault {
         pod: &Pod,
         assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
-        let assign_shards_request = assignment.to_proto().map_err(invalid_delivery)?;
+        let assign_shards_request = assignment_to_proto(assignment, super::model::incarnation_id())
+            .map_err(invalid_delivery)?;
 
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,

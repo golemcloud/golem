@@ -66,9 +66,13 @@ fn deliveries_count_all_executor_leases_after_join_and_leave() {
             let push = state.assignment_push_for(*executor_id).unwrap();
             assert_eq!(grant.executor_count, expected);
             assert_eq!(push.executor_count, expected);
-            let wire = push.to_proto().unwrap();
+            let wire = crate::sharding::worker_executor::assignment_to_proto(
+                &push,
+                "test-incarnation".to_string(),
+            )
+            .unwrap();
             assert_eq!(wire.executor_count, expected as u32);
-            assert_eq!(wire.incarnation_id, incarnation_id());
+            assert_eq!(wire.incarnation_id, "test-incarnation");
         });
     };
 
@@ -561,7 +565,15 @@ fn housekeep_evicts_only_expired_leases() {
         let push = state.assignment_push_for(executor(2)).unwrap();
         assert_eq!(grant.executor_count, expected);
         assert_eq!(push.executor_count, expected);
-        assert_eq!(push.to_proto().unwrap().executor_count, expected as u32);
+        assert_eq!(
+            crate::sharding::worker_executor::assignment_to_proto(
+                &push,
+                "test-incarnation".to_string(),
+            )
+            .unwrap()
+            .executor_count,
+            expected as u32
+        );
     };
 
     assert!(

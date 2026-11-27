@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::{lease_to_proto, registration_to_proto, resolve_pod};
+use crate::sharding::worker_executor::assignment_to_proto;
 use crate::sharding::{
     RegisterAck, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
 };
@@ -25,6 +26,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use test_r::test;
 
 const EXECUTOR_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 5);
+const INCARNATION: &str = "12345678-1234-4321-8765-123456789abc";
 
 #[test]
 fn registration_renewal_and_assignment_encode_the_delivered_executor_count() {
@@ -48,24 +50,29 @@ fn registration_renewal_and_assignment_encode_the_delivered_executor_count() {
                 grant: grant.clone(),
             },
             now,
+            INCARNATION.to_string(),
         )
         .unwrap();
         assert_eq!(registration.executor_count, registration_count);
         assert_eq!(registration.number_of_shards, 8);
         assert_eq!(registration.revision, 7);
         assert_eq!(registration.lease_ttl.unwrap().seconds, 45);
+        assert_eq!(registration.incarnation_id, INCARNATION);
 
-        let assignment = ShardAssignmentPush {
-            shard_epochs: grant.shard_epochs.clone(),
-            number_of_shards: 8,
-            executor_count: assignment_count as usize,
-            revision: ShardLeaseRevision(9),
-        }
-        .to_proto()
+        let assignment = assignment_to_proto(
+            &ShardAssignmentPush {
+                shard_epochs: grant.shard_epochs.clone(),
+                number_of_shards: 8,
+                executor_count: assignment_count as usize,
+                revision: ShardLeaseRevision(9),
+            },
+            INCARNATION.to_string(),
+        )
         .unwrap();
         assert_eq!(assignment.executor_count, assignment_count);
         assert_eq!(assignment.number_of_shards, 8);
         assert_eq!(assignment.revision, 9);
+        assert_eq!(assignment.incarnation_id, INCARNATION);
 
         let renewal = lease_to_proto(
             ShardLeaseGrant {
@@ -74,11 +81,13 @@ fn registration_renewal_and_assignment_encode_the_delivered_executor_count() {
                 ..grant
             },
             now,
+            INCARNATION.to_string(),
         )
         .unwrap();
         assert_eq!(renewal.executor_count, renewal_count);
         assert_eq!(renewal.revision, 8);
         assert_eq!(renewal.lease_ttl.unwrap().seconds, 45);
+        assert_eq!(renewal.incarnation_id, INCARNATION);
     });
 }
 
@@ -110,6 +119,7 @@ fn registration_and_renewal_refuse_invalid_executor_counts_as_internal_errors() 
                 grant: grant.clone(),
             },
             now,
+            INCARNATION.to_string(),
         )
         .unwrap_err()
         .into();
@@ -122,7 +132,9 @@ fn registration_and_renewal_refuse_invalid_executor_counts_as_internal_errors() 
             format!("RegisterSuccess.executor_count {detail}")
         );
 
-        let renewal_error: ShardLeaseError = lease_to_proto(grant, now).unwrap_err().into();
+        let renewal_error: ShardLeaseError = lease_to_proto(grant, now, INCARNATION.to_string())
+            .unwrap_err()
+            .into();
         let Some(shard_lease_error::Error::Internal(body)) = renewal_error.error else {
             panic!("invalid renewal count must not become LeaseNotFound");
         };

@@ -16,7 +16,6 @@ use super::error::ShardManagerError;
 use super::rebalancing::Rebalance;
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
-use golem_common::model::protobuf::executor_count_to_proto;
 use golem_common::model::{Pod, ShardId};
 use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -229,29 +228,6 @@ pub struct ShardAssignmentPush {
     pub executor_count: usize,
     /// See [`ShardLeaseGrant::revision`].
     pub revision: ShardLeaseRevision,
-}
-
-impl ShardAssignmentPush {
-    pub(crate) fn to_proto(
-        &self,
-    ) -> Result<golem::workerexecutor::v1::AssignShardsRequest, String> {
-        let executor_count =
-            executor_count_to_proto(self.executor_count, "AssignShardsRequest.executor_count")?;
-        Ok(golem::workerexecutor::v1::AssignShardsRequest {
-            shard_epochs: self
-                .shard_epochs
-                .iter()
-                .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
-                    shard_id: Some((*shard_id).into()),
-                    epoch: epoch.0,
-                })
-                .collect(),
-            revision: self.revision.0,
-            number_of_shards: self.number_of_shards as u32,
-            executor_count,
-            incarnation_id: incarnation_id(),
-        })
-    }
 }
 
 pub type ExecutorAddrs = BTreeMap<ExecutorId, ExecutorAddr>;

@@ -109,10 +109,6 @@ fn batch_matches(expected: usize, metrics: &[String]) -> anyhow::Result<Option<(
 #[test]
 #[timeout("600s")]
 async fn a_third_executor_refreshes_both_existing_counts_within_one_lease(_tracing: &Tracing) {
-    assert!(
-        std::env::var("GOLEM_TEST_BIN_PROFILE").is_ok_and(|profile| !profile.is_empty()),
-        "set GOLEM_TEST_BIN_PROFILE so all three executors use the same binary profile"
-    );
     if golem_common::config::env_config_provider()
         .iter()
         .any(|(key, _)| key == "rebalance_threshold")
@@ -164,7 +160,11 @@ async fn a_third_executor_refreshes_both_existing_counts_within_one_lease(_traci
         .executor_base_grpc_port
         .checked_add(2)
         .expect("the third executor's gRPC port exceeds 65535");
-    let executable = service_executable(&config.golem_repo_root, "worker-executor");
+    let executable = service_executable(&config.golem_repo_root, "worker-executor")
+        .parent()
+        .unwrap()
+        .with_file_name(&config.bin_profile)
+        .join("worker-executor");
     let working_directory = config.golem_repo_root.join("golem-worker-executor");
     let manager_config = config
         .golem_repo_root
@@ -182,6 +182,9 @@ async fn a_third_executor_refreshes_both_existing_counts_within_one_lease(_traci
     );
     let lease_duration = manager_config.shard_lease_duration;
     // Dependency setup flushes Redis. The fixture requires an isolated test endpoint.
+    let redis_port = std::net::TcpListener::bind((config.redis_host.as_str(), config.redis_port))
+        .expect("the fixture refuses an occupied Redis endpoint before dependency setup");
+    drop(redis_port);
     let deps = EnvBasedTestDependencies::new(config).await.unwrap();
     let spawn = |http_port, grpc_port| {
         SpawnedWorkerExecutor::new(

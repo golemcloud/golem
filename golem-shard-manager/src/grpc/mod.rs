@@ -119,7 +119,9 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .register_internal(executor_id, pod, request.pod_name)
             .instrument(record.span.clone())
             .await
-            .and_then(|ack| registration_to_proto(ack, Timestamp::now()));
+            .and_then(|ack| {
+                registration_to_proto(ack, Timestamp::now(), crate::sharding::incarnation_id())
+            });
 
         let result = match response {
             Ok(registration) => record.succeed(
@@ -158,7 +160,9 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .renew_shard_lease(executor_id, claimed)
             .instrument(record.span.clone())
             .await
-            .and_then(|grant| lease_to_proto(grant, Timestamp::now()));
+            .and_then(|grant| {
+                lease_to_proto(grant, Timestamp::now(), crate::sharding::incarnation_id())
+            });
 
         let result = match response {
             Ok(lease) => record.succeed(
@@ -508,6 +512,7 @@ fn resolve_pod(
 fn registration_to_proto(
     ack: RegisterAck,
     now: Timestamp,
+    incarnation_id: String,
 ) -> Result<golem::shardmanager::v1::RegisterSuccess, ShardManagerError> {
     Ok(golem::shardmanager::v1::RegisterSuccess {
         number_of_shards: ack.number_of_shards as u32,
@@ -519,13 +524,14 @@ fn registration_to_proto(
         .map_err(ShardManagerError::Internal)?,
         lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, now)),
         revision: ack.grant.revision.0,
-        incarnation_id: crate::sharding::incarnation_id(),
+        incarnation_id,
     })
 }
 
 fn lease_to_proto(
     grant: ShardLeaseGrant,
     now: Timestamp,
+    incarnation_id: String,
 ) -> Result<golem::shardmanager::v1::ShardLease, ShardManagerError> {
     Ok(golem::shardmanager::v1::ShardLease {
         shard_epochs: shard_epoch_entries(&grant.shard_epochs),
@@ -533,7 +539,7 @@ fn lease_to_proto(
             .map_err(ShardManagerError::Internal)?,
         lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, now)),
         revision: grant.revision.0,
-        incarnation_id: crate::sharding::incarnation_id(),
+        incarnation_id,
     })
 }
 
