@@ -1,6 +1,6 @@
-//! Reflection retention contracts on the prebuilt, named retention fixtures. The fixtures come
-//! from `test-components/size-analysis/fixtures`, which `test-components/build-components.sh rust`
-//! builds and copies to `test-components/`.
+//! Reflection retention and export contracts on the prebuilt, named retention fixtures. The
+//! fixtures come from `test-components/size-analysis/fixtures`, which
+//! `test-components/build-components.sh rust` builds and copies to `test-components/`.
 
 use golem_size_analysis::contract::{
     GOLEM_GUEST_EXPORTS, check_export_contract, component_contract,
@@ -12,8 +12,8 @@ use test_r::test;
 
 test_r::enable!();
 
-fn component(fixture: &str) -> Vec<u8> {
-    let path = PathBuf::from("../test-components").join(format!("{fixture}.wasm"));
+fn fixture(name: &str) -> Vec<u8> {
+    let path = PathBuf::from("../test-components").join(format!("{name}.wasm"));
     std::fs::read(&path).unwrap_or_else(|error| {
         panic!(
             "missing retention fixture {} ({error}); build it with \
@@ -23,15 +23,18 @@ fn component(fixture: &str) -> Vec<u8> {
     })
 }
 
-fn evidence(fixture: &str) -> Evidence {
-    component_evidence(&component(fixture)).unwrap()
+fn evidence(name: &str) -> Evidence {
+    component_evidence(&fixture(name)).unwrap()
 }
 
 #[test]
-fn empty_preserves_canonical_floor_contract() {
-    let floor = component_contract(&component("retention_canonical_floor")).unwrap();
-    let empty = component_contract(&component("retention_empty")).unwrap();
-    check_export_contract(&floor, &empty, &GOLEM_GUEST_EXPORTS).unwrap();
+fn empty_fixture_keeps_the_canonical_floor_contract() {
+    check_export_contract(
+        &component_contract(&fixture("retention_canonical_floor")).unwrap(),
+        &component_contract(&fixture("retention_empty")).unwrap(),
+        &GOLEM_GUEST_EXPORTS,
+    )
+    .unwrap();
 }
 
 #[test]

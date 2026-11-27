@@ -294,7 +294,7 @@ build_retention_fixtures() {
   if [ "$clean_only" = true ] || [ "$check_only" = true ]; then
     return 0
   fi
-  # Named, unstripped components for the reflection retention test in golem-size-analysis.
+  # Named, unstripped components for the retention test in golem-size-analysis.
   echo "Building retention fixtures..."
   local manifest="${SCRIPT_DIR}/size-analysis/fixtures/Cargo.toml"
   cargo build --locked --manifest-path "$manifest" --target wasm32-wasip2 --release \
