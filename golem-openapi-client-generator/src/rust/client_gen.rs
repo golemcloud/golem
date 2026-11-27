@@ -1809,7 +1809,7 @@ pub fn client_gen(
     let ignored_paths: HashSet<String> =
         HashSet::from_iter(ignored_paths.iter().map(|ip| ip.to_string()));
 
-    let paths: HashMap<String, ReferenceOr<PathItem>> = open_api
+    let paths: IndexMap<String, ReferenceOr<PathItem>> = open_api
         .paths
         .iter()
         .filter_map(|(path_key, path_item)| {
@@ -1942,6 +1942,53 @@ pub fn client_gen(
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn operations_follow_path_order() {
+        let mut api: OpenAPI = serde_yaml::from_str(
+            r#"
+openapi: 3.0.0
+info:
+  title: Ordering
+  version: '1'
+paths:
+  /zebra:
+    get:
+      operationId: fetch_zebra
+      responses:
+        '204': {description: Complete}
+  /alpha:
+    get:
+      operationId: fetch_alpha
+      responses:
+        '204': {description: Complete}
+  /middle:
+    get:
+      operationId: fetch_middle
+      responses:
+        '204': {description: Complete}
+"#,
+        )
+        .unwrap();
+
+        for names in [
+            ["fetch_zebra", "fetch_alpha", "fetch_middle"],
+            ["fetch_middle", "fetch_alpha", "fetch_zebra"],
+        ] {
+            for _ in 0..16 {
+                let generated = client_gen(&api, None, &mut RefCache::new(), &[])
+                    .unwrap()
+                    .code;
+                let methods: Vec<_> = generated
+                    .lines()
+                    .filter_map(|line| line.trim().strip_prefix("async fn "))
+                    .map(|line| line.split('(').next().unwrap())
+                    .collect();
+                assert_eq!(methods, names.repeat(2), "{generated}");
+            }
+            api.paths.paths.reverse();
+        }
+    }
 
     #[test]
     fn request_bodies_are_sent_but_never_logged() {
