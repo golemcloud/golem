@@ -18,20 +18,17 @@ use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
 use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::time::{Duration, Instant};
 
-/// Collects the entries of an oplog chunk in the form that its reader gets.
-trait ChunkBuilder {
+/// Collects the entries of an oplog chunk in the form that its reader gets. The attribution of an
+/// entry reads the `Start` entries that own it, also outside the chunk, after the builder allows
+/// each of them.
+trait ChunkBuilder: OwnerStartAccess {
     type Entry;
-    /// What the chunk holds about the origin of each entry.
-    type Attribution: ChunkAttribution;
 
-    /// Returns the form of the entry at `oplog_index` that the chunk holds, or `None` if the
-    /// entry does not fit in the chunk. `component_revision` is the revision that `entry` was
-    /// decoded with.
+    /// Returns the form of `entry` that the chunk holds, or `None` if the entry does not fit in
+    /// the chunk. `component_revision` is the revision that `entry` was decoded with.
     fn admit(
         &mut self,
-        oplog_index: OplogIndex,
-        attribution: Self::Attribution,
-        entry: PublicOplogEntry,
+        entry: PublicOplogEntryWithIndex,
         component_revision: ComponentRevision,
     ) -> Result<Option<Self::Entry>, String>;
 
@@ -42,93 +39,93 @@ trait ChunkBuilder {
     }
 }
 
-/// The origin of an oplog entry, as a chunk holds it.
-trait ChunkAttribution: Sized {
-    async fn resolve(
-        resolver: &mut PublicOplogAttributionResolver<'_>,
-        index: OplogIndex,
-        entry: &OplogEntry,
-    ) -> Result<Self, String>;
-}
-
-/// The attribution of an entry reads the `Start` entries that own the entry, also when they are
-/// outside the chunk.
-impl ChunkAttribution for PublicOplogEntryAttribution {
-    async fn resolve(
-        resolver: &mut PublicOplogAttributionResolver<'_>,
-        index: OplogIndex,
-        entry: &OplogEntry,
-    ) -> Result<Self, String> {
-        resolver.attribution_for_entry(index, entry).await
-    }
-}
-
-/// A chunk without attribution reads no owning `Start` of its entries.
-impl ChunkAttribution for () {
-    async fn resolve(
-        _resolver: &mut PublicOplogAttributionResolver<'_>,
-        _index: OplogIndex,
-        _entry: &OplogEntry,
-    ) -> Result<Self, String> {
-        Ok(())
-    }
-}
-
 /// The chunk of a reader in the executor process, which gets every entry in full.
 struct InProcessChunk;
 
-impl ChunkBuilder for InProcessChunk {
-    type Entry = PublicOplogEntryWithIndex;
-    type Attribution = PublicOplogEntryAttribution;
-
-    fn admit(
-        &mut self,
-        oplog_index: OplogIndex,
-        attribution: PublicOplogEntryAttribution,
-        entry: PublicOplogEntry,
-        _component_revision: ComponentRevision,
-    ) -> Result<Option<Self::Entry>, String> {
-        Ok(Some(PublicOplogEntryWithIndex {
-            oplog_index,
-            attribution,
-            entry,
-        }))
+impl OwnerStartAccess for InProcessChunk {
+    async fn check(&mut self, index: OplogIndex) -> Result<(), String> {
+        UnrestrictedOwnerStarts.check(index).await
     }
 }
 
-/// The chunk of a guest, which gets each entry with its index and without attribution. The guest
-/// form of an entry has no attribution, and the oplog grant of the guest covers only the indexes
-/// of its batch. The chunk does not read the expected request of a replay divergence outside its
-/// batch; [`unread_expected_requests`] names these divergences, and the caller reads their
-/// requests with [`read_expected_requests`] after the grant check covers them.
-struct GuestChunk {
-    /// The indexes that the grant check of the batch covers.
-    window: RangeInclusive<OplogIndex>,
+impl ChunkBuilder for InProcessChunk {
+    type Entry = PublicOplogEntryWithIndex;
+
+    fn admit(
+        &mut self,
+        entry: PublicOplogEntryWithIndex,
+        _component_revision: ComponentRevision,
+    ) -> Result<Option<Self::Entry>, String> {
+        Ok(Some(entry))
+    }
 }
 
-impl GuestChunk {
+/// The chunk of a guest, whose oplog grant check covers only the indexes of its batch. The
+/// attribution of an entry reads an owning `Start` outside the batch only after `access` allows
+/// it. The chunk does not read the expected request of a replay divergence outside its batch;
+/// [`unread_expected_requests`] names these divergences, and the caller reads their requests with
+/// [`read_expected_requests`] after the grant check covers them.
+struct GuestChunk<'a, A> {
+    /// The indexes that the grant check of the batch covers.
+    window: RangeInclusive<OplogIndex>,
+    access: &'a mut A,
+}
+
+/// The indexes of a guest batch of `count` indexes from `start`.
+fn guest_window(start: OplogIndex, count: usize) -> RangeInclusive<OplogIndex> {
+    let end = start
+        .as_u64()
+        .saturating_add((count as u64).saturating_sub(1));
+    start..=OplogIndex::from_u64(end)
+}
+
+impl<'a, A: OwnerStartAccess> GuestChunk<'a, A> {
     /// The chunk of a guest batch of `count` indexes from `start`.
-    fn new(start: OplogIndex, count: usize) -> Self {
-        let end = start
-            .as_u64()
-            .saturating_add((count as u64).saturating_sub(1));
+    fn new(start: OplogIndex, count: usize, access: &'a mut A) -> Self {
         Self {
-            window: start..=OplogIndex::from_u64(end),
+            window: guest_window(start, count),
+            access,
         }
+    }
+}
+
+impl<A: OwnerStartAccess> OwnerStartAccess for GuestChunk<'_, A> {
+    async fn check(&mut self, index: OplogIndex) -> Result<(), String> {
+        if self.window.contains(&index) {
+            Ok(())
+        } else {
+            self.access.check(index).await
+        }
+    }
+}
+
+impl<A: OwnerStartAccess> ChunkBuilder for GuestChunk<'_, A> {
+    type Entry = PublicOplogEntryWithIndex;
+
+    fn admit(
+        &mut self,
+        entry: PublicOplogEntryWithIndex,
+        _component_revision: ComponentRevision,
+    ) -> Result<Option<Self::Entry>, String> {
+        Ok(Some(entry))
+    }
+
+    fn expected_request_window(&self) -> Option<&RangeInclusive<OplogIndex>> {
+        Some(&self.window)
     }
 }
 
 /// The indexes of the replay divergences in `entries`, a guest batch of `count` indexes from
 /// `start`, that lie outside the batch. The batch did not read their expected requests.
 pub fn unread_expected_requests(
-    entries: &[(OplogIndex, PublicOplogEntry)],
+    entries: &[PublicOplogEntryWithIndex],
     start: OplogIndex,
     count: usize,
 ) -> Vec<OplogIndex> {
-    let window = GuestChunk::new(start, count).window;
+    let window = guest_window(start, count);
     let mut indexes = entries
         .iter()
-        .filter_map(|(_, entry)| match entry {
+        .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::FailedUpdate(params) => params.divergence.as_deref(),
             _ => None,
         })
@@ -143,14 +140,14 @@ pub fn unread_expected_requests(
 /// Reads the expected request of each replay divergence in `entries` whose index is in
 /// `indexes`.
 pub async fn read_expected_requests(
-    entries: &mut [(OplogIndex, PublicOplogEntry)],
+    entries: &mut [PublicOplogEntryWithIndex],
     indexes: &[OplogIndex],
     oplog_service: &Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) {
-    for (_, entry) in entries.iter_mut() {
-        let PublicOplogEntry::FailedUpdate(params) = entry else {
+    for entry in entries.iter_mut() {
+        let PublicOplogEntry::FailedUpdate(params) = &mut entry.entry else {
             continue;
         };
         if let Some(divergence) = params
@@ -161,25 +158,6 @@ pub async fn read_expected_requests(
                 with_expected_request(divergence, oplog_service, owned_agent_id, agent_mode).await,
             );
         }
-    }
-}
-
-impl ChunkBuilder for GuestChunk {
-    type Entry = (OplogIndex, PublicOplogEntry);
-    type Attribution = ();
-
-    fn admit(
-        &mut self,
-        oplog_index: OplogIndex,
-        _attribution: (),
-        entry: PublicOplogEntry,
-        _component_revision: ComponentRevision,
-    ) -> Result<Option<Self::Entry>, String> {
-        Ok(Some((oplog_index, entry)))
-    }
-
-    fn expected_request_window(&self) -> Option<&RangeInclusive<OplogIndex>> {
-        Some(&self.window)
     }
 }
 
@@ -200,35 +178,32 @@ impl RemotePage {
     }
 }
 
+impl OwnerStartAccess for RemotePage {
+    async fn check(&mut self, index: OplogIndex) -> Result<(), String> {
+        UnrestrictedOwnerStarts.check(index).await
+    }
+}
+
 impl ChunkBuilder for RemotePage {
     type Entry = golem_api_grpc::proto::golem::worker::OplogPageEntry;
-    type Attribution = PublicOplogEntryAttribution;
 
     /// Replaces an entry that is larger than `max_entry_bytes` with an `OmittedOplogEntry`. The
     /// first entry of a page always fits in the byte budget, so that a reader makes progress past
     /// an entry that is larger than the budget.
     fn admit(
         &mut self,
-        oplog_index: OplogIndex,
-        attribution: PublicOplogEntryAttribution,
-        entry: PublicOplogEntry,
+        entry: PublicOplogEntryWithIndex,
         component_revision: ComponentRevision,
     ) -> Result<Option<Self::Entry>, String> {
         let omitted = OmittedOplogEntry {
-            oplog_index,
-            attribution: attribution.clone(),
-            timestamp: entry.timestamp(),
-            entry_type: entry.entry_type().to_string(),
+            oplog_index: entry.oplog_index,
+            attribution: entry.attribution.clone(),
+            timestamp: entry.entry.timestamp(),
+            entry_type: entry.entry.entry_type().to_string(),
             size: 0,
             component_revision,
         };
-        let full: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex =
-            PublicOplogEntryWithIndex {
-                oplog_index,
-                attribution,
-                entry,
-            }
-            .try_into()?;
+        let full: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex = entry.try_into()?;
         let full_size = prost::Message::encoded_len(&full);
         let page_entry = if full_size > self.limits.max_entry_bytes {
             PublicOplogPageEntry::Omitted(OmittedOplogEntry {
@@ -288,10 +263,11 @@ pub async fn get_public_oplog_chunk(
 }
 
 /// Reads an oplog chunk of `count` indexes from `initial_oplog_index` for a guest, whose grant
-/// check covers these indexes. The chunk holds no attribution, so it reads no owning `Start`
-/// outside the chunk, and it reads the expected request of a replay divergence only for a
-/// divergence inside the chunk; [`unread_expected_requests`] names the others.
-pub async fn get_guest_oplog_chunk(
+/// check covers these indexes. The attribution of an entry reads an owning `Start` outside the
+/// chunk only after `access` allows it. The chunk reads the expected request of a replay
+/// divergence only for a divergence inside the chunk; [`unread_expected_requests`] names the
+/// others.
+pub(crate) async fn get_guest_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -303,7 +279,8 @@ pub async fn get_guest_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
     claims: ClaimVisibility,
-) -> Result<PublicOplogChunk<(OplogIndex, PublicOplogEntry)>, String> {
+    access: &mut impl OwnerStartAccess,
+) -> Result<PublicOplogChunk, String> {
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -317,7 +294,7 @@ pub async fn get_guest_oplog_chunk(
         count,
         None,
         claims,
-        &mut GuestChunk::new(initial_oplog_index, count),
+        &mut GuestChunk::new(initial_oplog_index, count, access),
     )
     .await?;
     Ok(chunk)
@@ -474,8 +451,9 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             .specifies_component_revision()
             .unwrap_or(current_component_revision);
 
-        let attribution =
-            B::Attribution::resolve(&mut attribution_resolver, index, &raw_entry).await?;
+        let attribution = attribution_resolver
+            .attribution_for_entry(index, &raw_entry, builder)
+            .await?;
         let entry = PublicOplogEntry::from_oplog_entry(
             index,
             raw_entry,
@@ -492,7 +470,12 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
         )
         .await?;
         if filter.is_none_or(|query| entry.matches(query)) {
-            match builder.admit(index, attribution, entry, entry_component_revision)? {
+            let entry = PublicOplogEntryWithIndex {
+                oplog_index: index,
+                attribution,
+                entry,
+            };
+            match builder.admit(entry, entry_component_revision)? {
                 Some(chunk_entry) => entries.push(chunk_entry),
                 None => {
                     page_full = true;
@@ -523,11 +506,11 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 /// Searches the oplog for a guest. The search reads no entry after `last_oplog_index`; the guest
 /// passes the `last_index` of its first result, so that its own entries, which every page adds,
 /// do not move the end of the search. The grant check of the guest covers `count` indexes from
-/// `initial_oplog_index`. The result holds no attribution, so the search reads no owning `Start`
-/// outside the chunks that it scans, and it reads the expected request of a replay divergence
-/// only for a divergence inside the indexes that the grant check covers;
-/// [`unread_expected_requests`] names the others.
-pub async fn search_guest_oplog(
+/// `initial_oplog_index`. The attribution of an entry reads an owning `Start` outside these
+/// indexes only after `access` allows it. The search reads the expected request of a replay
+/// divergence only for a divergence inside these indexes; [`unread_expected_requests`] names the
+/// others.
+pub(crate) async fn search_guest_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -542,7 +525,8 @@ pub async fn search_guest_oplog(
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult<(OplogIndex, PublicOplogEntry)>, String> {
+    access: &mut impl OwnerStartAccess,
+) -> Result<PublicOplogSearchResult, String> {
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -558,7 +542,7 @@ pub async fn search_guest_oplog(
         query,
         budget,
         claims,
-        GuestChunk::new(initial_oplog_index, count),
+        GuestChunk::new(initial_oplog_index, count, access),
     )
     .await
 }

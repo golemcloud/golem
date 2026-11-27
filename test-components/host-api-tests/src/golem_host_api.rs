@@ -282,6 +282,14 @@ pub trait GolemHostApi {
         agent_id: AgentId,
         query: String,
     ) -> Result<Option<Vec<u64>>, String>;
+    /// The index of each entry in the first batch of a search, with the start indexes of the
+    /// entity invocations that executed it, from the root to the immediate one; none for an entry
+    /// that the agent itself executed.
+    fn search_oplog_attributions(
+        &self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<(u64, Vec<u64>)>>, String>;
     /// Enriches a forged raw failed update at `entry_index` of the agent's own oplog, whose
     /// divergence names `divergence_index` with an expected host call of unknown request.
     fn enrich_forged_failed_update_result(
@@ -1039,7 +1047,7 @@ impl GolemHostApi for GolemHostApiImpl {
             .unwrap_or_default();
         Ok(entries
             .into_iter()
-            .filter_map(|entry| match entry {
+            .filter_map(|entry| match entry.entry {
                 PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
                     AgentInvocation::AgentMethodInvocation(method) => Some(method),
                     _ => None,
@@ -1077,7 +1085,7 @@ impl GolemHostApi for GolemHostApiImpl {
             .unwrap_or_default();
         Ok(entries
             .into_iter()
-            .filter_map(|entry| match entry {
+            .filter_map(|entry| match entry.entry {
                 PublicOplogEntry::AgentInvocationFinished(finished) => {
                     match (finished.method_name, finished.result) {
                         (Some(method_name), AgentInvocationResult::AgentMethod(output)) => {
@@ -1116,7 +1124,10 @@ impl GolemHostApi for GolemHostApiImpl {
         Ok(batch.map(|entries| {
             (
                 entries.len() as u64,
-                entries.iter().filter_map(divergence_request).collect(),
+                entries
+                    .iter()
+                    .filter_map(|entry| divergence_request(&entry.entry))
+                    .collect(),
             )
         }))
     }
@@ -1133,7 +1144,7 @@ impl GolemHostApi for GolemHostApiImpl {
             entries
                 .iter()
                 .filter_map(|(index, entry)| {
-                    divergence_request(entry).map(|request| (*index, request))
+                    divergence_request(&entry.entry).map(|request| (*index, request))
                 })
                 .collect()
         }))
@@ -1148,6 +1159,35 @@ impl GolemHostApi for GolemHostApiImpl {
         let batch = search.get_next().map_err(|error| format!("{error:?}"))?;
         self.kept_search = Some(search);
         Ok(batch.map(|entries| entries.into_iter().map(|(index, _)| index).collect()))
+    }
+
+    fn search_oplog_attributions(
+        &self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<(u64, Vec<u64>)>>, String> {
+        use golem_rust::bindings::golem::api::oplog::PublicOplogEntryAttribution;
+
+        let batch = SearchOplog::new(wire_agent_id(agent_id), &query)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(batch.map(|entries| {
+            entries
+                .into_iter()
+                .map(|(index, entry)| {
+                    let starts = match entry.attribution {
+                        PublicOplogEntryAttribution::Agent => Vec::new(),
+                        PublicOplogEntryAttribution::Entity(context) => context
+                            .ancestors
+                            .iter()
+                            .chain([&context.invocation])
+                            .map(|invocation| invocation.start_index)
+                            .collect(),
+                    };
+                    (index, starts)
+                })
+                .collect()
+        }))
     }
 
     fn enrich_forged_failed_update_result(

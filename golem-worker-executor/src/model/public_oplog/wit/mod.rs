@@ -14,6 +14,7 @@
 
 #[macro_use]
 mod entry_conversion;
+mod attribution;
 mod cards;
 mod public_entries;
 mod raw_entries;

@@ -525,7 +525,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     Sample(
       "oplog-inspector",
       "samples/oplog-inspector/repl-oplog-inspector.ts",
-      Contains("=== Oplog Inspector")
+      Contains("=== Oplog Inspector", "] by=agent CREATE")
     ),
     Sample(
       "oplog-search",

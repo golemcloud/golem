@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::oplog::OplogEnrichmentEntry;
 
 #[derive(Clone)]
 struct OplogStartAttributionSource {
@@ -44,6 +45,52 @@ impl OplogStartAttributionSource {
     fn parent(&self) -> Option<OplogIndex> {
         self.observational_owner.or(self.parent_start_index)
     }
+}
+
+/// Decides whether an attribution may read a `Start` entry that the read did not load itself.
+pub(crate) trait OwnerStartAccess {
+    /// Returns an error, which fails the read, when the reader may not read the entry at `index`.
+    async fn check(&mut self, index: OplogIndex) -> Result<(), String>;
+}
+
+/// The access of a reader that may read every entry of the oplog.
+pub(crate) struct UnrestrictedOwnerStarts;
+
+impl OwnerStartAccess for UnrestrictedOwnerStarts {
+    async fn check(&mut self, _index: OplogIndex) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The attribution of each of `entries`, which a guest passes to enrich them. The entries stand in
+/// for the oplog at their indexes, so the attribution reads only the owning `Start` entries
+/// outside `entries` from the oplog, after `access` allows each of them.
+pub(crate) async fn enrichment_attributions(
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    entries: &[(u64, OplogEnrichmentEntry)],
+    access: &mut impl OwnerStartAccess,
+) -> Result<Vec<PublicOplogEntryAttribution>, String> {
+    let mut resolver =
+        PublicOplogAttributionResolver::new(oplog_service, owned_agent_id, agent_mode);
+    for (index, entry) in entries {
+        if let OplogEnrichmentEntry::Other(entry) = entry {
+            resolver.cache_entry(OplogIndex::from_u64(*index), entry);
+        }
+    }
+    let mut attributions = Vec::with_capacity(entries.len());
+    for (index, entry) in entries {
+        attributions.push(match entry {
+            OplogEnrichmentEntry::CreateProjection { .. } => PublicOplogEntryAttribution::agent(),
+            OplogEnrichmentEntry::Other(entry) => {
+                resolver
+                    .attribution_for_entry(OplogIndex::from_u64(*index), entry, access)
+                    .await?
+            }
+        });
+    }
+    Ok(attributions)
 }
 
 enum AttributionPathNode {
@@ -80,10 +127,13 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             .insert(index, OplogStartAttributionSource::from_entry(entry));
     }
 
+    /// The attribution of `entry`. It reads the `Start` entries that own the entry and that the
+    /// resolver did not load yet, after `access` allows each of them.
     pub(super) async fn attribution_for_entry(
         &mut self,
         index: OplogIndex,
         entry: &OplogEntry,
+        access: &mut impl OwnerStartAccess,
     ) -> Result<PublicOplogEntryAttribution, String> {
         if let Some(start_index) = entry.entity_parent_start_index() {
             if start_index >= index {
@@ -91,7 +141,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                     "oplog entry {index} has non-causal entity parent Start index {start_index}"
                 ));
             }
-            let source = self.load_start(start_index).await?.ok_or_else(|| {
+            let source = self.load_start(start_index, access).await?.ok_or_else(|| {
                 format!(
                     "oplog entry {index} entity parent index {start_index} does not reference a Start"
                 )
@@ -102,7 +152,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 ));
             }
             return self
-                .entity_context_for_start(start_index)
+                .entity_context_for_start(start_index, access)
                 .await?
                 .map(PublicOplogEntryAttribution::entity)
                 .ok_or_else(|| {
@@ -262,7 +312,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
 
         match owner_start_index {
             Some(start_index) => self
-                .entity_context_for_start(start_index)
+                .entity_context_for_start(start_index, access)
                 .await
                 .map(|context| {
                     context.map_or_else(
@@ -277,6 +327,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
     async fn entity_context_for_start(
         &mut self,
         start_index: OplogIndex,
+        access: &mut impl OwnerStartAccess,
     ) -> Result<Option<PublicEntityInvocationContext>, String> {
         let mut path = Vec::new();
         let mut visited = HashSet::new();
@@ -289,7 +340,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 return Err(format!("cyclic oplog Start attribution at index {current}"));
             }
 
-            let Some(source) = self.load_start(current).await? else {
+            let Some(source) = self.load_start(current, access).await? else {
                 break None;
             };
             if source.function_name == HostFunctionName::GolemToolInvocationRejected {
@@ -346,10 +397,12 @@ impl<'a> PublicOplogAttributionResolver<'a> {
     async fn load_start(
         &mut self,
         index: OplogIndex,
+        access: &mut impl OwnerStartAccess,
     ) -> Result<Option<OplogStartAttributionSource>, String> {
         if let Some(start) = self.starts.get(&index) {
             return Ok(start.clone());
         }
+        access.check(index).await?;
 
         let entry = self
             .oplog_service

@@ -18,6 +18,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	oplogwit "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
@@ -34,7 +35,10 @@ func TestEveryEntryCaseHasAConstant(t *testing.T) {
 		}
 		var out []string
 		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
-			out = append(out, m[1])
+			// The cases of the attribution variant share the prefix of the entry cases.
+			if !strings.HasPrefix(m[1], "Attribution") {
+				out = append(out, m[1])
+			}
 		}
 		slices.Sort(out)
 		return out
@@ -73,5 +77,31 @@ func TestCheckpointPreservesSourceComponentRevision(t *testing.T) {
 	})
 	if got := entry.OplogProcessorCheckpoint().SourceComponentRevision; got != revision {
 		t.Fatalf("source component revision = %d, want %d", got, revision)
+	}
+}
+
+func TestAttributionNamesTheNestedEntityInvocation(t *testing.T) {
+	invocation := func(name string, start uint64) EntityInvocation {
+		return EntityInvocation{Entity: AgentEntity{Name: name}, StartIndex: start}
+	}
+	attributions := []Attribution{
+		oplogwit.MakePublicOplogEntryAttributionAgent(),
+		oplogwit.MakePublicOplogEntryAttributionEntity(EntityInvocationContext{
+			Invocation: invocation("lookup", 7),
+			Ancestors:  []EntityInvocation{invocation("audit", 3)},
+		}),
+	}
+	var got []string
+	for _, a := range attributions {
+		switch a.Tag() {
+		case AttributionAgent:
+			got = append(got, "agent")
+		case AttributionEntity:
+			c := a.Entity()
+			got = append(got, c.Ancestors[0].Entity.Name+">"+c.Invocation.Entity.Name)
+		}
+	}
+	if !slices.Equal(got, []string{"agent", "audit>lookup"}) {
+		t.Fatalf("attributions = %v", got)
 	}
 }

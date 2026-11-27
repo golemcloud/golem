@@ -18,11 +18,13 @@ import { uuidToString } from "./golem-core-types.js"
 // ---------------------------------------------------------------------------
 
 /**
- * Test-mock view of the host's `PublicOplogEntry`. Only the
- * discriminator is preserved; tests do not exercise the full payload
- * shapes (the real WIT type is a 30+ variant union).
+ * Test-mock view of the host's `AttributedPublicOplogEntry`. Only the
+ * tags of the attribution and of the entry are inspected by the tests.
  */
-export type PublicOplogEntry = { tag: string } & Record<string, unknown>
+export type AttributedPublicOplogEntry = {
+  attribution: { tag: string } & Record<string, unknown>
+  entry: { tag: string } & Record<string, unknown>
+}
 
 export type OplogEntry = { tag: string } & Record<string, unknown>
 
@@ -30,13 +32,15 @@ export type OplogEntry = { tag: string } & Record<string, unknown>
 // Seeded state
 // ---------------------------------------------------------------------------
 
-const _readChunks = new Map<string, ReadonlyArray<ReadonlyArray<PublicOplogEntry>>>()
+const _readChunks = new Map<string, ReadonlyArray<ReadonlyArray<AttributedPublicOplogEntry>>>()
 const _searchChunks = new Map<
   string,
-  ReadonlyArray<ReadonlyArray<readonly [OplogIndex, PublicOplogEntry]>>
+  ReadonlyArray<ReadonlyArray<readonly [OplogIndex, AttributedPublicOplogEntry]>>
 >()
 let _enrichImpl:
-  | ((entries: ReadonlyArray<readonly [OplogIndex, OplogEntry]>) => ReadonlyArray<PublicOplogEntry>)
+  | ((
+      entries: ReadonlyArray<readonly [OplogIndex, OplogEntry]>,
+    ) => ReadonlyArray<AttributedPublicOplogEntry>)
   | null = null
 
 const readKey = (id: AgentId, start: OplogIndex): string =>
@@ -46,7 +50,7 @@ const searchKey = (id: AgentId, text: string): string => `${uuidToString(id.uuid
 export const __seedReadChunks = (
   agentId: AgentId,
   start: OplogIndex,
-  chunks: ReadonlyArray<ReadonlyArray<PublicOplogEntry>>,
+  chunks: ReadonlyArray<ReadonlyArray<AttributedPublicOplogEntry>>,
 ): void => {
   _readChunks.set(readKey(agentId, start), chunks)
 }
@@ -54,7 +58,7 @@ export const __seedReadChunks = (
 export const __seedSearchChunks = (
   agentId: AgentId,
   text: string,
-  chunks: ReadonlyArray<ReadonlyArray<readonly [OplogIndex, PublicOplogEntry]>>,
+  chunks: ReadonlyArray<ReadonlyArray<readonly [OplogIndex, AttributedPublicOplogEntry]>>,
 ): void => {
   _searchChunks.set(searchKey(agentId, text), chunks)
 }
@@ -62,7 +66,7 @@ export const __seedSearchChunks = (
 export const __setEnrichImpl = (
   fn: (
     entries: ReadonlyArray<readonly [OplogIndex, OplogEntry]>,
-  ) => ReadonlyArray<PublicOplogEntry>,
+  ) => ReadonlyArray<AttributedPublicOplogEntry>,
 ): void => {
   _enrichImpl = fn
 }
@@ -79,7 +83,7 @@ export const enrichOplogEntries = (
   _agentId: AgentId,
   entries: ReadonlyArray<readonly [OplogIndex, OplogEntry]>,
   _componentRevision: ComponentRevision,
-): PublicOplogEntry[] => {
+): AttributedPublicOplogEntry[] => {
   if (_enrichImpl === null) {
     throw new Error("test mock: enrichOplogEntries was called but no impl is seeded")
   }
@@ -92,13 +96,13 @@ export const enrichOplogEntries = (
 
 export class GetOplog {
   private cursor = 0
-  private readonly chunks: ReadonlyArray<ReadonlyArray<PublicOplogEntry>>
+  private readonly chunks: ReadonlyArray<ReadonlyArray<AttributedPublicOplogEntry>>
 
   constructor(agentId: AgentId, start: OplogIndex) {
     this.chunks = _readChunks.get(readKey(agentId, start)) ?? []
   }
 
-  getNext(): PublicOplogEntry[] | undefined {
+  getNext(): AttributedPublicOplogEntry[] | undefined {
     if (this.cursor >= this.chunks.length) return undefined
     const out = [...this.chunks[this.cursor]!]
     this.cursor += 1
@@ -112,15 +116,19 @@ export class GetOplog {
 
 export class SearchOplog {
   private cursor = 0
-  private readonly chunks: ReadonlyArray<ReadonlyArray<readonly [OplogIndex, PublicOplogEntry]>>
+  private readonly chunks: ReadonlyArray<
+    ReadonlyArray<readonly [OplogIndex, AttributedPublicOplogEntry]>
+  >
 
   constructor(agentId: AgentId, text: string) {
     this.chunks = _searchChunks.get(searchKey(agentId, text)) ?? []
   }
 
-  getNext(): Array<[OplogIndex, PublicOplogEntry]> | undefined {
+  getNext(): Array<[OplogIndex, AttributedPublicOplogEntry]> | undefined {
     if (this.cursor >= this.chunks.length) return undefined
-    const out = this.chunks[this.cursor]!.map(([i, e]) => [i, e] as [OplogIndex, PublicOplogEntry])
+    const out = this.chunks[this.cursor]!.map(
+      ([i, e]) => [i, e] as [OplogIndex, AttributedPublicOplogEntry],
+    )
     this.cursor += 1
     return out
   }

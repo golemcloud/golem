@@ -4435,8 +4435,10 @@ Guest `search-oplog.get-next` authorizes a 100-index window from the search curs
 the scan budget for that call to the window size before reading entries. A batch can advance the
 cursor without finding a match. The first batch pins the oplog end separately, and each new live
 batch checks the grant for its own window. Completed calls replay their recorded results. Guest
-`get-oplog` and `search-oplog` batches hold no attribution, because the guest form of an entry has
-none, so they read no owning `Start` outside the window. When a `FailedUpdate` in a guest batch has
+`get-oplog` and `search-oplog` batches and `enrich-oplog-entries` attribute each entry. The
+attribution reads the owning `Start` entries of an entry; for each owner outside the window (or
+outside the entries passed to `enrich-oplog-entries`) it checks the grant first, and a denied owner
+refuses the call with `permission-denied` without reading the owner. When a `FailedUpdate` in a guest batch has
 its divergence index outside the window, the batch also checks the grant for that index, as
 `enrich-oplog-entries` does, and is refused with `permission-denied` when the grant does not cover
 it. A failed batch, such as a refused one, leaves the resource as it was, also its component

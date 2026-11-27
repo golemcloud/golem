@@ -1271,17 +1271,129 @@ object OplogApi {
     )
 
   // ---------------------------------------------------------------------------
+  // Attribution
+  // ---------------------------------------------------------------------------
+
+  enum AgentEntityKind {
+    case Tool, ToolMiddleware
+  }
+
+  enum EntityCallMode {
+    case Synchronous, Asynchronous, FireAndForget
+  }
+
+  /** An entity that runs inside an agent. */
+  final case class AgentEntity(kind: AgentEntityKind, name: String)
+
+  /** The tool command that an entity invocation ran. */
+  final case class ToolInvocationOperation(
+    commandPath: List[String],
+    hasStdin: Boolean,
+    hasStdout: Boolean,
+    declaresStdout: Boolean,
+    hasStderr: Boolean,
+    declaresStderr: Boolean
+  )
+
+  /** One entity invocation; `startIndex` is the index of its `start` entry. */
+  final case class EntityInvocation(
+    entity: AgentEntity,
+    startIndex: OplogIndex,
+    callMode: EntityCallMode,
+    operation: Option[ToolInvocationOperation]
+  )
+
+  /**
+   * The entity invocation that executed an entry. `ancestors` are ordered from
+   * the root entity invocation to the immediate parent of `invocation`.
+   */
+  final case class EntityInvocationContext(invocation: EntityInvocation, ancestors: List[EntityInvocation])
+
+  /**
+   * What executed an oplog entry: the agent itself, or an entity that runs
+   * inside it.
+   */
+  sealed trait Attribution extends Product with Serializable
+  object Attribution {
+    case object Agent                                         extends Attribution
+    final case class Entity(context: EntityInvocationContext) extends Attribution
+
+    private[host] def fromJs(raw: js.Any): Attribution = {
+      val dyn = raw.asInstanceOf[js.Dynamic]
+      dyn.tag.asInstanceOf[String] match {
+        case "agent"  => Agent
+        case "entity" =>
+          val context = dyn.selectDynamic("val")
+          Entity(
+            EntityInvocationContext(
+              invocation = parseEntityInvocation(context.invocation),
+              ancestors = context.ancestors.asInstanceOf[js.Array[js.Dynamic]].toList.map(parseEntityInvocation)
+            )
+          )
+        case other => throw new IllegalArgumentException(s"Unknown oplog entry attribution: $other")
+      }
+    }
+
+    private def parseEntityInvocation(raw: js.Dynamic): EntityInvocation = {
+      val entity    = raw.entity
+      val operation = raw.operation
+      EntityInvocation(
+        entity = AgentEntity(
+          kind = entity.kind.asInstanceOf[String] match {
+            case "tool"            => AgentEntityKind.Tool
+            case "tool-middleware" => AgentEntityKind.ToolMiddleware
+            case other             => throw new IllegalArgumentException(s"Unknown agent entity kind: $other")
+          },
+          name = entity.name.asInstanceOf[String]
+        ),
+        startIndex = BigInt(raw.startIndex.toString),
+        callMode = raw.callMode.asInstanceOf[String] match {
+          case "synchronous"     => EntityCallMode.Synchronous
+          case "asynchronous"    => EntityCallMode.Asynchronous
+          case "fire-and-forget" => EntityCallMode.FireAndForget
+          case other             => throw new IllegalArgumentException(s"Unknown entity call mode: $other")
+        },
+        operation =
+          if (js.isUndefined(operation) || operation == null) None
+          else {
+            val tool = operation.selectDynamic("val")
+            Some(
+              ToolInvocationOperation(
+                commandPath = tool.commandPath.asInstanceOf[js.Array[String]].toList,
+                hasStdin = tool.hasStdin.asInstanceOf[Boolean],
+                hasStdout = tool.hasStdout.asInstanceOf[Boolean],
+                declaresStdout = tool.declaresStdout.asInstanceOf[Boolean],
+                hasStderr = tool.hasStderr.asInstanceOf[Boolean],
+                declaresStderr = tool.declaresStderr.asInstanceOf[Boolean]
+              )
+            )
+          }
+      )
+    }
+  }
+
+  /** An oplog entry with what executed it. */
+  final case class AttributedOplogEntry(attribution: Attribution, entry: OplogEntry)
+
+  object AttributedOplogEntry {
+    private[host] def fromJs(raw: js.Any): AttributedOplogEntry = {
+      val dyn = raw.asInstanceOf[js.Dynamic]
+      AttributedOplogEntry(Attribution.fromJs(dyn.attribution), OplogEntry.fromJs(dyn.entry))
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // GetOplog resource
   // ---------------------------------------------------------------------------
 
   final class GetOplog private (private val handle: JsGetOplog) {
 
-    def getNext(): Option[List[OplogEntry]] = {
+    def getNext(): Option[List[AttributedOplogEntry]] = {
       val batch = handle.getNext()
       if (js.isUndefined(batch) || batch == null) None
       else {
         val arr = batch.asInstanceOf[js.Array[js.Any]]
-        Some(arr.toList.map(OplogEntry.fromJs))
+        Some(arr.toList.map(AttributedOplogEntry.fromJs))
       }
     }
   }
@@ -1300,14 +1412,14 @@ object OplogApi {
 
   final class SearchOplog private (private val handle: JsSearchOplog) {
 
-    def getNext(): Option[List[(OplogIndex, OplogEntry)]] = {
+    def getNext(): Option[List[(OplogIndex, AttributedOplogEntry)]] = {
       val batch = handle.getNext()
       if (js.isUndefined(batch) || batch == null) None
       else {
         val arr = batch.asInstanceOf[js.Array[js.Tuple2[js.Any, js.Any]]]
         Some(arr.toList.map { t =>
           val idx   = BigInt(t._1.toString)
-          val entry = OplogEntry.fromJs(t._2)
+          val entry = AttributedOplogEntry.fromJs(t._2)
           (idx, entry)
         })
       }

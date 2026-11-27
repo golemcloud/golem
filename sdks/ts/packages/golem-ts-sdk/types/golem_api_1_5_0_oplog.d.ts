@@ -10,23 +10,29 @@ declare module 'golem:api/oplog@1.5.0' {
   import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
   /**
    * Enriches raw oplog entries into public oplog entries by resolving oplog payloads
-   * and augmenting entries with component metadata.
+   * and augmenting entries with component metadata and attribution. The attribution can read
+   * the `start` entries of the entity invocations that own an entry, also when they are not
+   * in `entries`, so the oplog grant of the caller must cover them.
    * @throws string
    */
-  export function enrichOplogEntries(environmentId: EnvironmentId, agentId: AgentId, entries: [OplogIndex, OplogEntry][], componentRevision: ComponentRevision): PublicOplogEntry[];
+  export function enrichOplogEntries(environmentId: EnvironmentId, agentId: AgentId, entries: [OplogIndex, OplogEntry][], componentRevision: ComponentRevision): AttributedPublicOplogEntry[];
   export class GetOplog {
     constructor(agentId: AgentId, start: OplogIndex);
     /**
+     * A batch is refused with `permission-denied` when the oplog grant of the caller does
+     * not cover an entry that the batch reads, also a `start` entry outside the batch that
+     * the attribution of an entry reads.
      * @throws OplogReadError
      */
-    getNext(): PublicOplogEntry[] | undefined;
+    getNext(): AttributedPublicOplogEntry[] | undefined;
   }
   export class SearchOplog {
     constructor(agentId: AgentId, text: string);
     /**
+     * A batch is refused with `permission-denied` like a batch of `get-oplog`.
      * @throws OplogReadError
      */
-    getNext(): [OplogIndex, PublicOplogEntry][] | undefined;
+    getNext(): [OplogIndex, AttributedPublicOplogEntry][] | undefined;
   }
   export type Datetime = wasiClocks030SystemClock.Instant;
   export type AccountId = golemCore200Types.AccountId;
@@ -1959,6 +1965,81 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'span-closed'
     val: SpanClosedParameters
+  };
+  /**
+   * The kind of an entity that runs inside an agent
+   */
+  export type PublicAgentEntityKind = "tool" | "tool-middleware";
+  /**
+   * An entity that runs inside an agent
+   */
+  export type PublicAgentEntity = {
+    kind: PublicAgentEntityKind;
+    name: string;
+  };
+  /**
+   * How the agent called an entity
+   */
+  export type PublicEntityCallMode = "synchronous" | "asynchronous" | "fire-and-forget";
+  /**
+   * The tool command that an entity invocation ran
+   */
+  export type PublicToolInvocationOperation = {
+    commandPath: string[];
+    /** Whether a live stdin attachment was requested */
+    hasStdin: boolean;
+    /** Whether a live stdout attachment was requested. Stdout bytes are not recorded in the oplog. */
+    hasStdout: boolean;
+    /** Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog. */
+    declaresStdout: boolean;
+    /** Whether a live stderr attachment was requested. Stderr bytes are not recorded in the oplog. */
+    hasStderr: boolean;
+    /** Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog. */
+    declaresStderr: boolean;
+  };
+  /**
+   * The operation that an entity invocation ran
+   */
+  export type PublicEntityInvocationOperation =
+  {
+    tag: 'tool'
+    val: PublicToolInvocationOperation
+  };
+  /**
+   * One entity invocation in an owner-oplog execution chain
+   */
+  export type PublicEntityInvocation = {
+    entity: PublicAgentEntity;
+    /** The index of the `start` entry of the invocation */
+    startIndex: OplogIndex;
+    callMode: PublicEntityCallMode;
+    operation?: PublicEntityInvocationOperation;
+  };
+  /**
+   * The entity invocation that executed an entry, and its ancestors, ordered from the root
+   * entity invocation to the immediate parent of `invocation`
+   */
+  export type PublicEntityInvocationContext = {
+    invocation: PublicEntityInvocation;
+    ancestors: PublicEntityInvocation[];
+  };
+  /**
+   * What executed an oplog entry: the agent itself, or an entity that runs inside it
+   */
+  export type PublicOplogEntryAttribution =
+  {
+    tag: 'agent'
+  } |
+  {
+    tag: 'entity'
+    val: PublicEntityInvocationContext
+  };
+  /**
+   * A public oplog entry with what executed it
+   */
+  export type AttributedPublicOplogEntry = {
+    attribution: PublicOplogEntryAttribution;
+    entry: PublicOplogEntry;
   };
   export type OplogReadError =
   {

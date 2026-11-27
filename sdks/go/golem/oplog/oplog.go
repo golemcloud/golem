@@ -16,12 +16,14 @@
 //
 // The entries are the host's own types, as the Rust SDK exposes them: switch on
 // Entry.Tag() and read a case's parameters with the accessor of the same name.
+// Each entry comes with its [Attribution], which tells whether the agent itself or
+// an entity inside it executed the entry.
 //
 //	for e, err := range oplog.Get(id, 0) {
 //	    if err != nil { return err }
-//	    switch e.Tag() {
+//	    switch e.Entry.Tag() {
 //	    case oplog.AgentInvocationStarted:
-//	        p := e.AgentInvocationStarted()
+//	        p := e.Entry.AgentInvocationStarted()
 //	        …
 //	    }
 //	}
@@ -39,6 +41,32 @@ import (
 
 // Entry is one oplog entry. Its cases are the constants of this package.
 type Entry = oplogwit.PublicOplogEntry
+
+// AttributedEntry is an [Entry] with its [Attribution].
+type AttributedEntry = oplogwit.AttributedPublicOplogEntry
+
+// Attribution is what executed an entry: the agent itself when Tag() is
+// [AttributionAgent], or an entity inside it when Tag() is [AttributionEntity],
+// whose invocation Entity() returns.
+type Attribution = oplogwit.PublicOplogEntryAttribution
+
+// The cases of an [Attribution], for a switch on Attribution.Tag().
+const (
+	AttributionAgent  = oplogwit.PublicOplogEntryAttributionAgent
+	AttributionEntity = oplogwit.PublicOplogEntryAttributionEntity
+)
+
+// The entity invocation that executed an entry. Ancestors are ordered from the
+// root entity invocation to the immediate parent of Invocation.
+type (
+	EntityInvocationContext   = oplogwit.PublicEntityInvocationContext
+	EntityInvocation          = oplogwit.PublicEntityInvocation
+	AgentEntity               = oplogwit.PublicAgentEntity
+	AgentEntityKind           = oplogwit.PublicAgentEntityKind
+	EntityCallMode            = oplogwit.PublicEntityCallMode
+	EntityInvocationOperation = oplogwit.PublicEntityInvocationOperation
+	ToolInvocationOperation   = oplogwit.PublicToolInvocationOperation
+)
 
 // OwnerKind is the authoritative execution-owner kind stored at creation.
 type OwnerKind = oplogwit.OwnerKind
@@ -77,15 +105,17 @@ type (
 	PublicTokenProvenance       = oplogwit.PublicTokenProvenance
 )
 
-// SearchHit is an entry [Search] found, with its index in the oplog.
+// SearchHit is an entry [Search] found, with its index in the oplog and its
+// [Attribution].
 type SearchHit struct {
-	Index uint64
-	Entry Entry
+	Index       uint64
+	Attribution Attribution
+	Entry       Entry
 }
 
 // MustGet is [Get], panicking on a failing page.
-func MustGet(id golem.AgentID, start uint64) iter.Seq[Entry] {
-	return func(yield func(Entry) bool) {
+func MustGet(id golem.AgentID, start uint64) iter.Seq[AttributedEntry] {
+	return func(yield func(AttributedEntry) bool) {
 		for e, err := range Get(id, start) {
 			if err != nil {
 				panic(err)
@@ -114,7 +144,9 @@ func MustSearch(id golem.AgentID, text string) iter.Seq[SearchHit] {
 // Get reads an agent's oplog from the entry at index start. Pages are fetched
 // as the loop advances; a failing page is yielded as an error and ends the
 // iteration.
-func Get(id golem.AgentID, start uint64) iter.Seq2[Entry, error] { return hostGet(id, start) }
+func Get(id golem.AgentID, start uint64) iter.Seq2[AttributedEntry, error] {
+	return hostGet(id, start)
+}
 
 // Search finds the entries of an agent's oplog that match text, in pages like
 // [Get].

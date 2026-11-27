@@ -21,7 +21,7 @@ type RawOplogIndex = OplogHost.OplogIndex
 type RawAgentId = OplogHost.AgentId
 type RawEnvironmentId = OplogHost.EnvironmentId
 type RawComponentRevision = OplogHost.ComponentRevision
-type RawPublicOplogEntry = OplogHost.PublicOplogEntry
+type RawAttributedPublicOplogEntry = OplogHost.AttributedPublicOplogEntry
 type RawOplogEntry = OplogHost.OplogEntry
 
 /**
@@ -30,12 +30,14 @@ type RawOplogEntry = OplogHost.OplogEntry
  * underlying iterator is exhausted.
  */
 export interface GetOplogHandle {
-  readonly getNext: () => ReadonlyArray<RawPublicOplogEntry> | undefined
+  readonly getNext: () => ReadonlyArray<RawAttributedPublicOplogEntry> | undefined
 }
 
 /** Pager handle around `golem:api/oplog.SearchOplog`. */
 export interface SearchOplogHandle {
-  readonly getNext: () => ReadonlyArray<readonly [RawOplogIndex, RawPublicOplogEntry]> | undefined
+  readonly getNext: () =>
+    | ReadonlyArray<readonly [RawOplogIndex, RawAttributedPublicOplogEntry]>
+    | undefined
 }
 
 export interface OplogClientShape {
@@ -45,7 +47,7 @@ export interface OplogClientShape {
     agentId: RawAgentId,
     entries: ReadonlyArray<readonly [RawOplogIndex, RawOplogEntry]>,
     componentRevision: RawComponentRevision,
-  ) => ReadonlyArray<RawPublicOplogEntry>
+  ) => ReadonlyArray<RawAttributedPublicOplogEntry>
   /**
    * Construct a `GetOplog` pager. The handle is a thin wrapper over
    * the host's resource so its `getNext()` matches the WIT shape;
@@ -75,7 +77,9 @@ export const OplogLive: Layer.Layer<OplogClient> = Layer.succeed(
       return {
         getNext: () => {
           const out = handle.getNext()
-          return out === undefined ? undefined : ([...out] as ReadonlyArray<RawPublicOplogEntry>)
+          return out === undefined
+            ? undefined
+            : ([...out] as ReadonlyArray<RawAttributedPublicOplogEntry>)
         },
       }
     },
@@ -86,9 +90,9 @@ export const OplogLive: Layer.Layer<OplogClient> = Layer.succeed(
           const out = handle.getNext()
           return out === undefined
             ? undefined
-            : (out.map(([i, e]) => [i, e] as [RawOplogIndex, RawPublicOplogEntry]) as ReadonlyArray<
-                readonly [RawOplogIndex, RawPublicOplogEntry]
-              >)
+            : (out.map(
+                ([i, e]) => [i, e] as [RawOplogIndex, RawAttributedPublicOplogEntry],
+              ) as ReadonlyArray<readonly [RawOplogIndex, RawAttributedPublicOplogEntry]>)
         },
       }
     },

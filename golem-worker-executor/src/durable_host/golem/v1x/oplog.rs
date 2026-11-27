@@ -20,7 +20,9 @@ use crate::durable_host::concurrent::CallReplayOutcome;
 use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
+use crate::model::public_oplog::OwnerStartAccess;
 use crate::model::public_oplog::PublicOplogEntryOps;
+use crate::model::public_oplog::enrichment_attributions;
 use crate::model::public_oplog::get_guest_oplog_chunk;
 use crate::model::public_oplog::read_expected_requests;
 use crate::model::public_oplog::search_guest_oplog;
@@ -50,6 +52,7 @@ use golem_common::model::oplog::HostResponseGolemApiOplogChunk;
 use golem_common::model::oplog::HostResponseGolemApiOplogEntries;
 use golem_common::model::oplog::OplogEnrichmentEntry;
 use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::oplog::host_functions::GolemApiEnrichOplogEntries;
 use golem_common::model::oplog::host_functions::GolemApiGetOplogNext;
 use golem_common::model::oplog::host_functions::GolemApiSearchOplogNext;
@@ -106,6 +109,50 @@ async fn oplog_entries_denied<Ctx: WorkerCtx>(
     Ok(ctx.authorize_live_permissions(&targets).await?.is_err())
 }
 
+/// The access of a guest oplog read to the owning `Start` entries outside its batch: it checks
+/// the grant of the caller for each of them before the read reads it. An error of the check fails
+/// the read, and is kept in `failure` for the caller to raise.
+struct GuestOwnerStarts<'a, Ctx: WorkerCtx> {
+    ctx: &'a mut DurableWorkerCtx<Ctx>,
+    owned_agent_id: &'a OwnedAgentId,
+    failure: Option<WorkerExecutorError>,
+}
+
+impl<'a, Ctx: WorkerCtx> GuestOwnerStarts<'a, Ctx> {
+    fn new(ctx: &'a mut DurableWorkerCtx<Ctx>, owned_agent_id: &'a OwnedAgentId) -> Self {
+        Self {
+            ctx,
+            owned_agent_id,
+            failure: None,
+        }
+    }
+
+    /// `result`, or the error of a grant check that failed it.
+    fn finish<T>(
+        self,
+        result: Result<T, String>,
+    ) -> Result<Result<T, String>, WorkerExecutorError> {
+        match self.failure {
+            Some(failure) => Err(failure),
+            None => Ok(result),
+        }
+    }
+}
+
+impl<Ctx: WorkerCtx> OwnerStartAccess for GuestOwnerStarts<'_, Ctx> {
+    async fn check(&mut self, index: OplogIndex) -> Result<(), String> {
+        match oplog_entries_denied(self.ctx, self.owned_agent_id, &[index]).await {
+            Ok(false) => Ok(()),
+            Ok(true) => Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+            Err(failure) => {
+                let error = failure.to_string();
+                self.failure = Some(failure);
+                Err(error)
+            }
+        }
+    }
+}
+
 /// Reads the expected requests of the replay divergences in a guest batch of `count` indexes
 /// from `start` that lie outside the batch, which the grant check of the batch does not cover.
 /// Like `enrich-oplog-entries`, it checks the grant for each of these indexes first, and returns
@@ -113,7 +160,7 @@ async fn oplog_entries_denied<Ctx: WorkerCtx>(
 async fn guest_divergences_denied<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     owned_agent_id: &OwnedAgentId,
-    entries: &mut [(OplogIndex, PublicOplogEntry)],
+    entries: &mut [PublicOplogEntryWithIndex],
     start: OplogIndex,
     count: usize,
 ) -> Result<bool, WorkerExecutorError> {
@@ -281,87 +328,100 @@ async fn component_revision_at<Ctx: WorkerCtx>(
     Ok(revision_before(&status.successful_updates, start).unwrap_or(create_revision))
 }
 
-async fn get_oplog_chunk<Ctx: WorkerCtx>(
+/// The agent identity of a guest oplog read, and the component revision at its next index.
+async fn guest_read_start<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
-    entry: &GetOplogEntry,
-) -> Result<crate::model::public_oplog::PublicOplogChunk<(OplogIndex, PublicOplogEntry)>, String> {
+    owned_agent_id: &OwnedAgentId,
+    next_oplog_index: OplogIndex,
+    initialized_revision: Option<ComponentRevision>,
+) -> Result<(ResolvedAgentIdentity, ComponentRevision), String> {
     let identity = ctx
         .state
         .worker_service
-        .resolve_agent_identity(&entry.owned_agent_id)
+        .resolve_agent_identity(owned_agent_id)
         .await
         .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
-    let agent_mode = identity.agent_mode;
-    let current_component_revision = if entry.initialized {
-        entry.current_component_revision
-    } else {
-        component_revision_at(
-            ctx,
-            &identity,
-            &entry.owned_agent_id,
-            entry.next_oplog_index,
-        )
-        .await?
+        .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
+    let current_component_revision = match initialized_revision {
+        Some(revision) => revision,
+        None => component_revision_at(ctx, &identity, owned_agent_id, next_oplog_index).await?,
     };
-    let agent_type = &identity.create_parameters().agent_type_name;
-    get_guest_oplog_chunk(
-        ctx.state.component_service.clone(),
-        ctx.state.oplog_service(),
+    Ok((identity, current_component_revision))
+}
+
+async fn get_oplog_chunk<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &GetOplogEntry,
+) -> Result<Result<crate::model::public_oplog::PublicOplogChunk, String>, WorkerExecutorError> {
+    let (identity, current_component_revision) = match guest_read_start(
+        ctx,
         &entry.owned_agent_id,
-        agent_mode,
+        entry.next_oplog_index,
+        entry
+            .initialized
+            .then_some(entry.current_component_revision),
+    )
+    .await
+    {
+        Ok(start) => start,
+        Err(error) => return Ok(Err(error)),
+    };
+    let component_service = ctx.state.component_service.clone();
+    let oplog_service = ctx.state.oplog_service();
+    let mut access = GuestOwnerStarts::new(ctx, &entry.owned_agent_id);
+    let result = get_guest_oplog_chunk(
+        component_service,
+        oplog_service,
+        &entry.owned_agent_id,
+        identity.agent_mode,
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
-        agent_type.as_ref(),
+        identity.create_parameters().agent_type_name.as_ref(),
         current_component_revision,
         entry.next_oplog_index,
         entry.page_size,
         GUEST_CLAIM_VISIBILITY,
+        &mut access,
     )
-    .await
+    .await;
+    access.finish(result)
 }
 
 async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
+    ctx: &mut DurableWorkerCtx<Ctx>,
     entry: &SearchOplogEntry,
-) -> Result<
-    crate::model::public_oplog::PublicOplogSearchResult<(OplogIndex, PublicOplogEntry)>,
-    String,
-> {
-    let identity = ctx
-        .state
-        .worker_service
-        .resolve_agent_identity(&entry.owned_agent_id)
-        .await
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
-    let agent_mode = identity.agent_mode;
-    let current_component_revision = if entry.initialized {
-        entry.current_component_revision
-    } else {
-        component_revision_at(
-            ctx,
-            &identity,
-            &entry.owned_agent_id,
-            entry.next_oplog_index,
-        )
-        .await?
+) -> Result<Result<crate::model::public_oplog::PublicOplogSearchResult, String>, WorkerExecutorError>
+{
+    let (identity, current_component_revision) = match guest_read_start(
+        ctx,
+        &entry.owned_agent_id,
+        entry.next_oplog_index,
+        entry
+            .initialized
+            .then_some(entry.current_component_revision),
+    )
+    .await
+    {
+        Ok(start) => start,
+        Err(error) => return Ok(Err(error)),
     };
-    let agent_type = &identity.create_parameters().agent_type_name;
     // The grant covers page_size indexes, not page_size matches. The scanner caps each
     // storage read at the remaining entry budget, even when a chunk has no matches.
     let mut budget = ctx.state.config.limits.scan_budget;
     budget.entries = budget
         .entries
         .min(NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero"));
-    search_guest_oplog(
-        ctx.state.component_service.clone(),
-        ctx.state.oplog_service(),
+    let component_service = ctx.state.component_service.clone();
+    let oplog_service = ctx.state.oplog_service();
+    let mut access = GuestOwnerStarts::new(ctx, &entry.owned_agent_id);
+    let result = search_guest_oplog(
+        component_service,
+        oplog_service,
         &entry.owned_agent_id,
-        agent_mode,
+        identity.agent_mode,
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
-        agent_type.as_ref(),
+        identity.create_parameters().agent_type_name.as_ref(),
         current_component_revision,
         entry.next_oplog_index,
         entry.last_oplog_index,
@@ -369,8 +429,10 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         &entry.query,
         budget,
         GUEST_CLAIM_VISIBILITY,
+        &mut access,
     )
-    .await
+    .await;
+    access.finish(result)
 }
 
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
@@ -400,8 +462,9 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     async fn get_next(
         &mut self,
         self_: Resource<GetOplogEntry>,
-    ) -> anyhow::Result<Result<Option<Vec<golem_api_1_x::oplog::PublicOplogEntry>>, OplogReadError>>
-    {
+    ) -> anyhow::Result<
+        Result<Option<Vec<golem_api_1_x::oplog::AttributedPublicOplogEntry>>, OplogReadError>,
+    > {
         self.observe_function_call("golem::api::get-oplog", "get-next");
 
         let begun = DurableCallSession::<GolemApiGetOplogNext, NotCancellable>::begin(
@@ -446,7 +509,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            let mut result = get_oplog_chunk(self, &entry).await;
+            let mut result = get_oplog_chunk(self, &entry).await?;
             if let Ok(chunk) = &mut result
                 && guest_divergences_denied(
                     self,
@@ -461,13 +524,8 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             }
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
-                    let entries = chunk
-                        .entries
-                        .into_iter()
-                        .map(|(_, entry)| entry)
-                        .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
-                        result: serde_json::to_vec(&entries)
+                        result: serde_json::to_vec(&chunk.entries)
                             .map(Some)
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
@@ -497,7 +555,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             .map(|entry| entry.advance(&response))?;
         match response.result {
             Ok(Some(entries)) => {
-                let entries: Vec<PublicOplogEntry> = serde_json::from_slice(&entries)
+                let entries: Vec<PublicOplogEntryWithIndex> = serde_json::from_slice(&entries)
                     .map_err(|error| anyhow!("invalid persisted public oplog chunk: {error}"))?;
                 let entries = entries
                     .into_iter()
@@ -593,7 +651,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             Option<
                 Vec<(
                     golem_api_1_x::oplog::OplogIndex,
-                    golem_api_1_x::oplog::PublicOplogEntry,
+                    golem_api_1_x::oplog::AttributedPublicOplogEntry,
                 )>,
             >,
             OplogReadError,
@@ -643,7 +701,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            let mut result = get_search_oplog_chunk(self, &entry).await;
+            let mut result = get_search_oplog_chunk(self, &entry).await?;
             if let Ok(chunk) = &mut result
                 && guest_divergences_denied(
                     self,
@@ -689,15 +747,16 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             .map(|entry| entry.advance(&response))?;
         match response.result {
             Ok(Some(entries)) => {
-                let entries: Vec<(OplogIndex, PublicOplogEntry)> = serde_json::from_slice(&entries)
+                let entries: Vec<PublicOplogEntryWithIndex> = serde_json::from_slice(&entries)
                     .map_err(|error| {
                         anyhow!("invalid persisted public oplog search chunk: {error}")
                     })?;
                 let entries = entries
                     .into_iter()
-                    .map(|(idx, entry)| {
-                        let idx: golem_api_1_x::oplog::OplogIndex = idx.into();
-                        let entry: golem_api_1_x::oplog::PublicOplogEntry = entry.try_into()?;
+                    .map(|entry| {
+                        let idx: golem_api_1_x::oplog::OplogIndex = entry.oplog_index.into();
+                        let entry: golem_api_1_x::oplog::AttributedPublicOplogEntry =
+                            entry.try_into()?;
                         Ok((idx, entry))
                     })
                     .collect::<Result<Vec<_>, String>>()
@@ -776,7 +835,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
         agent_id: golem_api_1_x::oplog::AgentId,
         entries: Vec<(u64, golem_api_1_x::oplog::OplogEntry)>,
         component_revision: u64,
-    ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
+    ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::AttributedPublicOplogEntry>, String>> {
         self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
 
         let begun = DurableCallSession::<GolemApiEnrichOplogEntries, NotCancellable>::begin(
@@ -883,22 +942,42 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                 }
             };
 
+            let identity = self
+                .state
+                .worker_service
+                .resolve_agent_identity(&owned_agent_id)
+                .await
+                .map_err(|err| err.to_string())
+                .and_then(|identity| {
+                    identity.ok_or_else(|| format!("agent {owned_agent_id} does not exist"))
+                });
+            let attributions = match &identity {
+                Ok(identity) => {
+                    let oplog_service = self.state.oplog_service();
+                    let mut access = GuestOwnerStarts::new(self, &owned_agent_id);
+                    let attributions = enrichment_attributions(
+                        oplog_service,
+                        &owned_agent_id,
+                        identity.agent_mode,
+                        &entries,
+                        &mut access,
+                    )
+                    .await;
+                    access.finish(attributions)?
+                }
+                Err(error) => Err(error.clone()),
+            };
             let result = async {
+                let identity = identity?;
+                let attributions = attributions?;
                 let component_service = self.state.component_service.clone();
                 let oplog_service = self.state.oplog_service();
                 let mut current_revision = ComponentRevision::try_from(component_revision)?;
-                let identity = self
-                    .state
-                    .worker_service
-                    .resolve_agent_identity(&owned_agent_id)
-                    .await
-                    .map_err(|err| err.to_string())?
-                    .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
                 let agent_mode = identity.agent_mode;
                 let agent_type = &identity.create_parameters().agent_type_name;
 
                 let mut result = Vec::with_capacity(entries.len());
-                for (index, entry) in entries {
+                for ((index, entry), attribution) in entries.into_iter().zip(attributions) {
                     if let Some(revision) = match &entry {
                         OplogEnrichmentEntry::CreateProjection { parameters, .. } => {
                             Some(parameters.component_revision)
@@ -907,23 +986,27 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                     } {
                         current_revision = revision;
                     }
-                    result.push(
-                        PublicOplogEntry::from_enrichment_entry(
-                            OplogIndex::from_u64(index),
-                            entry,
-                            oplog_service.clone(),
-                            component_service.clone(),
-                            &owned_agent_id,
-                            agent_mode,
-                            identity.create_parameters().component_id,
-                            identity.create_parameters().owner_kind,
-                            agent_type.as_ref(),
-                            current_revision,
-                            GUEST_CLAIM_VISIBILITY,
-                            None,
-                        )
-                        .await?,
-                    );
+                    let oplog_index = OplogIndex::from_u64(index);
+                    let entry = PublicOplogEntry::from_enrichment_entry(
+                        oplog_index,
+                        entry,
+                        oplog_service.clone(),
+                        component_service.clone(),
+                        &owned_agent_id,
+                        agent_mode,
+                        identity.create_parameters().component_id,
+                        identity.create_parameters().owner_kind,
+                        agent_type.as_ref(),
+                        current_revision,
+                        GUEST_CLAIM_VISIBILITY,
+                        None,
+                    )
+                    .await?;
+                    result.push(PublicOplogEntryWithIndex {
+                        oplog_index,
+                        attribution,
+                        entry,
+                    });
                 }
                 serde_json::to_vec(&result).map_err(|error| error.to_string())
             }
@@ -936,8 +1019,8 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
 
         match response.result {
             Ok(entries) => {
-                let entries: Vec<PublicOplogEntry> =
-                    serde_json::from_slice(&entries).map_err(|error| {
+                let entries: Vec<PublicOplogEntryWithIndex> = serde_json::from_slice(&entries)
+                    .map_err(|error| {
                         anyhow!("invalid persisted enriched public oplog entries: {error}")
                     })?;
                 entries

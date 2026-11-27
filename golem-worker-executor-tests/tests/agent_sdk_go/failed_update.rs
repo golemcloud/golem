@@ -65,6 +65,7 @@ struct Divergence {
     actual: Step,
     mismatched: Vec<u8>,
     requests_differ: bool,
+    attribution: u8,
 }
 
 #[derive(Debug, FromSchema)]
@@ -80,6 +81,8 @@ const HOST_CALL: u8 = 0;
 const CLASS_DIVERGENCE: u8 = 0;
 const FIELD_FUNCTION_NAME: u8 = 0;
 const FIELD_REQUEST_PRESENCE: u8 = 4;
+/// The case tag of `public-oplog-entry-attribution.agent`.
+const ATTRIBUTION_AGENT: u8 = 0;
 
 fn host_call(
     recorded: &StartParams,
@@ -198,6 +201,11 @@ async fn go_reads_the_requests_of_a_failed_update_divergence(
     assert_eq!(both.oplog_index, recorded_index.as_u64());
     assert_eq!(both.mismatched, vec![FIELD_FUNCTION_NAME]);
     assert!(both.requests_differ);
+    assert_eq!(
+        (both.attribution, neither.attribution),
+        (ATTRIBUTION_AGENT, ATTRIBUTION_AGENT),
+        "the agent itself recorded both failed updates"
+    );
     let expected = both.expected.call.as_ref().expect("a host call");
     let actual = both.actual.call.as_ref().expect("a host call");
     assert_eq!(

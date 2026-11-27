@@ -26,14 +26,14 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
-func hostGet(id golem.AgentID, start uint64) iter.Seq2[Entry, error] {
-	return func(yield func(Entry, error) bool) {
+func hostGet(id golem.AgentID, start uint64) iter.Seq2[AttributedEntry, error] {
+	return func(yield func(AttributedEntry, error) bool) {
 		r := oplogwit.MakeGetOplog(agentIDToWit(id), start)
 		defer r.Drop()
 		for {
 			res := r.GetNext()
 			if res.IsErr() {
-				yield(Entry{}, readErrorFromWit(res.Err()))
+				yield(AttributedEntry{}, readErrorFromWit(res.Err()))
 				return
 			}
 			page := res.Ok()
@@ -64,7 +64,7 @@ func hostSearch(id golem.AgentID, text string) iter.Seq2[SearchHit, error] {
 				return
 			}
 			for _, h := range page.Some() {
-				if !yield(SearchHit{Index: h.F0, Entry: h.F1}, nil) {
+				if !yield(SearchHit{Index: h.F0, Attribution: h.F1.Attribution, Entry: h.F1.Entry}, nil) {
 					return
 				}
 			}

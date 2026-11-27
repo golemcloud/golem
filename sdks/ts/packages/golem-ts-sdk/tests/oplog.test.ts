@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   enrichOplogEntries as rawEnrichOplogEntries,
+  type PublicEntityInvocation as RawPublicEntityInvocation,
   type PublicOplogEntry as RawPublicOplogEntry,
 } from 'golem:api/oplog@1.5.0';
 import { AgentId, enrichOplogEntries } from '../src/host/oplog';
@@ -27,9 +28,13 @@ describe('oplog checkpoint enrichment', () => {
         lastBatchStart: 12n,
       },
     };
-    vi.mocked(rawEnrichOplogEntries).mockReturnValue([checkpoint]);
+    vi.mocked(rawEnrichOplogEntries).mockReturnValue([
+      { attribution: { tag: 'agent' }, entry: checkpoint },
+    ]);
 
-    const [entry] = enrichOplogEntries(environmentId, agentId, [], 99n);
+    const [attributed] = enrichOplogEntries(environmentId, agentId, [], 99n);
+    expect(attributed?.attribution).toEqual({ tag: 'agent' });
+    const entry = attributed?.entry;
     expect(entry?.tag).toBe('oplog-processor-checkpoint');
     if (entry?.tag !== 'oplog-processor-checkpoint') throw new Error('Expected checkpoint');
     expect(entry.val.sourceComponentRevision).toBe(9007199254740993n);
@@ -61,14 +66,54 @@ describe('oplog checkpoint enrichment', () => {
         neverLive,
       },
     });
-    vi.mocked(rawEnrichOplogEntries).mockReturnValue([create(true), create(false)]);
+    vi.mocked(rawEnrichOplogEntries).mockReturnValue([
+      { attribution: { tag: 'agent' }, entry: create(true) },
+      { attribution: { tag: 'agent' }, entry: create(false) },
+    ]);
 
-    const [marked, unmarked] = enrichOplogEntries(environmentId, agentId, [], 99n);
+    const [marked, unmarked] = enrichOplogEntries(environmentId, agentId, [], 99n).map(
+      (attributed) => attributed.entry,
+    );
     if (marked?.tag !== 'create' || unmarked?.tag !== 'create') {
       throw new Error('Expected create entries');
     }
     expect(marked.val.neverLive).toBe(true);
     expect(unmarked.val.neverLive).toBe(false);
     expect(marked.val.agentId.toString()).toBe('00000007-0000-8000-8000-000000000002');
+  });
+
+  it('keeps the nested entity attribution of an entry', () => {
+    const environmentId = { uuid: { highBits: 0n, lowBits: 1n } };
+    const agentId = AgentId.parse('00000007-0000-8000-8000-000000000002');
+    const invocation = (
+      kind: 'tool' | 'tool-middleware',
+      name: string,
+      startIndex: bigint,
+    ): RawPublicEntityInvocation => ({
+      entity: { kind, name },
+      startIndex,
+      callMode: 'synchronous',
+      operation: undefined,
+    });
+    vi.mocked(rawEnrichOplogEntries).mockReturnValue([
+      {
+        attribution: {
+          tag: 'entity',
+          val: {
+            invocation: invocation('tool', 'lookup', 7n),
+            ancestors: [invocation('tool-middleware', 'audit', 3n)],
+          },
+        },
+        entry: { tag: 'suspend', val: { timestamp: { seconds: 1700000000n, nanoseconds: 0 } } },
+      },
+    ]);
+
+    const [attributed] = enrichOplogEntries(environmentId, agentId, [], 99n);
+    if (attributed?.attribution.tag !== 'entity') throw new Error('Expected an entity');
+    expect(attributed.attribution.val.invocation.startIndex).toBe(7n);
+    expect(attributed.attribution.val.ancestors.map((ancestor) => ancestor.entity.name)).toEqual([
+      'audit',
+    ]);
+    expect(attributed.entry.tag).toBe('suspend');
   });
 });

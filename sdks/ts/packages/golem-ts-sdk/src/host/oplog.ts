@@ -17,6 +17,7 @@ import {
   SearchOplog as RawSearchOplog,
   enrichOplogEntries as rawEnrichOplogEntries,
   PublicOplogEntry as RawPublicOplogEntry,
+  AttributedPublicOplogEntry as RawAttributedPublicOplogEntry,
   AgentId as RawAgentId,
   EnvironmentId as RawEnvironmentId,
 } from 'golem:api/oplog@1.5.0';
@@ -109,6 +110,14 @@ export type SnapshotParameters = OplogTypes.SnapshotParameters;
 export type SnapshotConfirmedParameters = OplogTypes.SnapshotConfirmedParameters;
 export type SpanClosedParameters = OplogTypes.SpanClosedParameters;
 export type Timestamp = OplogTypes.Timestamp;
+export type PublicAgentEntityKind = OplogTypes.PublicAgentEntityKind;
+export type PublicAgentEntity = OplogTypes.PublicAgentEntity;
+export type PublicEntityCallMode = OplogTypes.PublicEntityCallMode;
+export type PublicToolInvocationOperation = OplogTypes.PublicToolInvocationOperation;
+export type PublicEntityInvocationOperation = OplogTypes.PublicEntityInvocationOperation;
+export type PublicEntityInvocation = OplogTypes.PublicEntityInvocation;
+export type PublicEntityInvocationContext = OplogTypes.PublicEntityInvocationContext;
+export type PublicOplogEntryAttribution = OplogTypes.PublicOplogEntryAttribution;
 
 // Re-export raw/internal types
 export type OplogPayload = OplogTypes.OplogPayload;
@@ -216,6 +225,12 @@ export type PublicOplogEntry =
   | { tag: 'span-closed'; val: SpanClosedParameters }
   | { tag: 'oplog-processor-checkpoint'; val: OplogProcessorCheckpointParameters };
 
+/** A public oplog entry with what executed it: the agent itself, or an entity inside it. */
+export type AttributedPublicOplogEntry = {
+  attribution: PublicOplogEntryAttribution;
+  entry: PublicOplogEntry;
+};
+
 // Wrapping helpers
 
 function wrapAgentId(raw: RawAgentId): AgentId {
@@ -248,6 +263,12 @@ function wrapPublicOplogEntry(raw: RawPublicOplogEntry): PublicOplogEntry {
   }
 }
 
+function wrapAttributedPublicOplogEntry(
+  raw: RawAttributedPublicOplogEntry,
+): AttributedPublicOplogEntry {
+  return { attribution: raw.attribution, entry: wrapPublicOplogEntry(raw.entry) };
+}
+
 // Wrapped classes and functions
 
 export class GetOplog {
@@ -257,9 +278,9 @@ export class GetOplog {
     this.inner = new RawGetOplog(AgentId.toWit(agentId), start);
   }
 
-  getNext(): PublicOplogEntry[] | undefined {
+  getNext(): AttributedPublicOplogEntry[] | undefined {
     const raw = this.inner.getNext();
-    return raw ? raw.map(wrapPublicOplogEntry) : undefined;
+    return raw ? raw.map(wrapAttributedPublicOplogEntry) : undefined;
   }
 }
 
@@ -270,11 +291,15 @@ export class SearchOplog {
     this.inner = new RawSearchOplog(AgentId.toWit(agentId), text);
   }
 
-  getNext(): [OplogIndex, PublicOplogEntry][] | undefined {
+  getNext(): [OplogIndex, AttributedPublicOplogEntry][] | undefined {
     const raw = this.inner.getNext();
     return raw
       ? raw.map(
-          ([idx, entry]) => [idx, wrapPublicOplogEntry(entry)] as [OplogIndex, PublicOplogEntry],
+          ([idx, entry]) =>
+            [idx, wrapAttributedPublicOplogEntry(entry)] as [
+              OplogIndex,
+              AttributedPublicOplogEntry,
+            ],
         )
       : undefined;
   }
@@ -285,11 +310,11 @@ export function enrichOplogEntries(
   agentId: AgentId,
   entries: [OplogIndex, import('golem:api/oplog@1.5.0').OplogEntry][],
   componentRevision: ComponentRevision,
-): PublicOplogEntry[] {
+): AttributedPublicOplogEntry[] {
   return rawEnrichOplogEntries(
     environmentId,
     AgentId.toWit(agentId),
     entries,
     componentRevision,
-  ).map(wrapPublicOplogEntry);
+  ).map(wrapAttributedPublicOplogEntry);
 }

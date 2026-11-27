@@ -204,7 +204,10 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             metadata.component_revision,
         )
         .unwrap();
-        for (oplog_index, entry) in oplog_indexes.iter().zip(enriched_entries.iter()) {
+        for (oplog_index, entry) in oplog_indexes
+            .iter()
+            .zip(enriched_entries.iter().map(|entry| &entry.entry))
+        {
             match entry {
                 PublicOplogEntry::Start(params) => durable_entries.push(DurableEntryRecord {
                     oplog_index: *oplog_index,

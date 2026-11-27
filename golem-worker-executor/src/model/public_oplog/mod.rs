@@ -21,16 +21,18 @@ mod reading;
 mod snapshots;
 
 use attribution::PublicOplogAttributionResolver;
+pub(crate) use attribution::{OwnerStartAccess, UnrestrictedOwnerStarts, enrichment_attributions};
 #[cfg(test)]
 use conversion::host_response_to_public_value;
 pub(crate) use conversion::with_expected_request;
 use invocation::{agent_invocation_result_to_public, agent_invocation_to_public};
 pub use reading::{
     PublicOplogRangePage, check_oplog_cursor_query, find_component_revision_at,
-    get_guest_oplog_chunk, get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
+    get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
     get_public_oplog_range_page, oplog_page_cursor, oplog_page_start, oplog_range_allowance,
-    read_expected_requests, search_guest_oplog, search_public_oplog_page, unread_expected_requests,
+    read_expected_requests, search_public_oplog_page, unread_expected_requests,
 };
+pub(crate) use reading::{get_guest_oplog_chunk, search_guest_oplog};
 use snapshots::raw_snapshot_to_public;
 
 #[cfg(test)]

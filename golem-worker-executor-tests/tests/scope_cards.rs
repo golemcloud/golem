@@ -6204,13 +6204,11 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         .await?;
 
     let tip = executor.get_oplog_last_index(&target).await?;
-    assert!(tip < 99);
+    assert!(tip < 100);
     for index in (tip + 1)..=101 {
         let entry = OplogEntry::Log {
             timestamp: golem_common::model::Timestamp::now_utc(),
-            // The attribution of an entry reads the `Start` that owns it. This owner is outside
-            // the granted window, so a search that attributes its entries reads past the window.
-            parent_start_index: (index == 99).then_some(OplogIndex::from_u64(101)),
+            parent_start_index: None,
             level: golem_common::model::oplog::LogLevel::Stderr,
             context: String::new(),
             message: match index {
@@ -6691,6 +6689,169 @@ async fn a_guest_oplog_batch_needs_the_grant_for_a_divergence_index_outside_it(
                 Ok(Some(vec![(100, Some(vec![4242]))])),
                 true,
                 Ok(Some(((last - 200).min(100), vec![Some(vec![4242])]))),
+                true
+            ),
+        ]
+    );
+    Ok(())
+}
+
+/// The attribution of an entry in a guest oplog batch reads the `Start` entries that own the
+/// entry. When an owner lies outside the batch, the batch also needs the grant for it: without the
+/// grant the batch is refused and the owner is not read, and with it the batch reads the owner and
+/// attributes the entry. The target holds log entries at 100, which the first search batch (1 to
+/// 100) holds, and at 250, which a `get-oplog` batch from 201 holds; both are owned by the custom
+/// `Start` at 150, which the agent itself executed.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn a_guest_oplog_batch_needs_the_grant_for_an_owner_start_outside_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{DurableFunctionType, LogLevel};
+
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let target_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let target_agent = agent_key!("GolemHostApi", "owner-grant-target");
+    configure_scope_card_root(&authority, &target_component, &target_agent)?;
+    let target = executor
+        .start_agent(&target_component.id, target_agent.clone())
+        .await?;
+
+    let owner_index = OplogIndex::from_u64(150);
+    let tip = executor.get_oplog_last_index(&target).await?;
+    assert!(tip < 99);
+    for index in (tip + 1)..=260 {
+        let entry = match index {
+            150 => OplogEntry::Start {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::Custom("owner-call".to_string()),
+                invocation_id: None,
+                observational_owner: None,
+                driver: None,
+                request: None,
+                durable_function_type: DurableFunctionType::WriteLocal,
+                span_started: None,
+                denial: None,
+            },
+            _ => OplogEntry::Log {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                parent_start_index: matches!(index, 100 | 250).then_some(owner_index),
+                level: LogLevel::Stderr,
+                context: String::new(),
+                message: match index {
+                    100 | 250 => "owned-entry",
+                    _ => "filler",
+                }
+                .to_string(),
+                trace_context: None,
+            },
+        };
+        let added = executor
+            .add_and_commit_oplog_entry(&target.agent_id(), entry)
+            .await?;
+        assert_eq!(added.as_u64(), index);
+    }
+
+    let mut results = Vec::new();
+    for (name, grants) in [
+        (
+            "owner-ungranted",
+            &["start=1:end=100", "start=201:end=300"][..],
+        ),
+        (
+            "owner-granted",
+            &["start=1:end=100", "start=201:end=300", "start=150:end=150"][..],
+        ),
+    ] {
+        let reader = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .name(name)
+            .without_default_host_permissions("GolemHostApi")
+            .try_update_agent_provision_config("GolemHostApi", |config| {
+                for grant in grants {
+                    config.initial_permissions.lower_bound.positive.push(
+                        parse_polymorphic_permission(&format!(
+                            "oplog(?env/*/*) @ * : read : {grant}"
+                        ))?,
+                    );
+                }
+                Ok::<_, golem_common::model::card::CardParseError>(())
+            })?
+            .store()
+            .await?;
+        let reader_agent = agent_key!("GolemHostApi", name);
+        // The target keeps its card as the reader's card becomes the root card.
+        authority.add_card(
+            authority
+                .root_card()
+                .expect("the previous card is the root card"),
+        );
+        configure_scope_card_root(&authority, &reader, &reader_agent)?;
+        executor
+            .start_agent(&reader.id, reader_agent.clone())
+            .await?;
+
+        let reads = executor.oplog_service_reads(&target.agent_id()).len();
+        let search = executor
+            .invoke_and_await_agent(
+                &reader,
+                &reader_agent,
+                "search_oplog_attributions",
+                data_value!(target.agent_id(), "owned-entry"),
+            )
+            .await?
+            .into_typed::<Result<Option<Vec<(u64, Vec<u64>)>>, String>>()?;
+        let search_read_the_owner =
+            executor.oplog_service_reads(&target.agent_id())[reads..].contains(&(owner_index, 1));
+
+        let reads = executor.oplog_service_reads(&target.agent_id()).len();
+        let batch = executor
+            .invoke_and_await_agent(
+                &reader,
+                &reader_agent,
+                "read_oplog_batch_size",
+                data_value!(target.agent_id(), 201u64),
+            )
+            .await?
+            .into_typed::<Result<Option<u64>, String>>()?;
+        let batch_read_the_owner =
+            executor.oplog_service_reads(&target.agent_id())[reads..].contains(&(owner_index, 1));
+        results.push((
+            name,
+            search,
+            search_read_the_owner,
+            batch,
+            batch_read_the_owner,
+        ));
+    }
+
+    let denied = "OplogReadError::PermissionDenied".to_string();
+    let last = executor.get_oplog_last_index(&target).await?;
+    assert_eq!(
+        results,
+        vec![
+            (
+                "owner-ungranted",
+                Err(denied.clone()),
+                false,
+                Err(denied),
+                false
+            ),
+            (
+                "owner-granted",
+                Ok(Some(vec![(100, vec![])])),
+                true,
+                Ok(Some((last - 200).min(100))),
                 true
             ),
         ]
