@@ -296,12 +296,6 @@ async fn schedule_at_target<U: Send + 'static, Ctx: WorkerCtx>(
     target_fingerprint: AgentFingerprint,
 ) -> anyhow::Result<Result<OwnedInvocationId, InternalRpcError>> {
     let auth_ctx = handle.agent_auth_ctx().clone();
-    let request_key = InvocationRequestKey::Internal(idempotency_key);
-    let invocation_id = request_key.finalize(
-        remote_agent_id.agent_id(),
-        target_fingerprint,
-        &prepared.rpc.method_name,
-    );
     let input = prepared
         .rpc
         .input_value
@@ -310,8 +304,7 @@ async fn schedule_at_target<U: Send + 'static, Ctx: WorkerCtx>(
     let scheduled = prepared.remote.schedule(
         remote_agent_id,
         target_fingerprint,
-        request_key,
-        &invocation_id,
+        idempotency_key,
         prepared.rpc.method_name,
         input,
         prepared.stack,
@@ -321,7 +314,7 @@ async fn schedule_at_target<U: Send + 'static, Ctx: WorkerCtx>(
     // The schedule's wake is not recorded: the handle cancels the invocation by its ID, and a
     // wake that finds no pending invocation has no effect.
     let result = interruptible(accessor, handle, scheduled).await?;
-    Ok(permanent_refusal(handle, result)?.map(|_| invocation_id))
+    permanent_refusal(handle, result)
 }
 
 fn accepted<U: Send + 'static, Ctx: WorkerCtx>(

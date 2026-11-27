@@ -265,7 +265,7 @@ enum AccessRequest<
 }
 
 /// The request a live call's `Start` records, resolved after the call's admission.
-pub enum StartRequest<Req> {
+enum StartRequest<Req> {
     Ready(Req),
     Indexed(BuildIndexedRequestCallback<Req>),
 }

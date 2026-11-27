@@ -104,7 +104,7 @@ impl golem_worker_executor::services::direct_invocation_auth::DirectInvocationAu
 /// The principal that the executor gives the current incarnation of `agent` as a caller: the
 /// pair of its address and fingerprint, which is what a starter check compares. An agent that
 /// does not exist gets the principal of no incarnation.
-pub async fn agent_principal(
+async fn agent_principal(
     executor: &TestWorkerExecutor,
     agent: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<golem_common::model::caller::Principal> {

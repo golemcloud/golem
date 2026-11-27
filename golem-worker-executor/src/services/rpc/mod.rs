@@ -127,7 +127,7 @@ pub fn invocation_handle_environment(
 
 /// The agent that owns the invocation a handle addresses. Handles address agent method
 /// invocations only, so a tool-owned ID is refused before any authority or storage read.
-pub fn invocation_handle_owner(
+fn invocation_handle_owner(
     invocation_id: &golem_common::model::OwnedInvocationId,
 ) -> Result<&AgentId, WorkerExecutorError> {
     invocation_id.agent_id().ok_or_else(|| {

@@ -125,21 +125,23 @@ impl RemoteCall {
             .await
     }
 
-    /// Schedules the invocation `invocation_id` of `method_name` at the target's incarnation
+    /// Schedules an invocation of `method_name` at the target's incarnation
     /// `target_fingerprint`, to run at `scheduled_at` in `invocation_context`, on behalf of the
-    /// calling agent.
+    /// calling agent. Returns the invocation's final ID, which derives from `idempotency_key`.
     pub async fn schedule(
         &self,
         remote_agent_id: &OwnedAgentId,
         target_fingerprint: AgentFingerprint,
-        request_key: InvocationRequestKey,
-        invocation_id: &OwnedInvocationId,
+        idempotency_key: IdempotencyKey,
         method_name: String,
         input: AgentMethodInput,
         invocation_context: InvocationContextStack,
         scheduled_at: jiff::Timestamp,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), InternalRpcError> {
+    ) -> Result<OwnedInvocationId, InternalRpcError> {
+        let request_key = InvocationRequestKey::Internal(idempotency_key);
+        let invocation_id =
+            request_key.finalize(remote_agent_id.agent_id(), target_fingerprint, &method_name);
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: invocation_id.id(),
             method_name,
@@ -160,6 +162,7 @@ impl RemoteCall {
                 auth_ctx,
             )
             .await
+            .map(|()| invocation_id)
     }
 }
 

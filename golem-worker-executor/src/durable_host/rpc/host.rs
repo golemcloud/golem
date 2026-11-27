@@ -14,9 +14,9 @@
 
 use super::EphemeralRpcTarget;
 use super::{
-    WasmRpcEntry, construct_ephemeral_wasm_rpc_resource, construct_wasm_rpc_resource,
-    discard_owned_rpc_input, reconstruct_wasm_rpc_resource, start_rpc_binding_call,
-    start_rpc_connection_call,
+    WasmRpcEntry, WasmRpcEntryPayload, WasmRpcTargetActivation,
+    construct_ephemeral_wasm_rpc_resource, construct_wasm_rpc_resource, discard_owned_rpc_input,
+    reconstruct_wasm_rpc_resource, start_rpc_binding_call, start_rpc_connection_call,
 };
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
@@ -47,8 +47,7 @@ use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentName;
-use golem_common::model::invocation_context::InvocationContextSpan;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::invocation_context::{InvocationContextSpan, SpanId};
 use golem_common::model::oplog::HostResponseGolemRpcCreate;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcBindSelf;
 use golem_common::model::oplog::host_functions::{
@@ -56,6 +55,7 @@ use golem_common::model::oplog::host_functions::{
 };
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::oplog::types::SerializableRpcError;
+use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use golem_common::model::oplog::{HostRequestGolemApiAgentId, HostResponseGolemAgentLookupAgentId};
 use golem_common::model::oplog::{HostRequestGolemRpcBindSelf, HostResponseGolemRpcUnit};
 use golem_common::model::oplog::{HostRequestGolemRpcGetById, HostResponseGolemRpcCreated};
@@ -68,17 +68,17 @@ use std::sync::Arc;
 use wasmtime::component::Resource;
 
 /// The deployed agent type that a client invokes, with what each of its calls needs.
-pub(super) struct RemoteAgentType {
-    pub(super) registered: RegisteredAgentType,
-    pub(super) agent_type: Arc<AgentTypeSchema>,
-    pub(super) method_streams: Arc<BTreeMap<String, bool>>,
-    pub(super) owner: AgentOwnerPattern,
+pub struct RemoteAgentType {
+    registered: RegisteredAgentType,
+    agent_type: Arc<AgentTypeSchema>,
+    method_streams: Arc<BTreeMap<String, bool>>,
+    owner: AgentOwnerPattern,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Looks up the deployed agent type of the name, durably. `Ok(Err(_))` is an RPC error for
     /// the guest; the caller still owns the guest's other inputs.
-    pub(super) async fn remote_agent_type(
+    async fn remote_agent_type(
         &mut self,
         agent_type_name: &str,
     ) -> anyhow::Result<Result<RemoteAgentType, RpcError>> {
@@ -230,7 +230,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 impl RemoteAgentType {
     /// `remote_component` is the revision of the implementing component that the registered
     /// type names; `owner_component` is the caller's component.
-    pub(super) fn new(
+    pub fn new(
         registered: RegisteredAgentType,
         remote_component: &Component,
         owner_component: &Component,
@@ -272,6 +272,27 @@ impl RemoteAgentType {
             method_streams,
             owner,
         })
+    }
+
+    /// The payload of a client that addresses the durable agent `remote_agent_id` of this type.
+    pub fn client_payload(
+        self,
+        remote_agent_id: OwnedAgentId,
+        span_id: SpanId,
+        creation_index: Option<OplogIndex>,
+        target_activation: WasmRpcTargetActivation,
+    ) -> WasmRpcEntryPayload {
+        WasmRpcEntryPayload {
+            remote_agent_id,
+            ephemeral: None,
+            span_id,
+            creation_index,
+            target_activation,
+            remote_agent_type: self.agent_type,
+            remote_component_id: self.registered.implemented_by.component_id,
+            remote_method_streams: self.method_streams,
+            remote_owner: self.owner,
+        }
     }
 }
 

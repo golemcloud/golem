@@ -66,7 +66,7 @@ pub enum RpcCallKind {
 }
 
 impl RpcCallKind {
-    pub fn verb(self) -> &'static str {
+    fn verb(self) -> &'static str {
         match self {
             Self::Awaited => "invoke-and-await",
             Self::Triggered => "trigger",
@@ -109,6 +109,7 @@ pub enum RpcCallOpening<Pair: HostPayloadPair> {
 /// What an open RPC call resolved: the validated request, its span, and the target that its
 /// `Start` index derives.
 pub struct RpcCall {
+    kind: RpcCallKind,
     prepared: PreparedRpcInvocation,
     span_id: SpanId,
     start_index: OplogIndex,
@@ -223,6 +224,7 @@ where
             RpcCallOpening::Open {
                 handle,
                 call: RpcCall {
+                    kind,
                     prepared,
                     span_id,
                     start_index,
@@ -454,9 +456,9 @@ impl RpcCall {
     }
 
     /// How the call retries a transient failure of its dispatch.
-    pub fn retry_properties(&self, kind: RpcCallKind) -> RetryProperties {
+    pub fn retry_properties(&self) -> RetryProperties {
         self.prepared
-            .retry_properties(kind.verb(), &self.remote_agent_id)
+            .retry_properties(self.kind.verb(), &self.remote_agent_id)
     }
 
     /// The scope card that the call lends and the logical origin of a streaming call. A live
@@ -593,7 +595,6 @@ impl RpcCall {
         &self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
         handle: &mut DurableCallSession<Pair, Cancellable>,
-        kind: RpcCallKind,
     ) -> anyhow::Result<Result<AgentFingerprint, InternalRpcError>>
     where
         U: Send + 'static,
@@ -619,7 +620,7 @@ impl RpcCall {
                     &self.idempotency_key,
                     &self.span_id,
                     freshness,
-                    kind.verb(),
+                    self.kind.verb(),
                 )
                 .await
             }

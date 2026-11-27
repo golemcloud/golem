@@ -16,9 +16,8 @@
 
 use super::host::RemoteAgentType;
 use super::{
-    InvocationEntry, WasmRpcEntry, WasmRpcEntryPayload, WasmRpcTargetActivation,
-    discard_owned_rpc_config, discard_owned_rpc_input, install_embedded_span,
-    restore_embedded_span, rpc_span_finished,
+    InvocationEntry, WasmRpcEntry, WasmRpcTargetActivation, discard_owned_rpc_config,
+    discard_owned_rpc_input, install_embedded_span, restore_embedded_span, rpc_span_finished,
 };
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
@@ -256,12 +255,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
         let client = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.table().push(WasmRpcEntry {
-                payload: Box::new(WasmRpcEntryPayload {
-                    remote_agent_id: OwnedAgentId::new(target_environment_id, &creation.agent_id),
-                    ephemeral: None,
-                    span_id: span.span_id().clone(),
+                payload: Box::new(remote.client_payload(
+                    OwnedAgentId::new(target_environment_id, &creation.agent_id),
+                    span.span_id().clone(),
                     creation_index,
-                    target_activation: WasmRpcTargetActivation::Activated {
+                    WasmRpcTargetActivation::Activated {
                         demand: Box::new(crate::services::rpc::ReplayedDemand::new(
                             creation.fingerprint,
                         )),
@@ -269,11 +267,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
                         env: creation.env,
                         config: creation.config,
                     },
-                    remote_agent_type: remote.agent_type,
-                    remote_component_id: remote.registered.implemented_by.component_id,
-                    remote_method_streams: remote.method_streams,
-                    remote_owner: remote.owner,
-                }),
+                )),
             })
         })?;
         Ok(Ok(Created {
@@ -395,21 +389,16 @@ async fn replayed_creation<U: Send + 'static, Ctx: WorkerCtx>(
     .await?;
     let client = accessor.with(|mut access| {
         access.get().table().push(WasmRpcEntry {
-            payload: Box::new(WasmRpcEntryPayload {
-                remote_agent_id: OwnedAgentId::new(response.target_environment_id, &agent_id),
-                ephemeral: None,
-                span_id: span_id.clone(),
+            payload: Box::new(remote.client_payload(
+                OwnedAgentId::new(response.target_environment_id, &agent_id),
+                span_id.clone(),
                 creation_index,
-                target_activation: WasmRpcTargetActivation::ReplayPending {
+                WasmRpcTargetActivation::ReplayPending {
                     target_fingerprint: fingerprint,
                     env: vec![],
                     config: vec![],
                 },
-                remote_agent_type: remote.agent_type,
-                remote_component_id: remote.registered.implemented_by.component_id,
-                remote_method_streams: remote.method_streams,
-                remote_owner: remote.owner,
-            }),
+            )),
         })
     })?;
     Ok(Ok(Created {

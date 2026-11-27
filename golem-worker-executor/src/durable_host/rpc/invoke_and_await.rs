@@ -202,10 +202,7 @@ async fn invoke_live<U: Send + 'static, Ctx: WorkerCtx>(
     scope_card: Option<ScopeCard>,
     streaming_origin: Option<StreamInvocationId>,
 ) -> anyhow::Result<CallOutcome> {
-    let (result, final_id, streams) = match call
-        .target_fingerprint(accessor, &mut handle, RpcCallKind::Awaited)
-        .await?
-    {
+    let (result, final_id, streams) = match call.target_fingerprint(accessor, &mut handle).await? {
         Ok(fingerprint) => {
             let final_id = call.final_id(fingerprint);
             let (result, streams) = dispatch(
@@ -289,7 +286,7 @@ async fn dispatch<U: Send + 'static, Ctx: WorkerCtx>(
 
     let prepared = call.prepared();
     let remote_target = call.dispatch_target();
-    let retry_properties = call.retry_properties(RpcCallKind::Awaited);
+    let retry_properties = call.retry_properties();
     let spawn = |handle: &InvokeAndAwaitCall| {
         with_import_access(accessor, |mut access| {
             let ctx = access.get();

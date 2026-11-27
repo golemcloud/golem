@@ -100,10 +100,7 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
             Ok(response)
         }
         CallResolution::Live(mut handle) => {
-            let result = match call
-                .target_fingerprint(accessor, &mut handle, RpcCallKind::Triggered)
-                .await?
-            {
+            let result = match call.target_fingerprint(accessor, &mut handle).await? {
                 Ok(fingerprint) => dispatch(accessor, &mut handle, call, this, fingerprint).await?,
                 Err(error) => Err(error),
             };
@@ -155,7 +152,7 @@ async fn dispatch<U: Send + 'static, Ctx: WorkerCtx>(
         Some(activate_known_target(accessor, this).map_err(|error| handle.trap(error))?)
     };
     let auth_ctx = handle.agent_auth_ctx().clone();
-    let retry_properties = call.retry_properties(RpcCallKind::Triggered);
+    let retry_properties = call.retry_properties();
     let result = loop {
         let remote = RemoteCall::capture(accessor, call.span_id());
         let invocation = remote.invoke(call, expected_callee_fingerprint, &auth_ctx);
