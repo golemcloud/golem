@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{PreparedRpcInvocation, WasmRpcEntry};
+use super::{PreparedRpcInvocation, RpcCallKind, WasmRpcEntry};
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{CompletionDelivery, finish_span_in_memory};
 use crate::durable_host::durable_session::strip_streams;
@@ -146,13 +146,11 @@ pub(super) fn rpc_output_root(prepared: &PreparedRpcInvocation) -> SchemaType {
 pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WasmRpcEntry>,
-    host_function_name: &str,
-    synchronous: bool,
+    kind: RpcCallKind,
     method_name: String,
     input: core_wire::SchemaValueTree,
-    streaming_allowed: bool,
 ) -> anyhow::Result<Result<PreparedRpcInvocation, RpcError>> {
-    ctx.check_read_only_allows(host_function_name)
+    ctx.check_read_only_allows(kind.host_function_name())
         .map_err(wasmtime::Error::from)?;
 
     let own_agent_id = ctx.owned_agent_id().clone();
@@ -192,7 +190,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         .expect("method existence was checked while decoding RPC input");
     let streaming = remote_method_uses_streams(&remote_method_streams, &method.name)?;
 
-    if streaming && !streaming_allowed {
+    if streaming && kind != RpcCallKind::Awaited {
         return Ok(Err(RpcError::ProtocolError(
             "live streams require invoke-and-await".to_string(),
         )));
@@ -205,7 +203,9 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
                     "RPC calls to the same agent are not supported"
                 ));
             }
-            golem_common::model::entity::OwnerRuntime::Entity(_) if synchronous => {
+            golem_common::model::entity::OwnerRuntime::Entity(_)
+                if kind == RpcCallKind::Awaited =>
+            {
                 let caller = ctx.owner_invocation_id()?;
                 ctx.owner_execution
                     .lane()

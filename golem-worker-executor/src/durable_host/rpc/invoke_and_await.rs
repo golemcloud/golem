@@ -19,27 +19,21 @@
 //! Dropping the subtask records `Cancelled` and, once the call was dispatched, asks the target
 //! to withdraw the invocation if it has not started yet. A running invocation keeps running.
 
-use super::denial::denied_rpc_request;
 use super::{
-    CallerStreamsContext, DurableStreamingTaskParams, PreparedRpcInvocation, RpcCallTarget,
-    WasmRpcEntry, admit_rpc_result_secret_holds, caller_durable_rpc_streams,
-    claim_completed_preparation, current_streaming_origin, deliver_rpc_result,
-    discard_owned_rpc_input, dispatch_target, embedded_invocation_span_builder,
+    CallerStreamsContext, DurableStreamingTaskParams, OpenRpcCall, PreparedRpcInvocation,
+    RpcCallKind, RpcCallOpening, WasmRpcEntry, admit_rpc_result_secret_holds,
+    caller_durable_rpc_streams, claim_completed_preparation, deliver_rpc_result, dispatch_target,
     invocation_metadata, invoke_and_await_response_to_wire, known_fresh_dispatch_allowed,
-    preparation_request, prepare_ephemeral_identity, prepare_rpc_invocation,
-    recorded_target_fingerprint, restore_embedded_span, retry_after_backoff, rpc_input_root,
-    rpc_output_root, rpc_span_finished, spawn_invoke_and_await_task,
+    open_rpc_call, preparation_request, prepare_ephemeral_identity, retry_after_backoff,
+    rpc_input_root, rpc_output_root, rpc_span_finished, spawn_invoke_and_await_task,
     spawn_streaming_invoke_and_await_task, suspendable,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, AccessPermissionCheck, Cancellable, CompletionDelivery,
-    DeferredCallReplayOutcome, DurableCallSession, TeardownProbe,
-    reserve_invocation_id_before_await,
+    Cancellable, CompletionDelivery, DeferredCallReplayOutcome, DurableCallSession, TeardownProbe,
 };
 use crate::durable_host::durable_session::{StreamSession, strip_streams};
 use crate::durable_host::durable_stream::SessionError;
-use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::{InvocationResultWithMetadata, RpcError};
 use crate::services::rpc::{Rpc, RpcError as InternalRpcError};
@@ -49,9 +43,9 @@ use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::caller::Principal;
 use golem_common::model::durable_stream::StreamInvocationId;
 use golem_common::model::invocation_context::SpanId;
+use golem_common::model::oplog::HostResponseGolemRpcInvokeAndAwait;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvokeAndAwaitResult;
 use golem_common::model::oplog::payload::denied;
-use golem_common::model::oplog::{DurableFunctionType, HostResponseGolemRpcInvokeAndAwait};
 use golem_common::model::{
     AgentFingerprint, InvocationRequestKey, OwnedAgentId, OwnedInvocationId,
 };
@@ -71,156 +65,46 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
     input: core_wire::SchemaValueTree,
     scope_card: Option<Resource<PermissionCardHandleRep>>,
 ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
-    reserve_invocation_id_before_await(accessor, accessor.getter())?;
-    let prepared = accessor.with(|mut access| {
-        let ctx = access.get();
-        let scope_card = match scope_card {
-            Some(handle) => match resolve_invocation_scope_card(ctx, &handle) {
-                Ok(card) => Some(card),
-                Err(details) => {
-                    discard_owned_rpc_input(input, ctx);
-                    return Ok::<_, anyhow::Error>(Err(RpcError::Denied(details)));
-                }
-            },
-            None => None,
-        };
-        let prepared = match prepare_rpc_invocation(
-            ctx,
-            &this,
-            "golem::rpc::wasm-rpc::invoke-and-await",
-            true,
-            method_name,
-            input,
-            true,
-        )? {
-            Ok(prepared) => prepared,
-            Err(error) => return Ok(Err(error)),
-        };
-        let target = ctx.outbound_agent_method_target(
-            &this,
-            &prepared.logical_remote_agent_id,
-            &prepared.method_name,
-        )?;
-        ctx.record_outbound_rpc_call()?;
-        let span_started = embedded_invocation_span_builder(
-            ctx,
-            &prepared.connection_span_id,
-            &prepared.method_name,
-        )?;
-        let call_target = RpcCallTarget::new(
-            ctx.idempotency_key_position(None),
-            &prepared.logical_remote_agent_id,
-            prepared.ephemeral.as_ref(),
-            &prepared.method_name,
-        );
-        let streaming_origin = if prepared.is_streaming() {
-            let parent_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
-                anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
-            })?;
-            Some(current_streaming_origin(ctx, parent_key))
-        } else {
-            None
-        };
-        Ok(Ok((
-            prepared,
-            target,
-            span_started,
-            call_target,
-            scope_card,
-            streaming_origin,
-        )))
-    })?;
-    let (prepared, target, span_started, call_target, scope_card, streaming_origin) = match prepared
-    {
-        Ok(prepared) => prepared,
-        Err(error) => return Ok(Err(error)),
-    };
-
-    let (permission_check, decision) = AccessPermissionCheck::new(Ok(vec![target]));
-    let request_prepared = prepared.clone();
-    let request_target = call_target.clone();
-    let request_scope_card = scope_card.clone();
-    // A tool body that returned before this call finished parks the call's replay; its recorded
-    // preparation child is then claimed as an abandoned subtree.
-    let parks_incomplete_replay = prepared.is_ephemeral()
-        && accessor.with(|mut access| access.get().parks_incomplete_tool_guest_replay());
-    let mut handle = InvokeAndAwaitCall::start_access_with_agent_authority_and_indexed_request(
+    let call = match open_rpc_call::<_, _, GolemRpcWasmRpcInvokeAndAwaitResult>(
         accessor,
-        accessor.getter(),
-        DurableFunctionType::WriteRemote,
-        AccessClaimOptions {
-            permission_check: Some(permission_check),
-            host_internal_calls: prepared.is_ephemeral(),
-            abandon_incomplete_host_internal_calls: parks_incomplete_replay,
-            ..Default::default()
-        },
-        move |start_index, denied| {
-            let (idempotency_key, remote_agent_id) = request_target.at(start_index)?;
-            let started = span_started(&idempotency_key);
-            let request = if denied {
-                denied_rpc_request(
-                    &remote_agent_id,
-                    &idempotency_key,
-                    request_prepared.method_name.clone(),
-                )
-            } else {
-                request_prepared.invoke_request(
-                    &remote_agent_id,
-                    &idempotency_key,
-                    request_scope_card.as_ref(),
-                    streaming_origin,
-                )
-            };
-            Ok((request, Some(started)))
-        },
+        &this,
+        RpcCallKind::Awaited,
+        method_name,
+        input,
+        scope_card,
     )
-    .await?;
-    // The live decision holds its authorization permit until the call completes.
-    let decision = decision.await.ok().flatten();
-    let started_live = handle.is_live();
-
-    let started = handle
-        .recorded_span_started_access(accessor, accessor.getter())
-        .await
-        .map_err(|error| handle.trap(error))?
-        .ok_or_else(|| {
-            WorkerExecutorError::unexpected_oplog_entry(
-                handle.start_index(),
-                "RPC invoke-and-await Start carrying span_started",
-                format!(
-                    "RPC invoke-and-await Start at {} without span metadata",
-                    handle.start_index()
-                ),
-            )
-        })
-        .map_err(|error| handle.trap(error))?;
-    let span = with_import_access(accessor, |mut access| {
-        restore_embedded_span(access.get(), &started)
-    })
-    .map_err(|error| handle.trap(error))?;
-    let span_id = span.span_id().clone();
-    handle.close_span_on_cancellation(span_id.clone());
-
-    if started_live && let Some(Err(denial)) = &decision {
-        let response = denied::rpc::invoke_and_await(&(), denial);
-        let finished = rpc_span_finished::<()>(
-            &span_id,
-            &Err(InternalRpcError::Denied {
-                details: denial.clone(),
-            }),
-        );
-        let (response, delivery) = handle
-            .complete_access_deferred_with_span(accessor, accessor.getter(), response, finished)
-            .await?;
-        return deliver(accessor, response, None, delivery, &span_id).await;
-    }
-
-    let (idempotency_key, remote_agent_id) = call_target
-        .at(handle.start_index())
-        .map_err(|error| handle.trap(error))?;
+    .await?
+    {
+        RpcCallOpening::Rejected(error) => return Ok(Err(error)),
+        RpcCallOpening::Denied {
+            handle,
+            span_id,
+            denial,
+        } => {
+            let response = denied::rpc::invoke_and_await(&(), &denial);
+            let finished = rpc_span_finished::<()>(
+                &span_id,
+                &Err(InternalRpcError::Denied { details: denial }),
+            );
+            let (response, delivery) = handle
+                .complete_access_deferred_with_span(accessor, accessor.getter(), response, finished)
+                .await?;
+            return deliver(accessor, response, None, delivery, &span_id).await;
+        }
+        RpcCallOpening::Open(call) => call,
+    };
+    let OpenRpcCall {
+        mut handle,
+        prepared,
+        span_id,
+        idempotency_key,
+        remote_agent_id,
+        started_live,
+        known_fingerprint,
+        scope_card,
+        ..
+    } = call;
     let request_key = InvocationRequestKey::Internal(idempotency_key.clone());
-    let known_fingerprint =
-        recorded_target_fingerprint(accessor, &this).map_err(|error| handle.trap(error))?;
 
     // A replay or repair reuses the scope card and streaming origin its `Start` recorded.
     let (scope_card, streaming_origin) = if started_live {

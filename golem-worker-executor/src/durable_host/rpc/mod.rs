@@ -173,6 +173,7 @@ impl Debug for WasmRpcEntryPayload {
     }
 }
 
+mod call;
 mod create;
 mod denial;
 mod ephemeral;
@@ -187,6 +188,7 @@ mod target;
 mod trigger;
 mod values;
 
+use call::*;
 use ephemeral::*;
 use execution::*;
 use remote_call::*;
