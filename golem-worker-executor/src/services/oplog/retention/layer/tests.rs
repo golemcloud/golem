@@ -93,6 +93,29 @@ async fn the_length_counts_the_retained_entries_and_the_last_index_stays() {
 }
 
 #[test]
+async fn a_failed_retained_tail_read_returns_an_error_from_length() {
+    use crate::services::oplog::tests::ReadCountingIndexedStorage;
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let oplog =
+        RetainedOplog::with_storage(indexed.clone(), Arc::new(InMemoryKeyValueStorage::new()))
+            .await;
+    oplog.with_jumps(10).await;
+    oplog.advance(4).await;
+    let handle = oplog.open().await;
+
+    indexed.fail_next_last_id();
+    let error = handle.length().await.unwrap_err();
+    assert_eq!(error.agent_id, *oplog.agent_id());
+    assert!(matches!(
+        error.error,
+        OplogReadError::SourceFailure { detail, .. } if detail.contains("injected tail lookup failure")
+    ));
+    assert_eq!(handle.length().await.unwrap(), 7);
+}
+
+#[test]
 async fn a_read_below_the_start_is_expired_and_the_create_entry_stays_readable() {
     let oplog = RetainedOplog::new().await;
     oplog.with_jumps(10).await;

@@ -24,9 +24,9 @@ use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog,
     OplogAddPairReceipt, OplogAddReceipt, OplogCloseCompletion, OplogError, OplogLifecycleGuard,
-    OplogService, OrderedOplogStart, RawDurableStreamSessionStatus, RawOplogPayloadDownloadError,
-    ReservedRawStartBuilder, ScanPage, StagePublication, StreamSessionIndexService,
-    UnreadableOplog, WorkerTasks,
+    OplogReadError, OplogReadSource, OplogService, OrderedOplogStart,
+    RawDurableStreamSessionStatus, RawOplogPayloadDownloadError, ReservedRawStartBuilder, ScanPage,
+    StagePublication, StreamSessionIndexService, UnreadableOplog, WorkerTasks,
 };
 use crate::storage::keyvalue::KeyValueStorage;
 use async_trait::async_trait;
@@ -219,7 +219,19 @@ impl Oplog for RetentionOplog {
             return Ok(length);
         }
         // An archive layer can count chunks, not entries. Use the committed tail for the count.
-        let last = self.service.get_last_index(&self.owner, self.mode).await?;
+        let last = self
+            .service
+            .try_get_last_index(&self.owner, self.mode)
+            .await
+            .map_err(|error| {
+                UnreadableOplog::new(
+                    &self.owner.agent_id,
+                    OplogReadError::source_failure(
+                        OplogReadSource::Other("retained oplog tail"),
+                        error,
+                    ),
+                )
+            })?;
         Ok(self.retention.retained_length(last))
     }
 

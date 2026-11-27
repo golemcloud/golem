@@ -25,6 +25,7 @@ use crate::services::oplog::{
     ReservedRawStartBuilder, ScanPage, StagePublication, UnreadableOplog, WorkerTasks,
 };
 use crate::services::stream_session_index::StreamSessionIndexService;
+use crate::storage::indexed::IndexedStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
@@ -154,8 +155,15 @@ impl RetainedOplog {
     pub async fn with_key_value_storage(
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     ) -> Self {
+        Self::with_storage(Arc::new(InMemoryIndexedStorage::new()), key_value_storage).await
+    }
+
+    pub async fn with_storage(
+        indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Self {
         let primary = PrimaryOplogService::new(
-            Arc::new(InMemoryIndexedStorage::new()),
+            indexed_storage,
             Arc::new(InMemoryBlobStorage::new()),
             1,
             1,

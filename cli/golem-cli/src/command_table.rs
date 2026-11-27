@@ -303,7 +303,8 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         destructive: true,
     },
     // `--html` writes a host file; the viewer flags serve or open it locally. An obfuscated export
-    // first reads `Create` at index 1. Its data pages honor `--from`. It cannot use `--page`.
+    // first requests a page at index 1. If the retained start is later, the request expires
+    // before `--from` is used. The export's data pages honor `--from`. It cannot use `--page`.
     CommandRow {
         path: &["agent", "oplog"],
         class: ManagementRead,

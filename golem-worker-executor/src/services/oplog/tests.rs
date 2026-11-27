@@ -743,6 +743,7 @@ pub(crate) struct ReadCountingIndexedStorage {
     fail_delete_once: AtomicBool,
     fail_drop_prefix_once: AtomicBool,
     fail_length_once: AtomicBool,
+    fail_last_id_once: AtomicBool,
     fail_exists_once: AtomicBool,
     miss_closest_once: AtomicBool,
     /// Fails every `last_id` of a compressed archive level with this error.
@@ -838,6 +839,10 @@ impl ReadCountingIndexedStorage {
 
     fn fail_next_length(&self) {
         self.fail_length_once.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fail_next_last_id(&self) {
+        self.fail_last_id_once.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn fail_next_exists(&self) {
@@ -1234,6 +1239,11 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
         self.count_read();
+        if self.fail_last_id_once.swap(false, Ordering::Relaxed) {
+            return Err(IndexedStorageError::Other(
+                "injected tail lookup failure".into(),
+            ));
+        }
         if let (Some(error), IndexedStorageNamespace::CompressedOpLog { .. }) =
             (&self.archive_last_id_error, &namespace)
         {
