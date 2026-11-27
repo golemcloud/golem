@@ -217,6 +217,7 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
         SchedulerStorageConfig,
     };
     use golem_worker_service::config::SessionStoreConfig;
+    use golem_worker_service::mcp::session::McpSessionStorageConfig;
 
     let Some(file_name) = config
         .logging
@@ -274,23 +275,82 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
         &config.data_dir.join(crate::filesystem_config::KEY_FILE),
         "retained repository key",
     )?;
-    let check_sqlite = |sqlite: &DbSqliteConfig| {
-        check_path(Path::new(&sqlite.database), "selected SQLite database")
+    let check_sqlite_path = |path: &Path| -> anyhow::Result<()> {
+        let database = match std::fs::canonicalize(path) {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
+            Err(error) => return Err(error).context("Failed to inspect selected SQLite database"),
+        };
+        ["", "-wal", "-shm", "-journal"]
+            .into_iter()
+            .try_for_each(|suffix| {
+                let mut path = database.as_os_str().to_os_string();
+                path.push(suffix);
+                check_path(
+                    Path::new(&path),
+                    "selected SQLite database or recovery file",
+                )
+            })
     };
-    let check_multi_sqlite = |root: &Path| -> anyhow::Result<()> {
+    let check_sqlite = |sqlite: &DbSqliteConfig| check_sqlite_path(Path::new(&sqlite.database));
+    let is_agent_file_key = |key: &str| {
+        key.split_once('_').is_some_and(|(environment, agent)| {
+            [environment, agent].into_iter().all(|id| {
+                uuid::Uuid::parse_str(id).is_ok_and(|uuid| uuid.hyphenated().to_string() == id)
+            })
+        })
+    };
+    let is_key_value_database = |name: &str, persistent: bool| {
+        (persistent
+            && matches!(
+                name,
+                "kv-running_workers" | "kv-schedule.db" | "kv-user-defined.db"
+            ))
+            || name
+                .strip_prefix("kv-worker-")
+                .and_then(|key| key.strip_suffix(".db"))
+                .is_some_and(is_agent_file_key)
+    };
+    let is_indexed_database = |name: &str| {
+        name == "epochs.db"
+            || name
+                .strip_suffix(".db")
+                .and_then(|name| {
+                    name.strip_prefix("durable-")
+                        .or_else(|| name.strip_prefix("ephemeral-"))
+                })
+                .and_then(|name| {
+                    name.strip_prefix("oplog-").or_else(|| {
+                        name.strip_prefix("compressed-oplog-l")
+                            .or_else(|| name.strip_prefix("blob-oplog-l"))
+                            .and_then(|name| name.split_once('-'))
+                            .and_then(|(level, key)| {
+                                level
+                                    .parse::<usize>()
+                                    .is_ok_and(|value| value.to_string() == level)
+                                    .then_some(key)
+                            })
+                    })
+                })
+                .is_some_and(is_agent_file_key)
+    };
+    let check_multi_sqlite = |root: &Path, selected: &dyn Fn(&str) -> bool| -> anyhow::Result<()> {
         let entries = match std::fs::read_dir(root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error).context("Failed to inspect selected SQLite databases"),
         };
         entries.into_iter().try_for_each(|entry| {
-            let path = entry?.path();
-            if path.extension().is_some_and(|extension| extension == "db")
-                || path
-                    .file_name()
-                    .is_some_and(|name| name == "kv-running_workers")
-            {
-                check_path(&path, "selected SQLite database")?;
+            let entry = entry?;
+            let name = entry.file_name();
+            if let Some(name) = name.to_str() {
+                let database = ["-wal", "-shm", "-journal"]
+                    .into_iter()
+                    .find_map(|suffix| name.strip_suffix(suffix))
+                    .unwrap_or(name);
+                if selected(database) {
+                    check_sqlite_path(&root.join(database))?;
+                }
             }
             Ok(())
         })
@@ -306,6 +366,10 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
         },
         match &config.worker_service.gateway_session_storage {
             SessionStoreConfig::Sqlite(sqlite) => Some(&sqlite.sqlite_config),
+            _ => None,
+        },
+        match &config.worker_service.mcp.session.session_storage {
+            Some(McpSessionStorageConfig::Sqlite(sqlite)) => Some(&sqlite.sqlite_config),
             _ => None,
         },
         match &config.worker_executor.scheduler_storage {
@@ -329,27 +393,43 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     })?;
     match &config.worker_executor.key_value_storage {
         KeyValueStorageConfig::Sqlite(sqlite) => check_sqlite(sqlite)?,
-        KeyValueStorageConfig::MultiSqlite(sqlite) => check_multi_sqlite(&sqlite.root_dir)?,
-        KeyValueStorageConfig::NamespaceRouted(routed) => [&routed.cache, &routed.persistent]
-            .into_iter()
-            .try_for_each(|inner| match inner {
-                KeyValueStorageInnerConfig::Sqlite(sqlite) => check_sqlite(sqlite),
-                KeyValueStorageInnerConfig::MultiSqlite(sqlite) => {
-                    check_multi_sqlite(&sqlite.root_dir)
-                }
-                _ => Ok(()),
-            })?,
+        KeyValueStorageConfig::MultiSqlite(sqlite) => {
+            check_multi_sqlite(&sqlite.root_dir, &|name| is_key_value_database(name, true))?
+        }
+        KeyValueStorageConfig::NamespaceRouted(routed) => {
+            [(&routed.cache, false), (&routed.persistent, true)]
+                .into_iter()
+                .try_for_each(|(inner, persistent)| match inner {
+                    KeyValueStorageInnerConfig::Sqlite(sqlite) => check_sqlite(sqlite),
+                    KeyValueStorageInnerConfig::MultiSqlite(sqlite) => {
+                        check_multi_sqlite(&sqlite.root_dir, &|name| {
+                            is_key_value_database(name, persistent)
+                        })
+                    }
+                    _ => Ok(()),
+                })?
+        }
         _ => {}
     }
     match &config.worker_executor.indexed_storage {
         IndexedStorageConfig::Sqlite(sqlite) => check_sqlite(sqlite),
-        IndexedStorageConfig::MultiSqlite(sqlite) => check_multi_sqlite(&sqlite.root_dir),
+        IndexedStorageConfig::MultiSqlite(sqlite) => {
+            check_multi_sqlite(&sqlite.root_dir, &is_indexed_database)
+        }
         IndexedStorageConfig::KVStoreSqlite(_) => match &config.worker_executor.key_value_storage {
             KeyValueStorageConfig::Sqlite(sqlite) => check_sqlite(
                 &golem_worker_executor::derive_disjoint_sqlite_config(sqlite, "indexed"),
             ),
             _ => Ok(()),
         },
+        IndexedStorageConfig::KVStoreMultiSqlite(_) => {
+            match &config.worker_executor.key_value_storage {
+                KeyValueStorageConfig::MultiSqlite(sqlite) => {
+                    check_multi_sqlite(&sqlite.root_dir, &is_indexed_database)
+                }
+                _ => Ok(()),
+            }
+        }
         _ => Ok(()),
     }
 }

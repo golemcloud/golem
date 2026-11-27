@@ -726,10 +726,13 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
         ("gateway-sessions.db", None),
         ("scheduler.db", None),
         ("kv-store/kv-running_workers", None),
+        ("kv-store/kv-schedule.db", None),
+        ("kv-store/kv-user-defined.db", None),
         ("kv-store/epochs.db", None),
         ("custom.db", Some("REGISTRY_SERVICE__DB")),
         ("custom.db", Some("SHARD_MANAGER__PERSISTENCE")),
         ("custom.db", Some("WORKER_SERVICE__GATEWAY_SESSION_STORAGE")),
+        ("custom.db", Some("WORKER_SERVICE__MCP__SESSION_STORAGE")),
         ("custom.db", Some("WORKER_EXECUTOR__SCHEDULER_STORAGE")),
         ("custom.db", Some("WORKER_EXECUTOR__KEY_VALUE_STORAGE")),
         ("custom.db", Some("WORKER_EXECUTOR__INDEXED_STORAGE")),
@@ -762,6 +765,58 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
         ),
     ]
     .into_iter()
+    .map(|(database, store)| (database, store, true))
+    .chain([
+        ("kv-store/server.db", None, false),
+        ("kv-store/kv-worker-unrelated.db", None, false),
+        ("kv-store/durable-oplog-unrelated.db", None, false),
+        (
+            "other-kv/epochs.db",
+            Some("WORKER_EXECUTOR__KEY_VALUE_STORAGE"),
+            false,
+        ),
+        (
+            "other-index/kv-schedule.db",
+            Some("WORKER_EXECUTOR__INDEXED_STORAGE"),
+            false,
+        ),
+        (
+            "other-cache/kv-schedule.db",
+            Some("WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__CACHE"),
+            false,
+        ),
+        (
+            "kv-store/kv-worker-1ac92b47-0d81-4c31-936a-0ea6104cdd59_2bb90c48-1de4-4e54-b638-44ed713f5420.db",
+            None,
+            true,
+        ),
+        (
+            "kv-store/durable-oplog-1ac92b47-0d81-4c31-936a-0ea6104cdd59_2bb90c48-1de4-4e54-b638-44ed713f5420.db",
+            None,
+            true,
+        ),
+        (
+            "kv-store/ephemeral-compressed-oplog-l2-1ac92b47-0d81-4c31-936a-0ea6104cdd59_2bb90c48-1de4-4e54-b638-44ed713f5420.db",
+            None,
+            true,
+        ),
+        (
+            "kv-store/durable-blob-oplog-l3-1ac92b47-0d81-4c31-936a-0ea6104cdd59_2bb90c48-1de4-4e54-b638-44ed713f5420.db",
+            None,
+            true,
+        ),
+    ])
+    .flat_map(|database| {
+        let recovery_files = database.2
+            && (matches!(
+                database.0,
+                "registry_service.db" | "kv-store/kv-running_workers" | "kv-store/epochs.db"
+            ) || database.1 == Some("WORKER_SERVICE__MCP__SESSION_STORAGE"));
+        ["", "-wal", "-shm", "-journal"]
+            .into_iter()
+            .filter(move |suffix| suffix.is_empty() || recovery_files)
+            .map(move |suffix| (database, suffix))
+    })
     .flat_map(|database| {
         [
             "direct",
@@ -769,11 +824,13 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
             "noncolliding",
             #[cfg(unix)]
             "symlink",
+            #[cfg(unix)]
+            "database-symlink",
         ]
         .into_iter()
         .flat_map(move |alias| [false, true].map(|retained_key| (database, alias, retained_key)))
     })
-    .for_each(|((database, selected_store), alias, retained_key)| {
+    .for_each(|(((database, selected_store, selected), suffix), alias, retained_key)| {
         figment::Jail::expect_with(|jail| {
             jail.clear_env();
             jail.set_env("HOME", jail.directory().display().to_string());
@@ -785,7 +842,23 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                 data_dir.join(database)
             };
             std::fs::create_dir_all(database_path.parent().unwrap()).unwrap();
-            std::fs::write(&database_path, b"preserve selected SQLite state").unwrap();
+            let resolved_database = if alias == "database-symlink" {
+                database_path.with_file_name("resolved.db")
+            } else {
+                database_path.clone()
+            };
+            let state_path = resolved_database.with_file_name(format!(
+                "{}{suffix}",
+                resolved_database.file_name().unwrap().to_str().unwrap()
+            ));
+            std::fs::write(&state_path, b"preserve selected SQLite state").unwrap();
+            #[cfg(unix)]
+            if alias == "database-symlink" {
+                if !suffix.is_empty() {
+                    std::fs::write(&resolved_database, b"selected database").unwrap();
+                }
+                std::os::unix::fs::symlink(&resolved_database, &database_path).unwrap();
+            }
             let key_path = data_dir.join(crate::filesystem_config::KEY_FILE);
             if retained_key {
                 std::fs::write(&key_path, "2a".repeat(64)).unwrap();
@@ -826,8 +899,20 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                         format!("GOLEM_ADVANCED__{store}__CONFIG__ROOT_DIR"),
                         database_path.parent().unwrap().display().to_string(),
                     );
+                    if store == "WORKER_EXECUTOR__KEY_VALUE_STORAGE" {
+                        jail.set_env(
+                            "GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE",
+                            "InMemory",
+                        );
+                    }
                 } else {
                     jail.set_env(format!("GOLEM_ADVANCED__{store}__TYPE"), "Sqlite");
+                    if store == "WORKER_SERVICE__MCP__SESSION_STORAGE" {
+                        jail.set_env(
+                            format!("GOLEM_ADVANCED__{store}__CONFIG__CLEANUP_INTERVAL"),
+                            "5m",
+                        );
+                    }
                     let selected_database = if database == "custom-indexed.db" {
                         jail.set_env(
                             "GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE",
@@ -843,15 +928,15 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                     );
                 }
             }
-            let log_path = if alias == "direct" {
-                database_path.clone()
+            let log_path = if matches!(alias, "direct" | "database-symlink") {
+                state_path.clone()
             } else {
                 data_dir.join("server.log")
             };
             match alias {
-                "hard-link" => std::fs::hard_link(&database_path, &log_path).unwrap(),
+                "hard-link" => std::fs::hard_link(&state_path, &log_path).unwrap(),
                 #[cfg(unix)]
-                "symlink" => std::os::unix::fs::symlink(&database_path, &log_path).unwrap(),
+                "symlink" => std::os::unix::fs::symlink(&state_path, &log_path).unwrap(),
                 _ => {}
             }
             jail.set_env("GOLEM__LOGGING__FILE_NAME", log_path.display().to_string());
@@ -893,12 +978,12 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                         .await
                 })
             }));
-            if alias == "noncolliding" {
+            if !selected || alias == "noncolliding" {
                 assert!(result.unwrap_err().is::<TracingInitialized>());
                 assert!(called.get());
             } else {
                 let refusal = result.unwrap_or_else(|_| {
-                    panic!("tracing opened {database}, {alias}, retained_key={retained_key}")
+                    panic!("tracing opened {database}{suffix}, {alias}, retained_key={retained_key}")
                 });
                 let message = format!("{:#}", refusal.unwrap_err());
                 assert!(message.contains("selected SQLite database"), "{message}");
@@ -908,8 +993,12 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                 );
             }
             assert_eq!(
-                std::fs::read(&database_path).unwrap(),
-                b"preserve selected SQLite state"
+                std::fs::read(&state_path).unwrap(),
+                if !selected && alias != "noncolliding" {
+                    b"log would replace state".as_slice()
+                } else {
+                    b"preserve selected SQLite state".as_slice()
+                }
             );
             assert_eq!(key_path.exists(), retained_key);
             Ok(())
