@@ -22,11 +22,12 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     search_oplog_response,
 };
 use golem_common::base_model::worker_filter::StringFilterComparator;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{
     OplogCursor as CommonOplogCursor, OplogIndex, PublicOplogEntry, PublicOplogPageEntry,
 };
-use golem_common::model::{AgentFilter, AgentId, OwnedAgentId, PromiseId, ScanCursor};
+use golem_common::model::{AgentFilter, OwnedAgentId, PromiseId, ScanCursor};
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;

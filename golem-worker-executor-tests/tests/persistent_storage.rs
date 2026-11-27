@@ -189,10 +189,10 @@ impl PersistentStorage {
                         "test",
                         "primary_length",
                         IndexedStorageNamespace::OpLog {
-                            agent_id: agent.agent_id(),
+                            owned_agent_id: agent.clone(),
                             agent_mode: AgentMode::Durable,
                         },
-                        &agent.agent_id.to_redis_key(),
+                        &agent.storage_key(),
                     )
                     .await?)
             }

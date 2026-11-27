@@ -20,7 +20,7 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{MemoryConfig, OplogConfig};
@@ -795,7 +795,7 @@ async fn auto_committed_invocations_publish_idle_status(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_key!("Environment", "auto-commit-status");
+    let agent_id = agent_key!("GolemWasiHttp", "auto-commit-status");
     let keys = [(); 4].map(|()| IdempotencyKey::fresh());
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
@@ -822,7 +822,9 @@ async fn auto_committed_invocations_publish_idle_status(
     let expected_keys = futures::future::try_join_all(
         keys.iter()
             .zip(["increment", "get_count", "increment", "get_count"])
-            .map(|(key, method)| executor.external_invocation_key(&worker_id, key, method)),
+            .map(|(key, method)| {
+                executor.external_invocation_key(&worker_id.agent_id, key, method)
+            }),
     )
     .await?;
     let expected_keys = expected_keys
@@ -897,7 +899,7 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         .store()
         .await?;
 
-    let agent_id = agent_key!("Environment", "archive-idle-1");
+    let agent_id = agent_key!("GolemWasiHttp", "archive-idle-1");
     let keys = [(); 4].map(|()| IdempotencyKey::fresh());
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
@@ -921,12 +923,11 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
     assert_eq!(metadata.status, AgentStatus::Idle);
 
     // Wait for archiving to move entries out of the primary oplog
-    let owned_agent = OwnedAgentId::new(context.default_environment_id, &worker_id);
     wait_for_primary_oplog_empty(
         durable_storage,
         deps,
         &context,
-        &owned_agent,
+        &worker_id,
         Duration::from_secs(30),
     )
     .await?;
@@ -940,7 +941,9 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
     let expected_keys = futures::future::try_join_all(
         keys.iter()
             .zip(["increment", "get_count", "increment", "get_count"])
-            .map(|(key, method)| executor.external_invocation_key(&worker_id, key, method)),
+            .map(|(key, method)| {
+                executor.external_invocation_key(&worker_id.agent_id, key, method)
+            }),
     )
     .await?;
     let expected_keys = expected_keys
@@ -1035,11 +1038,15 @@ async fn oplog_archive_scheduled_when_worker_fails(
     let settled_keys = [
         constructor_key(&settled),
         executor
-            .external_invocation_key(&worker_id, &warmup_key, "get_self_metadata_result")
+            .external_invocation_key(&worker_id.agent_id, &warmup_key, "get_self_metadata_result")
             .await?,
     ];
     let failed_invocation = executor
-        .external_invocation_key(&worker_id, &failed_key, "fail_with_custom_max_retries")
+        .external_invocation_key(
+            &worker_id.agent_id,
+            &failed_key,
+            "fail_with_custom_max_retries",
+        )
         .await?;
 
     // Invoke with 0 retries to cause immediate failure
@@ -1061,12 +1068,11 @@ async fn oplog_archive_scheduled_when_worker_fails(
     assert_eq!(metadata.status, AgentStatus::Failed);
 
     // Wait for archiving to move entries out of the primary oplog
-    let owned_agent = OwnedAgentId::new(context.default_environment_id, &worker_id);
     wait_for_primary_oplog_empty(
         durable_storage,
         deps,
         &context,
-        &owned_agent,
+        &worker_id,
         Duration::from_secs(30),
     )
     .await?;

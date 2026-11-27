@@ -8428,17 +8428,17 @@ async fn reconstruct_interrupted_state(
     let expected_keys = [
         constructor_key(&before),
         executor
-            .external_invocation_key(&worker_id, &warmup_key, "sleep_for")
+            .external_invocation_key(&worker_id.agent_id, &warmup_key, "sleep_for")
             .await?,
         executor
-            .external_invocation_key(&worker_id, &interrupted_key, "interruption")
+            .external_invocation_key(&worker_id.agent_id, &interrupted_key, "interruption")
             .await?,
         executor
-            .external_invocation_key(&worker_id, &fresh_key, "sleep_for")
+            .external_invocation_key(&worker_id.agent_id, &fresh_key, "sleep_for")
             .await?,
     ];
     executor.shutdown_and_wait_for_invocation_loops().await?;
-    executor.remove_cached_status(&worker_id).await?;
+    executor.remove_cached_status(&worker_id.agent_id).await?;
     drop(executor);
     let executor = durable_storage.start(deps, &context, None).await?;
 
@@ -8558,7 +8558,7 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemWasiHttp", "cache-loss");
+    let agent_id = agent_key!("GolemWasiHttp", "cache-loss");
     let keys = [(); 6].map(|()| IdempotencyKey::fresh());
     let worker_id = executor
         .start_agent_with(
@@ -8588,7 +8588,9 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
                 "increment",
                 "get_count",
             ])
-            .map(|(key, method)| executor.external_invocation_key(&worker_id, key, method)),
+            .map(|(key, method)| {
+                executor.external_invocation_key(&worker_id.agent_id, key, method)
+            }),
     )
     .await?;
     let expected_keys = expected_keys
