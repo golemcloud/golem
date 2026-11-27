@@ -221,6 +221,10 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         errors: Vec<String>,
     },
+    #[error(
+        "Tool name {tool_name} is a UUID and cannot be distinguished from an agent invocation owner; choose a name that is not a UUID"
+    )]
+    UuidToolName { tool_name: ToolName },
     #[error("Tool {tool_name} filesystem configuration is invalid: {error}")]
     ToolFilesystemRequirement { tool_name: ToolName, error: String },
     #[error("Tool {tool_name} in component {component_name} could not be serialized: {error}")]

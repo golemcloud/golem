@@ -58,6 +58,24 @@ key := durability.GenerateIdempotencyKey()
     </Tabs.Tab>
 </Tabs>
 
+### Override the outgoing HTTP idempotency key
+
+Golem adds an `idempotency-key` header to every outgoing HTTP request when your code does not set one. You cannot turn off this header. During an invocation, Golem derives the key from the invocation and the call's durable position. Automatic retries and recovery of that call use the same key. Outside an invocation, Golem uses a random parent key, so recovery does not guarantee the same derived key.
+
+Replay of a fully recorded response uses its recorded headers and body and sends no request. Recovery of an incomplete response body can reissue the request with the same key, including a `Range` request to resume the body. See [Durable execution](/next/concepts/durable-execution).
+
+To override the key for one request, set the `idempotency-key` header in your HTTP client. Golem keeps that value. For example, a payment request can carry the key of its business operation:
+
+```http
+POST /charge HTTP/1.1
+Host: payments.example.com
+Idempotency-Key: order-42-charge
+```
+
+Use a different key for a different operation. A retry that your guest code makes itself is a new send and gets a new derived key. To deduplicate such retries, set the header to the same business-operation key on each send. You can also [generate an idempotency key](#generate-an-idempotency-key) and reuse it. This needs no Golem setting or additional SDK API.
+
+The remote service must support the header, apply the effect once and return the original result for the same key. A stable key alone cannot prevent duplicate effects at a service that ignores it.
+
 ### Get agent metadata
 
 It is possible to query **metadata** for Golem agents. This metadata is defined by the `AgentMetadata` interface:

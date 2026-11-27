@@ -410,8 +410,8 @@ impl RustBridgeGenerator {
                 crate::__golem_bridge_runtime::check_datetime(#val)
                     .map(|__datetime| __writer.push(__wire::SchemaValueNode::DatetimeValue(
                         __wire::Datetime {
-                            seconds: __datetime.timestamp(),
-                            nanoseconds: __datetime.timestamp_subsec_nanos(),
+                            seconds: __datetime.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                            nanoseconds: __datetime.as_nanosecond().rem_euclid(1_000_000_000) as u32,
                         }
                     )))
             },
@@ -622,16 +622,21 @@ impl RustBridgeGenerator {
             },
             SchemaType::Duration { .. } => {
                 quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
-                    __wire::SchemaValueNode::DurationValue(__value) => Ok(chrono::TimeDelta::nanoseconds(__value.nanoseconds)),
+                    __wire::SchemaValueNode::DurationValue(__value) => Ok(jiff::SignedDuration::from_nanos(__value.nanoseconds)),
                     __other => Err(format!("Expected duration value, got {:?}", __other)),
                 }}
             }
             SchemaType::Datetime { .. } => {
                 quote! { match __reader.take(#index).map_err(|e| e.to_string())? {
-                    __wire::SchemaValueNode::DatetimeValue(__value) =>
-                        chrono::DateTime::<chrono::Utc>::from_timestamp(__value.seconds, __value.nanoseconds)
-                            .ok_or_else(|| format!("Invalid datetime {}s {}ns", __value.seconds, __value.nanoseconds))
-                            .and_then(|__datetime| crate::__golem_bridge_runtime::check_datetime(&__datetime)),
+                    __wire::SchemaValueNode::DatetimeValue(__value) => {
+                        if __value.nanoseconds >= 1_000_000_000 {
+                            Err(format!("Invalid datetime {}s {}ns", __value.seconds, __value.nanoseconds))
+                        } else {
+                            jiff::Timestamp::new(__value.seconds, __value.nanoseconds as i32)
+                                .map_err(|__error| __error.to_string())
+                                .and_then(|__datetime| crate::__golem_bridge_runtime::check_datetime(&__datetime))
+                        }
+                    },
                     __other => Err(format!("Expected datetime value, got {:?}", __other)),
                 }}
             }

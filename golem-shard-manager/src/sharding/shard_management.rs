@@ -23,10 +23,10 @@ use super::rebalancing::Rebalance;
 use super::worker_executor::{WorkerExecutorService, assign_shards, revoke_shards};
 use crate::metrics;
 use async_rwlock::RwLock;
-use chrono::Utc;
 use golem_common::base_model::shard_lease;
 use golem_common::model::ShardId;
 use itertools::Itertools;
+use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -247,7 +247,7 @@ impl ShardManagement {
         // executors are dropped.
         let unhealthy_executors = if discard_stored_executors {
             HashSet::new()
-        } else if !shard_state.has_expired_lease(Utc::now()) {
+        } else if !shard_state.has_expired_lease(Timestamp::now()) {
             info!(
                 executors = executors.len(),
                 "Every stored shard lease is still valid; skipping the initial health check"
@@ -316,7 +316,7 @@ impl ShardManagement {
             // every stored expiry is in the past and the first pass's housekeeping would evict the
             // whole cluster. The executors counted healthy above (all of them when the health check
             // was skipped) have their lease clock restarted before the loop can run.
-            let now = Utc::now();
+            let now = Timestamp::now();
             let regranted = shard_management
                 .mutate_and_persist(move |shard_state| {
                     shard_state.regrant_leases(&healthy_executors, now, lease_ttl)
@@ -344,6 +344,10 @@ impl ShardManagement {
     /// the same registration, so the same id at the same address refreshes that lease and returns
     /// it; it neither creates a second lease nor counts as a replacement. A *different* id at a
     /// known address is a restarted instance, and inherits its predecessor's shards.
+    ///
+    /// Registration does not remove elapsed leases. The delivered executor count can be high
+    /// until housekeeping removes them and a newer snapshot is delivered. This reduces a
+    /// divided resource budget; it does not grant shard ownership.
     pub async fn register_executor(
         &self,
         executor_id: ExecutorId,
@@ -351,7 +355,7 @@ impl ShardManagement {
         pod_name: Option<String>,
     ) -> Result<RegisterAck, ShardManagerError> {
         debug!(executor_id = %executor_id, addr = %addr, "Registering executor");
-        let now = Utc::now();
+        let now = Timestamp::now();
         let lease_ttl = self.lease_ttl;
 
         let ((already_known, replaced, number_of_shards, pending), stored_at) = self
@@ -428,7 +432,7 @@ impl ShardManagement {
             claimed_shards = claimed.len(),
             "Renewing shard lease"
         );
-        let now = Utc::now();
+        let now = Timestamp::now();
         let lease_ttl = self.lease_ttl;
 
         // Reaped in a write of its own, ahead of the renewal: so that a lease which lapsed before
@@ -625,7 +629,7 @@ impl ShardManagement {
             );
             // The write lock is taken twice, for the plan and for its apply, and is free during the
             // fan-out, so a renewal is never queued behind the executor round trips.
-            let now = Utc::now();
+            let now = Timestamp::now();
             let (rebalance, full_assignment_executors, expired) = self
                 .mutate_and_persist(|current_shard_state| {
                     // Every pass begins by reaping the leases that lapsed since the last one.
@@ -950,6 +954,7 @@ impl ShardManagement {
                 worker_executors.clone(),
                 rebalance.get_unassignments(),
                 shard_state.revision,
+                shard_state.executor_count(),
                 addrs,
             )
             .await
@@ -1098,8 +1103,8 @@ mod tests {
 
     const TTL: Duration = Duration::from_secs(60);
 
-    fn t0() -> chrono::DateTime<Utc> {
-        chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    fn t0() -> jiff::Timestamp {
+        jiff::Timestamp::new(1_700_000_000, 0).unwrap()
     }
 
     fn executor(idx: u128) -> ExecutorId {

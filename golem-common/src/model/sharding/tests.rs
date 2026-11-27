@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
 use test_r::test;
@@ -40,7 +41,12 @@ const MANAGER: Uuid = Uuid::from_u128(0x5eed);
 fn set_shards_replaces_the_set_rather_than_merging_into_it() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
 
-    let outcome = assignment.set_shards(8, &epochs([(1, 4)]), revision_of(MANAGER, 1));
+    let outcome = assignment.set_shards(
+        8,
+        &epochs([(1, 4)]),
+        revision_of(MANAGER, 1),
+        NonZeroUsize::MIN,
+    );
 
     assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
     assert!(!assignment.contains(&ShardId::new(0)));
@@ -58,10 +64,21 @@ fn set_shards_replaces_the_set_rather_than_merging_into_it() {
 #[test]
 fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
-    assignment.set_shards(8, &epochs([(0, 1), (5, 2)]), revision_of(MANAGER, 7));
+    assignment.set_shards(
+        8,
+        &epochs([(0, 1), (5, 2)]),
+        revision_of(MANAGER, 7),
+        NonZeroUsize::MIN,
+    );
 
     let granted = in_secs(60);
-    let outcome = assignment.adopt_grant(None, &epochs([(0, 1)]), granted, revision_of(MANAGER, 6));
+    let outcome = assignment.adopt_grant(
+        None,
+        &epochs([(0, 1)]),
+        granted,
+        revision_of(MANAGER, 6),
+        NonZeroUsize::MIN,
+    );
 
     assert_eq!(
         outcome,
@@ -89,11 +106,21 @@ fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
 #[test]
 fn a_delivery_at_the_same_revision_is_applied() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
-    assignment.set_shards(8, &epochs([(0, 1)]), revision_of(MANAGER, 7));
+    assignment.set_shards(
+        8,
+        &epochs([(0, 1)]),
+        revision_of(MANAGER, 7),
+        NonZeroUsize::MIN,
+    );
 
     let refreshed = in_secs(60);
-    let outcome =
-        assignment.adopt_grant(None, &epochs([(0, 1)]), refreshed, revision_of(MANAGER, 7));
+    let outcome = assignment.adopt_grant(
+        None,
+        &epochs([(0, 1)]),
+        refreshed,
+        revision_of(MANAGER, 7),
+        NonZeroUsize::MIN,
+    );
 
     assert_eq!(
         outcome,
@@ -114,12 +141,14 @@ fn a_push_never_moves_the_lease_clock() {
         &epochs([(0, 1), (1, 1)]),
         granted,
         revision_of(MANAGER, 1),
+        NonZeroUsize::MIN,
     );
 
     assignment.set_shards(
         8,
         &epochs([(0, 1), (1, 1), (2, 1)]),
         revision_of(MANAGER, 2),
+        NonZeroUsize::MIN,
     );
     assert_eq!(
         assignment.expires_at,
@@ -127,7 +156,11 @@ fn a_push_never_moves_the_lease_clock() {
         "a full-replace push must leave the lease where the grant put it"
     );
 
-    assignment.revoke_shards(&HashSet::from([ShardId::new(2)]), revision_of(MANAGER, 3));
+    assignment.revoke_shards(
+        &HashSet::from([ShardId::new(2)]),
+        revision_of(MANAGER, 3),
+        NonZeroUsize::MIN,
+    );
     assert_eq!(
         assignment.expires_at,
         Some(granted),
@@ -148,6 +181,7 @@ fn a_grant_with_a_shorter_lease_shortens_it() {
         &epochs([(0, 1)]),
         now + Duration::from_secs(60),
         revision_of(MANAGER, 1),
+        NonZeroUsize::MIN,
     );
 
     assignment.adopt_grant(
@@ -155,6 +189,7 @@ fn a_grant_with_a_shorter_lease_shortens_it() {
         &epochs([(0, 1)]),
         now + Duration::from_secs(30),
         revision_of(MANAGER, 2),
+        NonZeroUsize::MIN,
     );
 
     assert_eq!(assignment.expires_at, Some(now + Duration::from_secs(30)));
@@ -172,10 +207,11 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         &epochs([(0, 1), (1, 1)]),
         expiry,
         revision_of(MANAGER, 3),
+        NonZeroUsize::MIN,
     );
     let revoked = HashSet::from([ShardId::new(0)]);
 
-    let stale = assignment.revoke_shards(&revoked, revision_of(MANAGER, 2));
+    let stale = assignment.revoke_shards(&revoked, revision_of(MANAGER, 2), NonZeroUsize::MIN);
     assert_eq!(
         stale,
         ShardDeliveryOutcome::Stale {
@@ -188,7 +224,7 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         "a revoke older than the last delivery applied must be ignored"
     );
 
-    let applied = assignment.revoke_shards(&revoked, revision_of(MANAGER, 5));
+    let applied = assignment.revoke_shards(&revoked, revision_of(MANAGER, 5), NonZeroUsize::MIN);
     assert_eq!(applied, ShardDeliveryOutcome::Applied { set_changed: true });
     assert!(!assignment.contains(&ShardId::new(0)));
     assert_eq!(
@@ -207,6 +243,7 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         &epochs([(0, 1), (1, 1)]),
         in_secs(60),
         revision_of(MANAGER, 4),
+        NonZeroUsize::MIN,
     );
     assert!(matches!(late_grant, ShardDeliveryOutcome::Stale { .. }));
     assert!(
@@ -221,13 +258,19 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
 #[test]
 fn a_renewal_that_changes_the_set_reports_it() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
-    assignment.set_shards(8, &epochs([(0, 1), (1, 1)]), revision_of(MANAGER, 3));
+    assignment.set_shards(
+        8,
+        &epochs([(0, 1), (1, 1)]),
+        revision_of(MANAGER, 3),
+        NonZeroUsize::MIN,
+    );
 
     let outcome = assignment.adopt_grant(
         None,
         &epochs([(1, 1), (2, 5)]),
         in_secs(60),
         revision_of(MANAGER, 4),
+        NonZeroUsize::MIN,
     );
 
     assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
@@ -257,6 +300,7 @@ fn a_reply_from_another_manager_process_starts_the_revisions_over() {
         &epochs([(0, 4)]),
         in_secs(60),
         revision_of(old_manager, 10_000),
+        NonZeroUsize::MIN,
     );
     // what a lost lease does before the re-registration
     assignment.clear(Instant::now());
@@ -266,6 +310,7 @@ fn a_reply_from_another_manager_process_starts_the_revisions_over() {
         &epochs([(0, 5)]),
         in_secs(60),
         revision_of(new_manager, 3),
+        NonZeroUsize::MIN,
     );
 
     assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
@@ -284,11 +329,17 @@ fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
         &epochs([(0, 4)]),
         in_secs(60),
         revision_of(old_manager, 10_000),
+        NonZeroUsize::MIN,
     );
 
     // The new manager's push arrives before any reply from it: nothing says yet that it is
     // the one in charge.
-    let early = assignment.set_shards(8, &epochs([(1, 1)]), revision_of(new_manager, 2));
+    let early = assignment.set_shards(
+        8,
+        &epochs([(1, 1)]),
+        revision_of(new_manager, 2),
+        NonZeroUsize::MIN,
+    );
     assert_eq!(
         early,
         ShardDeliveryOutcome::FromAnotherManager {
@@ -303,16 +354,19 @@ fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
         &epochs([(0, 5)]),
         in_secs(60),
         revision_of(new_manager, 3),
+        NonZeroUsize::MIN,
     );
 
     let delayed_push = assignment.set_shards(
         8,
         &epochs([(0, 4), (1, 4)]),
         revision_of(old_manager, 10_001),
+        NonZeroUsize::MIN,
     );
     let delayed_revoke = assignment.revoke_shards(
         &HashSet::from([ShardId::new(0)]),
         revision_of(old_manager, 10_002),
+        NonZeroUsize::MIN,
     );
     for delayed in [delayed_push, delayed_revoke] {
         assert!(
@@ -324,7 +378,12 @@ fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
     assert_eq!(assignment.revision, Some(revision_of(new_manager, 3)));
 
     // The followed manager's own pushes are ordered by number as ever.
-    let push = assignment.set_shards(8, &epochs([(0, 5), (2, 1)]), revision_of(new_manager, 4));
+    let push = assignment.set_shards(
+        8,
+        &epochs([(0, 5), (2, 1)]),
+        revision_of(new_manager, 4),
+        NonZeroUsize::MIN,
+    );
     assert_eq!(push, ShardDeliveryOutcome::Applied { set_changed: true });
 }
 

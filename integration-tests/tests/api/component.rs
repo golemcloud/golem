@@ -181,10 +181,8 @@ async fn component_upload_deduplication_is_account_scoped(
     blob_storage
         .with("component_upload_deduplication", "clear_compiled_cache")
         .delete_dir(
-            BlobStorageNamespace::CompilationCache {
-                environment_id: second.id,
-            },
-            root,
+            BlobStorageNamespace::CompilationCache,
+            Path::new(&reused.wasm_hash.to_string()),
         )
         .await?;
     let agent = golem_common::agent_key!("Counter", "first-start-after-peer-deletion");

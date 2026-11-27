@@ -83,8 +83,8 @@ Every service exports its version, so a query can join any metric with the versi
 | `golem_storage_written_bytes_total` | counter | `storage_type` | Bytes written to storage, by storage type |
 | `golem_storage_objects_written_total` | counter | `storage_type` | Objects written to storage, by storage type |
 | `golem_storage_objects_deleted_total` | counter | `storage_type` | Objects deleted from storage, by storage type |
-| `golem_compilation_cache_written_bytes_total` | counter |  | Bytes written to the compiled component cache |
-| `golem_compilation_cache_objects_written_total` | counter |  | Objects written to the compiled component cache |
+| `golem_compilation_cache_written_bytes_total` | counter |  | Bytes written to the shared compiled component cache |
+| `golem_compilation_cache_objects_written_total` | counter |  | Objects written to the shared compiled component cache |
 
 ## TLS certificates
 
@@ -138,6 +138,7 @@ The shard lease metrics take their label values from a fixed set. A label value 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
 | `golem_assigned_shard_count` | gauge |  | Shards assigned to this executor |
+| `golem_executor_count` | gauge |  | Executor leases in the last accepted shard assignment |
 | `golem_stale_shard_delivery_total` | counter | `delivery` | Shard deliveries dropped for naming a revision older than the last one applied; `delivery` is `register`, `assign`, `revoke` or `renewal`. One is normal when a push and a renewal cross; a sustained rate is not |
 | `golem_shard_lease_expiry_timestamp_seconds` | gauge |  | Unix time at which the shard lease of this executor lapses unless it is renewed. Absent on a single-shard executor, which has no lease, and before the executor registers. `golem_shard_lease_expiry_timestamp_seconds - time()` is the remaining lease time, and it keeps counting down when the renewal loop stops |
 | `golem_shard_lease_renewals_total` | counter | `outcome` | Shard lease renewal attempts; `outcome` is `granted`, `not_registered`, `timeout`, `lease_not_found` or `failed`. On `lease_not_found` the executor drops its shards and registers again |

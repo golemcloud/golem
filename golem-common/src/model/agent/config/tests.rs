@@ -84,6 +84,7 @@ fn metadata_redaction_redacts_the_capabilities_in_the_divergence_of_a_failed_upd
         owner_kind: OwnerKind::ComponentAgent,
         agent_type_name: Some(crate::model::agent::AgentTypeName("Agent".to_string())),
         canonical_key: Some("Agent()".to_string()),
+        origin: crate::model::agent::AgentOrigin::Keyed,
         constructor_parameters: Some("()".to_string()),
         environment_id: crate::model::environment::EnvironmentId::new(),
         created_by: crate::model::account::AccountId::new(),

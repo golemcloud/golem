@@ -341,8 +341,8 @@ async fn clocks(
         .unwrap()
         .as_secs_f64();
     let diff1 = (epoch_seconds - *elapsed1).abs();
-    let parsed_odt = chrono::DateTime::parse_from_rfc3339(odt.as_str()).unwrap();
-    let odt_diff = epoch_seconds - parsed_odt.timestamp() as f64;
+    let parsed_odt = str::parse::<jiff::Timestamp>(odt.as_str()).unwrap();
+    let odt_diff = epoch_seconds - parsed_odt.as_second() as f64;
 
     assert!(diff1 < 5.0);
     assert!(*elapsed2 >= 2.0);
@@ -1418,6 +1418,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
             shard_ids: vec![shard],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -1435,6 +1436,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     assert!(!executor.worker_is_loaded(&owned_agent_id).await);
     let assigned = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,

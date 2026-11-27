@@ -386,6 +386,7 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
     let mut client = executor.client.clone();
     let assignment = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             number_of_shards: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),
@@ -441,6 +442,7 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -461,6 +463,7 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
     .expect("abandoned deletion did not finish");
     let assignment = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             number_of_shards: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),
@@ -503,6 +506,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
     let mut client = executor.client.clone();
     let assignment = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             number_of_shards: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),
@@ -557,6 +561,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
             if replace_assignment {
                 let response = retirement_client
                     .assign_shards(AssignShardsRequest {
+                        executor_count: 1,
                         number_of_shards: 1,
                         shard_epochs: vec![],
                         revision,
@@ -574,6 +579,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                         shard_ids: vec![ShardId { value: 0 }],
                         revision,
                         incarnation_id: TEST_SHARD_MANAGER.to_string(),
+                        executor_count: 1,
                     })
                     .await?
                     .into_inner();
@@ -624,6 +630,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
         assert!(executor.tracked_card_ids().await.is_empty());
         let response = client
             .assign_shards(AssignShardsRequest {
+                executor_count: 1,
                 number_of_shards: 1,
                 shard_epochs: vec![ShardEpochEntry {
                     shard_id: Some(ShardId { value: 0 }),
@@ -754,6 +761,7 @@ async fn a_push_of_zero_shards_is_refused_rather_than_applied(
     let mut client = executor.client.clone();
     let refused = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),
                 epoch: 0,
@@ -824,6 +832,7 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
     let mut client = executor.client.clone();
     let assigned = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,
@@ -846,6 +855,7 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
             shard_ids: vec![shard],
             revision: 3,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -866,6 +876,7 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
             shard_ids: vec![shard],
             revision: 5,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -920,6 +931,7 @@ async fn a_delivery_that_raises_a_kept_shards_epoch_gives_its_agents_up(
     let shard = ShardId { value: 0 };
     let mut client = executor.client.clone();
     let push = |epoch: u64, revision: u64| AssignShardsRequest {
+        executor_count: 1,
         shard_epochs: vec![ShardEpochEntry {
             shard_id: Some(shard),
             epoch,
@@ -1166,6 +1178,7 @@ async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -1259,6 +1272,7 @@ async fn a_constructor_that_waits_through_a_shard_reassignment_runs_as_the_creat
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -1281,6 +1295,7 @@ async fn a_constructor_that_waits_through_a_shard_reassignment_runs_as_the_creat
     // The shard comes back, and a request of another caller loads the agent.
     let assignment = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             number_of_shards: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),

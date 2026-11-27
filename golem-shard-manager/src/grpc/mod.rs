@@ -17,14 +17,16 @@ use crate::error::{ShardLeaseTraceErrorKind, ShardManagerTraceErrorKind};
 use crate::quota::QuotaService;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
-use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch};
-use chrono::Utc;
+use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch, ShardLeaseGrant};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
-use golem_common::model::protobuf::{ip_addr_from_proto, lease_ttl_to_proto};
+use golem_common::model::protobuf::{
+    executor_count_to_proto, ip_addr_from_proto, lease_ttl_to_proto,
+};
 use golem_common::model::{Pod, ShardId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::clients::shard_manager::canonical_advertised_ip;
+use jiff::Timestamp;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::num::TryFromIntError;
@@ -116,18 +118,15 @@ impl ShardManagerService for ShardManagerServiceImpl {
         let response = self
             .register_internal(executor_id, pod, request.pod_name)
             .instrument(record.span.clone())
-            .await;
+            .await
+            .and_then(|ack| {
+                registration_to_proto(ack, Timestamp::now(), crate::sharding::incarnation_id())
+            });
 
         let result = match response {
-            Ok(ack) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
-                golem::shardmanager::v1::RegisterSuccess {
-                    number_of_shards: ack.number_of_shards as u32,
-                    shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
-                    lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, Utc::now())),
-                    revision: ack.grant.revision.0,
-                    incarnation_id: crate::sharding::incarnation_id(),
-                },
-            )),
+            Ok(registration) => record.succeed(
+                golem::shardmanager::v1::register_response::Result::Success(registration),
+            ),
             Err(error) => {
                 let error: golem::shardmanager::v1::ShardManagerError = error.into();
                 record.fail(
@@ -160,18 +159,14 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .shard_management
             .renew_shard_lease(executor_id, claimed)
             .instrument(record.span.clone())
-            .await;
+            .await
+            .and_then(|grant| {
+                lease_to_proto(grant, Timestamp::now(), crate::sharding::incarnation_id())
+            });
 
         let result = match response {
-            Ok(grant) => record.succeed(
-                golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
-                    golem::shardmanager::v1::ShardLease {
-                        shard_epochs: shard_epoch_entries(&grant.shard_epochs),
-                        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Utc::now())),
-                        revision: grant.revision.0,
-                        incarnation_id: crate::sharding::incarnation_id(),
-                    },
-                ),
+            Ok(lease) => record.succeed(
+                golem::shardmanager::v1::renew_shard_lease_response::Result::Success(lease),
             ),
             Err(error) => {
                 let error: golem::shardmanager::v1::ShardLeaseError = error.into();
@@ -514,144 +509,39 @@ fn resolve_pod(
     Ok(Pod { ip, port })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::resolve_pod;
-    use golem_api_grpc::proto::golem::shardmanager::v1::ExecutorEndpoint;
-    use golem_common::model::Pod;
-    use golem_common::model::protobuf::ip_addr_to_proto;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-    use test_r::test;
-
-    const EXECUTOR_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 5);
-
-    fn endpoint(port: i32, advertised_ip: Option<IpAddr>) -> Option<ExecutorEndpoint> {
-        Some(ExecutorEndpoint {
-            port,
-            advertised_ip: advertised_ip.map(ip_addr_to_proto),
-        })
-    }
-
-    fn remote(ip: IpAddr) -> Option<SocketAddr> {
-        Some(SocketAddr::new(ip, 51234))
-    }
-
-    fn pod(ip: IpAddr, port: u16) -> Pod {
-        Pod { ip, port }
-    }
-
-    #[test]
-    fn source_ip_is_used_without_advertised_ip() {
-        assert_eq!(
-            resolve_pod(remote(EXECUTOR_V4.into()), endpoint(9000, None)).unwrap(),
-            pod(EXECUTOR_V4.into(), 9000)
-        );
-
-        let v6: IpAddr = "fdaa:0:1:a7b::2".parse().unwrap();
-        assert_eq!(
-            resolve_pod(remote(v6), endpoint(9000, None)).unwrap(),
-            pod(v6, 9000)
-        );
-    }
-
-    #[test]
-    fn ipv4_mapped_source_ip_is_canonicalized() {
-        let mapped = IpAddr::V6(EXECUTOR_V4.to_ipv6_mapped());
-
-        assert_eq!(
-            resolve_pod(remote(mapped), endpoint(9000, None)).unwrap(),
-            resolve_pod(remote(EXECUTOR_V4.into()), endpoint(9000, None)).unwrap(),
-        );
-    }
-
-    #[test]
-    fn advertised_ip_overrides_source_ip() {
-        let advertised: IpAddr = "fdaa:0:1:a7b::2".parse().unwrap();
-
-        assert_eq!(
-            resolve_pod(
-                remote(Ipv4Addr::new(172, 16, 0, 1).into()),
-                endpoint(9000, Some(advertised))
-            )
-            .unwrap(),
-            pod(advertised, 9000)
-        );
-        assert_eq!(
-            resolve_pod(None, endpoint(9000, Some(advertised))).unwrap(),
-            pod(advertised, 9000)
-        );
-    }
-
-    #[test]
-    fn ipv4_mapped_advertised_ip_is_canonicalized() {
-        let mapped = IpAddr::V6(EXECUTOR_V4.to_ipv6_mapped());
-
-        assert_eq!(
-            resolve_pod(
-                remote(Ipv6Addr::LOCALHOST.into()),
-                endpoint(9000, Some(mapped))
-            )
-            .unwrap(),
-            pod(EXECUTOR_V4.into(), 9000)
-        );
-    }
-
-    #[test]
-    fn invalid_endpoints_are_rejected() {
-        let source = remote(EXECUTOR_V4.into());
-        let invalid_argument = |result: Result<Pod, tonic::Status>| {
-            assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument)
-        };
-
-        invalid_argument(resolve_pod(source, None));
-        invalid_argument(resolve_pod(None, endpoint(9000, None)));
-        invalid_argument(resolve_pod(source, endpoint(-1, None)));
-        invalid_argument(resolve_pod(source, endpoint(65536, None)));
-        invalid_argument(resolve_pod(source, endpoint(0, None)));
-        invalid_argument(resolve_pod(
-            source,
-            endpoint(9000, Some(Ipv4Addr::BROADCAST.into())),
-        ));
-        invalid_argument(resolve_pod(
-            source,
-            endpoint(9000, Some(Ipv4Addr::new(224, 0, 0, 1).into())),
-        ));
-        invalid_argument(resolve_pod(
-            source,
-            endpoint(9000, Some("ff02::1".parse().unwrap())),
-        ));
-        invalid_argument(resolve_pod(
-            source,
-            endpoint(9000, Some("fe80::1".parse().unwrap())),
-        ));
-        invalid_argument(resolve_pod(
-            source,
-            endpoint(9000, Some(Ipv4Addr::UNSPECIFIED.into())),
-        ));
-        invalid_argument(resolve_pod(
-            source,
-            endpoint(9000, Some(Ipv6Addr::UNSPECIFIED.into())),
-        ));
-        invalid_argument(resolve_pod(
-            source,
-            endpoint(
-                9000,
-                Some(IpAddr::V6(Ipv4Addr::UNSPECIFIED.to_ipv6_mapped())),
-            ),
-        ));
-        invalid_argument(resolve_pod(
-            source,
-            Some(ExecutorEndpoint {
-                port: 9000,
-                advertised_ip: Some(golem_api_grpc::proto::golem::shardmanager::IpAddress {
-                    kind: Some(
-                        golem_api_grpc::proto::golem::shardmanager::ip_address::Kind::Ipv6(vec![
-                            0;
-                            4
-                        ]),
-                    ),
-                }),
-            }),
-        ));
-    }
+fn registration_to_proto(
+    ack: RegisterAck,
+    now: Timestamp,
+    incarnation_id: String,
+) -> Result<golem::shardmanager::v1::RegisterSuccess, ShardManagerError> {
+    Ok(golem::shardmanager::v1::RegisterSuccess {
+        number_of_shards: ack.number_of_shards as u32,
+        shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
+        executor_count: executor_count_to_proto(
+            ack.grant.executor_count,
+            "RegisterSuccess.executor_count",
+        )
+        .map_err(ShardManagerError::Internal)?,
+        lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, now)),
+        revision: ack.grant.revision.0,
+        incarnation_id,
+    })
 }
+
+fn lease_to_proto(
+    grant: ShardLeaseGrant,
+    now: Timestamp,
+    incarnation_id: String,
+) -> Result<golem::shardmanager::v1::ShardLease, ShardManagerError> {
+    Ok(golem::shardmanager::v1::ShardLease {
+        shard_epochs: shard_epoch_entries(&grant.shard_epochs),
+        executor_count: executor_count_to_proto(grant.executor_count, "ShardLease.executor_count")
+            .map_err(ShardManagerError::Internal)?,
+        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, now)),
+        revision: grant.revision.0,
+        incarnation_id,
+    })
+}
+
+#[cfg(test)]
+mod tests;

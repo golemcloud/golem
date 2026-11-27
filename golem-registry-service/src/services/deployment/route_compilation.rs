@@ -1294,7 +1294,6 @@ pub fn validate_path_segments(
 mod tests {
     use super::*;
     use crate::model::api_definition::UnboundRouteSecurity;
-    use chrono::Utc;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{
         AgentMode, CorsOptions as AgentCorsOptions, DurableStreamInputSlotSource,
@@ -1319,6 +1318,7 @@ mod tests {
     use golem_service_base::custom_api::{
         CompiledSchema, MethodParameter, PathSegmentType, QueryOrHeaderType,
     };
+    use jiff::Timestamp;
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
     use uuid::Uuid;
@@ -1427,7 +1427,7 @@ mod tests {
             agents: BTreeMap::new(),
             webhooks_prefix: "/webhooks".to_string(),
             openapi_endpoint_prefix: "/".to_string(),
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         }
     }
 
@@ -1965,7 +1965,7 @@ mod tests {
             agents: BTreeMap::new(),
             webhooks_prefix: "/webhooks".to_string(),
             openapi_endpoint_prefix: openapi_endpoint.to_string(),
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         }
     }
 

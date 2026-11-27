@@ -987,8 +987,8 @@ fn effective_surface_authorization_preserves_algebra_and_batch_atomicity() {
 
 #[test]
 fn authority_fast_path_requires_an_open_current_unexpired_snapshot() {
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-    let later = now + chrono::Duration::nanoseconds(1);
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
+    let later = now + jiff::SignedDuration::from_nanos(1);
 
     assert!(authority_snapshot_is_current_at(
         true,
@@ -1044,7 +1044,7 @@ fn generation_recheck_invalidates_in_progress_allow_and_deny() {
         }],
         upper: Vec::new(),
     };
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
 
     assert!(authorize_effective_surface(&surface, &[allowed]).is_ok());
     assert!(authorize_effective_surface(&surface, &[denied]).is_err());
@@ -1066,8 +1066,8 @@ fn authorize_boundary_for_test(
     authority_open: bool,
     processed_generation: &mut u64,
     published_generation: u64,
-    expiration: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
+    expiration: Option<jiff::Timestamp>,
+    now: jiff::Timestamp,
     slow_refreshes: &mut usize,
     surface: &golem_common::model::card::EffectiveSurface,
     target: &PermissionTarget,
@@ -1115,7 +1115,7 @@ fn unchanged_authority_generation_uses_no_io_fast_path() {
         &mut processed,
         9,
         None,
-        Utc::now(),
+        jiff::Timestamp::now(),
         &mut slow_refreshes,
         &surface,
         &target,
@@ -1137,7 +1137,7 @@ fn authority_event_burst_causes_exactly_one_slow_refresh() {
             &mut processed,
             8,
             None,
-            Utc::now(),
+            jiff::Timestamp::now(),
             &mut slow_refreshes,
             &surface,
             &target,
@@ -1161,7 +1161,7 @@ fn closed_authority_cannot_allow() {
             &mut processed,
             3,
             None,
-            Utc::now(),
+            jiff::Timestamp::now(),
             &mut slow_refreshes,
             &surface,
             &target,
@@ -1174,7 +1174,7 @@ fn closed_authority_cannot_allow() {
 fn expiration_is_visible_at_first_due_live_boundary() {
     let target = network_permission("expired.example.com");
     let surface = allowing_surface(target.clone());
-    let due = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let due = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
     let mut processed = 5;
     let mut slow_refreshes = 0;
     authorize_boundary_for_test(
@@ -1433,22 +1433,22 @@ fn inherited_scope_roots_are_checked_once_and_unknown_roots_are_errors() {
 fn inherited_scope_detects_revoked_and_expired_roots() {
     let root = CardId(Uuid::from_u128(1));
     let unrelated = CardId(Uuid::from_u128(2));
-    let now = Utc::now();
+    let now = jiff::Timestamp::now();
     let scope = InheritedInvocationScope {
         card: invocation_scope_card(vec![root]),
         roots: Some(BTreeMap::from([(
             root,
-            concrete_card_expiring_at(root, Some(now + chrono::Duration::seconds(60))),
+            concrete_card_expiring_at(root, Some(now + jiff::SignedDuration::from_secs(60))),
         )])),
     };
 
     assert!(!scope.roots_include(&HashSet::from([unrelated])));
     assert!(scope.roots_include(&HashSet::from([root])));
     assert!(!scope.roots_expired(now));
-    assert!(scope.roots_expired(now + chrono::Duration::seconds(60)));
+    assert!(scope.roots_expired(now + jiff::SignedDuration::from_secs(60)));
     assert!(
         !InheritedInvocationScope::unchecked(invocation_scope_card(vec![root]))
-            .roots_expired(now + chrono::Duration::seconds(60))
+            .roots_expired(now + jiff::SignedDuration::from_secs(60))
     );
 }
 
@@ -1642,7 +1642,7 @@ fn concrete_card(card_id: CardId) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1650,7 +1650,7 @@ fn concrete_card(card_id: CardId) -> StoredCard {
     .into()
 }
 
-fn concrete_card_expiring_at(card_id: CardId, expires_at: Option<DateTime<Utc>>) -> StoredCard {
+fn concrete_card_expiring_at(card_id: CardId, expires_at: Option<jiff::Timestamp>) -> StoredCard {
     let mut card = concrete_card(card_id);
     match &mut card {
         StoredCard::Concrete(card) => card.expires_at = expires_at,
@@ -1692,7 +1692,7 @@ fn agent_permission_card(
             .map(|verb| agent_permission_pattern(owner, recipient, verb))
             .collect(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1968,15 +1968,15 @@ fn expiry_generation_outcome_is_stable_when_replayed() {
 
 #[test]
 fn expiry_boundary_is_inclusive_and_preserves_later_cards() {
-    let boundary = DateTime::from_timestamp(1_700_000_000, 123).unwrap();
+    let boundary = jiff::Timestamp::new(1_700_000_000, 123).unwrap();
     let elapsed = concrete_card_expiring_at(
         CardId::new(),
-        Some(boundary - chrono::Duration::nanoseconds(1)),
+        Some(boundary - jiff::SignedDuration::from_nanos(1)),
     );
     let at_boundary = concrete_card_expiring_at(CardId::new(), Some(boundary));
     let later = concrete_card_expiring_at(
         CardId::new(),
-        Some(boundary + chrono::Duration::nanoseconds(1)),
+        Some(boundary + jiff::SignedDuration::from_nanos(1)),
     );
     let indefinite = concrete_card(CardId::new());
     let wallet = wallet_cards([
@@ -1996,15 +1996,17 @@ fn expiry_boundary_is_inclusive_and_preserves_later_cards() {
 
 #[test]
 fn recorded_expiry_events_replay_identically_with_an_earlier_clock() {
-    let boundary = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-    let replay_clock = boundary - chrono::Duration::hours(1);
+    let boundary = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
+    let replay_clock = boundary - jiff::SignedDuration::from_hours(1);
     let elapsed = concrete_card_expiring_at(
         CardId::new(),
-        Some(boundary - chrono::Duration::nanoseconds(1)),
+        Some(boundary - jiff::SignedDuration::from_nanos(1)),
     );
     let at_boundary = concrete_card_expiring_at(CardId::new(), Some(boundary));
-    let later =
-        concrete_card_expiring_at(CardId::new(), Some(boundary + chrono::Duration::hours(1)));
+    let later = concrete_card_expiring_at(
+        CardId::new(),
+        Some(boundary + jiff::SignedDuration::from_hours(1)),
+    );
     let original_wallet = wallet_cards([
         (elapsed.card_id(), elapsed),
         (at_boundary.card_id(), at_boundary),
@@ -2278,7 +2280,7 @@ fn polymorphic_card(card_id: CardId) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
     })

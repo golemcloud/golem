@@ -77,6 +77,8 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
     AgentStatusRecord {
         status: status.status,
         last_error_kind: status.last_error_kind,
+        terminal_failure_at: status.terminal_failure_at,
+        terminal_failure_index: status.terminal_failure_index,
         skipped_regions: DeletedRegions::new(),
         overridden_retry_config: status.overridden_retry_config.clone(),
         pending_invocations: status.pending_invocations.clone(),
@@ -103,6 +105,7 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         total_linear_memory_size: status.total_linear_memory_size,
         owned_resources: status.owned_resources.clone(),
         oplog_idx: status.oplog_idx,
+        state_oplog_idx: status.state_oplog_idx,
         active_plugins: status.active_plugins.clone(),
         oplog_processor_checkpoints: status.oplog_processor_checkpoints.clone(),
         revoked_cards: status.revoked_cards.clone(),

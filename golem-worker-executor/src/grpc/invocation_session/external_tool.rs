@@ -24,6 +24,37 @@ use golem_common::model::agent::AgentTarget;
 use golem_common::model::{InvocationRequestKey, OwnedAgentId};
 use golem_common::schema::TypedSchemaValue;
 
+fn standalone_invocation_identity(
+    request: &InvocationStart,
+    tool: &ExternalToolInvocation,
+    agent_id: AgentId,
+) -> Result<
+    Option<(
+        golem_common::model::InvocationId,
+        golem_common::model::component::ComponentId,
+    )>,
+    WorkerExecutorError,
+> {
+    if !tool.fresh_owner || agent_id.type_tag() == RESERVED_TYPE_TAG {
+        return Ok(None);
+    }
+    let component_id = request.component_id()?.ok_or_else(|| {
+        WorkerExecutorError::invalid_request("a standalone tool owner requires component_id")
+    })?;
+    let invocation_id = request
+        .idempotency_key
+        .as_ref()
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(
+                "a standalone tool owner requires its invocation ID",
+            )
+        })?
+        .value
+        .parse::<golem_common::model::InvocationId>()
+        .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+    Ok(Some((invocation_id, component_id)))
+}
+
 fn validate_live_stream_mode(
     tool: &ExternalToolInvocation,
     mode: AgentInvocationMode,
@@ -52,7 +83,10 @@ where
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         use golem_api_grpc::proto::golem::worker::AgentInvocationMode as Mode;
 
-        let tool = request.external_tool.as_ref().expect("native tool request");
+        let tool = request
+            .external_tool
+            .as_ref()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("external_tool is required"))?;
         let AgentTarget::Id(agent_id) = request.agent_target()? else {
             return Err(WorkerExecutorError::invalid_request(
                 "an external tool invocation names its owner by ID",
@@ -65,6 +99,8 @@ where
             &tool.command_path,
         );
         let mode = request.mode();
+        let standalone_identity = standalone_invocation_identity(request, tool, agent_id)?;
+        let standalone = standalone_identity.is_some();
         let virtual_lookup = mode == Mode::Lookup && owned.agent_id.type_tag() == RESERVED_TYPE_TAG;
         if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG && !virtual_lookup {
             return Err(WorkerExecutorError::invalid_request(
@@ -216,7 +252,7 @@ where
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
         let owner_key = request_key.owner_key(&operation);
-        if let Some(component_id) = fresh_owner_component
+        if let Some(component_id) = fresh_owner_component.filter(|_| !standalone)
             && owned.agent_id
                 != AgentId::external_tool_owner(owned.environment_id, component_id, &owner_key)
         {
@@ -256,7 +292,86 @@ where
             ));
         }
         let streaming = validate_live_stream_mode(tool, mode, request.schedule_at.is_some())?;
-        if let Some(component_id) = fresh_owner_component
+        if let Some((invocation_id, component_id)) = standalone_identity {
+            let existing = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
+            if let Some(existing) = existing {
+                let matches = existing.component_id == component_id
+                    && existing.owner_kind == golem_common::model::agent::OwnerKind::StandaloneTool
+                    && existing.standalone_tool.as_ref().is_some_and(|accepted| {
+                        accepted.tool_name.as_str() == tool.tool_name
+                            && accepted.command_path == tool.command_path
+                            && accepted.invocation_id == invocation_id
+                    });
+                if !matches {
+                    return Err(WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id });
+                }
+            } else {
+                let component = self
+                    .component_service()
+                    .get_metadata(component_id, None)
+                    .await?;
+                if component.environment_id != owned.environment_id {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "standalone owner environment does not match the component",
+                    ));
+                }
+                let tool_name: golem_common::model::tool::ToolName = tool
+                    .tool_name
+                    .clone()
+                    .try_into()
+                    .map_err(WorkerExecutorError::invalid_request)?;
+                let deployment = self
+                    .environment_state_service()
+                    .get_live_tool_deployment_state(
+                        owned.environment_id,
+                        component.id,
+                        component.revision,
+                    )
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request("tool is not registered")
+                    })?;
+                let registered = deployment.registered_tools.get(&tool_name).ok_or_else(|| {
+                    WorkerExecutorError::invalid_request("tool is not registered")
+                })?;
+                if !matches!(
+                    registered.registration.source,
+                    golem_common::model::tool::ToolSource::Component { .. }
+                ) {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "standalone durable owners require a component tool",
+                    ));
+                }
+                if agent_id
+                    != AgentId::standalone_tool_invocation(
+                        owned.environment_id,
+                        registered.type_id,
+                        invocation_id,
+                    )
+                {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "standalone owner identity does not match the invocation",
+                    ));
+                }
+                self.active_agents()
+                    .get_or_add_standalone_tool(
+                        self,
+                        &owned,
+                        component_id,
+                        component.revision,
+                        golem_common::model::oplog::StandaloneToolInvocation {
+                            tool_name,
+                            command_path: tool.command_path.clone(),
+                            invocation_id,
+                            caller: caller.clone(),
+                        },
+                        &context,
+                    )
+                    .await?;
+            }
+        }
+        if let Some(component_id) = fresh_owner_component.filter(|_| !standalone)
             && mode == Mode::Schedule
             && let Some(timestamp) = request.schedule_at.as_ref()
         {
@@ -315,13 +430,13 @@ where
                 &tool_name,
                 &tool.command_path,
             )?;
-            let at = DateTime::from_timestamp(
-                timestamp.seconds,
-                timestamp.nanos.try_into().map_err(|_| {
-                    WorkerExecutorError::invalid_request("invalid schedule timestamp")
-                })?,
-            )
-            .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
+            if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid schedule timestamp",
+                ));
+            }
+            let at = jiff::Timestamp::new(timestamp.seconds, timestamp.nanos)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
             let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
@@ -372,7 +487,7 @@ where
             )?;
             return Ok(response);
         }
-        if let Some(component_id) = fresh_owner_component {
+        if let Some(component_id) = fresh_owner_component.filter(|_| !standalone) {
             self.active_agents()
                 .get_or_add_ephemeral_external_tool(
                     self,
@@ -397,9 +512,11 @@ where
             .deleted_incarnation_as_not_found(expected_fingerprint, bound)
             .await?;
         let metadata = worker.get_latest_worker_metadata().await;
-        let key = request_key
-            .finalize(owned.agent_id, metadata.fingerprint, &operation)
-            .id();
+        let key = standalone_identity.map(|(id, _)| id).unwrap_or_else(|| {
+            request_key
+                .finalize(owned.agent_id, metadata.fingerprint, &operation)
+                .id()
+        });
         response.idempotency_key = Some(key);
         response.component_revision = Some(metadata.last_known_status.component_revision);
         response.agent_fingerprint = Some(metadata.fingerprint);
@@ -494,13 +611,13 @@ where
             Worker::start_if_needed(worker.clone()).await?;
         } else if mode == Mode::Schedule && request.schedule_at.is_some() {
             let timestamp = request.schedule_at.as_ref().unwrap();
-            let at = DateTime::from_timestamp(
-                timestamp.seconds,
-                timestamp.nanos.try_into().map_err(|_| {
-                    WorkerExecutorError::invalid_request("invalid schedule timestamp")
-                })?,
-            )
-            .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
+            if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid schedule timestamp",
+                ));
+            }
+            let at = jiff::Timestamp::new(timestamp.seconds, timestamp.nanos)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
             let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
@@ -541,9 +658,56 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::validate_live_stream_mode;
+    use super::{standalone_invocation_identity, validate_live_stream_mode};
+    use crate::grpc::invocation_session::InvocationStart;
     use golem_api_grpc::proto::golem::worker::{AgentInvocationMode, ExternalToolInvocation};
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::{AgentId, IdempotencyKey, InvocationId};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use test_r::test;
+
+    #[test]
+    fn standalone_request_requires_both_component_and_invocation_identity() {
+        let tool = ExternalToolInvocation {
+            fresh_owner: true,
+            ..Default::default()
+        };
+        let agent = AgentId::from_parts(7, 1);
+        let component = ComponentId(uuid::Uuid::from_u128(41));
+        let invocation = InvocationId(uuid::Uuid::from_u128(42));
+        let valid = InvocationStart {
+            component_id: Some(component.into()),
+            idempotency_key: Some(IdempotencyKey::new(invocation.to_string()).into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            standalone_invocation_identity(&valid, &tool, agent).unwrap(),
+            Some((invocation, component))
+        );
+        let mut malformed = valid.clone();
+        malformed.component_id = None;
+        assert!(matches!(
+            standalone_invocation_identity(&malformed, &tool, agent),
+            Err(WorkerExecutorError::InvalidRequest { .. })
+        ));
+        for key in [None, Some(IdempotencyKey::new("not-a-uuid".into()).into())] {
+            let mut malformed = valid.clone();
+            malformed.idempotency_key = key;
+            assert!(matches!(
+                standalone_invocation_identity(&malformed, &tool, agent),
+                Err(WorkerExecutorError::InvalidRequest { .. })
+            ));
+        }
+        assert_eq!(
+            standalone_invocation_identity(&valid, &tool, AgentId::from_parts(0, 1)).unwrap(),
+            None
+        );
+        assert_eq!(
+            standalone_invocation_identity(&valid, &ExternalToolInvocation::default(), agent)
+                .unwrap(),
+            None
+        );
+    }
 
     #[test]
     fn stderr_only_requires_an_attached_await_session() {

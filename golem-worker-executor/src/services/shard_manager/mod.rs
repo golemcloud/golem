@@ -27,6 +27,7 @@ use golem_service_base::clients::shard_manager::{
     ExecutorEndpoint, ShardLease, ShardLeaseError, ShardManagerError,
 };
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::{Duration, Instant};
@@ -53,7 +54,7 @@ pub enum RecoveryOutcome {
     /// Agents on lost shards were swept, and agents were recovered for the set.
     Recovered,
     /// Swept, but not recovered: the local lease had lapsed, and a fenced executor starts
-    /// nothing. The grant that revives the lease runs the recovery.
+    /// nothing. A later accepted grant runs the recovery.
     DeferredUntilLeaseIsLive,
 }
 
@@ -105,8 +106,8 @@ pub trait ShardManagerService: Send + Sync {
     /// Registers that a recovery of the agents for the current set is owed, and returns the
     /// ticket the attempt started now hands back if it completes. Called by the receipt path
     /// before anything runs: a push that lands on a lapsed lease, a recovery that fails, and a
-    /// recovery that is still running all leave it owed, and the next grant runs it. No-op by
-    /// default.
+    /// recovery that is still running all leave it owed. A later accepted grant runs it.
+    /// No-op by default.
     fn recovery_deferred(&self) -> RecoveryTicket {
         RecoveryTicket(0)
     }
@@ -259,8 +260,8 @@ pub struct GrpcShardManagerService {
     /// Shortest per-attempt deadline this executor will use; see [`Self::rpc_deadline`].
     /// A field rather than the constant so a test does not have to wait out the production floor.
     rpc_deadline_floor: Duration,
-    /// The newest recovery attempt still owed, as its ticket; `0` is none. The next grant runs a
-    /// recovery while it is non-zero, even if the set is unchanged: a push that fails is retried
+    /// The newest recovery attempt still owed, as its ticket; `0` is none. A later accepted grant
+    /// runs recovery while it is non-zero, even if the set is unchanged: a push that fails is retried
     /// by the shard manager, but a renewal has nobody to retry it, and an unchanged grant would
     /// otherwise never run it again. A ticket rather than a flag because two attempts can
     /// overlap: a renewal's recovery can outlast the lease, a push can then land and defer its
@@ -491,12 +492,14 @@ impl GrpcShardManagerService {
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
         expires_at: Instant,
         revision: ShardLeaseRevision,
+        executor_count: NonZeroUsize,
     ) -> (RenewalDelay, bool) {
         let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
         let announcement_owed = match self.shard_service.update_lease(
             &shard_epochs,
             expires_at,
             revision,
+            executor_count,
         ) {
             Ok(ShardDeliveryOutcome::Applied { set_changed: true }) => {
                 info!(
@@ -612,7 +615,12 @@ impl GrpcShardManagerService {
         match renewed {
             Ok(lease) => {
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::Granted);
-                self.adopt_lease(lease.shard_epochs, lease.expires_at, lease.revision)
+                self.adopt_lease(
+                    lease.shard_epochs,
+                    lease.expires_at,
+                    lease.revision,
+                    lease.executor_count,
+                )
             }
             Err(ShardLeaseError::LeaseNotFound(details)) => {
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::LeaseNotFound);
@@ -656,6 +664,7 @@ impl GrpcShardManagerService {
                                 &lease.shard_epochs.into_iter().collect(),
                                 Some(lease.expires_at),
                                 lease.revision,
+                                lease.executor_count,
                             );
                             if let ShardDeliveryOutcome::Stale { delivered, applied } = outcome {
                                 // A push read from a later state of the same process crossed
@@ -723,6 +732,7 @@ impl ShardManagerService for GrpcShardManagerService {
         let (number_of_shards, lease) = self.register_granted(endpoint, pod_name).await?;
         Ok(ShardAssignment {
             number_of_shards,
+            executor_count: lease.executor_count,
             shard_epochs: lease.shard_epochs.into_iter().collect(),
             expires_at: Some(lease.expires_at),
             revision: Some(lease.revision),
@@ -801,8 +811,7 @@ impl ShardManagerService for ShardManagerServiceSingleShard {
         _endpoint: ExecutorEndpoint,
         _pod_name: Option<String>,
     ) -> Result<ShardAssignment, ShardManagerError> {
-        // `expires_at: None` — the single binary has no shard manager to renew
-        // against and must never fence itself.
+        // This adapter has no shard manager to renew against, so its assignment never expires.
         Ok(ShardAssignment::unexpiring(1, [ShardId::new(0)]))
     }
 

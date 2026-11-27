@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretOwner, AgentSecretRevision, CanonicalAgentSecretPath,
+    SecretDestination,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::graph::SchemaGraph;
@@ -31,6 +32,9 @@ use golem_common::schema::schema_value::SchemaValue;
 #[derive(Debug, Clone)]
 pub struct AgentSecret {
     pub id: AgentSecretId,
+    pub owner: AgentSecretOwner,
+    /// Applies only to environment-owned secrets; agent- and tool-owned revisions store no destinations.
+    pub destinations: Vec<SecretDestination>,
     pub environment_id: EnvironmentId,
     pub path: CanonicalAgentSecretPath,
     pub revision: AgentSecretRevision,
@@ -57,6 +61,12 @@ impl TryFrom<AgentSecret> for golem_api_grpc::proto::golem::registry::AgentSecre
     fn try_from(value: AgentSecret) -> Result<Self, Self::Error> {
         Ok(Self {
             agent_secret_id: Some(value.id.into()),
+            owner: Some(value.owner.into()),
+            destinations: value
+                .destinations
+                .into_iter()
+                .map(|d| d.to_string())
+                .collect(),
             environment_id: Some(value.environment_id.into()),
             path: value.path.0,
             revision: value.revision.into(),
@@ -94,6 +104,12 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecret> for AgentSecre
                 .agent_secret_id
                 .ok_or("Missing agent_secret_id field")?
                 .try_into()?,
+            owner: value.owner.ok_or("Missing owner field")?.try_into()?,
+            destinations: value
+                .destinations
+                .into_iter()
+                .map(|d| d.parse().map_err(|e| format!("Invalid destination: {e}")))
+                .collect::<Result<_, _>>()?,
             environment_id: value
                 .environment_id
                 .ok_or("Missing environment_id field")?
@@ -103,5 +119,54 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecret> for AgentSecre
             secret_type,
             secret_value,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::tool::ToolName;
+    use golem_common::model::{AgentFingerprint, AgentId};
+    use golem_common::schema::SchemaType;
+    use test_r::test;
+
+    #[test]
+    fn agent_secret_wire_preserves_owner_and_destinations() {
+        for owner in [
+            AgentSecretOwner::Environment,
+            AgentSecretOwner::Agent {
+                agent_id: AgentId::from_parts(7, 19),
+                fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+            },
+            AgentSecretOwner::Tool {
+                tool_name: ToolName::try_from("test-tool").unwrap(),
+            },
+        ] {
+            let secret = AgentSecret {
+                id: AgentSecretId::new(),
+                environment_id: EnvironmentId::new(),
+                path: CanonicalAgentSecretPath(vec!["stripe".to_string()]),
+                revision: AgentSecretRevision::INITIAL.next().unwrap(),
+                owner: owner.clone(),
+                destinations: vec!["https://*.example.com:8443".parse().unwrap()],
+                secret_type: SchemaGraph::anonymous(SchemaType::string()),
+                secret_value: Some(SchemaValue::String("value".to_string())),
+            };
+            let wire: golem_api_grpc::proto::golem::registry::AgentSecret =
+                secret.clone().try_into().unwrap();
+            assert_eq!(wire.destinations, vec!["https://*.example.com:8443"]);
+            let decoded: AgentSecret = wire.clone().try_into().unwrap();
+            assert_eq!(decoded.owner, owner);
+            assert_eq!(decoded.destinations, secret.destinations);
+            assert_eq!(decoded.id, secret.id);
+            assert_eq!(decoded.revision, secret.revision);
+            assert_eq!(decoded.secret_value, secret.secret_value);
+            let mut invalid = wire.clone();
+            invalid.owner = None;
+            assert!(AgentSecret::try_from(invalid).is_err());
+            let mut invalid = wire;
+            invalid.destinations = vec!["http://*.example.com".to_string()];
+            assert!(AgentSecret::try_from(invalid).is_err());
+        }
     }
 }

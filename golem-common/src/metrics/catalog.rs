@@ -635,10 +635,10 @@ catalog! {
             "Objects deleted from storage, by storage type");
         metric COMPILATION_CACHE_BYTES_WRITTEN_TOTAL: Counter = Metric::new(
             "golem_compilation_cache_written_bytes_total", Bytes, &[],
-            "Bytes written to the compiled component cache");
+            "Bytes written to the shared compiled component cache");
         metric COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL: Counter = Metric::new(
             "golem_compilation_cache_objects_written_total", NoUnit, &[],
-            "Objects written to the compiled component cache");
+            "Objects written to the shared compiled component cache");
     }
 
     section "TLS certificates" intro "Every service that serves or calls gRPC with TLS, and the \
@@ -737,6 +737,9 @@ catalog! {
         metric ASSIGNED_SHARD_COUNT: Gauge = Metric::new(
             "golem_assigned_shard_count", NoUnit, &[],
             "Shards assigned to this executor");
+        metric EXECUTOR_COUNT: Gauge = Metric::new(
+            "golem_executor_count", NoUnit, &[],
+            "Executor leases in the last accepted shard assignment");
         metric STALE_SHARD_DELIVERY_TOTAL: CounterVec = Metric::new(
             "golem_stale_shard_delivery_total", NoUnit, &["delivery"],
             "Shard deliveries dropped for naming a revision older than the last one applied; \

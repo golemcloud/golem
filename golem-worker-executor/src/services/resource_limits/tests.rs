@@ -2509,7 +2509,7 @@ fn idle_refresh_accounts_for_adversarial_batch_phase_with_sub_unit_memory() {
     // At the 300-second tick its cached policy is only 299 seconds old.
     entry
         .last_refresh_secs
-        .store(Utc::now().timestamp() - 299, Ordering::Release);
+        .store(jiff::Timestamp::now().as_second() - 299, Ordering::Release);
     assert!(
         entry.capture_usage_update(threshold).is_some(),
         "the 300-second tick must refresh rather than waiting until 360 seconds"
@@ -4025,9 +4025,9 @@ fn max_memory_limit_returns_stored_value() {
 
 #[test]
 fn last_refresh_secs_is_set_on_initialize() {
-    let before = Utc::now().timestamp();
+    let before = jiff::Timestamp::now().as_second();
     let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX, u64::MAX);
-    let after = Utc::now().timestamp();
+    let after = jiff::Timestamp::now().as_second();
     let stored = entry.last_refresh_secs.load(Ordering::Acquire);
     assert!(stored >= before, "last_refresh_secs should be >= before");
     assert!(stored <= after, "last_refresh_secs should be <= after");
@@ -4846,9 +4846,11 @@ impl RegistryService for MockRegistryService {
     async fn get_agent_secret_revision(
         &self,
         _environment_id: EnvironmentId,
+        _owner: golem_common::model::agent_secret::AgentSecretOwner,
         _agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
         _path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
-        _revision: golem_common::model::agent_secret::AgentSecretRevision,
+        _selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+        _mode: golem_common::model::agent_secret::AgentSecretReadMode,
     ) -> Result<Option<golem_service_base::model::agent_secret::AgentSecret>, RegistryServiceError>
     {
         unimplemented!()
@@ -6200,10 +6202,10 @@ async fn last_refresh_secs_is_updated_on_successful_batch() {
     let entry = svc.initialize_account(id).await.unwrap();
     entry.last_refresh_secs.store(0, Ordering::Release);
 
-    let before = Utc::now().timestamp();
+    let before = jiff::Timestamp::now().as_second();
     entry.borrow_fuel(200);
     svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
-    let after = Utc::now().timestamp();
+    let after = jiff::Timestamp::now().as_second();
 
     let stored = entry.last_refresh_secs.load(Ordering::Acquire);
     assert!(
@@ -6310,9 +6312,9 @@ async fn send_batch_idle_stale_account_is_refreshed() {
     let entry = svc.initialize_account(id).await.unwrap();
     entry.last_refresh_secs.store(0, Ordering::Release); // stale, no borrows
 
-    let before = Utc::now().timestamp();
+    let before = jiff::Timestamp::now().as_second();
     svc.send_batch(STALE_THRESHOLD_SECS).await;
-    let after = Utc::now().timestamp();
+    let after = jiff::Timestamp::now().as_second();
 
     assert_eq!(entry.effective_fuel(), 5000);
     let stored = entry.last_refresh_secs.load(Ordering::Acquire);

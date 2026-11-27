@@ -106,7 +106,7 @@ fn http_context(agents: Vec<AgentTypeSchema>) -> DeploymentContext {
             .collect(),
         webhooks_prefix: "/webhooks".into(),
         openapi_endpoint_prefix: "/".into(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     };
     DeploymentContext {
         environment,
@@ -978,7 +978,7 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
             lower_negative: vec![],
             upper_positive: vec![],
             upper_negative: vec![],
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
         },
@@ -1608,7 +1608,7 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
                 agents: BTreeMap::from([(name, Default::default())]),
                 webhooks_prefix: "/webhooks".into(),
                 openapi_endpoint_prefix: "/".into(),
-                created_at: chrono::Utc::now(),
+                created_at: jiff::Timestamp::now(),
             },
         );
         let routes = context.compile_http_api_routes(
@@ -1681,6 +1681,8 @@ fn stored_agent_secret(
 ) -> AgentSecret {
     AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: EnvironmentId::new(),
         path: CanonicalAgentSecretPath::from_path_in_unknown_casing(path),
         revision: AgentSecretRevision::INITIAL,
@@ -1778,7 +1780,7 @@ fn mcp_deployment(
         hash: diff::Hash::empty(),
         agents,
         tools,
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     }
 }
 
@@ -1805,7 +1807,7 @@ fn test_tool_component(name: &str, tools: BTreeMap<ToolName, ToolDeploymentMetad
             BTreeMap::new(),
             tools,
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: diff::Hash::empty(),
         package_metadata: None,
         object_store_key: String::new(),
@@ -1843,9 +1845,9 @@ fn test_remote_tool(
         lifecycle: ToolReleaseLifecycle::Published,
         origin: ToolReleaseOrigin::Ordinary,
         system_availability: None,
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         created_by: owner_account_id,
-        state_changed_at: chrono::Utc::now(),
+        state_changed_at: jiff::Timestamp::now(),
         state_changed_by: owner_account_id,
     };
     (
@@ -1971,7 +1973,7 @@ fn compile_test_mcp() -> (CompiledMcp, Vec<RegisteredAgentTypeSchema>) {
             (agent_a_name.clone(), McpDeploymentAgentOptions::default()),
         ]),
         tools: BTreeMap::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     };
     let context = DeploymentContext {
         environment,
@@ -2024,7 +2026,7 @@ fn compile_mcp_rejects_a_domain_that_also_has_an_http_api_deployment() {
                 agents: BTreeMap::new(),
                 webhooks_prefix: "/webhooks".into(),
                 openapi_endpoint_prefix: "/".into(),
-                created_at: chrono::Utc::now(),
+                created_at: jiff::Timestamp::now(),
             },
         )]),
         mcp_deployments: BTreeMap::from([
@@ -2599,6 +2601,77 @@ fn compile_tools_registers_unbound_tool_without_agent_bindings() {
         component_bindings
     );
     assert!(compiled.agent_tool_bindings.is_empty());
+}
+
+#[test]
+fn compile_tools_rejects_uuid_names_for_every_source() {
+    for (name, rejected) in [
+        ("abcdef01-2345-6789-abcd-ef0123456789", true),
+        ("abcdef0123456789abcdef0123456789", true),
+        ("abcdef01-2345-6789-abcd-ef012345678", false),
+    ] {
+        for source in ["component", "remote", "host"] {
+            let tool_name: ToolName = name.parse().unwrap();
+            let component = test_tool_component(
+                "tools",
+                BTreeMap::from([(
+                    tool_name.clone(),
+                    ToolDeploymentMetadata {
+                        definition: test_tool(name),
+                        provision: ToolProvisionConfig::default(),
+                        environment_binding: None,
+                        component_bindings: BTreeMap::new(),
+                        agent_bindings: BTreeMap::new(),
+                    },
+                )]),
+            );
+            let remote_tools = if source == "component" {
+                Vec::new()
+            } else {
+                let mut remote = test_remote_tool(name, None, BTreeMap::new());
+                if source == "host" {
+                    remote.1.as_mut().unwrap().release.source = ToolSource::Host {
+                        host_tool_id: golem_common::model::tool::HostToolId::try_from(
+                            "host-tool".to_string(),
+                        )
+                        .unwrap(),
+                        implementation_version: "1.0.0".to_string(),
+                    };
+                }
+                vec![remote]
+            };
+            let context = DeploymentContext {
+                environment: test_environment(),
+                components: if source == "component" {
+                    BTreeMap::from([(component.component_name.clone(), component)])
+                } else {
+                    BTreeMap::new()
+                },
+                http_api_deployments: BTreeMap::new(),
+                mcp_deployments: BTreeMap::new(),
+                registered_agent_types: HashMap::new(),
+            };
+            let mut errors = Vec::new();
+            let compiled = context.compile_tools_with_remote(
+                golem_common::model::deployment::DeploymentRevision::INITIAL,
+                &remote_tools,
+                &mut errors,
+                &mut Vec::new(),
+            );
+            if rejected {
+                assert_eq!(
+                    errors,
+                    vec![DeployValidationError::UuidToolName { tool_name }],
+                    "{source}: {name}"
+                );
+                assert!(compiled.registered_tools.is_empty());
+            } else {
+                assert!(errors.is_empty(), "{source}: {name}: {errors:?}");
+                assert_eq!(compiled.registered_tools.len(), 1);
+                assert_eq!(compiled.registered_tools[0].definition.name(), Some(name));
+            }
+        }
+    }
 }
 
 #[test]

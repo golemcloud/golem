@@ -8,9 +8,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
     AgentFileContentHash, AgentTypeName, RegisteredAgentType, ResolvedAgentType,
 };
-use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
-};
+use golem_common::model::agent_secret::{AgentSecretId, CanonicalAgentSecretPath};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
@@ -387,7 +385,7 @@ fn dynamic_admission_compiles_projected_metadata_and_rejects_changed_upstream_co
         environment_name: EnvironmentName::try_from("test").unwrap(),
         component_size: 0,
         metadata: ComponentMetadata::default(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: Default::default(),
         package_metadata: None,
         object_store_key: String::new(),
@@ -1582,9 +1580,11 @@ impl RegistryService for MockRegistryService {
     async fn get_agent_secret_revision(
         &self,
         _: EnvironmentId,
+        _: golem_common::model::agent_secret::AgentSecretOwner,
         _: AgentSecretId,
         _: CanonicalAgentSecretPath,
-        _: AgentSecretRevision,
+        _: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+        _: golem_common::model::agent_secret::AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, RegistryServiceError> {
         unimplemented!()
     }

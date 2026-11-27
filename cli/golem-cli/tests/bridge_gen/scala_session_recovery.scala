@@ -484,6 +484,50 @@ class StreamRuntimeTest extends munit.FunSuite {
     } finally { complete.trySuccess(()); server.close() }
   }
 
+  test("an input that the server ends with a failure fails the call with that failure") {
+    val server = new ServerSocket(0)
+    val complete = Promise[Unit]()
+    val peer = Future {
+      val p = new Peer(server.accept())
+      try {
+        val start = p.receive()
+        val refs = field(field(start, "methodParameters"), "value")
+        val entry = Json.asArray(field(refs, "elements")).toOption.get.head
+        val mapping = Json.obj("channel" -> Json.fromInt(1), "direction" -> Json.string("input"),
+          "streamToken" -> Json.string("input-0"), "provisionalRef" -> field(field(entry, "value"), "provisionalRef"),
+          "inputHighWater" -> Json.obj("sequence" -> Json.string("0"), "terminal" -> Json.bool(false)))
+        p.send(message("invocationAccepted",
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
+          "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
+          "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector(mapping))))
+        assertEquals(p.receiveBinary()._2, Vector[Byte](7))
+        p.send(message("stream-end", "channel" -> Json.fromInt(1), "direction" -> Json.string("input"), "sequence" -> Json.string("0"),
+          "outcome" -> Json.obj("kind" -> Json.string("failed"), "error" -> Json.obj("kind" -> Json.string("interrupted"),
+            "message" -> Json.string("input item 0 does not satisfy the element schema")))))
+        Await.result(complete.future, 5.seconds)
+      } finally { p.close(); server.close() }
+    }
+    val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u8","value":{}}}""")
+    val inputGraph = """{"root":{"kind":"tuple","value":{"elements":[{"kind":"stream","value":{"inner":{"kind":"u8","value":{}}}}]}}}"""
+    var first = true
+    val source = AgentStream.fromPull[Int](() => {
+      if (first) { first = false; Future.successful(AgentStreamStep.Item(7)) }
+      else Promise[AgentStreamStep[Int]]().future
+    }, () => Future.unit)
+    seedEnvironment(server.getLocalPort)
+    val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
+    try {
+      val invocation = Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(List(
+        StreamSession.input(source, SchemaValue.U8Value.apply, "u8", codec))), empty, PublicValueCodec.fromSchemaGraphJson(inputGraph), None)
+      val error = intercept[AgentStreamEnded](Await.result(invocation, 5.seconds))
+      assertEquals(error.outcome, StreamOutcome.Failed(StreamError.Interrupted("input item 0 does not satisfy the element schema")))
+      complete.success(())
+      Await.result(peer, 5.seconds)
+    } finally { complete.trySuccess(()); server.close() }
+  }
+
   test("an oversized public input failure diagnostic fails replay admission instead of remaining uncharged") {
     val server = new ServerSocket(0)
     val finished = Promise[Unit]()

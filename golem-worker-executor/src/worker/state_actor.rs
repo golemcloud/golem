@@ -66,7 +66,7 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
-use chrono::Utc;
+
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::InvocationId;
@@ -323,6 +323,7 @@ struct StatusState<Ctx: WorkerCtx> {
     fingerprint: AgentFingerprint,
     agent_mode: AgentMode,
     created_by: AccountId,
+    standalone_invocation_id: Option<InvocationId>,
     oplog: Arc<dyn Oplog>,
     /// The published worker status. Written only by this task (and during worker construction,
     /// before the actor exists); read lock-free everywhere else.
@@ -388,6 +389,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         fingerprint: AgentFingerprint,
         agent_mode: AgentMode,
         created_by: AccountId,
+        standalone_invocation_id: Option<InvocationId>,
         oplog: Arc<dyn Oplog>,
         last_known_status: Arc<ArcSwap<AgentStatusRecord>>,
         detached: Arc<AtomicBool>,
@@ -418,6 +420,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             fingerprint,
             agent_mode,
             created_by,
+            standalone_invocation_id,
             oplog,
             last_known_status,
             invocation_start_status: arc_swap::ArcSwapOption::empty(),
@@ -1514,14 +1517,17 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             authority_change_count = authority_change_count.max(1);
         }
 
-        // Compared without the index, which moves on nearly every fold, to tell a fold that changed
+        // Compared without the indexes, which move on nearly every fold, to tell a fold that changed
         // other fields. Empty folds still finalize checkpoint pruning; do not bypass them on an
         // empty receipt.
         let mut updated_status = updated_status;
         let updated_index = updated_status.oplog_idx;
+        let updated_state_index = updated_status.state_oplog_idx;
         updated_status.oplog_idx = old_status.oplog_idx;
+        updated_status.state_oplog_idx = old_status.state_oplog_idx;
         let fields_changed = reconstructed || updated_status != *old_status;
         updated_status.oplog_idx = updated_index;
+        updated_status.state_oplog_idx = updated_state_index;
         let changed = if fields_changed || updated_index != old_status.oplog_idx {
             let updated_status = self.update_last_known_status(updated_status).await;
             if reconstructed {
@@ -1532,6 +1538,14 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             }
             self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                 .await;
+            super::retention::schedule(
+                &self.deps,
+                &self.owned_agent_id,
+                self.fingerprint,
+                self.standalone_invocation_id,
+                &updated_status,
+            )
+            .await;
             true
         } else {
             false
@@ -1615,7 +1629,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             self.deps
                 .scheduler_service()
                 .schedule(
-                    Utc::now() + archive_interval,
+                    jiff::Timestamp::now() + archive_interval,
                     ScheduledAction::ArchiveOplog {
                         account_id: self.created_by,
                         owned_agent_id: self.owned_agent_id.clone(),

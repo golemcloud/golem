@@ -16,7 +16,8 @@ use super::agent_secret::{AgentSecretError, AgentSecretService};
 use super::deployment::{DeploymentError, DeploymentService};
 use super::retry_policy::{RetryPolicyError, RetryPolicyService};
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevisionSelector,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -126,12 +127,14 @@ impl EnvironmentStateService {
     pub async fn get_agent_secret_revision(
         &self,
         environment_id: EnvironmentId,
+        owner: AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, EnvironmentStateError> {
         self.agent_secret_service
-            .get_revision_unchecked(environment_id, agent_secret_id, path, revision)
+            .get_revision_unchecked(environment_id, owner, agent_secret_id, path, selector, mode)
             .await
             .map_err(Into::into)
     }

@@ -1569,6 +1569,7 @@ fn worker_filter_combination() {
 fn worker_filter_matches() {
     let component_id = ComponentId::new();
     let worker_metadata = AgentMetadata {
+        standalone_tool: None,
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         component_id,
         agent_type_name: Some(AgentTypeName("Worker".to_string())),
@@ -1781,6 +1782,7 @@ fn worker_filter_matches() {
 fn sandbox_metadata(never_live: bool, status: AgentStatus) -> AgentMetadata {
     let component_id = ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3"));
     AgentMetadata {
+        standalone_tool: None,
         component_id,
         agent_type_name: None,
         canonical_key: None,
@@ -1885,6 +1887,7 @@ fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
         agent_id: AgentId::from_parts(1, 1),
         agent_type_name: None,
         canonical_key: None,
+        origin: crate::model::agent::AgentOrigin::Forked,
         constructor_parameters: None,
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         environment_id: EnvironmentId::new(),
@@ -1920,6 +1923,7 @@ fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
     let json = serde_json::to_value(&sandbox).unwrap();
     assert_eq!(json["status"], "Sandboxed");
     assert_eq!(json["underlyingStatus"], "Interrupted");
+    assert_eq!(json["origin"], "forked");
 
     let live = dto(AgentStatus::Idle, None);
     let proto = ProtoAgentMetadata::try_from(live.clone()).unwrap();
@@ -2132,7 +2136,7 @@ fn agent_invocation_result_redacted_debug_hides_capability_material() {
                     secret_id: uuid::Uuid::nil(),
                     config_key: None,
                     version: 0,
-                    resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    resolved_at: jiff::Timestamp::new(0, 0).unwrap(),
                     category: None,
                 }),
             ],

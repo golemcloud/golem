@@ -364,7 +364,7 @@ impl Rpc for ActivatingRpc {
         _expected_fingerprint: AgentFingerprint,
         _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
-        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _scheduled_at: jiff::Timestamp,
         _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
@@ -476,7 +476,7 @@ impl Rpc for RecordingScopeCardRpc {
         _expected_fingerprint: AgentFingerprint,
         _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
-        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _scheduled_at: jiff::Timestamp,
         _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
@@ -556,7 +556,8 @@ fn cancellation_token(owner: OwnedAgentId, recipient: OwnedAgentId) -> Cancellat
         metadata: invocation_metadata(&OwnedInvocationId::new(
             recipient.agent_id(),
             Uuid::from_u128(42).into(),
-        )),
+        ))
+        .unwrap(),
         owner,
         recipient,
     }
@@ -866,7 +867,7 @@ fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
         AgentFingerprint(Uuid::from_u128(42)),
         "run",
     );
-    let metadata = invocation_metadata(&invocation_id);
+    let metadata = invocation_metadata(&invocation_id).unwrap();
     assert_eq!(AgentId::from(metadata.agent_id), first.agent_id());
     let golem_schema::schema::wit::wire::InvocationOwner::Agent(owner) =
         metadata.invocation_id.owner
@@ -926,8 +927,8 @@ fn final_rpc_metadata_uses_recorded_preparation_and_schedule_receipts() {
     let final_id = key.finalize(target, preparation.result.unwrap(), "run");
     let replayed_id = key.finalize(target, replayed.result.unwrap(), "run");
     assert_eq!(
-        Uuid::from(invocation_metadata(&final_id).invocation_id.id),
-        Uuid::from(invocation_metadata(&replayed_id).invocation_id.id)
+        Uuid::from(invocation_metadata(&final_id).unwrap().invocation_id.id),
+        Uuid::from(invocation_metadata(&replayed_id).unwrap().invocation_id.id)
     );
     assert_ne!(
         final_id,
@@ -947,11 +948,19 @@ fn final_rpc_metadata_uses_recorded_preparation_and_schedule_receipts() {
     assert_eq!(
         Uuid::from(
             invocation_metadata(&replayed.invocation_id)
+                .unwrap()
                 .invocation_id
                 .id
         ),
         final_id.uuid()
     );
+    let tool_target = OwnedInvocationId::new(
+        golem_common::model::InvocationOwner::Tool(
+            golem_common::model::tool::ToolName::try_from("streaming").unwrap(),
+        ),
+        final_id.id(),
+    );
+    assert!(invocation_metadata(&tool_target).is_err());
 }
 
 #[test]

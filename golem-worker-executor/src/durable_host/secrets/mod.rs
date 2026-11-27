@@ -28,8 +28,10 @@ use crate::preview2::golem::secrets::types::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use chrono::Utc;
-use golem_common::model::agent_secret::{AgentSecretRevision, CanonicalAgentSecretPath};
+use golem_common::model::agent_secret::{
+    AgentSecretOwner, AgentSecretReadMode, AgentSecretRevision, AgentSecretRevisionSelector,
+    CanonicalAgentSecretPath,
+};
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::SecretVerb;
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
@@ -478,7 +480,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                             audit: SecretRevealAudit {
                                 calling_agent: self.owned_agent_id.agent_id,
                                 config_key: None,
-                                timestamp: Utc::now().into(),
+                                timestamp: jiff::Timestamp::now().into(),
                             },
                         },
                     )
@@ -503,7 +505,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                                 audit: SecretRevealAudit {
                                     calling_agent: self.owned_agent_id.agent_id,
                                     config_key: entry.config_key.clone(),
-                                    timestamp: Utc::now().into(),
+                                    timestamp: jiff::Timestamp::now().into(),
                                 },
                             },
                         )
@@ -517,9 +519,11 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                     .environment_state_service
                     .get_agent_secret_revision(
                         self.owner_component_metadata().environment_id,
+                        AgentSecretOwner::Environment,
                         entry.secret_id,
                         config_key.clone(),
-                        entry.pinned_revision,
+                        AgentSecretRevisionSelector::Fixed(entry.pinned_revision),
+                        AgentSecretReadMode::Live,
                     )
                     .await;
                 match handle
@@ -569,7 +573,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                         audit: SecretRevealAudit {
                             calling_agent: self.owned_agent_id.agent_id,
                             config_key: entry.config_key.clone(),
-                            timestamp: Utc::now().into(),
+                            timestamp: jiff::Timestamp::now().into(),
                         },
                     },
                 )
@@ -601,12 +605,14 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                 .environment_state_service
                 .get_agent_secret_revision(
                     self.owner_component_metadata().environment_id,
+                    AgentSecretOwner::Environment,
                     entry.secret_id,
                     match canonical_config_key(&entry) {
                         Ok(path) => path,
                         Err(error) => return Ok(Err(reveal_error_to_wit(error))),
                     },
-                    entry.pinned_revision,
+                    AgentSecretRevisionSelector::Fixed(entry.pinned_revision),
+                    AgentSecretReadMode::Historical,
                 )
                 .await
             {
@@ -654,6 +660,8 @@ mod tests {
     fn secret_with_inner(inner: SchemaType, value: SchemaValue) -> AgentSecret {
         AgentSecret {
             id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
+            owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+            destinations: vec![],
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             path: golem_common::model::agent_secret::CanonicalAgentSecretPath(vec![
                 "apiKey".to_string(),
@@ -669,7 +677,7 @@ mod tests {
             secret_id: uuid::Uuid::nil(),
             config_key: Some(path.iter().map(|segment| (*segment).to_string()).collect()),
             version: AgentSecretRevision::INITIAL.get(),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         })
     }
@@ -701,14 +709,14 @@ mod tests {
             secret_id,
             pinned_revision: AgentSecretRevision::INITIAL,
             config_key: Some(vec!["apiKey".to_string()]),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         };
         let second = SecretEntry {
             secret_id,
             pinned_revision: AgentSecretRevision::INITIAL.next().unwrap(),
             config_key: Some(vec!["apiKey".to_string()]),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         };
 
@@ -725,7 +733,7 @@ mod tests {
             secret_id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
             pinned_revision: AgentSecretRevision::INITIAL,
             config_key: Some(vec!["service".to_string(), "api-key".to_string()]),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         };
 
@@ -741,7 +749,7 @@ mod tests {
             secret_id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
             pinned_revision: AgentSecretRevision::INITIAL,
             config_key: Some(vec!["service".to_string(), "*".to_string()]),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         };
 
@@ -792,7 +800,7 @@ mod tests {
             secret_id: uuid::Uuid::nil(),
             config_key: None,
             version: AgentSecretRevision::INITIAL.get(),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         });
 

@@ -14,12 +14,12 @@
 
 use super::quota_repo::{QuotaLeaseRecord, QuotaResourceRecord};
 use super::quota_service::QuotaError;
-use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
 use golem_common::model::quota::LeaseEpoch;
 use golem_common::model::quota::{ResourceDefinition, ResourceLimit};
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::Blob;
+use jiff::Timestamp;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::debug;
@@ -40,7 +40,7 @@ fn precedes(epoch: LeaseEpoch, next: LeaseEpoch) -> bool {
 pub(super) struct AcquireLeaseResult {
     pub epoch: LeaseEpoch,
     pub allocated_amount: u64,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
     pub expired: Vec<Pod>,
     pub total_available_amount: u64,
 }
@@ -48,7 +48,7 @@ pub(super) struct AcquireLeaseResult {
 pub(super) struct RenewLeaseResult {
     pub new_epoch: LeaseEpoch,
     pub allocated_amount: u64,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
     pub expired: Vec<Pod>,
     pub total_available_amount: u64,
 }
@@ -63,10 +63,10 @@ pub(super) struct RenewLeaseResult {
 /// the next write reclaims them.
 pub(super) const MAX_RECLAIMED_PER_WRITE: usize = 120;
 
-fn elapsed_since(dt: DateTime<Utc>) -> Duration {
-    Utc::now()
-        .signed_duration_since(dt)
-        .to_std()
+fn elapsed_since(dt: Timestamp) -> Duration {
+    Timestamp::now()
+        .duration_since(dt)
+        .try_into()
         .unwrap_or(Duration::ZERO)
 }
 
@@ -74,29 +74,29 @@ fn elapsed_since(dt: DateTime<Utc>) -> Duration {
 pub(super) struct PodLease {
     pub epoch: LeaseEpoch,
     pub allocated: u64,
-    pub granted_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    pub granted_at: Timestamp,
+    pub expires_at: Timestamp,
     pub pending_reservations: Vec<PendingReservation>,
 }
 
 #[derive(Clone)]
 pub(super) struct QuotaState {
     pub definition: ResourceDefinition,
-    pub last_refreshed: DateTime<Utc>,
+    pub last_refreshed: Timestamp,
     pub remaining: u64,
     /// Budget that a Capacity or Concurrency resource still owes because its limit shrank below
     /// what the leases already used or hold. Lease returns pay it before they add to
     /// `remaining`, so a shrink and a later growth give back no spent budget, and returned leases
     /// never lift the pool above the limit. It is 0 for Rate.
     pub deficit: u64,
-    pub last_refilled: DateTime<Utc>,
+    pub last_refilled: Timestamp,
     pub leases: HashMap<Pod, PodLease>,
 }
 
 impl QuotaState {
     pub fn new(definition: ResourceDefinition) -> Self {
         let remaining = Self::initial_pool(&definition.limit);
-        let now = Utc::now();
+        let now = Timestamp::now();
         Self {
             definition,
             last_refreshed: now,
@@ -111,8 +111,8 @@ impl QuotaState {
         definition: ResourceDefinition,
         remaining: u64,
         deficit: u64,
-        last_refilled: DateTime<Utc>,
-        last_refreshed: DateTime<Utc>,
+        last_refilled: Timestamp,
+        last_refreshed: Timestamp,
         leases: HashMap<Pod, PodLease>,
     ) -> Self {
         Self {
@@ -156,7 +156,7 @@ impl QuotaState {
             (_, new) => (Self::initial_pool(new).saturating_sub(total_allocated), 0),
         };
         self.definition = definition;
-        self.last_refreshed = Utc::now();
+        self.last_refreshed = Timestamp::now();
     }
 
     pub fn is_stale(&self, ttl: Duration) -> bool {
@@ -166,8 +166,8 @@ impl QuotaState {
     /// Reclaims the expired leases, earliest expiry first, at most [`MAX_RECLAIMED_PER_WRITE`] of
     /// them, and returns their pods.
     pub fn reclaim_expired(&mut self) -> Vec<Pod> {
-        let now = Utc::now();
-        let mut expired: Vec<(DateTime<Utc>, Pod)> = self
+        let now = Timestamp::now();
+        let mut expired: Vec<(Timestamp, Pod)> = self
             .leases
             .iter()
             .filter(|(_, lease)| now >= lease.expires_at)
@@ -214,7 +214,7 @@ impl QuotaState {
 
         if full_periods > 0 {
             let advance_nanos = period.as_nanos() * full_periods;
-            self.last_refilled += chrono::Duration::nanoseconds(advance_nanos as i64);
+            self.last_refilled += jiff::SignedDuration::from_nanos(advance_nanos as i64);
         }
     }
 
@@ -341,7 +341,7 @@ impl QuotaState {
             self.return_to_pool(returned);
         }
 
-        let now = Utc::now();
+        let now = Timestamp::now();
         let expires_at = now + lease_duration;
 
         self.leases.entry(pod).or_insert_with(|| PodLease {
@@ -396,7 +396,7 @@ impl QuotaState {
             });
         }
 
-        let now = Utc::now();
+        let now = Timestamp::now();
         let expires_at = now + lease_duration;
 
         let returned = unused.min(pod_lease.allocated);

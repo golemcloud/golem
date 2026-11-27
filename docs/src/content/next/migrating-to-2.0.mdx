@@ -21,7 +21,7 @@ Every SDK renames its client operations. The table uses the TypeScript names; ea
 | `client.get(params, config)`, `getWithConfig` | `await client.create(params, { keyed: true, config })`: creates the keyed agent, and fails with a conflict error when it exists. |
 | `client.newPhantom(params)` | `await client.create(params)`: creates an agent without a key, with a new agent ID. |
 | `client.newPhantom(params, config)`, `newPhantomWithConfig` | `await client.create(params, { config, env })` |
-| `client.getPhantom(params, phantomId)` | `await client.getById(agentId)`: checks that the agent exists and has this type, and fails with a not-found error otherwise. |
+| `client.getPhantom(params, phantomId)` | `client.getById(agentId)`: checks that the agent exists and has this type, and throws a not-found error otherwise. |
 | `ParsedAgentId`, parsing or building agent ID text | The typed `AgentId` and `agentId()` on every client. |
 
 `create` and `getById` contact Golem, so they are asynchronous or fallible in every SDK.

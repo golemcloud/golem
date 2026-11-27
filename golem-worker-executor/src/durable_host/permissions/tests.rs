@@ -78,7 +78,7 @@ fn scope_and_persistent_cards_share_the_metadata_and_inspection_shape() {
         lower_negative: scope.lower_negative.clone(),
         upper_positive: scope.upper_positive.clone(),
         upper_negative: scope.upper_negative.clone(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -236,7 +236,7 @@ fn derive_authorization_surface() -> EffectiveSurface {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -261,7 +261,7 @@ fn install_authority_card(card_id: CardId, target: &RecipientPattern) -> StoredC
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -406,7 +406,7 @@ fn install_card_recipients_must_cover_the_target() {
         ],
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -425,7 +425,7 @@ fn install_card_recipients_must_cover_the_target() {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
     });
@@ -460,8 +460,8 @@ fn installed_child_request_matches_registry_canonicalization() {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap(),
-        expires_at: Some(DateTime::from_timestamp(1_800_000_000, 987_654_321).unwrap()),
+        created_at: jiff::Timestamp::new(1_700_000_000, 123_456_789_i32).unwrap(),
+        expires_at: Some(jiff::Timestamp::new(1_800_000_000, 987_654_321_i32).unwrap()),
         system_card: false,
         managed_by: None,
     });
@@ -473,9 +473,9 @@ fn installed_child_request_matches_registry_canonicalization() {
     };
     let mut canonical = requested.clone();
     if let StoredCard::Concrete(canonical_card) = &mut canonical {
-        canonical_card.created_at = DateTime::from_timestamp(1_700_000_000, 123_456_000).unwrap();
+        canonical_card.created_at = jiff::Timestamp::new(1_700_000_000, 123_456_000_i32).unwrap();
         canonical_card.expires_at =
-            Some(DateTime::from_timestamp(1_800_000_000, 987_654_000).unwrap());
+            Some(jiff::Timestamp::new(1_800_000_000, 987_654_000_i32).unwrap());
         canonical_card.managed_by = Some(CardManagedBy::RuntimeDerived(provenance.clone()));
     }
 
@@ -700,7 +700,7 @@ fn wallet_card_with_secret_denial(card_id: u128, holder: &str) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: vec![parse_pattern_grant(&secret).unwrap()],
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -861,7 +861,7 @@ fn concrete_parent(grant: &permissions_types::PatternGrant) -> Card {
         lower_negative: vec![parse_pattern_grant(&lower_negative).unwrap()],
         upper_positive: vec![positive],
         upper_negative: vec![parse_pattern_grant(&upper_negative).unwrap()],
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -890,7 +890,7 @@ fn wallet_parent(card_id: u128, grant: &permissions_types::PatternGrant) -> Stor
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -909,7 +909,7 @@ fn scope_derivation_parent(
         lower_negative: Vec::new(),
         upper_positive: parse_grants(upper_positive).unwrap(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1047,7 +1047,7 @@ fn scope_derivation_combines_positive_authority_from_multiple_parents() {
 #[test]
 fn scope_card_expires_with_its_earliest_expiring_parent() {
     let grant = valid_filesystem_grant();
-    let at = |seconds| DateTime::from_timestamp(seconds, 0).unwrap();
+    let at = |seconds| jiff::Timestamp::new(seconds, 0).unwrap();
     let mut later = scope_derivation_parent(1, std::slice::from_ref(&grant), &[]);
     later.expires_at = Some(at(1_900_000_000));
     let earlier_scope = ScopeCard {
@@ -1163,7 +1163,7 @@ fn explicit_derivation_resolves_a_wallet_template_parent_for_the_caller() {
         lower_negative: Vec::new(),
         upper_positive: vec![staging_write],
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
     });
@@ -1192,7 +1192,7 @@ fn explicit_derivation_resolves_a_wallet_template_parent_for_the_caller() {
         polymorphic,
         &wallet_derivation_context(),
         CardId(Uuid::from_u128(8)),
-        DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
+        jiff::Timestamp::new(1_700_000_001, 0).unwrap(),
     );
     assert_eq!(
         installed.lower_positive.len(),
@@ -1557,16 +1557,16 @@ fn lifespan(value: &str) -> permissions_types::Duration {
 
 #[test]
 fn derive_expiry_parses_fixed_iso_8601_duration() {
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
 
     assert_eq!(
         derive_expires_at(now, Some(&lifespan("P1DT2H3M4.5S")), None).unwrap(),
         Some(
-            now + TimeDelta::days(1)
-                + TimeDelta::hours(2)
-                + TimeDelta::minutes(3)
-                + TimeDelta::seconds(4)
-                + TimeDelta::milliseconds(500)
+            now + jiff::SignedDuration::from_hours(24)
+                + jiff::SignedDuration::from_hours(2)
+                + jiff::SignedDuration::from_mins(3)
+                + jiff::SignedDuration::from_secs(4)
+                + jiff::SignedDuration::from_millis(500)
         )
     );
     assert_eq!(
@@ -1581,7 +1581,7 @@ fn derive_expiry_rejects_non_fixed_or_malformed_duration() {
         assert!(
             matches!(
                 derive_expires_at(
-                    DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                    jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
                     Some(&lifespan(value)),
                     None,
                 ),
@@ -1594,8 +1594,8 @@ fn derive_expiry_rejects_non_fixed_or_malformed_duration() {
 
 #[test]
 fn derive_expiry_enforces_parent_expiry() {
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-    let parent_expires_at = now + TimeDelta::hours(1);
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
+    let parent_expires_at = now + jiff::SignedDuration::from_hours(1);
 
     assert_eq!(
         derive_expires_at(now, Some(&lifespan("PT1H")), Some(parent_expires_at),).unwrap(),
@@ -1621,12 +1621,12 @@ fn derive_expiry_enforces_parent_expiry() {
 
 #[test]
 fn derive_expiry_handles_indefinite_parent_and_timestamp_overflow() {
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
 
     assert_eq!(derive_expires_at(now, None, None).unwrap(), None);
     assert!(matches!(
         derive_expires_at(
-            DateTime::<Utc>::MAX_UTC,
+            jiff::Timestamp::MAX,
             Some(&lifespan("PT0.000000001S")),
             None,
         ),

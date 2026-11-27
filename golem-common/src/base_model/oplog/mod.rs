@@ -101,7 +101,8 @@ oplog_entry! {
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
             instance_id: Uuid,
-            never_live: bool
+            never_live: bool,
+            standalone_tool: Option<PublicStandaloneToolInvocation>
         }
     },
     /// Marks the start of a durable host call (or scope such as a batched-write).

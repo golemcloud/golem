@@ -44,6 +44,7 @@ precise|boolean|No|If true, calculate the most up-to-date status for each agent,
       "ownerKind": "component-agent",
       "agentTypeName": "string",
       "canonicalKey": "string",
+      "origin": "keyed",
       "constructorParameters": "string",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
       "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
@@ -302,6 +303,7 @@ component_name|string|No|Restrict results to agents whose recorded component has
       "ownerKind": "component-agent",
       "agentTypeName": "string",
       "canonicalKey": "string",
+      "origin": "keyed",
       "constructorParameters": "string",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
       "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
@@ -522,7 +524,7 @@ anything runs. The idempotency key comes from the `Idempotency-Key` header.
 }
 ```
 
-## Invoke a tool on an existing agent or a fresh ephemeral component owner
+## Invoke a tool on an existing agent or a fresh component baseline owner
 
 Path|Method|Protected
 ---|---|---
@@ -601,6 +603,7 @@ require an attached invocation session rather than this scalar endpoint.
 
 ```json copy
 {
+  "invocationId": "string",
   "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
   "idempotencyKey": "0c14c6a6-6f50-4d1e-b0c4-b46ff43ba6a1",
   "result": {

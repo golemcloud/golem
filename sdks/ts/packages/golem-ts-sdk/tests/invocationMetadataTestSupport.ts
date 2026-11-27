@@ -27,7 +27,7 @@ export const TEST_INVOKED_AGENT_ID = '00000007-0000-8000-8000-0000000000aa';
 export function hostInvocationMetadata(
   agentId: string = TEST_INVOKED_AGENT_ID,
 ): HostInvocationMetadata {
-  const raw = { uuid: AgentId.parse(agentId).uuid };
+  const raw = AgentId.toWit(AgentId.parse(agentId));
   return {
     agentId: { uuid: { highBits: raw.uuid.highBits, lowBits: raw.uuid.lowBits } },
     invocationId: {

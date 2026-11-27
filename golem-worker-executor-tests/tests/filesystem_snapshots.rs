@@ -3363,6 +3363,7 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();

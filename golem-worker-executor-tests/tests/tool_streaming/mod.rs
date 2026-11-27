@@ -12,31 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::standalone_fixture::{
+    ARCHIVE_LAST_INDEX, BaselineToolDeployment, CHECKPOINT_TIMEOUT, EXTENDED_FAILURE_RETENTION,
+    FAILURE_LOOKUP_TIMEOUT, INITIAL_FAILURE_RETENTION, InvocationIdInput, REJECTED_OPERATION_CUT,
+    StandaloneFixture, StandaloneSetup, ToolModeInput, ToolValueInput, wait_for_retention_deletion,
+};
 use crate::Tracing;
 use crate::execution_observations::WorkerObservations;
+use crate::scheduled_ephemeral::PausedScheduler;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
 use axum::response::Response;
 use axum::routing::{get, post};
 use futures::StreamExt;
+use golem_api_grpc::proto::golem::worker::AgentInvocationMode as ProtoInvocationMode;
+use golem_api_grpc::proto::golem::worker::InvocationRejectionReason;
+use golem_api_grpc::proto::golem::worker::invocation_session_result;
+use golem_api_grpc::proto::golem::worker::{
+    InputStreamItem, InvocationRequest, ResumeAttach, ResumeOperation, StreamCursor,
+    StreamDirection, StreamEnd, StreamTerminalAuthor, ToolByteStreamRole, input_stream_item,
+    invocation_request, invocation_response, invocation_session_completion,
+};
+use golem_api_grpc::proto::golem::worker::{InvocationSessionResult, InvocationStart};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    InvocationLifecycleState, InvocationSummary,
+};
 use golem_common::agent_key;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind};
+use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
+use golem_common::model::application::ApplicationId;
 use golem_common::model::caller::Caller;
-use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::component_metadata::ComponentProvisionConfig;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::mcp_import::{McpImport, McpImportSource};
+use golem_common::model::oplog::PublicExternalToolResult;
 use golem_common::model::oplog::payload::types::{
     SerializableEntityBodyExecution, SerializableToolError, SerializableToolOperationTerminal,
     SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    OplogIndex, PublicAgentEntityKind, PublicAgentInvocation, PublicOplogEntry,
+    OplogEntry, OplogIndex, PublicAgentEntityKind, PublicAgentInvocation, PublicOplogEntry,
     PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
 };
 use golem_common::model::tool::{
@@ -48,12 +71,17 @@ use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
 };
+use golem_common::model::{AgentFingerprint, InvocationId};
+use golem_common::model::{InvocationOwner, InvocationRequestKey, OwnedInvocationId};
+use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
+use golem_common::schema::IntoTypedSchemaValue;
 use golem_common::schema::tool::argv::{self, ParsedToolArguments};
 use golem_common::schema::tool::{OptionShape, ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
     TypedSchemaValue, VariantValuePayload, build_input_record,
 };
+use golem_common::serialization::serialize;
 use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
 use golem_common::{
     data_value,
@@ -62,18 +90,24 @@ use golem_common::{
     },
 };
 use golem_mcp_import::tool::{Limits, ProjectedTool};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::component::Component as ComponentMetadata;
 use golem_service_base::model::mcp_import::McpImportObservation;
 use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::oplog_shape::assert_settled_oplog;
 use golem_worker_executor::durable_host::tool::{
     ToolAttachmentModeMetadata, ToolBodyAdmissionMetadata, ToolOperationLaneMetadata,
     ToolOperationMetadata, ToolOperationWinnerMetadata, ToolOwnerFailureMetadata,
 };
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::environment_state::{
     EnvironmentStateService, ToolDiscoveryError,
 };
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::dsl_impl::InvocationSessionRejection;
+use golem_worker_executor_test_utils::standalone_tool::StandaloneToolCall;
 use golem_worker_executor_test_utils::{
     AgentInvocationSuccessGateHandle, LastUniqueId, PrecompiledComponent, ReplayAdmissionStage,
     TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
@@ -86,6 +120,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
@@ -107,6 +142,7 @@ mod dropped_waits;
 mod durable_entity_blob;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;
+mod live_cancellation_open_calls;
 mod matrix_client_resource_acceptance;
 mod matrix_conformance;
 mod middleware_acceptance;
@@ -116,9 +152,12 @@ mod node_tool_processes;
 mod path_policy_acceptance;
 mod python_sidecar;
 mod rdbms_drop;
+mod retention_storage;
 mod rust_sdk_gol40_conformance;
 mod sdk_child_process_tools;
 mod snapshot_attachments;
+mod standalone_fixture;
+mod standalone_middleware;
 mod tool_result_delivery;
 mod trapped_leaf_observers;
 
@@ -2110,15 +2149,17 @@ impl EnvironmentStateService for ReorderedToolActivationService {
     async fn get_agent_secret_revision(
         &self,
         environment_id: golem_common::model::environment::EnvironmentId,
+        owner: golem_common::model::agent_secret::AgentSecretOwner,
         agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
         path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
-        revision: golem_common::model::agent_secret::AgentSecretRevision,
+        selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+        mode: golem_common::model::agent_secret::AgentSecretReadMode,
     ) -> Result<
         Option<golem_service_base::model::agent_secret::AgentSecret>,
         golem_service_base::error::worker_executor::WorkerExecutorError,
     > {
         self.inner
-            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .get_agent_secret_revision(environment_id, owner, agent_secret_id, path, selector, mode)
             .await
     }
 
@@ -2313,7 +2354,24 @@ async fn start_idempotency_effect_server() -> (
     (port, task, attempt_rx, keys, effects)
 }
 
-async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
+#[derive(Default)]
+struct NativeOrderEffectGate {
+    hold_next: std::sync::atomic::AtomicBool,
+    attempts: AtomicUsize,
+    arrived: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    keys: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+struct NativeOrderHttpServer {
+    port: u16,
+    server: tokio::task::JoinHandle<()>,
+    effects: Arc<AtomicUsize>,
+}
+
+async fn start_native_order_http_server(
+    gate: Option<Arc<NativeOrderEffectGate>>,
+) -> NativeOrderHttpServer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind native-order HTTP server");
@@ -2325,10 +2383,28 @@ async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, 
     let route_requests = requests.clone();
     let app = Router::new().route(
         "/",
-        post(move || {
+        post(move |headers: axum::http::HeaderMap| {
             let requests = route_requests.clone();
+            let gate = gate.clone();
             async move {
-                requests.fetch_add(1, Ordering::SeqCst);
+                if let Some(gate) = gate {
+                    gate.attempts.fetch_add(1, Ordering::SeqCst);
+                    let key = headers
+                        .get("idempotency-key")
+                        .expect("durable HTTP effect has a key")
+                        .to_str()
+                        .unwrap()
+                        .to_string();
+                    if gate.keys.lock().unwrap().insert(key) {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                    }
+                    if gate.hold_next.swap(false, Ordering::SeqCst) {
+                        gate.arrived.notify_one();
+                        gate.release.notified().await;
+                    }
+                } else {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                }
                 axum::http::StatusCode::NO_CONTENT
             }
         }),
@@ -2338,7 +2414,11 @@ async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, 
             .await
             .expect("serve native-order HTTP requests");
     });
-    (port, task, requests)
+    NativeOrderHttpServer {
+        port,
+        server: task,
+        effects: requests,
+    }
 }
 
 struct WebFetchHttpServers {
@@ -12210,7 +12290,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,
@@ -16052,6 +16132,40 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, None).await
+}
+
+#[test]
+#[timeout("3m")]
+async fn entity_http_error_replay_preserves_later_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, Some("before")).await
+}
+
+#[test]
+#[timeout("3m")]
+async fn entity_http_error_completion_does_not_reorder_an_incomplete_send_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, Some("overlap")).await
+}
+
+async fn entity_http_key_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    http_error_mode: Option<&str>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let executor = start_with_overrides(
@@ -16063,7 +16177,7 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
         },
     )
     .await?;
-    let (effect_port, effect_server, mut attempts, keys, effects) =
+    let (effect_port, effect_server, mut attempts, attempt_keys, effects) =
         start_idempotency_effect_server().await;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -16092,31 +16206,62 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "entity-idempotency-recovery");
+    let env = std::iter::once((
+        "IDEMPOTENCY_EFFECT_PORT".to_string(),
+        effect_port.to_string(),
+    ))
+    .chain(http_error_mode.map(|mode| ("HTTP_ERROR_MODE".to_string(), mode.to_string())))
+    .collect();
     let worker_id = executor
-        .start_agent_with(
-            &caller_component.id,
-            agent_id.clone(),
-            HashMap::from([(
-                "IDEMPOTENCY_EFFECT_PORT".to_string(),
-                effect_port.to_string(),
-            )]),
-            Vec::new(),
-        )
+        .start_agent_with(&caller_component.id, agent_id.clone(), env, Vec::new())
         .await?;
-    let input = b"entity-idempotency".to_vec();
-    let call = executor.invoke_and_await_agent(
+    let input = b"entity-idempotency";
+    let invocation_key = IdempotencyKey::fresh();
+    let invocation_id = executor
+        .external_invocation_key(&worker_id.agent_id, &invocation_key, "collect_capable")
+        .await?;
+    let call = executor.invoke_and_await_agent_with_key(
         &caller_component,
         &agent_id,
+        &invocation_key,
         "collect_capable",
-        data_value!("atomic-idempotency-parent", input.clone()),
+        data_value!("atomic-idempotency-parent", input.to_vec()),
     );
     let recover = async {
         let first_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
             .await
             .map_err(|_| anyhow::anyhow!("initial idempotent HTTP effect timed out"))?
-            .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped"))?;
+            .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped"))?
+            .into_boxed_str();
+        assert!(!first_key.is_empty());
 
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let oplog = if http_error_mode.is_some() {
+            crate::http::wait_for_oplog(
+                &executor,
+                &worker_id,
+                "the entity's recorded HTTP error beside its incomplete effect",
+                |oplog| {
+                    let sends = oplog
+                        .iter()
+                        .filter_map(|entry| match &entry.entry {
+                            PublicOplogEntry::Start(params)
+                                if params.function_name == "http::client::send" =>
+                            {
+                                Some(entry.oplog_index)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Box<[_]>>();
+                    sends.len() == 2 && oplog.iter().filter(|entry| matches!(
+                        &entry.entry,
+                        PublicOplogEntry::End(params) if sends.contains(&params.start_index)
+                    )).count() == 1
+                },
+            )
+            .await?
+        } else {
+            executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?
+        };
         let entity_starts = oplog
             .iter()
             .filter_map(|entry| match &entry.entry {
@@ -16127,49 +16272,411 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
                 }
                 _ => None,
             })
-            .collect::<Vec<_>>();
-        let (child_start, Some(parent_start)) = entity_starts
-            .iter()
-            .find(|(_, parent)| parent.is_some())
-            .copied()
-            .expect("nested entity was admitted before its HTTP effect")
+            .collect::<Box<[_]>>();
+        let [
+            (parent_start, Some(invocation_start)),
+            (child_start, Some(child_parent)),
+        ] = entity_starts.as_ref()
         else {
-            unreachable!()
+            panic!("expected the parent entity and its nested child before the HTTP effect")
         };
+        assert_eq!(child_parent, parent_start);
+        assert!(oplog.iter().any(|entry| {
+            entry.oplog_index == *invocation_start
+                && matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(&started.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(method)
+                                if method.invocation_id == invocation_id
+                        )
+                )
+        }));
+        let (parent_start, child_start) = (*parent_start, *child_start);
+        let sends = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params) if params.function_name == "http::client::send" => {
+                    assert_eq!(params.parent_start_index, Some(child_start));
+                    let is_error_request = params.span_started.as_ref().is_some_and(|span| {
+                        span.attributes.iter().any(|attribute| {
+                            let golem_common::model::oplog::PublicAttributeValue::String(value) =
+                                &attribute.value;
+                            attribute.key == "request.uri"
+                                && value.value
+                                    == format!("https://127.0.0.1:{effect_port}/unsupported")
+                        })
+                    });
+                    Some((entry.oplog_index, is_error_request))
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert_eq!(sends.len(), 1 + usize::from(http_error_mode.is_some()));
+        assert_eq!(
+            sends.iter().filter(|(_, is_error)| !is_error).count(),
+            1,
+            "the held effect must have its own HTTP Start"
+        );
+        assert!(
+            sends
+                .iter()
+                .filter(|(_, is_error)| !is_error)
+                .all(|(start, _)| {
+                    !oplog.iter().any(|entry| match &entry.entry {
+                        PublicOplogEntry::End(end) => end.start_index == *start,
+                        PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == *start,
+                        _ => false,
+                    })
+                }),
+            "the held response must keep the effect's HTTP Start incomplete at the crash"
+        );
+        if http_error_mode.is_some() {
+            let (error_start, _) = sends
+                .iter()
+                .find(|(_, is_error)| *is_error)
+                .expect("the TLS error request must have its own Start");
+            assert!(
+                oplog.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::End(params) if params.start_index == *error_start
+                )),
+                "the send error must be recorded before the crash"
+            );
+        }
 
         executor.simulated_crash(&worker_id).await?;
         let retry_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
             .await
             .map_err(|_| anyhow::anyhow!("reconstructed HTTP retry timed out"))?
             .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped before retry"))?;
-        assert_eq!(retry_key, first_key, "incomplete HTTP retry changed key");
-        Ok::<_, anyhow::Error>((parent_start, child_start))
+        assert_eq!(
+            retry_key,
+            first_key.as_ref(),
+            "incomplete HTTP retry changed key"
+        );
+        Ok::<_, anyhow::Error>((parent_start, child_start, sends, first_key))
     };
-    let (result, (_parent_start, _child_start)) = tokio::try_join!(call, recover)?;
+    let (result, (parent_start, child_start, sends, first_key)) = tokio::try_join!(call, recover)?;
     let result: StreamEvidence = result.into_typed()?;
-    assert_evidence(&result, &input, 1, input.len() as u64);
-    let recorded_keys = keys.lock().await;
-    assert_eq!(recorded_keys.len(), 2);
-    assert_eq!(recorded_keys[0], recorded_keys[1]);
-    drop(recorded_keys);
+    assert_evidence(&result, input, 1, input.len() as u64);
+    let oplog = crate::http::wait_for_oplog(
+        &executor,
+        &worker_id,
+        "the repaired entity invocation's settlement",
+        |oplog| {
+            oplog.iter().any(|entry| {
+                matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationSettled(settled)
+                        if settled.invocation_id == invocation_id
+                )
+            })
+        },
+    )
+    .await?;
+    let assert_repaired_history = |oplog: &[PublicOplogEntryWithIndex]| {
+        let started = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(&started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.invocation_id == invocation_id
+                                && method.method_name.replace('-', "_") == "collect_capable"
+                    ) =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert_eq!(
+            started.len(),
+            1,
+            "repair must retain the original keyed invocation"
+        );
+        let finished = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.invocation_id == invocation_id =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        let settled = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationSettled(settled)
+                    if settled.invocation_id == invocation_id =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert_eq!(
+            finished.len(),
+            1,
+            "the original invocation must finish once"
+        );
+        assert_eq!(settled.len(), 1, "the original invocation must settle once");
+        assert!(started[0] < finished[0] && finished[0] < settled[0]);
+
+        let entity_starts = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if started[0] < entry.oplog_index
+                        && entry.oplog_index < settled[0]
+                        && start.function_name == "golem::entity::invoke" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert_eq!(entity_starts.as_ref(), &[parent_start, child_start]);
+        let http_starts = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "http::client::send"
+                        && start.parent_start_index == Some(child_start) =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert!(
+            http_starts
+                .iter()
+                .copied()
+                .eq(sends.iter().map(|(start, _)| *start)),
+            "repair must end the original HTTP Starts instead of appending replacements"
+        );
+
+        [parent_start, child_start]
+            .into_iter()
+            .chain(sends.iter().map(|(start, _)| *start))
+            .for_each(|start| {
+                let terminals = oplog
+                    .iter()
+                    .filter(|entry| match &entry.entry {
+                        PublicOplogEntry::End(end) => end.start_index == start,
+                        PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                        _ => false,
+                    })
+                    .collect::<Box<[_]>>();
+                assert_eq!(
+                    terminals.len(),
+                    1,
+                    "the original Start {start} must end once"
+                );
+                assert!(
+                    matches!(terminals[0].entry, PublicOplogEntry::End(_)),
+                    "the completed entity or HTTP call {start} must not be cancelled"
+                );
+                assert!(
+                    started[0] < start
+                        && start < terminals[0].oplog_index
+                        && terminals[0].oplog_index < settled[0],
+                    "the completed call {start} must end before invocation settlement"
+                );
+                if start == parent_start {
+                    assert!(
+                        terminals[0].oplog_index < finished[0],
+                        "the collected parent must end before the invocation returns"
+                    );
+                }
+            });
+        assert!(
+            oplog.iter().all(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.invocation_id.is_some_and(|id| [
+                        started[0],
+                        parent_start,
+                        child_start
+                    ]
+                    .contains(&id.anchor))
+                        && start.driver.is_none_or(|driver| driver == started[0]) =>
+                    entry.oplog_index < settled[0],
+                _ => true,
+            }),
+            "positional work without a later driver must precede its invocation's settlement"
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "golem::api::generate_idempotency-key"
+                            && start.parent_start_index == Some(child_start)
+                ))
+                .count(),
+            1,
+            "completed generated-key call must replay instead of running live"
+        );
+    };
+    assert_repaired_history(&oplog);
+    assert_eq!(
+        attempt_keys.lock().await.len(),
+        2,
+        "repair must make exactly two target attempts"
+    );
+    assert!(
+        attempt_keys
+            .lock()
+            .await
+            .iter()
+            .all(|key| key == first_key.as_ref())
+    );
     assert_eq!(
         effects.lock().await.len(),
         1,
         "upstream effect was repeated"
     );
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    drop(executor);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let probe_key = IdempotencyKey::fresh();
+    let probe_id = executor
+        .external_invocation_key(&worker_id.agent_id, &probe_key, "replay_probe")
+        .await?;
+    let replayed: String = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent_id,
+            &probe_key,
+            "replay_probe",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(replayed, "replayed");
+    let oplog = crate::http::wait_for_oplog(
+        &executor,
+        &worker_id,
+        "the completed-history replay probe's settlement",
+        |oplog| {
+            oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationSettled(settled) if settled.invocation_id == probe_id
+        ))
+        },
+    )
+    .await?;
+    assert_repaired_history(&oplog);
     assert_eq!(
-        oplog
-            .iter()
-            .filter(|entry| matches!(
-                &entry.entry,
-                PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::api::generate_idempotency-key"
-            ))
-            .count(),
+        attempt_keys.lock().await.len(),
+        2,
+        "completed entity replay must not make another old target attempt"
+    );
+    assert_eq!(
+        effects.lock().await.len(),
         1,
-        "completed generated-key call must replay instead of running live"
+        "completed entity replay must not apply an effect"
+    );
+    assert!(attempts.try_recv().is_err());
+
+    let fresh_key = IdempotencyKey::fresh();
+    assert_ne!(fresh_key, invocation_key);
+    let fresh_id = executor
+        .external_invocation_key(&worker_id.agent_id, &fresh_key, "collect_capable")
+        .await?;
+    assert_ne!(fresh_id, invocation_id);
+    let fresh_input = b"fresh-entity-idempotency";
+    let fresh: StreamEvidence = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent_id,
+            &fresh_key,
+            "collect_capable",
+            data_value!("atomic-idempotency-parent", fresh_input.to_vec()),
+        )
+        .await?
+        .into_typed()?;
+    assert_evidence(&fresh, fresh_input, 1, fresh_input.len() as u64);
+    let oplog = crate::http::wait_for_oplog(
+        &executor,
+        &worker_id,
+        "the fresh entity invocation's settlement",
+        |oplog| {
+            oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationSettled(settled) if settled.invocation_id == fresh_id
+        ))
+        },
+    )
+    .await?;
+    assert_repaired_history(&oplog);
+    let fresh_effect_key = attempts.try_recv()?.into_boxed_str();
+    assert!(!fresh_effect_key.is_empty());
+    assert_ne!(
+        fresh_effect_key, first_key,
+        "fresh work needs a distinct effect identity"
+    );
+    assert!(attempts.try_recv().is_err());
+    let recorded_attempts = attempt_keys.lock().await;
+    assert_eq!(
+        recorded_attempts.len(),
+        3,
+        "fresh work must add exactly one target attempt"
+    );
+    assert_eq!(
+        recorded_attempts
+            .iter()
+            .filter(|key| key.as_str() == first_key.as_ref())
+            .count(),
+        2
+    );
+    assert_eq!(
+        recorded_attempts
+            .iter()
+            .filter(|key| key.as_str() == fresh_effect_key.as_ref())
+            .count(),
+        1
+    );
+    drop(recorded_attempts);
+    let recorded_effects = effects.lock().await;
+    assert_eq!(
+        recorded_effects.len(),
+        2,
+        "fresh work must advance the provider-side effect counter"
+    );
+    assert!(recorded_effects.contains(first_key.as_ref()));
+    assert!(recorded_effects.contains(fresh_effect_key.as_ref()));
+    drop(recorded_effects);
+    assert_eq!(
+        oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation,
+                    PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == fresh_id
+                )
+        )).count(),
+        1,
+        "the fresh invocation must start once"
+    );
+    assert_eq!(
+        oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationFinished(finished) if finished.invocation_id == fresh_id
+        )).count(),
+        1,
+        "the fresh invocation must finish once"
+    );
+    assert_eq!(
+        oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationSettled(settled) if settled.invocation_id == fresh_id
+        )).count(),
+        1,
+        "the fresh invocation must settle once"
     );
     executor.delete_worker(&worker_id).await?;
     effect_server.abort();
@@ -16580,109 +17087,59 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::worker::{
-        ExternalToolInvocation, InputStreamItem, InvocationRequest, InvocationStart, ResumeAttach,
-        ResumeOperation, StreamCursor, StreamDirection, StreamEnd, StreamTerminalAuthor,
-        ToolByteStreamRole, input_stream_item, invocation_request, invocation_response,
-        invocation_session_completion, invocation_session_result,
-    };
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let provider_component = executor
-        .component_dep(&context.default_environment_id, provider)
-        .store()
-        .await?;
-    let caller_component = executor
-        .component_dep(&context.default_environment_id, caller)
-        .store()
-        .await?;
-    let metadata = extract_component_metadata(
-        &deps
-            .component_directory
-            .join(format!("{}.wasm", provider.wasm_name)),
-        false,
-        true,
-    )
-    .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        wrap_component_service: Some(Arc::new(|inner| {
+            Arc::new(BaselineOwnerComponentService {
+                inner,
+                owner_loads: Default::default(),
+                http_port: 0,
+                extra_env: Default::default(),
+            })
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let BaselineToolDeployment {
+        component: caller_component,
+        mut deployment,
+        ..
+    } = BaselineToolDeployment::store(&executor, deps, &context, provider, caller).await?;
     for bindings in deployment.tool_bindings.values_mut() {
         bindings
             .get_mut(&ToolName::try_from("streaming").unwrap())
             .unwrap()
             .filesystem_access = ToolFilesystemAccess::Allowed;
     }
+    let tool_type_id =
+        deployment.registered_tools[&ToolName::try_from("streaming").unwrap()].type_id;
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
         Some(deployment),
     );
-    let worker_id = executor
-        .start_agent(
-            &caller_component.id,
-            agent_key!("ToolStreamingCaller", "native-session"),
-        )
-        .await?;
-    let metadata = executor.get_worker_metadata(&worker_id).await?;
     let key = IdempotencyKey::fresh();
-    let input = TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::record(vec![
-            golem_common::schema::NamedFieldType {
-                name: "mode".to_string(),
-                body: SchemaType::string(),
-                metadata: Default::default(),
-            },
-        ])),
-        SchemaValue::Record {
-            fields: vec![SchemaValue::String("marker-echo".to_string())],
-        },
-    );
+    let mut call = executor.standalone_tool(
+        &caller_component,
+        tool_type_id,
+        "streaming",
+        "run",
+        &key,
+        ToolModeInput {
+            mode: "marker-echo".into(),
+        }
+        .into_typed_schema_value()?,
+    )?;
+    let worker_id = call.owned.clone();
+    let tool_request = call.request.external_tool.as_mut().unwrap();
+    tool_request.stdin = true;
+    tool_request.stdout = true;
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     let start_request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            target: Some(crate::agent::id_target(&worker_id)),
-            idempotency_key: Some(key.clone().into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            caller: Some(callers::account(context.account_id).into()),
-            environment_id: Some(context.default_environment_id.into()),
-            component_owner_account_id: Some(context.account_id.into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            external_tool: Some(ExternalToolInvocation {
-                tool_name: "streaming".to_string(),
-                command_path: vec!["run".to_string()],
-                input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-                stdin: true,
-                stdout: true,
-                stderr: false,
-                fresh_owner: false,
-                expected_deployment_revision: None,
-            }),
-            request_key: Some(
-                golem_common::model::InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&key),
-                )
-                .into(),
-            ),
-            ..Default::default()
-        })),
+        request: Some(invocation_request::Request::Start(call.request)),
     };
     sender.send(start_request.clone()).await?;
     let mut responses = executor
@@ -16762,7 +17219,10 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         "{rejected:?}"
     );
 
-    // Take over while the result is still blocked on stdin, resuming after the marker.
+    // Lose the Store and the transport after the committed marker. Reattach by its offset,
+    // not by replaying the already-observed bytes into the client.
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let Some(invocation_request::Request::Start(start)) = start_request.request else {
         unreachable!()
     };
@@ -16775,7 +17235,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 environment_id: start.environment_id,
                 attachment_id: accepted.attachment_id,
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: start.expected_callee_fingerprint,
+                expected_callee_fingerprint: accepted.callee_fingerprint,
                 expected_epoch: accepted.epoch,
                 operation: ResumeOperation::Takeover as i32,
                 cursors: vec![stdout_cursor.unwrap()],
@@ -16912,15 +17372,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         caller_component.revision,
         None,
     );
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     let (completed_sender, completed_receiver) = tokio::sync::mpsc::channel(1);
     completed_sender
         .send(InvocationRequest {
@@ -16993,16 +17445,25 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     }
     assert!(completed_result && completed_finished);
     drop(completed_sender);
-    let after: String = executor
-        .invoke_and_await_agent(
-            &caller_component,
-            &agent_key!("ToolStreamingCaller", "native-session"),
-            "record_native_order",
-            data_value!("R"),
-        )
-        .await?
-        .into_typed()?;
-    assert_eq!(after, "R");
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.owner_kind,
+        OwnerKind::StandaloneTool
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        1
+    );
     Ok(())
 }
 
@@ -22016,6 +22477,8 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
     )?;
     harness.environment_state.set_agent_secret(AgentSecret {
         id: secret_id,
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: harness.context.default_environment_id,
         path: CanonicalAgentSecretPath(secret_path.clone()),
         revision: AgentSecretRevision::INITIAL,
@@ -22027,7 +22490,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
             secret_id: secret_id.0,
             config_key: Some(secret_path),
             version: 0,
-            resolved_at: chrono::Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         }))),
     };
@@ -23013,8 +23476,11 @@ async fn native_external_tool_scalar_admission(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let (native_order_port, _native_order_server, native_order_requests) =
-        start_native_order_http_server().await;
+    let NativeOrderHttpServer {
+        port: native_order_port,
+        server: _native_order_server,
+        effects: native_order_requests,
+    } = start_native_order_http_server(None).await;
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let overrides = TestExecutorOverrides {
         environment_state_service: Some(environment_state.clone()),
@@ -23348,31 +23814,136 @@ async fn native_external_tool_scalar_admission(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn tool_guest_invocation_id_names_its_public_owner_and_can_call_an_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        wrap_component_service: Some(Arc::new(|inner| {
+            Arc::new(BaselineOwnerComponentService {
+                inner,
+                owner_loads: Default::default(),
+                http_port: 0,
+                extra_env: Default::default(),
+            })
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let BaselineToolDeployment {
+        component,
+        mut deployment,
+        ..
+    } = BaselineToolDeployment::store(&executor, deps, &context, provider, caller).await?;
+    let tool = ToolName::try_from("streaming").unwrap();
+    let type_id = deployment.registered_tools[&tool].type_id;
+    // This scenario compares standalone and hosted identities on the same component.
+    let agent_owner = ToolBindingOwner::AgentType {
+        agent_type_name: AgentTypeName("ToolStreamingCaller".into()),
+    };
+    let mut hosted_bindings = deployment.tool_bindings[&ToolBindingOwner::ComponentBaseline {
+        component_id: component.id,
+    }]
+        .clone();
+    for binding in hosted_bindings.values_mut() {
+        binding.owner = agent_owner.clone();
+    }
+    deployment
+        .tool_bindings
+        .insert(agent_owner, hosted_bindings);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment),
+    );
+    let hosted = executor
+        .start_agent(&component.id, agent_key!("ToolStreamingCaller", "guest-id"))
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&hosted).await?.fingerprint;
+    for standalone in [true, false] {
+        let key = IdempotencyKey::fresh();
+        let request_key =
+            InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
+        let call = executor.standalone_tool(
+            &component,
+            type_id,
+            "streaming",
+            "invocation-id",
+            &key,
+            InvocationIdInput {
+                rpc_name: standalone.then(|| "standalone-guest-id".into()),
+            }
+            .into_typed_schema_value()?,
+        )?;
+        let owner = if standalone {
+            call.owned.agent_id
+        } else {
+            hosted.agent_id
+        };
+        let expected = if standalone {
+            OwnedInvocationId::new(InvocationOwner::Tool(tool.clone()), call.invocation_id)
+        } else {
+            request_key.finalize(owner, fingerprint, "tool:streaming/invocation-id")
+        };
+        let result = if standalone {
+            call.attach(&executor).await?.result().await?
+        } else {
+            let mut request = call.request;
+            request.target = Some(crate::agent::id_target(&hosted));
+            request.idempotency_key = Some(key.into());
+            request.expected_callee_fingerprint = Some(fingerprint.0.into());
+            request.external_tool.as_mut().unwrap().fresh_owner = false;
+            executor.invoke_agent_session(request).await?
+        };
+        let Some(invocation_session_result::Result::ToolResult(result)) = result.result else {
+            anyhow::bail!("expected a tool result");
+        };
+        let result: PublicExternalToolResult = result.try_into().map_err(anyhow::Error::msg)?;
+        let PublicExternalToolResult::Success(result) = result else {
+            anyhow::bail!("tool failed: {result:?}");
+        };
+        assert_eq!(
+            result.result.unwrap().value(),
+            &SchemaValue::String(expected.to_string())
+        );
+    }
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
+}
+
 struct BaselineOwnerComponentService {
-    inner: Arc<dyn golem_worker_executor::services::component::ComponentService>,
+    inner: Arc<dyn ComponentService>,
     owner_loads: Arc<AtomicUsize>,
     http_port: u16,
+    extra_env: BTreeMap<String, String>,
 }
 
 #[async_trait::async_trait]
-impl golem_worker_executor::services::component::ComponentService
-    for BaselineOwnerComponentService
-{
+impl ComponentService for BaselineOwnerComponentService {
     async fn get(
         &self,
-        engine: &wasmtime::Engine,
-        id: golem_common::model::component::ComponentId,
+        engine: &Engine,
+        id: ComponentId,
         revision: ComponentRevision,
-    ) -> Result<
-        (
-            wasmtime::component::Component,
-            golem_service_base::model::component::Component,
-        ),
-        golem_service_base::error::worker_executor::WorkerExecutorError,
-    > {
+    ) -> Result<(Component, ComponentMetadata), WorkerExecutorError> {
         let metadata = self.inner.get_metadata(id, Some(revision)).await?;
         if metadata.component_name.0 == "virtual-native-policy" {
             self.owner_loads.fetch_add(1, Ordering::SeqCst);
+        }
+        if metadata.component_name.0 == "virtual-native-policy-failed" {
+            return Err(WorkerExecutorError::InvalidRequest {
+                details: "primary instantiation refused".into(),
+            });
         }
         let (component, _) = self.inner.get(engine, id, revision).await?;
         Ok((component, self.get_metadata(id, Some(revision)).await?))
@@ -23380,15 +23951,15 @@ impl golem_worker_executor::services::component::ComponentService
 
     async fn get_metadata(
         &self,
-        id: golem_common::model::component::ComponentId,
+        id: ComponentId,
         revision: Option<ComponentRevision>,
-    ) -> Result<
-        golem_service_base::model::component::Component,
-        golem_service_base::error::worker_executor::WorkerExecutorError,
-    > {
-        use golem_common::model::component_metadata::ComponentProvisionConfig;
+    ) -> Result<ComponentMetadata, WorkerExecutorError> {
         let mut component = self.inner.get_metadata(id, revision).await?;
-        if component.component_name.0 == "virtual-native-policy" {
+        if component
+            .component_name
+            .0
+            .starts_with("virtual-native-policy")
+        {
             let permissions = component
                 .metadata
                 .agent_type_provision_configs()
@@ -23406,7 +23977,10 @@ impl golem_worker_executor::services::component::ComponentService
                             self.http_port.to_string(),
                         ),
                         ("FORBID_AGENT_CONSTRUCTION".to_string(), "true".to_string()),
-                    ]),
+                    ])
+                    .into_iter()
+                    .chain(self.extra_env.clone())
+                    .collect(),
                     ..Default::default()
                 },
             );
@@ -23417,30 +23991,1180 @@ impl golem_worker_executor::services::component::ComponentService
     async fn resolve_component(
         &self,
         reference: String,
-        environment: golem_common::model::environment::EnvironmentId,
-        application: golem_common::model::application::ApplicationId,
+        environment: EnvironmentId,
+        application: ApplicationId,
         account: AccountId,
-    ) -> Result<
-        Option<golem_common::model::component::ComponentId>,
-        golem_service_base::error::worker_executor::WorkerExecutorError,
-    > {
+    ) -> Result<Option<ComponentId>, WorkerExecutorError> {
         self.inner
             .resolve_component(reference, environment, application, account)
             .await
     }
 
-    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::component::Component> {
+    async fn all_cached_metadata(&self) -> Vec<ComponentMetadata> {
         self.inner.all_cached_metadata().await
     }
 
-    async fn invalidate_all_metadata_for_environment(
-        &self,
-        environment: golem_common::model::environment::EnvironmentId,
-    ) {
+    async fn invalidate_all_metadata_for_environment(&self, environment: EnvironmentId) {
         self.inner
             .invalidate_all_metadata_for_environment(environment)
             .await
     }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let StandaloneSetup { fixture, executor } =
+        StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
+    let component = &fixture.tools.component;
+    let provider_component = &fixture.tools.provider;
+    let effects = &fixture.effects;
+    let effect_gate = &fixture.effect_gate;
+    let call = fixture.call(&executor, &IdempotencyKey::fresh().value, "native-order")?;
+    let owned = call.owned.clone();
+    let request = call.request.clone();
+
+    // Concurrent same-key callers, reverse result observation → one Started and one effect.
+    effect_gate.hold_next.store(true, Ordering::SeqCst);
+    let (first_session, second_session) =
+        tokio::join!(call.attach(&executor), call.attach(&executor));
+    let sessions = [first_session?, second_session?];
+    tokio::time::timeout(CHECKPOINT_TIMEOUT, effect_gate.arrived.notified()).await?;
+    effect_gate.release.notify_one();
+    let mut results = Vec::new();
+    // Observe responses in reverse caller order while both sessions remain attached.
+    for session in sessions.into_iter().rev() {
+        results.push(session.result().await?);
+    }
+    let second = results.remove(0);
+    let first = results.remove(0);
+    assert_eq!(first, second);
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    let metadata = executor.get_worker_metadata(&owned).await?;
+    assert_eq!(metadata.owner_kind, OwnerKind::StandaloneTool);
+    let before = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+    assert!(
+        matches!(&before[0].entry, PublicOplogEntry::Create(parameters) if parameters.agent_mode == AgentMode::Durable)
+    );
+    // Same key, other component → idempotency-key-conflict, first oplog unchanged.
+    let mut conflict = request.clone();
+    conflict.component_id = Some(provider_component.id.into());
+    let error = executor.invoke_agent_session(conflict).await.unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<InvocationSessionRejection>()
+            .expect("typed rejection")
+            .reason,
+        InvocationRejectionReason::IdempotencyConflict
+    );
+    assert_eq!(
+        before,
+        executor.get_oplog(&owned, OplogIndex::INITIAL).await?
+    );
+    let mut conflict = request.clone();
+    let changed_input = ToolValueInput {
+        value: "native-error".into(),
+    }
+    .into_typed_schema_value()?;
+    conflict.external_tool.as_mut().unwrap().input =
+        Some(changed_input.try_into().map_err(anyhow::Error::msg)?);
+    let error = executor.invoke_agent_session(conflict).await.unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<InvocationSessionRejection>()
+            .expect("typed rejection")
+            .reason,
+        InvocationRejectionReason::IdempotencyConflict
+    );
+    for error in [
+        executor
+            .fork_worker(&owned, REJECTED_OPERATION_CUT)
+            .await
+            .unwrap_err(),
+        executor
+            .auto_update_worker(&owned, component.revision, false)
+            .await
+            .unwrap_err(),
+        executor
+            .manual_update_worker(&owned, component.revision, false)
+            .await
+            .unwrap_err(),
+        executor
+            .snapshot_assisted_update_worker(&owned, component.revision, false)
+            .await
+            .unwrap_err(),
+        executor
+            .revert(
+                &owned,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: REJECTED_OPERATION_CUT,
+                }),
+            )
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(
+                error.downcast_ref::<WorkerExecutorError>(),
+                Some(WorkerExecutorError::NotAnAgent { .. })
+            ),
+            "{error:#}"
+        );
+    }
+    assert_eq!(
+        before,
+        executor.get_oplog(&owned, OplogIndex::INITIAL).await?
+    );
+    drop(executor);
+    verify_completed_standalone_after_restart(deps, &fixture, &call, first).await
+}
+
+async fn verify_completed_standalone_after_restart(
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &StandaloneFixture,
+    call: &StandaloneToolCall,
+    first: InvocationSessionResult,
+) -> anyhow::Result<()> {
+    let executor = start_with_overrides(deps, &fixture.context, fixture.overrides.clone()).await?;
+    let owned = &call.owned;
+    let effects = &fixture.effects;
+    let effect_gate = &fixture.effect_gate;
+    // Completed replay after executor restart → same result, one Started/Finished and no new effect.
+    assert_eq!(first, call.result(&executor).await?);
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(effect_gate.attempts.load(Ordering::SeqCst), 1);
+    let oplog = executor.get_oplog(owned, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+    );
+    assert_settled_oplog(&oplog, &[], &[]);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_scheduled_and_cancelled_invocations_survive_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let StandaloneSetup { fixture, executor } =
+        StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
+    let effects = &fixture.effects;
+    let scheduled_request = |label: &str| -> anyhow::Result<StandaloneToolCall> {
+        let mut call = fixture.call(&executor, label, "native-order")?;
+        call.request.mode = ProtoInvocationMode::Schedule as i32;
+        let due = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
+        call.request.schedule_at = Some(prost_types::Timestamp {
+            seconds: due.as_second(),
+            nanos: due.subsec_nanosecond(),
+        });
+        Ok(call)
+    };
+    let StandaloneToolCall {
+        owned: scheduled_owner,
+        request: mut scheduled,
+        ..
+    } = scheduled_request("scheduled-survives-restart")?;
+    let due_after_restart = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(10);
+    scheduled.schedule_at = Some(prost_types::Timestamp {
+        seconds: due_after_restart.as_second(),
+        nanos: due_after_restart.subsec_nanosecond(),
+    });
+    let StandaloneToolCall {
+        owned: pending_owner,
+        invocation_id: pending_id,
+        request: pending,
+    } = scheduled_request("cancelled-due-pending")?;
+    let StandaloneToolCall {
+        owned: cancelled_owner,
+        invocation_id: cancelled_id,
+        request: mut cancelled,
+    } = scheduled_request("cancelled-across-restart")?;
+    let future = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
+    cancelled.schedule_at = Some(prost_types::Timestamp {
+        seconds: future.as_second(),
+        nanos: 0,
+    });
+    executor.invoke_agent_session(scheduled.clone()).await?;
+    executor.invoke_agent_session(pending.clone()).await?;
+    executor.invoke_agent_session(cancelled.clone()).await?;
+    for owner in [&scheduled_owner, &pending_owner, &cancelled_owner] {
+        let oplog = executor.get_oplog(owner, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::PendingAgentInvocation(_)))
+                .count(),
+            1
+        );
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        );
+    }
+    // Schedule pending entry; restart before due → no execution before the deadline.
+    assert_eq!(effects.load(Ordering::SeqCst), 0);
+    drop(executor);
+    verify_scheduled_and_cancelled_after_restart(
+        deps,
+        &fixture,
+        ScheduledInvocations {
+            scheduled,
+            pending_owner,
+            pending_id,
+            pending,
+            cancelled_owner,
+            cancelled_id,
+            cancelled,
+            due_after_restart,
+        },
+    )
+    .await
+}
+
+struct ScheduledInvocations {
+    scheduled: InvocationStart,
+    pending_owner: OwnedAgentId,
+    pending_id: InvocationId,
+    pending: InvocationStart,
+    cancelled_owner: OwnedAgentId,
+    cancelled_id: InvocationId,
+    cancelled: InvocationStart,
+    due_after_restart: jiff::Timestamp,
+}
+
+async fn verify_scheduled_and_cancelled_after_restart(
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &StandaloneFixture,
+    calls: ScheduledInvocations,
+) -> anyhow::Result<()> {
+    let ScheduledInvocations {
+        scheduled,
+        pending_owner,
+        pending_id,
+        pending,
+        cancelled_owner,
+        cancelled_id,
+        cancelled,
+        due_after_restart,
+    } = calls;
+    let context = &fixture.context;
+    let overrides = &fixture.overrides;
+    let effects = &fixture.effects;
+    let executor = start_with_overrides(deps, context, overrides.clone()).await?;
+    assert!(
+        jiff::Timestamp::now() < due_after_restart,
+        "restart must precede the scheduled deadline"
+    );
+    assert!(
+        executor
+            .cancel_invocation(&pending_owner, &pending_id)
+            .await?
+    );
+    assert!(
+        executor
+            .cancel_invocation(&cancelled_owner, &cancelled_id)
+            .await?
+    );
+    fixture.release_wakes.cancel();
+    let mut await_scheduled = scheduled;
+    await_scheduled.mode = ProtoInvocationMode::Await as i32;
+    await_scheduled.schedule_at = None;
+    executor.invoke_agent_session(await_scheduled).await?;
+    assert!(
+        jiff::Timestamp::now() >= due_after_restart,
+        "the scheduled invocation completed before its deadline"
+    );
+    executor.invoke_agent_session(pending).await?;
+    executor.invoke_agent_session(cancelled).await?;
+    // Pending and scheduled cancellation → cancelled status and zero additional effect.
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    for (owner, id) in [
+        (&pending_owner, pending_id),
+        (&cancelled_owner, cancelled_id),
+    ] {
+        let summary = executor
+            .get_invocation(&owner.agent_id, owner.environment_id, id)
+            .await?
+            .expect("invocation lookup")
+            .expect("cancelled invocation remains readable");
+        assert_eq!(
+            summary.state,
+            golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState::Cancelled
+                as i32
+        );
+    }
+    let pending_oplog = executor
+        .get_oplog(&pending_owner, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !pending_oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    );
+    assert_eq!(
+        pending_oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::CancelPendingInvocation(_)))
+            .count(),
+        1
+    );
+    let cancelled_oplog = executor
+        .get_oplog(&cancelled_owner, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !cancelled_oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    );
+    assert_eq!(
+        cancelled_oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::CancelPendingInvocation(_)))
+            .count(),
+        1
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_unaccepted_owner_rechecks_the_component_tool_activation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let StandaloneSetup { fixture, executor } =
+        StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
+    let context = &fixture.context;
+    let component = &fixture.tools.component;
+    let deployment = &fixture.tools.deployment;
+    let environment_state = &fixture.environment;
+    let tool_name = ToolName::try_from("streaming").unwrap();
+
+    // A rejected preparation can leave Create without an accepted payload. A retry must check
+    // the actual activation again, rather than admitting a newly deployed host implementation.
+    let StandaloneToolCall {
+        owned: unaccepted_owner,
+        request: mut unaccepted,
+        ..
+    } = fixture.call(&executor, "standalone-unaccepted", "standalone-unaccepted")?;
+    unaccepted
+        .external_tool
+        .as_mut()
+        .unwrap()
+        .expected_deployment_revision = Some(999);
+    assert!(
+        executor
+            .invoke_agent_session(unaccepted.clone())
+            .await
+            .is_err()
+    );
+    let unaccepted_oplog = executor
+        .get_oplog(&unaccepted_owner, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(unaccepted_oplog.len(), 1);
+    assert!(matches!(
+        unaccepted_oplog[0].entry,
+        PublicOplogEntry::Create(_)
+    ));
+    let host_deployment = fixture.tools.replaced_by_host(&tool_name);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(host_deployment.clone()),
+    );
+    unaccepted
+        .external_tool
+        .as_mut()
+        .unwrap()
+        .expected_deployment_revision = None;
+    let rejected = executor.invoke_agent_session(unaccepted).await.unwrap_err();
+    assert!(
+        matches!(
+            &rejected.downcast_ref::<InvocationSessionRejection>().expect("typed rejection").worker_error,
+            Some(WorkerExecutorError::InvalidRequest { details }) if details == "standalone durable owners require a component tool"
+        ),
+        "{rejected:#}"
+    );
+    assert_eq!(
+        executor
+            .get_oplog(&unaccepted_owner, OplogIndex::INITIAL)
+            .await?,
+        unaccepted_oplog
+    );
+    assert_eq!(fixture.effects.load(Ordering::SeqCst), 0);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment.clone()),
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_tool_checkpoint_crashes_do_not_repeat_effects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let StandaloneSetup {
+        mut fixture,
+        mut executor,
+    } = StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
+    let context = &fixture.context;
+    let component = &fixture.tools.component;
+    let deployment = &fixture.tools.deployment;
+    let environment_state = &fixture.environment;
+    let overrides = &fixture.overrides;
+    let tool_name = ToolName::try_from("streaming").unwrap();
+    let host_deployment = fixture.tools.replaced_by_host(&tool_name);
+    for (value, before_crash, after_recovery) in [
+        ("standalone-before-effect", 0, 1),
+        ("standalone-after-effect", 2, 2),
+    ] {
+        let call = fixture.call(&executor, value, value)?;
+        let checkpoint = stop_at_effect_checkpoint(
+            &mut fixture.checkpoints,
+            &executor,
+            &call,
+            value,
+            &fixture.effects,
+            before_crash,
+        )
+        .await?;
+        if value == "standalone-after-effect" {
+            environment_state.set_tool_deployment(
+                context.default_environment_id,
+                component.id,
+                component.revision,
+                Some(host_deployment.clone()),
+            );
+        }
+        drop(executor);
+        drop(checkpoint.release);
+        executor = start_with_overrides(deps, context, overrides.clone()).await?;
+        replay_effect_checkpoint(&mut fixture.checkpoints, &executor, &call, value).await?;
+        // Before/after recorded effect → recovery adds only the missing effect, never a duplicate.
+        assert_eq!(fixture.effects.load(Ordering::SeqCst), after_recovery);
+        assert_eq!(
+            fixture.effect_gate.attempts.load(Ordering::SeqCst),
+            after_recovery
+        );
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            component.id,
+            component.revision,
+            Some(deployment.clone()),
+        );
+        let oplog = executor.get_oplog(&call.owned, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count(),
+            1
+        );
+        assert_settled_oplog(&oplog, &[], &[]);
+    }
+    Ok(())
+}
+
+async fn stop_at_effect_checkpoint(
+    checkpoints: &mut tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
+    executor: &TestWorkerExecutor,
+    call: &StandaloneToolCall,
+    value: &str,
+    effects: &AtomicUsize,
+    before_crash: usize,
+) -> anyhow::Result<CrashCheckpointArrival> {
+    call.start(executor).await?;
+    let checkpoint = next_crash_checkpoint(checkpoints, value).await?;
+    assert_eq!(
+        effects.load(Ordering::SeqCst),
+        before_crash,
+        "effect count at {value}"
+    );
+    Ok(checkpoint)
+}
+
+async fn replay_effect_checkpoint(
+    checkpoints: &mut tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
+    executor: &TestWorkerExecutor,
+    call: &StandaloneToolCall,
+    value: &str,
+) -> anyhow::Result<()> {
+    next_crash_checkpoint(checkpoints, value)
+        .await?
+        .release
+        .send(())
+        .unwrap();
+    call.result(executor).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_tool_promise_completion_survives_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let StandaloneSetup {
+        mut fixture,
+        mut executor,
+    } = StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
+    let call = fixture.call(&executor, "standalone-promise", "standalone-promise")?;
+    let promise = suspend_standalone_at_promise(&mut fixture, &executor, &call).await?;
+    drop(executor);
+    executor = start_with_overrides(deps, &fixture.context, fixture.overrides.clone()).await?;
+    complete_standalone_promise_after_restart(&fixture, &executor, &call, promise).await
+}
+
+async fn suspend_standalone_at_promise(
+    fixture: &mut StandaloneFixture,
+    executor: &TestWorkerExecutor,
+    call: &StandaloneToolCall,
+) -> anyhow::Result<PromiseId> {
+    call.start(executor).await?;
+    let promise = next_promise_checkpoint(&mut fixture.promises, "standalone-promise").await?;
+    wait_for_promise_checkpoint_to_await(executor, &call.owned.agent_id, &promise).await?;
+    let fingerprint = executor.get_worker_metadata(&call.owned).await?.fingerprint;
+    Ok(PromiseId {
+        agent_id: call.owned.agent_id,
+        fingerprint,
+        oplog_idx: promise.oplog_idx,
+    })
+}
+
+async fn complete_standalone_promise_after_restart(
+    fixture: &StandaloneFixture,
+    executor: &TestWorkerExecutor,
+    call: &StandaloneToolCall,
+    promise: PromiseId,
+) -> anyhow::Result<()> {
+    executor
+        .complete_promise(
+            &fixture.context.default_environment_id,
+            &promise,
+            b"continue".to_vec(),
+        )
+        .await?;
+    call.result(executor).await?;
+    // Promise completion after reconstruction → one external effect.
+    assert_eq!(fixture.effects.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_tool_ambiguous_http_retry_keeps_its_durable_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let StandaloneSetup {
+        fixture,
+        mut executor,
+    } = StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
+    let call = fixture.call(
+        &executor,
+        "standalone-held-effect",
+        "standalone-held-effect",
+    )?;
+    let attempts = commit_effect_without_http_response(&fixture, &executor, &call).await?;
+    drop(executor);
+    fixture.effect_gate.release.notify_one();
+    executor = start_with_overrides(deps, &fixture.context, fixture.overrides.clone()).await?;
+    verify_ambiguous_retry_after_restart(&fixture, &executor, &call, attempts).await
+}
+
+async fn commit_effect_without_http_response(
+    fixture: &StandaloneFixture,
+    executor: &TestWorkerExecutor,
+    call: &StandaloneToolCall,
+) -> anyhow::Result<usize> {
+    let effects = &fixture.effects;
+    let effect_gate = &fixture.effect_gate;
+    effect_gate.hold_next.store(true, Ordering::SeqCst);
+    call.start(executor).await?;
+    tokio::time::timeout(CHECKPOINT_TIMEOUT, effect_gate.arrived.notified()).await?;
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    let attempts_before_crash = effect_gate.attempts.load(Ordering::SeqCst);
+    let before_response = executor.get_oplog(&call.owned, OplogIndex::INITIAL).await?;
+    assert!(before_response.iter().any(|entry| {
+        matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "http::client::send")
+            && !before_response.iter().any(|terminal| matches!(&terminal.entry, PublicOplogEntry::End(end) if end.start_index == entry.oplog_index))
+    }), "effect happened while its HTTP Start still had no End");
+    Ok(attempts_before_crash)
+}
+
+async fn verify_ambiguous_retry_after_restart(
+    fixture: &StandaloneFixture,
+    executor: &TestWorkerExecutor,
+    call: &StandaloneToolCall,
+    attempts_before_crash: usize,
+) -> anyhow::Result<()> {
+    let effects = &fixture.effects;
+    let effect_gate = &fixture.effect_gate;
+    call.result(executor).await?;
+    // Effect before End, executor loss → one retry attempt and no additional peer effect.
+    assert_eq!(
+        effect_gate.attempts.load(Ordering::SeqCst),
+        attempts_before_crash + 1
+    );
+    assert_eq!(
+        effects.load(Ordering::SeqCst),
+        1,
+        "the external peer deduplicates the ambiguous retry by its durable HTTP key"
+    );
+    let recovered = executor.get_oplog(&call.owned, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        recovered
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        1
+    );
+    assert!(incomplete_starts_before(&recovered, OplogIndex::from_u64(u64::MAX)).is_empty());
+    assert_settled_oplog(&recovered, &[], &[]);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_tool_retention_repairs_timers_and_fences_old_incarnations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let StandaloneSetup {
+        mut fixture,
+        executor,
+    } = StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
+    // Retention delivery runs until the replacement-incarnation phase explicitly pauses it.
+    fixture.release_wakes.cancel();
+    let owners = commit_terminal_before_retention_timer_insert(&mut fixture, &executor).await?;
+    drop(executor);
+    let executor = repair_retention_timers_after_restart(deps, &fixture, &owners).await?;
+    drop(executor);
+    verify_old_timer_cannot_delete_replacement(deps, &fixture, &owners).await
+}
+
+struct RetentionOwners {
+    owned: OwnedAgentId,
+    request: InvocationStart,
+    fingerprint: AgentFingerprint,
+    suspended_owner: OwnedAgentId,
+    timer_crash_owner: OwnedAgentId,
+    timer_crash: InvocationStart,
+}
+
+async fn commit_terminal_before_retention_timer_insert(
+    fixture: &mut StandaloneFixture,
+    executor: &TestWorkerExecutor,
+) -> anyhow::Result<RetentionOwners> {
+    let original = fixture.call(executor, "standalone-retained", "native-order")?;
+    original.result(executor).await?;
+    let owned = original.owned;
+    let request = original.request;
+    let metadata = executor.get_worker_metadata(&owned).await?;
+    let retention_insert = &fixture.retention_insert;
+    let storage = fixture.storage.lock().unwrap().clone().unwrap();
+    let StandaloneToolCall {
+        owned: suspended_owner,
+        request: mut suspended,
+        ..
+    } = fixture.call(executor, "retention-suspended", "standalone-promise")?;
+    suspended.mode = ProtoInvocationMode::Schedule as i32;
+    executor.invoke_agent_session(suspended).await?;
+    let suspended_promise =
+        next_promise_checkpoint(&mut fixture.promises, "standalone-promise").await?;
+    wait_for_promise_checkpoint_to_await(executor, &suspended_owner.agent_id, &suspended_promise)
+        .await?;
+    let StandaloneToolCall {
+        owned: timer_crash_owner,
+        request: timer_crash,
+        ..
+    } = fixture.call(
+        executor,
+        "standalone-retention-crash",
+        "standalone-retention-crash",
+    )?;
+    retention_insert.hold_next.store(true, Ordering::SeqCst);
+    let mut trigger = timer_crash.clone();
+    trigger.mode = ProtoInvocationMode::Schedule as i32;
+    executor.invoke_agent_session(trigger).await?;
+    tokio::time::timeout(CHECKPOINT_TIMEOUT, retention_insert.arrived.notified()).await?;
+    // Terminal persisted, timer insertion lost → cold load must repair deletion.
+    assert!(
+        executor
+            .stored_oplog(&timer_crash_owner.agent_id)
+            .await
+            .iter()
+            .any(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
+    );
+    assert!(
+        storage
+            .get_action(&ScheduleId::for_finished_invocation(&timer_crash_owner))
+            .await?
+            .is_none()
+    );
+    Ok(RetentionOwners {
+        owned,
+        request,
+        fingerprint: metadata.fingerprint,
+        suspended_owner,
+        timer_crash_owner,
+        timer_crash,
+    })
+}
+
+async fn repair_retention_timers_after_restart(
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &StandaloneFixture,
+    owners: &RetentionOwners,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let RetentionOwners {
+        owned,
+        request,
+        suspended_owner,
+        timer_crash_owner,
+        timer_crash,
+        ..
+    } = owners;
+    let context = &fixture.context;
+    let overrides = &fixture.overrides;
+    let storage = fixture.storage.lock().unwrap().clone().unwrap();
+    // Also exercise cold-load repair of a missing timer for an older completed owner.
+    storage
+        .cancel(&ScheduleId::for_finished_invocation(owned))
+        .await?;
+    let mut expired = overrides.clone();
+    expired.configure = Some(Arc::new(|config| {
+        config.standalone_tool_invocation_retention = Duration::ZERO;
+    }));
+    let executor = start_with_overrides(deps, context, expired).await?;
+    let mut timer_lookup = timer_crash.clone();
+    timer_lookup.mode = ProtoInvocationMode::Lookup as i32;
+    let _ = executor.invoke_agent_session(timer_lookup).await;
+    wait_for_retention_deletion(&executor, timer_crash_owner)
+        .await
+        .expect("crash-before-insert did not repair the retention timer on load");
+    assert!(
+        executor
+            .stored_oplog(&timer_crash_owner.agent_id)
+            .await
+            .is_empty()
+    );
+    let mut lookup = request.clone();
+    lookup.mode = ProtoInvocationMode::Lookup as i32;
+    // Deletion may cancel the lookup's response lease after cold hydration.
+    let _ = executor.invoke_agent_session(lookup).await;
+    wait_for_retention_deletion(&executor, owned)
+        .await
+        .expect("reconstructed finished owner was not retained for deletion");
+    // Completed owners deleted; suspended promise owner remains without a deletion timer.
+    assert!(executor.stored_oplog(&owned.agent_id).await.is_empty());
+    assert!(executor.get_worker_metadata(suspended_owner).await.is_ok());
+    assert!(
+        storage
+            .get_action(&ScheduleId::for_finished_invocation(suspended_owner))
+            .await?
+            .is_none()
+    );
+    let archive_id = ScheduleId::fresh();
+    storage
+        .insert(
+            archive_id,
+            jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1),
+            ShardId::new(0),
+            &serialize(&ScheduledAction::ArchiveOplog {
+                account_id: context.account_id,
+                owned_agent_id: timer_crash_owner.clone(),
+                agent_mode: AgentMode::Durable,
+                last_oplog_index: ARCHIVE_LAST_INDEX,
+                next_after: Duration::from_secs(1),
+            })
+            .map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+    tokio::time::timeout(CHECKPOINT_TIMEOUT, async {
+        while storage.get_action(&archive_id).await.unwrap().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("archive action for a deleted owner was not acknowledged");
+    assert!(
+        executor
+            .stored_oplog(&timer_crash_owner.agent_id)
+            .await
+            .is_empty()
+    );
+    Ok(executor)
+}
+
+async fn verify_old_timer_cannot_delete_replacement(
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &StandaloneFixture,
+    owners: &RetentionOwners,
+) -> anyhow::Result<()> {
+    let RetentionOwners {
+        owned,
+        request,
+        fingerprint,
+        ..
+    } = owners;
+    let context = &fixture.context;
+    let overrides = &fixture.overrides;
+    let effects = &fixture.effects;
+    let storage = fixture.storage.lock().unwrap().clone().unwrap();
+
+    // A retry after retention creates a new incarnation at the same T3 address.
+    // Deliver an old timer after that Create; the replacement must remain intact.
+    let mut expired_replacement = overrides.clone();
+    expired_replacement.configure = Some(Arc::new(|config| {
+        config.standalone_tool_invocation_retention = Duration::ZERO;
+    }));
+    let release_replacement_deletion = CancellationToken::new();
+    expired_replacement.wrap_scheduler_storage = Some(Arc::new({
+        let release = release_replacement_deletion.clone();
+        move |inner| {
+            Arc::new(PausedScheduler {
+                inner,
+                release: release.clone(),
+                invocation_wake: Default::default(),
+                acknowledged: Default::default(),
+            })
+        }
+    }));
+    let executor = start_with_overrides(deps, context, expired_replacement).await?;
+    let mut replacement_request = request.clone();
+    replacement_request.external_tool.as_mut().unwrap().input = fixture
+        .call(&executor, "retention-replacement", "retention-replacement")?
+        .request
+        .external_tool
+        .unwrap()
+        .input;
+    executor.invoke_agent_session(replacement_request).await?;
+    let replacement = executor.get_worker_metadata(owned).await?;
+    assert_ne!(*fingerprint, replacement.fingerprint);
+    assert_eq!(replacement.status, AgentStatus::Idle);
+    assert!(
+        executor
+            .stored_oplog(&owned.agent_id)
+            .await
+            .iter()
+            .any(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
+    );
+    let action = ScheduledAction::DeleteFinishedInvocation {
+        owned_agent_id: owned.clone(),
+        fingerprint: *fingerprint,
+    };
+    storage
+        .cancel(&ScheduleId::for_finished_invocation(owned))
+        .await?;
+    let now = jiff::Timestamp::now();
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    storage
+        .insert(
+            ScheduleId::for_finished_invocation(owned),
+            now,
+            ShardId::new(0),
+            &serialize(&action).map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+    release_replacement_deletion.cancel();
+    tokio::time::timeout(CHECKPOINT_TIMEOUT, async {
+        while storage.count_due(now, &assignment).await.unwrap() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stale retention action was not acknowledged");
+    assert_eq!(
+        executor.get_worker_metadata(owned).await?.fingerprint,
+        replacement.fingerprint
+    );
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_tool_retains_startup_failure_and_reschedules_deletion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let StandaloneSetup { fixture, executor } =
+        StandaloneFixture::start(last_unique_id, deps, provider, caller).await?;
+    let context = &fixture.context;
+    let component = &fixture.tools.component;
+    let deployment = fixture.tools.deployment.clone();
+    let environment_state = &fixture.environment;
+    let overrides = &fixture.overrides;
+    let retention_insert = &fixture.retention_insert;
+    let storage = fixture.storage.lock().unwrap().clone().unwrap();
+    let failed_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .name("virtual-native-policy-failed")
+        .store()
+        .await?;
+    let mut failed_deployment = deployment;
+    let baseline = ToolBindingOwner::ComponentBaseline {
+        component_id: component.id,
+    };
+    let mut bindings = failed_deployment.tool_bindings.remove(&baseline).unwrap();
+    let failed_baseline = ToolBindingOwner::ComponentBaseline {
+        component_id: failed_component.id,
+    };
+    for binding in bindings.values_mut() {
+        binding.owner = failed_baseline.clone();
+    }
+    failed_deployment
+        .tool_bindings
+        .insert(failed_baseline, bindings);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        failed_component.id,
+        failed_component.revision,
+        Some(failed_deployment),
+    );
+    let StandaloneToolCall {
+        owned: failed_owner,
+        invocation_id: failed_id,
+        request: mut failed_start,
+    } = fixture.call(
+        &executor,
+        "standalone-startup-failure",
+        "standalone-startup-failure",
+    )?;
+    failed_start.component_id = Some(failed_component.id.into());
+    failed_start.mode = ProtoInvocationMode::Schedule as i32;
+    drop(executor);
+    let hold_deletion = CancellationToken::new();
+    let mut short_retention = overrides.clone();
+    short_retention.configure = Some(Arc::new(|config| {
+        config.standalone_tool_invocation_retention = INITIAL_FAILURE_RETENTION;
+    }));
+    short_retention.wrap_scheduler_storage = Some(Arc::new({
+        let release = hold_deletion.clone();
+        let gate = retention_insert.clone();
+        move |inner| {
+            Arc::new(PausedScheduler {
+                inner: Arc::new(retention_storage::HoldRetentionInsert {
+                    inner,
+                    gate: gate.clone(),
+                }),
+                release: release.clone(),
+                invocation_wake: Default::default(),
+                acknowledged: Default::default(),
+            })
+        }
+    }));
+    let executor = start_with_overrides(deps, context, short_retention.clone()).await?;
+    executor.invoke_agent_session(failed_start.clone()).await?;
+    executor
+        .wait_for_status(&failed_owner, AgentStatus::Failed, CHECKPOINT_TIMEOUT)
+        .await?;
+    let failed_history = executor.stored_oplog(&failed_owner.agent_id).await;
+    // Primary instantiation refused → retained Error, no invocation Started, deletion timer present.
+    assert!(
+        failed_history
+            .iter()
+            .any(|entry| matches!(entry, OplogEntry::Error { .. }))
+    );
+    let failed_oplog = executor
+        .get_oplog(&failed_owner, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !failed_oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    );
+    assert!(
+        storage
+            .get_action(&ScheduleId::for_finished_invocation(&failed_owner))
+            .await?
+            .is_some()
+    );
+    let failed_summary = executor
+        .get_invocation(
+            &failed_owner.agent_id,
+            failed_owner.environment_id,
+            failed_id,
+        )
+        .await?
+        .expect("the failed standalone invocation must remain readable")
+        .expect("the accepted invocation must have a summary");
+    assert_eq!(
+        failed_summary.state,
+        InvocationLifecycleState::Failed as i32
+    );
+    drop(executor);
+    verify_retained_startup_failure_after_restart(
+        deps,
+        &fixture,
+        short_retention,
+        RetainedStartupFailure {
+            owner: failed_owner,
+            request: failed_start,
+            history: failed_history,
+            invocation_id: failed_id,
+            summary: failed_summary,
+        },
+        hold_deletion,
+    )
+    .await
+}
+
+struct RetainedStartupFailure {
+    owner: OwnedAgentId,
+    request: InvocationStart,
+    history: Vec<OplogEntry>,
+    invocation_id: InvocationId,
+    summary: InvocationSummary,
+}
+
+async fn verify_retained_startup_failure_after_restart(
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &StandaloneFixture,
+    mut short_retention: TestExecutorOverrides,
+    failure: RetainedStartupFailure,
+    hold_deletion: CancellationToken,
+) -> anyhow::Result<()> {
+    let RetainedStartupFailure {
+        owner: failed_owner,
+        request: mut failed_start,
+        history: failed_history,
+        invocation_id: failed_id,
+        summary: failed_summary,
+    } = failure;
+    let context = &fixture.context;
+    let retention_insert = &fixture.retention_insert;
+    short_retention.configure = Some(Arc::new(|config| {
+        config.standalone_tool_invocation_retention = EXTENDED_FAILURE_RETENTION;
+    }));
+    let executor = start_with_overrides(deps, context, short_retention).await?;
+    assert_eq!(
+        executor.get_worker_metadata(&failed_owner).await?.status,
+        AgentStatus::Failed
+    );
+    assert_eq!(
+        executor.stored_oplog(&failed_owner.agent_id).await,
+        failed_history
+    );
+    assert_eq!(
+        executor
+            .get_invocation(
+                &failed_owner.agent_id,
+                failed_owner.environment_id,
+                failed_id
+            )
+            .await?
+            .expect("a restart must not hide the failed invocation"),
+        Some(failed_summary),
+        "the public summary must retain its terminal failure after restart"
+    );
+    // Same-key lookup after restart → same typed failure, unchanged retained history.
+    failed_start.mode = ProtoInvocationMode::Await as i32;
+    let failure = tokio::time::timeout(
+        FAILURE_LOOKUP_TIMEOUT,
+        executor.invoke_agent_session(failed_start),
+    )
+    .await
+    .expect("a retained primary startup failure must answer a same-key caller");
+    let failure = failure.expect_err("a terminal startup failure became a success");
+    let Some(WorkerExecutorError::FailedToResumeAgent { reason, .. }) =
+        failure.downcast_ref::<WorkerExecutorError>()
+    else {
+        anyhow::bail!("expected FailedToResumeAgent: {failure:#}");
+    };
+    assert!(
+        matches!(reason.as_ref(), WorkerExecutorError::Runtime { details } if details == "primary instantiation refused"),
+        "{failure:#}"
+    );
+    assert_eq!(
+        executor.stored_oplog(&failed_owner.agent_id).await,
+        failed_history,
+        "reading the retained failure must not execute the owner again"
+    );
+    // Old retention deadline → rescheduled deletion, not premature removal.
+    hold_deletion.cancel();
+    tokio::time::timeout(CHECKPOINT_TIMEOUT, retention_insert.rescheduled.notified()).await?;
+    assert_eq!(
+        executor.get_worker_metadata(&failed_owner).await?.status,
+        AgentStatus::Failed
+    );
+    wait_for_retention_deletion(&executor, &failed_owner)
+        .await
+        .expect("terminal startup failure was not deleted by retention after restart");
+    assert!(
+        executor
+            .stored_oplog(&failed_owner.agent_id)
+            .await
+            .is_empty()
+    );
+    Ok(())
 }
 
 #[test]
@@ -23455,7 +25179,11 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let (http_port, _server, effects) = start_native_order_http_server().await;
+    let NativeOrderHttpServer {
+        port: http_port,
+        server: _server,
+        effects,
+    } = start_native_order_http_server(None).await;
     let owner_loads = Arc::new(AtomicUsize::new(0));
     let loads = owner_loads.clone();
     let overrides = TestExecutorOverrides {
@@ -23471,6 +25199,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
                 inner,
                 owner_loads: loads.clone(),
                 http_port,
+                extra_env: Default::default(),
             })
         })),
         ..Default::default()
@@ -23822,9 +25551,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             .await
             .expect_err("automatic update must not interrupt a virtual owner's invocation");
         assert!(
-            update_error
-                .to_string()
-                .contains("update is not supported for an external tool owner"),
+            update_error.to_string().contains("NotAnAgent"),
             "unexpected update rejection: {update_error}"
         );
         assert!(
@@ -23908,6 +25635,8 @@ async fn native_tool_secret_permissions_and_completed_replay(
         let secret_id = AgentSecretId::new();
         let path = vec!["nativeSecret".to_string()];
         environment_state.set_agent_secret(AgentSecret {
+            owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+            destinations: vec![],
             id: secret_id,
             environment_id: context.default_environment_id,
             path: CanonicalAgentSecretPath(path.clone()),
@@ -23970,7 +25699,7 @@ async fn native_tool_secret_permissions_and_completed_replay(
             secret_id: secret_id.0,
             config_key: Some(path),
             version: 0,
-            resolved_at: chrono::Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         });
         for fail in [false, true] {

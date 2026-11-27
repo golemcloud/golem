@@ -525,6 +525,36 @@ async fn test_agent_secret_get_revision_include_deleted(
 }
 
 #[test]
+async fn test_agent_secret_owner_identity(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_agent_secret_owner_identity(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_owner_constraints(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_agent_secret_owner_constraints(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_principal_destinations(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_agent_secret_principal_destinations(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_revision_destinations(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_agent_secret_revision_destinations(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_owner_lookups(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_agent_secret_owner_lookups(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_environment_restore(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_agent_secret_environment_restore(deps).await;
+}
+
+#[test]
 async fn test_retry_policy_and_agent_secret_natural_key_lookups(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
@@ -574,7 +604,7 @@ async fn test_component_upload_attachment_races_collection(db: &PostgresDb) {
                 id,
                 bytes.len() as u64,
                 ComponentMetadata::default(),
-                hash.clone(),
+                hash,
                 None,
                 key,
                 account,

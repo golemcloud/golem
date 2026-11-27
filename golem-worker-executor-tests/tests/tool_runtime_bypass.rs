@@ -111,7 +111,7 @@ impl QuotaService for RecordingQuotaService {
         resource_name: ResourceName,
         expected_use: u64,
         previous_credit: i64,
-        previous_credit_at: Option<chrono::DateTime<chrono::Utc>>,
+        previous_credit_at: Option<jiff::Timestamp>,
     ) -> LeaseInterest {
         self.acquisitions.lock().unwrap().push((
             environment_id,
@@ -177,6 +177,8 @@ async fn fixture(
     ] {
         environment.set_agent_secret(AgentSecret {
             id: AgentSecretId::new(),
+            owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+            destinations: vec![],
             environment_id,
             path: CanonicalAgentSecretPath(vec!["contextSecret".to_string()]),
             revision: AgentSecretRevision::INITIAL,

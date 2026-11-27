@@ -268,6 +268,8 @@ fn update_status_with_precomputed_regions(
     let skipped_regions = &skipped;
     let active_plugins = last_known.active_plugins.clone();
     let requests = InvocationRequests::of_status(&last_known);
+    let mut terminal_failure_at = last_known.terminal_failure_at;
+    let mut terminal_failure_index = last_known.terminal_failure_index;
     let (
         status,
         last_error_kind,
@@ -286,6 +288,8 @@ fn update_status_with_precomputed_regions(
         skipped_regions,
         deleted_regions,
         &new_entries,
+        &mut terminal_failure_at,
+        &mut terminal_failure_index,
     );
 
     let pending_invocations =
@@ -439,8 +443,16 @@ fn update_status_with_precomputed_regions(
             .max()
             .cloned()
             .unwrap_or(last_known.oplog_idx),
+        state_oplog_idx: new_entries
+            .iter()
+            .rev()
+            .find(|(_, entry)| !matches!(entry, OplogEntry::AgentInvocationSettled { .. }))
+            .map(|(index, _)| *index)
+            .unwrap_or(last_known.state_oplog_idx),
         status,
         last_error_kind,
+        terminal_failure_at,
+        terminal_failure_index,
         overridden_retry_config,
         pending_invocations,
         pending_card_events,

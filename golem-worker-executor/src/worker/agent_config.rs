@@ -375,7 +375,7 @@ mod tests {
             environment_name: EnvironmentName::try_from("dev").unwrap(),
             component_size: 0,
             metadata,
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             wasm_hash: Hash::empty(),
             package_metadata: None,
             object_store_key: String::new(),
@@ -397,6 +397,8 @@ mod tests {
                 revision: AgentSecretRevision::INITIAL,
                 secret_type,
                 secret_value: Some(SchemaValue::String("present".to_string())),
+                owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                destinations: vec![],
             },
         );
 
@@ -455,7 +457,7 @@ mod tests {
             environment_name: EnvironmentName::try_from("dev").unwrap(),
             component_size: 0,
             metadata,
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             wasm_hash: Hash::empty(),
             package_metadata: None,
             object_store_key: String::new(),
@@ -477,6 +479,8 @@ mod tests {
                 revision: AgentSecretRevision::INITIAL,
                 secret_type,
                 secret_value: Some(SchemaValue::Bool(true)),
+                owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                destinations: vec![],
             },
         );
 
@@ -551,7 +555,7 @@ mod tests {
             environment_name: EnvironmentName::try_from("dev").unwrap(),
             component_size: 0,
             metadata,
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             wasm_hash: Hash::empty(),
             package_metadata: None,
             object_store_key: String::new(),
@@ -575,6 +579,8 @@ mod tests {
                 secret_value: Some(SchemaValue::Url {
                     url: SECRET_PLAINTEXT.to_string(),
                 }),
+                owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                destinations: vec![],
             },
         );
 

@@ -210,33 +210,35 @@ Use `golem_rust::Schema` for custom records and enums. The derive and standard i
 
 Derives preserve case names by default. Use derive `rename` / `rename_all` attributes when a different schema name is needed.
 
-`uuid::Uuid` and `chrono::DateTime<chrono::Utc>` have unconditional UUID and datetime implementations; no `uuid` feature is required. The following optional integrations are enabled on the `golem-rust` dependency:
+`uuid::Uuid` and `jiff::Timestamp` have unconditional UUID and datetime implementations; no `uuid` feature is required. The following optional integrations are enabled on the `golem-rust` dependency:
 
-| Feature                | Type                                      | Canonical JSON example                                                    |
-| ---------------------- | ----------------------------------------- | ------------------------------------------------------------------------- |
-| `chrono`               | `NaiveDate`, `NaiveTime`, `NaiveDateTime` | `"2026-01-02"`, `"03:04:05.000000000"`, `"2026-01-02T03:04:05.000000000"` |
-| `chrono`               | `chrono::Duration`                        | `{"nanoseconds":"1500000000"}`                                            |
-| `serde_json_types`     | `serde_json::Value`                       | `"{\"count\":5}"` (a string containing JSON)                              |
-| `url`                  | `url::Url`                                | `"https://example.com/"`                                                  |
-| `bytes`                | `bytes::Bytes`                            | `{"bytes":"AQID"}` (rich binary, unlike `Vec<u8>`)                        |
-| `mac_address`          | `mac_address::MacAddress`                 | `{"bytes":[0,1,2,3,4,5]}` (fixed six bytes)                               |
-| `bigdecimal`           | `bigdecimal::BigDecimal`                  | `"123.45"`                                                                |
-| `rust_decimal`         | `rust_decimal::Decimal`                   | `"123.45"`                                                                |
-| `num_bigint`           | `num_bigint::BigInt`                      | `"12345678901234567890"`                                                  |
-| `bit_vec`              | `bit_vec::BitVec`                         | `[true,false]`                                                            |
-| `nonempty_collections` | `nonempty_collections::NEVec<T>`          | `{"items":[1,2]}`                                                         |
+| Feature                | Type                                    | Canonical JSON example                                                    |
+| ---------------------- | --------------------------------------- | ------------------------------------------------------------------------- |
+| `jiff`                 | `jiff::civil::Date`, `Time`, `DateTime` | `"2026-01-02"`, `"03:04:05.000000000"`, `"2026-01-02T03:04:05.000000000"` |
+| `jiff`                 | `jiff::SignedDuration`                  | `{"nanoseconds":"1500000000"}`                                            |
+| `serde_json_types`     | `serde_json::Value`                     | `"{\"count\":5}"` (a string containing JSON)                              |
+| `url`                  | `url::Url`                              | `"https://example.com/"`                                                  |
+| `bytes`                | `bytes::Bytes`                          | `{"bytes":"AQID"}` (rich binary, unlike `Vec<u8>`)                        |
+| `mac_address`          | `mac_address::MacAddress`               | `{"bytes":[0,1,2,3,4,5]}` (fixed six bytes)                               |
+| `bigdecimal`           | `bigdecimal::BigDecimal`                | `"123.45"`                                                                |
+| `rust_decimal`         | `rust_decimal::Decimal`                 | `"123.45"`                                                                |
+| `num_bigint`           | `num_bigint::BigInt`                    | `"12345678901234567890"`                                                  |
+| `bit_vec`              | `bit_vec::BitVec`                       | `[true,false]`                                                            |
+| `nonempty_collections` | `nonempty_collections::NEVec<T>`        | `{"items":[1,2]}`                                                         |
 
 The SDK also supports `std::time::Duration` as duration and `std::path::PathBuf` as path. It exposes `Quantity<U>` for quantities, with `U` implementing `QuantityUnit`. Derive attributes can select rich text, binary, URL, or path schemas and add restrictions to fields.
 
 Generated Rust bridges, external and guest, use these types:
 
-| Schema type | Bridge type                     | Notes                                                                 |
-| ----------- | ------------------------------- | --------------------------------------------------------------------- |
-| `datetime`  | `chrono::DateTime<chrono::Utc>` | A year outside `0000..=9999` is an encode and a decode error          |
-| `duration`  | `chrono::TimeDelta`             | Signed; a value outside the `s64` nanosecond range is an encode error |
-| `url`       | `url::Url`                      | An invalid URL is a decode error                                      |
-| `path`      | `String`                        | Not `PathBuf`; see below                                              |
-| `map`       | `Vec<(K, V)>`                   | Not `HashMap` or `BTreeMap`; see below                                |
+| Schema type | Bridge type            | Notes                                                                 |
+| ----------- | ---------------------- | --------------------------------------------------------------------- |
+| `datetime`  | `jiff::Timestamp`      | A year outside `0000..=9999` is an encode and a decode error          |
+| `duration`  | `jiff::SignedDuration` | Signed; a value outside the `s64` nanosecond range is an encode error |
+| `url`       | `url::Url`             | An invalid URL is a decode error                                      |
+| `path`      | `String`               | Not `PathBuf`; see below                                              |
+| `map`       | `Vec<(K, V)>`          | Not `HashMap` or `BTreeMap`; see below                                |
+
+Datetime values must fit in Jiff's timestamp range. The largest UTC instant is `9999-12-30T22:00:00.999999999Z`; later instants are rejected even if their year has four digits.
 
 With the `serde` feature of an external bridge, a datetime serializes as UTC RFC 3339 with a `Z` suffix and up to nine fraction digits. Deserialization accepts any RFC 3339 offset and converts the value to UTC.
 
@@ -351,24 +353,24 @@ Fixed-size lists are supported in generated bridges only. A MoonBit agent uses `
 
 Method parameters are the exported fields of the input struct. Field names become lowerCamelCase, treating each initialism as one word: `OrderID` → `orderId`, `APIKey` → `apiKey`.
 
-| Go type                                               | Canonical JSON / remarks                                                 |
-| ----------------------------------------------------- | ------------------------------------------------------------------------ |
-| `string`, `bool`                                      | `"hi"`, `true`                                                           |
-| `int8`, `int16`, `int32`, `uint8`, `uint16`, `uint32` | JSON number in the type's range                                          |
-| `int64`, `uint64`                                     | Decimal string                                                           |
-| `int`, `uint`                                         | Rejected; use sized integers                                             |
-| `float32`, `float64`                                  | Finite JSON number                                                       |
-| `golem.Char`                                          | One Unicode scalar string; `rune` is instead an `int32`                  |
-| `[]T`, `[N]T`                                         | JSON array; nil slice becomes `[]`                                       |
-| `[]byte`                                              | Numeric byte list, not rich binary                                       |
-| `*T`, `golem.Option[T]`                               | Inner value or `null`                                                    |
-| Struct                                                | Object containing exported fields; a struct with fields but none exported (`big.Int`, `url.URL`) is rejected |
-| `map[K]V`                                             | Key-value pair array; `K` is `bool`, a sized integer, a float, `golem.Char` or `string` |
-| `golem.DefineVariant` interface                       | `{"card":{"number":"4242"}}`; empty-struct case → `"cash"`               |
-| `golem.DefineEnum` integer type                       | Registered string, e.g. `"active"`                                       |
-| `golem.DefineFlags` bool-field struct                 | Selected names, e.g. `["read","write"]`                                  |
-| `golem.Tuple1[T]` … `golem.Tuple8[...]`               | Fixed-order array                                                        |
-| `golem.Result[Ok,Err]`                                | `{"ok":5}` or `{"err":"failed"}`; a `golem.Unit` arm is `{"ok":null}`    |
+| Go type                                               | Canonical JSON / remarks                                                                                          |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `string`, `bool`                                      | `"hi"`, `true`                                                                                                    |
+| `int8`, `int16`, `int32`, `uint8`, `uint16`, `uint32` | JSON number in the type's range                                                                                   |
+| `int64`, `uint64`                                     | Decimal string                                                                                                    |
+| `int`, `uint`                                         | Rejected; use sized integers                                                                                      |
+| `float32`, `float64`                                  | Finite JSON number                                                                                                |
+| `golem.Char`                                          | One Unicode scalar string; `rune` is instead an `int32`                                                           |
+| `[]T`, `[N]T`                                         | JSON array; nil slice becomes `[]`                                                                                |
+| `[]byte`                                              | Numeric byte list, not rich binary                                                                                |
+| `*T`, `golem.Option[T]`                               | Inner value or `null`                                                                                             |
+| Struct                                                | Object containing exported fields; a struct with fields but none exported (`big.Int`, `url.URL`) is rejected      |
+| `map[K]V`                                             | Key-value pair array; `K` is `bool`, a sized integer, a float, `golem.Char` or `string`                           |
+| `golem.DefineVariant` interface                       | `{"card":{"number":"4242"}}`; empty-struct case → `"cash"`                                                        |
+| `golem.DefineEnum` integer type                       | Registered string, e.g. `"active"`                                                                                |
+| `golem.DefineFlags` bool-field struct                 | Selected names, e.g. `["read","write"]`                                                                           |
+| `golem.Tuple1[T]` … `golem.Tuple8[...]`               | Fixed-order array                                                                                                 |
+| `golem.Result[Ok,Err]`                                | `{"ok":5}` or `{"err":"failed"}`; a `golem.Unit` arm is `{"ok":null}`                                             |
 | `golem.Unit`                                          | The empty tuple: no method parameters/result at the method boundary, a payloadless result arm, and `[]` elsewhere |
 
 ```go

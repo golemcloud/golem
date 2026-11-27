@@ -31,7 +31,7 @@
     },
     "packages": {
       "type": "object",
-      "description": "Installed file packages by name. Only allowed in the root manifest. Use golem install to set these pins and golem.lock together.",
+      "description": "Installed packages by name. Only allowed in the root manifest. Use golem install to set these pins and golem.lock together.",
       "maxProperties": 64,
       "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,63}$" },
       "additionalProperties": {
@@ -39,7 +39,7 @@
         "additionalProperties": false,
         "required": ["source", "version", "digest"],
         "properties": {
-          "source": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "source": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Archive path, HTTP(S) URL, or oci:// registry reference." },
           "version": { "type": "string", "maxLength": 128, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.-]+)?$" },
           "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
         }
@@ -1769,7 +1769,11 @@
       "properties": {
         "preinitializeJs": {
           "type": "string",
-          "description": "Path to the input WASM component to pre-initialize"
+          "description": "Path to the prebuilt QuickJS WASM template"
+        },
+        "module": {
+          "type": "string",
+          "description": "Path to the JS module passed to the template's initializer"
         },
         "into": {
           "type": "string",
@@ -1778,6 +1782,7 @@
       },
       "required": [
         "preinitializeJs",
+        "module",
         "into"
       ]
     },

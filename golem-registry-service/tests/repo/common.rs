@@ -16,7 +16,6 @@ use crate::repo::{Deps, TestDb, test_environment_default_card_record};
 use anyhow::Error;
 use assert2::{assert, check, let_assert};
 use async_trait::async_trait;
-use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
 use golem_common::base_model::agent::{
@@ -34,7 +33,8 @@ use golem_common::model::account_usage::{
 };
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevision,
+    AgentSecretRevisionSelector, CanonicalAgentSecretPath,
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::owner::{ComponentOwnerPattern, EnvironmentOwnerPattern};
@@ -68,7 +68,7 @@ use golem_common::model::tool_release::{
     SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
     ToolReleaseId,
 };
-use golem_common::model::{AgentId, InvocationId, OplogIndex};
+use golem_common::model::{AgentFingerprint, AgentId, InvocationId, OplogIndex};
 use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
 use golem_common::schema::tool::{
     CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
@@ -185,6 +185,7 @@ use golem_service_base::storage::blob::{
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
 };
 use heck::ToKebabCase;
+use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::default::Default;
 use std::path::PathBuf;
@@ -487,8 +488,8 @@ fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap(),
-        expires_at: Some(chrono::DateTime::from_timestamp(1_800_000_000, 987_654_321).unwrap()),
+        created_at: jiff::Timestamp::new(1_700_000_000, 123_456_789).unwrap(),
+        expires_at: Some(jiff::Timestamp::new(1_800_000_000, 987_654_321).unwrap()),
         system_card: false,
         managed_by: None,
     })
@@ -952,7 +953,7 @@ pub async fn test_runtime_card_parent_integrity(deps: &Deps) {
     let mut expired_parent = runtime_card(expired_parent_id, Vec::new())
         .into_concrete()
         .unwrap();
-    expired_parent.expires_at = Some(chrono::DateTime::from_timestamp(1_600_000_000, 0).unwrap());
+    expired_parent.expires_at = Some(jiff::Timestamp::new(1_600_000_000, 0).unwrap());
     services
         .card_service
         .create_runtime_card(
@@ -1165,7 +1166,7 @@ pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1327,7 +1328,7 @@ pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1498,7 +1499,7 @@ pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(d
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1897,7 +1898,7 @@ pub async fn test_update(deps: &Deps) {
 }
 
 pub async fn test_application_create(deps: &Deps) {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let owner = deps.create_account().await;
     let user = deps.create_account().await;
     let app_name = format!("app-name-{}", new_repo_uuid());
@@ -2343,9 +2344,11 @@ async fn create_test_agent_secret(deps: &Deps) -> TestAgentSecret {
         .create(AgentSecretCreationRecord::new(
             id,
             EnvironmentId(env.revision.environment_id),
+            AgentSecretOwner::Environment,
             path.clone(),
             SchemaGraph::empty(),
             None,
+            vec![],
             AccountId(owner.revision.account_id),
         ))
         .await
@@ -2368,10 +2371,15 @@ async fn get_agent_secret_initial_revision(
     deps.agent_secret_repo
         .get_revision(
             secret.env.revision.environment_id,
+            &AgentSecretOwner::Environment,
             secret.id,
             secret.path.0.clone(),
-            AgentSecretRevision::INITIAL,
-            include_deleted,
+            AgentSecretRevisionSelector::Fixed(AgentSecretRevision::INITIAL),
+            if include_deleted {
+                AgentSecretReadMode::Historical
+            } else {
+                AgentSecretReadMode::Live
+            },
         )
         .await
         .unwrap()
@@ -2403,10 +2411,11 @@ pub async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
         deps.agent_secret_repo
             .get_revision(
                 secret.env.revision.environment_id,
+                &AgentSecretOwner::Environment,
                 secret.id,
                 secret.path.0.clone(),
-                deleted_revision,
-                true,
+                AgentSecretRevisionSelector::Fixed(deleted_revision),
+                AgentSecretReadMode::Historical,
             )
             .await
             .unwrap()
@@ -2448,6 +2457,625 @@ pub async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
         .unwrap();
     check!(!get_agent_secret_initial_revision(deps, &secret, false).await);
     check!(get_agent_secret_initial_revision(deps, &secret, true).await);
+}
+
+pub async fn test_agent_secret_owner_identity(deps: &Deps) {
+    use golem_registry_service::repo::model::agent_secrets::AgentSecretRepoError;
+
+    let context = create_test_agent_secret(deps).await;
+    let agent_id = AgentId::from_parts(7, 1);
+    let owners = [
+        AgentSecretOwner::Environment,
+        AgentSecretOwner::Agent {
+            agent_id,
+            fingerprint: AgentFingerprint(new_repo_uuid()),
+        },
+        AgentSecretOwner::Agent {
+            agent_id,
+            fingerprint: AgentFingerprint(new_repo_uuid()),
+        },
+        AgentSecretOwner::Tool {
+            tool_name: ToolName::try_from("t").unwrap(),
+        },
+    ];
+    for owner in owners {
+        let mut creation = agent_secret_creation(&context, owner.clone(), "stripe");
+        let id = AgentSecretId(creation.revision.agent_secret_id);
+        let _ = deps
+            .agent_secret_repo
+            .create(creation.clone())
+            .await
+            .unwrap();
+        creation.revision.agent_secret_id = new_repo_uuid();
+        assert!(matches!(
+            deps.agent_secret_repo.create(creation.clone()).await,
+            Err(AgentSecretRepoError::SecretViolatesUniqueness)
+        ));
+        let found = deps
+            .agent_secret_repo
+            .get_by_id(id.0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(AgentSecretOwner::try_from(&found.agent_secret.owner).unwrap() == owner);
+        assert!(
+            deps.agent_secret_repo
+                .get_revision(
+                    context.env.revision.environment_id,
+                    &AgentSecretOwner::Tool {
+                        tool_name: ToolName::try_from("wrong").unwrap()
+                    },
+                    id,
+                    creation.path.0.clone(),
+                    AgentSecretRevisionSelector::Current,
+                    AgentSecretReadMode::Live
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        if matches!(
+            owner,
+            AgentSecretOwner::Environment | AgentSecretOwner::Agent { .. }
+        ) {
+            let _ = deps
+                .agent_secret_repo
+                .delete(
+                    AgentSecretRevisionRecord::delete(
+                        id,
+                        AgentSecretRevision::INITIAL,
+                        AccountId(context.owner.revision.account_id),
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let _ = deps.agent_secret_repo.create(creation).await.unwrap();
+        }
+    }
+}
+
+fn agent_secret_creation(
+    context: &TestAgentSecret,
+    owner: AgentSecretOwner,
+    path: &str,
+) -> AgentSecretCreationRecord {
+    let destinations = if owner == AgentSecretOwner::Environment {
+        vec!["https://a.example.com".parse().unwrap()]
+    } else {
+        vec![]
+    };
+    AgentSecretCreationRecord::new(
+        AgentSecretId::new(),
+        EnvironmentId(context.env.revision.environment_id),
+        owner,
+        CanonicalAgentSecretPath(vec![path.to_string()]),
+        SchemaGraph::anonymous(SchemaType::string()),
+        Some(SchemaValue::String("original".to_string())),
+        destinations,
+        AccountId(context.owner.revision.account_id),
+    )
+}
+
+pub async fn test_agent_secret_owner_constraints(deps: &Deps) {
+    let context = create_test_agent_secret(deps).await;
+    let id = context.id.0;
+    // Copy valid non-owner fields so each insert isolates one owner-field constraint.
+    let cases = [
+        ("'agent', $2, $2, 7, 't'", false),
+        ("'environment', $2, NULL, NULL, NULL", false),
+        ("'agent', $2, NULL, 7, NULL", false),
+        ("'environment', NULL, NULL, NULL, NULL", true),
+        ("'agent', $2, $2, 7, NULL", true),
+        ("'tool', NULL, NULL, NULL, 't'", true),
+    ];
+    for (fields, valid) in cases {
+        let inserted_id = AgentId::from_parts(7, new_repo_uuid().as_u64_pair().1.into()).0;
+        let sql = format!(
+            "INSERT INTO agent_secrets (agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, owner_kind, agent_id, agent_fingerprint, agent_type, tool_name) SELECT $2, environment_id, $3, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, {fields} FROM agent_secrets WHERE agent_secret_id = $1"
+        );
+        let result = match &deps.test_db {
+            TestDb::Postgres(pool) => pool
+                .with_rw("test", "invalid_secret_owner")
+                .execute(
+                    sqlx::query(&sql)
+                        .bind(id)
+                        .bind(inserted_id)
+                        .bind(sqlx::types::Json(vec!["invalid-owner"])),
+                )
+                .await
+                .map(|result| result.rows_affected()),
+            TestDb::Sqlite(pool) => pool
+                .with_rw("test", "invalid_secret_owner")
+                .execute(
+                    sqlx::query(&sql)
+                        .bind(id)
+                        .bind(inserted_id)
+                        .bind(sqlx::types::Json(vec!["invalid-owner"])),
+                )
+                .await
+                .map(|result| result.rows_affected()),
+        };
+        if valid {
+            assert_eq!(result.unwrap(), 1, "owner fields {fields}");
+        } else {
+            assert!(result.is_err(), "owner fields {fields}: {result:?}");
+        }
+    }
+    // The DB cannot verify the tag embedded in an issued ID; row decoding must do so.
+    let sql = "UPDATE agent_secrets SET owner_kind = 'agent', agent_id = $2, agent_fingerprint = $2, agent_type = 8 WHERE agent_secret_id = $1";
+    match &deps.test_db {
+        TestDb::Postgres(pool) => pool
+            .with_rw("test", "mismatched_secret_owner")
+            .execute(sqlx::query(sql).bind(id).bind(AgentId::from_parts(7, 1).0))
+            .await
+            .map(|_| ())
+            .unwrap(),
+        TestDb::Sqlite(pool) => pool
+            .with_rw("test", "mismatched_secret_owner")
+            .execute(sqlx::query(sql).bind(id).bind(AgentId::from_parts(7, 1).0))
+            .await
+            .map(|_| ())
+            .unwrap(),
+    };
+    assert!(deps.agent_secret_repo.get_by_id(id).await.is_err());
+}
+
+pub async fn test_agent_secret_principal_destinations(deps: &Deps) {
+    use golem_registry_service::repo::model::agent_secrets::{
+        AgentSecretDestinations, AgentSecretRepoError,
+    };
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+
+    let context = create_test_agent_secret(deps).await;
+    let notifier = deps.test_registry_change_notifier();
+    for owner in [
+        AgentSecretOwner::Agent {
+            agent_id: AgentId::from_parts(7, 1),
+            fingerprint: AgentFingerprint(new_repo_uuid()),
+        },
+        AgentSecretOwner::Tool {
+            tool_name: ToolName::try_from("t").unwrap(),
+        },
+    ] {
+        let creation = agent_secret_creation(&context, owner, "stripe");
+        let id = AgentSecretId(creation.revision.agent_secret_id);
+        let nonempty = AgentSecretDestinations::Set(vec!["https://a.example.com".parse().unwrap()]);
+        let mut invalid = creation.clone();
+        invalid.revision.destinations = nonempty.clone();
+        assert!(matches!(
+            deps.agent_secret_repo.create(invalid).await,
+            Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner)
+        ));
+        assert!(
+            deps.agent_secret_repo
+                .get_by_id(id.0)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let created = deps
+            .agent_secret_repo
+            .create(creation)
+            .await
+            .unwrap()
+            .signal_new_events_available(notifier.as_ref());
+        let empty = AgentSecretDestinations::Set(vec![]);
+        assert_eq!(created.revision.destinations, empty);
+        let mut revision = created.revision.clone();
+        revision.revision_id += 1;
+        revision.destinations = nonempty.clone();
+        assert!(matches!(
+            deps.agent_secret_repo.update(revision.clone()).await,
+            Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner)
+        ));
+        let unchanged = deps
+            .agent_secret_repo
+            .get_by_id(id.0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.agent_secret.revision, created.revision);
+
+        for destinations in [empty.clone(), AgentSecretDestinations::Copy] {
+            revision.destinations = destinations;
+            let updated = deps
+                .agent_secret_repo
+                .update(revision.clone())
+                .await
+                .unwrap()
+                .signal_new_events_available(notifier.as_ref());
+            assert_eq!(updated.revision.destinations, empty);
+            revision.revision_id += 1;
+        }
+        let deletion = AgentSecretRevisionRecord::delete(
+            id,
+            (revision.revision_id - 1).try_into().unwrap(),
+            AccountId(context.owner.revision.account_id),
+        )
+        .unwrap();
+        let mut invalid_deletion = deletion.clone();
+        invalid_deletion.destinations = nonempty;
+        assert!(matches!(
+            deps.agent_secret_repo.delete(invalid_deletion).await,
+            Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner)
+        ));
+        let deleted = deps
+            .agent_secret_repo
+            .delete(deletion)
+            .await
+            .unwrap()
+            .signal_new_events_available(notifier.as_ref());
+        assert_eq!(deleted.revision.destinations, empty);
+    }
+}
+
+pub async fn test_agent_secret_revision_destinations(deps: &Deps) {
+    use golem_registry_service::repo::model::agent_secrets::AgentSecretDestinations;
+
+    let context = create_test_agent_secret(deps).await;
+    let creation = agent_secret_creation(&context, AgentSecretOwner::Environment, "stripe");
+    let id = AgentSecretId(creation.revision.agent_secret_id);
+    let mut revision = creation.revision.clone();
+    let _ = deps.agent_secret_repo.create(creation).await.unwrap();
+    revision.revision_id += 1;
+    revision.destinations = AgentSecretDestinations::Set(vec![
+        "HTTPS://B.EXAMPLE.COM.:443/".parse().unwrap(),
+        "https://b.example.com".parse().unwrap(),
+    ]);
+    let _ = deps
+        .agent_secret_repo
+        .update(revision.clone())
+        .await
+        .unwrap();
+    revision.revision_id += 1;
+    revision.destinations = AgentSecretDestinations::Copy;
+    revision.agent_secret_revision_data = Blob::new(
+        golem_registry_service::repo::model::agent_secrets::AgentSecretRevisionData {
+            secret_value: Some(SchemaValue::String("changed".to_string())),
+        },
+    );
+    let _ = deps
+        .agent_secret_repo
+        .update(revision.clone())
+        .await
+        .unwrap();
+    for (offset, destination, value) in [
+        (0, "https://a.example.com", "original"),
+        (1, "https://b.example.com", "original"),
+        (2, "https://b.example.com", "changed"),
+    ] {
+        let mut expected_revision = AgentSecretRevision::INITIAL;
+        for _ in 0..offset {
+            expected_revision = expected_revision.next().unwrap();
+        }
+        let found = deps
+            .agent_secret_repo
+            .get_revision(
+                context.env.revision.environment_id,
+                &AgentSecretOwner::Environment,
+                id,
+                vec!["stripe".to_string()],
+                AgentSecretRevisionSelector::Fixed(expected_revision),
+                AgentSecretReadMode::Live,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            found.revision.destinations
+                == AgentSecretDestinations::Set(vec![destination.parse().unwrap()])
+        );
+        assert!(
+            found
+                .revision
+                .agent_secret_revision_data
+                .value()
+                .secret_value
+                == Some(SchemaValue::String(value.to_string()))
+        );
+    }
+    let current = deps
+        .agent_secret_repo
+        .get_revision(
+            context.env.revision.environment_id,
+            &AgentSecretOwner::Environment,
+            id,
+            vec!["stripe".to_string()],
+            AgentSecretRevisionSelector::Current,
+            AgentSecretReadMode::Live,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(current.revision.revision_id == revision.revision_id);
+    let mut deletion = AgentSecretRevisionRecord::delete(
+        id,
+        current.revision.revision_id.try_into().unwrap(),
+        AccountId(context.owner.revision.account_id),
+    )
+    .unwrap();
+    // Deletion strips destinations even when its caller supplies Copy.
+    deletion.destinations = AgentSecretDestinations::Copy;
+    let deletion_revision = deletion.revision_id.try_into().unwrap();
+    let _ = deps.agent_secret_repo.delete(deletion).await.unwrap();
+    for mode in [AgentSecretReadMode::Live, AgentSecretReadMode::Historical] {
+        for selector in [
+            AgentSecretRevisionSelector::Current,
+            AgentSecretRevisionSelector::Fixed(deletion_revision),
+            AgentSecretRevisionSelector::Fixed(deletion_revision.next().unwrap()),
+        ] {
+            assert!(
+                deps.agent_secret_repo
+                    .get_revision(
+                        context.env.revision.environment_id,
+                        &AgentSecretOwner::Environment,
+                        id,
+                        vec!["stripe".to_string()],
+                        selector,
+                        mode
+                    )
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let old = deps
+            .agent_secret_repo
+            .get_revision(
+                context.env.revision.environment_id,
+                &AgentSecretOwner::Environment,
+                id,
+                vec!["stripe".to_string()],
+                AgentSecretRevisionSelector::Fixed(AgentSecretRevision::INITIAL),
+                mode,
+            )
+            .await
+            .unwrap();
+        if mode == AgentSecretReadMode::Historical {
+            let old = old.unwrap();
+            assert_eq!(
+                old.revision.agent_secret_revision_data.value().secret_value,
+                Some(SchemaValue::String("original".to_string()))
+            );
+            assert_eq!(
+                old.revision.destinations,
+                AgentSecretDestinations::Set(vec!["https://a.example.com".parse().unwrap()])
+            );
+        } else {
+            assert!(old.is_none());
+        }
+    }
+    let sql = "SELECT destinations FROM agent_secret_revisions WHERE agent_secret_id = $1 AND revision_id = $2";
+    let (destinations,): (sqlx::types::Json<Vec<String>>,) = match &deps.test_db {
+        TestDb::Postgres(pool) => pool
+            .with_ro("test", "deleted_secret_destinations")
+            .fetch_one_as(
+                sqlx::query_as(sql)
+                    .bind(id.0)
+                    .bind(revision.revision_id + 1),
+            )
+            .await
+            .unwrap(),
+        TestDb::Sqlite(pool) => pool
+            .with_ro("test", "deleted_secret_destinations")
+            .fetch_one_as(
+                sqlx::query_as(sql)
+                    .bind(id.0)
+                    .bind(revision.revision_id + 1),
+            )
+            .await
+            .unwrap(),
+    };
+    assert!(destinations.0.is_empty());
+}
+
+pub async fn test_agent_secret_owner_lookups(deps: &Deps) {
+    let context = create_test_agent_secret(deps).await;
+    let agent_id = AgentId::from_parts(7, 1);
+    let fingerprint = AgentFingerprint(new_repo_uuid());
+    let owner = AgentSecretOwner::Agent {
+        agent_id,
+        fingerprint,
+    };
+    let variants = [
+        (owner.clone(), "stripe", false),
+        (owner.clone(), "second", false),
+        (
+            AgentSecretOwner::Agent {
+                agent_id,
+                fingerprint: AgentFingerprint(new_repo_uuid()),
+            },
+            "stripe",
+            false,
+        ),
+        (
+            AgentSecretOwner::Agent {
+                agent_id: AgentId::from_parts(7, 2),
+                fingerprint,
+            },
+            "stripe",
+            false,
+        ),
+        (
+            AgentSecretOwner::Agent {
+                agent_id: AgentId::from_parts(8, 1),
+                fingerprint,
+            },
+            "stripe",
+            false,
+        ),
+        (owner.clone(), "deleted", true),
+        (
+            AgentSecretOwner::Tool {
+                tool_name: ToolName::try_from("t").unwrap(),
+            },
+            "stripe",
+            false,
+        ),
+        (AgentSecretOwner::Environment, "stripe", false),
+    ];
+    let mut ids = vec![];
+    for (owner, path, deleted) in variants {
+        let creation = agent_secret_creation(&context, owner, path);
+        let id = AgentSecretId(creation.revision.agent_secret_id);
+        let _ = deps.agent_secret_repo.create(creation).await.unwrap();
+        if deleted {
+            let _ = deps
+                .agent_secret_repo
+                .delete(
+                    AgentSecretRevisionRecord::delete(
+                        id,
+                        AgentSecretRevision::INITIAL,
+                        AccountId(context.owner.revision.account_id),
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+        ids.push(id.0);
+    }
+    let other = create_test_agent_secret(deps).await;
+    let _ = deps
+        .agent_secret_repo
+        .create(agent_secret_creation(&other, owner, "stripe"))
+        .await
+        .unwrap();
+    let row_ids = |rows: Vec<
+        golem_registry_service::repo::model::agent_secrets::AgentSecretExtRevisionRecord,
+    >| {
+        rows.into_iter()
+            .map(|r| r.revision.agent_secret_id)
+            .collect::<BTreeSet<_>>()
+    };
+    let env = context.env.revision.environment_id;
+    assert!(
+        row_ids(
+            deps.agent_secret_repo
+                .get_for_agent_owner(env, agent_id, fingerprint)
+                .await
+                .unwrap()
+        ) == BTreeSet::from([ids[0], ids[1]])
+    );
+    assert!(
+        row_ids(
+            deps.agent_secret_repo
+                .get_for_agent_type(env, agent_id.type_id().unwrap())
+                .await
+                .unwrap()
+        ) == BTreeSet::from([ids[0], ids[1], ids[2], ids[3]])
+    );
+    assert!(
+        row_ids(
+            deps.agent_secret_repo
+                .get_for_environment(env)
+                .await
+                .unwrap()
+        ) == BTreeSet::from([context.id.0, ids[7]])
+    );
+    assert!(
+        deps.agent_secret_repo
+            .get_for_environment_and_path(env, vec!["stripe".to_string()])
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .agent_secret_id
+            == ids[7]
+    );
+    assert!(
+        deps.agent_secret_repo
+            .get_for_environment_and_path(env, vec!["second".to_string()])
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+pub async fn test_agent_secret_environment_restore(deps: &Deps) {
+    use golem_registry_service::repo::model::agent_secrets::AgentSecretDestinations;
+    let context = create_test_agent_secret(deps).await;
+    let owners = [
+        (
+            AgentSecretOwner::Environment,
+            vec!["https://a.example.com".parse().unwrap()],
+        ),
+        (
+            AgentSecretOwner::Agent {
+                agent_id: AgentId::from_parts(7, 1),
+                fingerprint: AgentFingerprint(new_repo_uuid()),
+            },
+            vec![],
+        ),
+    ];
+    let mut ids = vec![];
+    for (owner, _) in &owners {
+        let creation = agent_secret_creation(&context, owner.clone(), "stripe");
+        ids.push(AgentSecretId(creation.revision.agent_secret_id));
+        let _ = deps.agent_secret_repo.create(creation).await.unwrap();
+    }
+    let _ = deps
+        .environment_repo
+        .delete(EnvironmentRevisionRecord {
+            revision_id: context.env.revision.revision_id + 1,
+            ..context.env.revision.clone()
+        })
+        .await
+        .unwrap();
+    for restored in [false, true] {
+        if restored {
+            let sql = "UPDATE environments SET deleted_at = NULL WHERE environment_id = $1";
+            match &deps.test_db {
+                TestDb::Postgres(pool) => pool
+                    .with_rw("test", "restore_environment")
+                    .execute(sqlx::query(sql).bind(context.env.revision.environment_id))
+                    .await
+                    .map(|_| ())
+                    .unwrap(),
+                TestDb::Sqlite(pool) => pool
+                    .with_rw("test", "restore_environment")
+                    .execute(sqlx::query(sql).bind(context.env.revision.environment_id))
+                    .await
+                    .map(|_| ())
+                    .unwrap(),
+            };
+        }
+        for ((owner, destinations), id) in owners.iter().zip(&ids) {
+            for mode in [AgentSecretReadMode::Live, AgentSecretReadMode::Historical] {
+                let found = deps
+                    .agent_secret_repo
+                    .get_revision(
+                        context.env.revision.environment_id,
+                        owner,
+                        *id,
+                        vec!["stripe".to_string()],
+                        AgentSecretRevisionSelector::Fixed(AgentSecretRevision::INITIAL),
+                        mode,
+                    )
+                    .await
+                    .unwrap();
+                if restored || mode == AgentSecretReadMode::Historical {
+                    let found = found.unwrap();
+                    assert!(
+                        found
+                            .revision
+                            .agent_secret_revision_data
+                            .value()
+                            .secret_value
+                            == Some(SchemaValue::String("original".to_string()))
+                    );
+                    assert_eq!(
+                        found.revision.destinations,
+                        AgentSecretDestinations::Set(destinations.clone())
+                    );
+                } else {
+                    assert!(found.is_none());
+                }
+            }
+        }
+    }
 }
 
 pub async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
@@ -2516,9 +3144,11 @@ pub async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps)
         let creation = AgentSecretCreationRecord::new(
             secret_id,
             environment_id,
+            AgentSecretOwner::Environment,
             CanonicalAgentSecretPath(path.clone()),
             SchemaGraph::empty(),
             None,
+            vec![],
             actor,
         );
         let _ = deps
@@ -2546,9 +3176,11 @@ pub async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps)
         .create(AgentSecretCreationRecord::new(
             deleted_id,
             environment_id,
+            AgentSecretOwner::Environment,
             CanonicalAgentSecretPath(deleted_path.clone()),
             SchemaGraph::empty(),
             None,
+            vec![],
             actor,
         ))
         .await
@@ -3012,7 +3644,7 @@ pub async fn test_environment_deletion_revokes_component_card_runtime_descendant
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3460,7 +4092,7 @@ pub async fn test_component_upload_reference_lifetime(deps: &Deps) {
                     ComponentId(new_repo_uuid()),
                     bytes.len() as u64,
                     ComponentMetadata::default(),
-                    hash.clone(),
+                    hash,
                     None,
                     upload.object_key.clone(),
                     AccountId(account),
@@ -3476,8 +4108,7 @@ pub async fn test_component_upload_reference_lifetime(deps: &Deps) {
             bytes
         );
         if environment_id == first.revision.environment_id {
-            let _ = deps
-                .blob_storage
+            deps.blob_storage
                 .delete(
                     "test",
                     "simulate_lost_upload",
@@ -3857,7 +4488,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3953,7 +4584,7 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4158,7 +4789,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4249,7 +4880,7 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4361,7 +4992,7 @@ pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4475,7 +5106,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4972,7 +5603,9 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
             source: AccountResourceOverrideSource::SelfService,
             override_value: 5678.into(),
             reason: AccountResourceOverrideReason::UserSelfServe,
-            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            expires_at: Some(SqlDateTime::new(
+                Timestamp::now() - jiff::SignedDuration::from_secs(1),
+            )),
             created_by: account.revision.account_id,
             created_at: now.clone(),
         })
@@ -4985,7 +5618,9 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
             source: AccountResourceOverrideSource::SelfService,
             override_value: 5678.into(),
             reason: AccountResourceOverrideReason::UserSelfServe,
-            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            expires_at: Some(SqlDateTime::new(
+                Timestamp::now() - jiff::SignedDuration::from_secs(1),
+            )),
             created_by: account.revision.account_id,
             created_at: now.clone(),
         })
@@ -5652,7 +6287,7 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
         .await
         .unwrap();
 
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(1));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(1));
     let granted = deps
         .account_resource_override_repo
         .set_admin_grant(
@@ -5675,7 +6310,7 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
         .await
         .unwrap();
 
-    let cleanup_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(2));
+    let cleanup_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(2));
     assert!(
         deps.account_resource_override_repo
             .get_active_admin_grants(account_id, &cleanup_at)
@@ -5730,14 +6365,14 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
     assert_eq!(events[0].reason, AdminResourceGrantReason::Promotional);
     assert_eq!(events[0].actor_account_id, AccountId(account_id));
     assert_eq!(
-        events[0].changed_at.timestamp_micros(),
-        granted.changed_at.timestamp_micros()
+        events[0].changed_at.as_microsecond(),
+        granted.changed_at.as_microsecond()
     );
     assert_eq!(events[0].old_value, 5000);
     assert_eq!(events[0].new_value, finite_change_value(7000));
     assert_eq!(
-        events[0].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[0].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     assert_eq!(
         events[1].event_type,
@@ -5748,12 +6383,12 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
     assert_eq!(events[1].new_value, finite_change_value(6000));
     assert_eq!(events[1].actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        events[1].changed_at.timestamp_micros(),
-        cleanup_at.as_utc().timestamp_micros()
+        events[1].changed_at.as_microsecond(),
+        cleanup_at.as_utc().as_microsecond()
     );
     assert_eq!(
-        events[1].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[1].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
 
     assert!(matches!(
@@ -5803,9 +6438,9 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
         i64::try_from(2 * FUEL_PER_GCU).unwrap(),
     );
     deps.account_usage_repo.add(&exhausted_usage).await.unwrap();
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::seconds(1));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_secs(1));
     let just_before_expiry =
-        SqlDateTime::new(expires_at.as_utc().to_owned() - chrono::Duration::microseconds(1));
+        SqlDateTime::new(expires_at.as_utc().to_owned() - jiff::SignedDuration::from_micros(1));
 
     let granted = deps
         .account_resource_override_repo
@@ -5855,14 +6490,14 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
         AccountId(account_id)
     );
     assert_eq!(
-        before_expiry.admin_grants[0].granted_at.timestamp_micros(),
-        granted_at.as_utc().timestamp_micros()
+        before_expiry.admin_grants[0].granted_at.as_microsecond(),
+        granted_at.as_utc().as_microsecond()
     );
     assert_eq!(
         before_expiry.admin_grants[0]
             .expires_at
-            .map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+            .map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
 
     let after_expiry = deps
@@ -5931,18 +6566,18 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
     );
     assert_eq!(events[1].actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        events[1].changed_at.timestamp_micros(),
-        replacement.changed_at.timestamp_micros()
+        events[1].changed_at.as_microsecond(),
+        replacement.changed_at.as_microsecond()
     );
     assert_eq!(
-        events[1].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[1].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     assert_eq!(
         deps.account_resource_override_repo
-            .cleanup_expired_admin_grants(
-                SqlDateTime::new(Utc::now() + chrono::Duration::hours(3),)
-            )
+            .cleanup_expired_admin_grants(SqlDateTime::new(
+                Timestamp::now() + jiff::SignedDuration::from_hours(3),
+            ))
             .await
             .unwrap(),
         0
@@ -5973,7 +6608,7 @@ pub async fn test_admin_grant_operations_observe_time_after_locks(deps: &Deps) {
     let replacement_account_id = replacement_account.revision.account_id;
     let clear_account_id = clear_account.revision.account_id;
     let dimension = AccountResourceOverrideDimension::MonthlyComputeGcu;
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::seconds(2));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_secs(2));
     for account_id in [replacement_account_id, clear_account_id] {
         deps.account_resource_override_repo
             .set_admin_grant(
@@ -6023,10 +6658,10 @@ pub async fn test_admin_grant_operations_observe_time_after_locks(deps: &Deps) {
         }
     });
     wait_for_postgres_locks(&pool, "FROM plans", 2).await;
-    let remaining = expires_at
+    let remaining: std::time::Duration = expires_at
         .as_utc()
-        .signed_duration_since(Utc::now())
-        .to_std()
+        .duration_since(Timestamp::now())
+        .try_into()
         .expect("grant expired before both operations reached the Plan lock");
     tokio::time::sleep(remaining + std::time::Duration::from_millis(50)).await;
     blocker.commit().await.unwrap();
@@ -6094,8 +6729,8 @@ pub async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(d
     let account = deps.create_account().await;
     let account_id = account.revision.account_id;
     let mut plan = assign_grant_test_plan(deps, &account).await;
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(1));
-    let cleanup_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(2));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(1));
+    let cleanup_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(2));
     deps.account_resource_override_repo
         .set_admin_grant(
             account_id,
@@ -6168,14 +6803,14 @@ pub async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(d
     );
     assert_eq!(monthly_expiry.actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        monthly_expiry.changed_at.timestamp_micros(),
-        cleanup_at.as_utc().timestamp_micros()
+        monthly_expiry.changed_at.as_microsecond(),
+        cleanup_at.as_utc().as_microsecond()
     );
     assert_eq!(
         monthly_expiry
             .expires_at
-            .map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+            .map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     let storage_expiry = events
         .iter()
@@ -6237,7 +6872,7 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
             .unwrap();
     }
 
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::days(1));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(24));
     for (dimension, value) in [
         (AccountResourceOverrideDimension::MonthlyComputeGcu, 3),
         (
@@ -6595,8 +7230,10 @@ pub async fn test_multi_account_expiry_cleanup_uses_deadlock_safe_lock_order(dep
     ];
     account_ids.sort_unstable();
     let granted_at = SqlDateTime::now();
-    let expires_at = SqlDateTime::new(granted_at.as_utc().to_owned() + chrono::Duration::hours(1));
-    let cleanup_at = SqlDateTime::new(granted_at.as_utc().to_owned() + chrono::Duration::hours(2));
+    let expires_at =
+        SqlDateTime::new(granted_at.as_utc().to_owned() + jiff::SignedDuration::from_hours(1));
+    let cleanup_at =
+        SqlDateTime::new(granted_at.as_utc().to_owned() + jiff::SignedDuration::from_hours(2));
     for account_id in &account_ids {
         deps.account_resource_override_repo
             .upsert(AccountResourceOverrideRecord {
@@ -8042,8 +8679,10 @@ pub async fn test_account_usage_history(deps: &Deps) {
     use golem_service_base::model::auth::AuthCtx;
 
     let account = deps.create_account().await;
-    let previous_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(40));
-    let older_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(80));
+    let previous_month =
+        SqlDateTime::new(Timestamp::now() - jiff::SignedDuration::from_hours((40) * 24));
+    let older_month =
+        SqlDateTime::new(Timestamp::now() - jiff::SignedDuration::from_hours((80) * 24));
     let mut usage = deps
         .account_usage_repo
         .get(account.revision.account_id, &previous_month)
@@ -8077,8 +8716,8 @@ pub async fn test_account_usage_history(deps: &Deps) {
         .get_usage_history(
             account.revision.account_id,
             golem_common::model::account_usage::AccountUsagePeriod {
-                year: Utc::now().year(),
-                month: Utc::now().month(),
+                year: i32::from(jiff::tz::Offset::UTC.to_datetime(Timestamp::now()).year()),
+                month: (jiff::tz::Offset::UTC.to_datetime(Timestamp::now()).month() as u32),
             },
             1,
         )
@@ -8682,7 +9321,6 @@ pub async fn test_resource_reads_exclude_disabled_monthly_usage_and_baselines(de
 }
 
 pub async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(deps: &Deps) {
-    use chrono::TimeZone;
     use golem_common::model::account_usage::MeteringStatus;
     use golem_registry_service::services::account_usage::ResourceUsageUpdate;
     use golem_service_base::clients::registry::ResourceUsageMetering;
@@ -8788,10 +9426,11 @@ pub async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(deps
         (period.year, period.month + 1)
     };
     let next_month = SqlDateTime::new(
-        chrono::Utc
-            .with_ymd_and_hms(year, month, 1, 0, 0, 0)
-            .single()
-            .unwrap(),
+        jiff::civil::date(year as i16, month as i8, 1)
+            .at(0, 0, 0, 0)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp(),
     );
     let next = deps
         .account_usage_repo
@@ -13520,6 +14159,27 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
         .unwrap()
         .type_id;
     assert_ne!(agent_id, tool_id);
+    assert_eq!(
+        deps.full_deployment_repo
+            .get_environment_tool_type_id(env.environment_id, "shared-name")
+            .await
+            .unwrap()
+            .unwrap()
+            .type_id,
+        tool_id
+    );
+    for (environment_id, name) in [
+        (new_repo_uuid(), "shared-name"),
+        (env.environment_id, "never-allocated"),
+    ] {
+        assert!(
+            deps.full_deployment_repo
+                .get_environment_tool_type_id(environment_id, name)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
     for row in &allocations {
         let reverse = deps
             .full_deployment_repo
@@ -13654,6 +14314,15 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
             assert_eq!(retained[0].type_id, Some(agent_id));
             assert_eq!(retained[0].component_id, expected_agent.component_id);
             assert_eq!(retained[0].deployment_revision_id, 2);
+            assert_eq!(
+                deps.full_deployment_repo
+                    .get_environment_tool_type_id(env.environment_id, "shared-name")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .type_id,
+                tool_id
+            );
         }
         let retained = deps
             .full_deployment_repo
@@ -13714,6 +14383,28 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
             .iter()
             .all(|declaration| declaration.type_id == Some(agent_id))
     );
+    deps.full_deployment_repo
+        .deploy_current(
+            type_id_deployment(deps, &env, 6, "renamed-tool").await,
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let old = deps
+        .full_deployment_repo
+        .get_environment_tool_type_id(env.environment_id, "shared-name")
+        .await
+        .unwrap()
+        .unwrap();
+    let renamed = deps
+        .full_deployment_repo
+        .get_environment_tool_type_id(env.environment_id, "renamed-tool")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(old.type_id, tool_id);
+    assert_ne!(old.type_id, renamed.type_id);
 }
 
 pub async fn test_environment_type_ids_rollback_and_environment_isolation(deps: &Deps) {

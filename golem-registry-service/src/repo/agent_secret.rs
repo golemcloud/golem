@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::model::agent_secrets::{
-    AgentSecretAuthExtRevisionRecord, AgentSecretCreationRecord, AgentSecretExtRevisionRecord,
-    AgentSecretRepoError, AgentSecretRevisionRecord,
+    AgentSecretAuthExtRevisionRecord, AgentSecretCreationRecord, AgentSecretDestinations,
+    AgentSecretExtRevisionRecord, AgentSecretRepoError, AgentSecretRevisionRecord,
 };
 use super::registry_change::{RequiresNotificationSignal, RequiresSignalExt};
 use crate::repo::model::BindFields;
@@ -24,7 +24,11 @@ use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent}
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
-use golem_common::model::agent_secret::{AgentSecretId, AgentSecretRevision};
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevisionSelector,
+};
+use golem_common::model::type_id::TypeId;
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
@@ -66,16 +70,28 @@ pub trait AgentSecretRepo: Send + Sync {
         path: Vec<String>,
     ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
 
-    /// Gets a stored revision by identity. When `include_deleted` is true, soft-deleted
-    /// secrets and parent environment/application/account records are still considered;
-    /// deleted revision records themselves are never returned.
+    async fn get_for_agent_owner(
+        &self,
+        environment_id: Uuid,
+        agent_id: AgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
+
+    async fn get_for_agent_type(
+        &self,
+        environment_id: Uuid,
+        type_id: TypeId,
+    ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
+
+    /// Historical reads include soft-deleted secrets and parents, but never deletion revisions.
     async fn get_revision(
         &self,
         environment_id: Uuid,
+        owner: &AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: Vec<String>,
-        revision: AgentSecretRevision,
-        include_deleted: bool,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
 }
 
@@ -160,22 +176,40 @@ impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
             .await
     }
 
+    async fn get_for_agent_owner(
+        &self,
+        environment_id: Uuid,
+        agent_id: AgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        self.repo
+            .get_for_agent_owner(environment_id, agent_id, fingerprint)
+            .instrument(Self::span_environment_id(environment_id))
+            .await
+    }
+
+    async fn get_for_agent_type(
+        &self,
+        environment_id: Uuid,
+        type_id: TypeId,
+    ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        self.repo
+            .get_for_agent_type(environment_id, type_id)
+            .instrument(Self::span_environment_id(environment_id))
+            .await
+    }
+
     async fn get_revision(
         &self,
         environment_id: Uuid,
+        owner: &AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: Vec<String>,
-        revision: AgentSecretRevision,
-        include_deleted: bool,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         self.repo
-            .get_revision(
-                environment_id,
-                agent_secret_id,
-                path,
-                revision,
-                include_deleted,
-            )
+            .get_revision(environment_id, owner, agent_secret_id, path, selector, mode)
             .instrument(Self::span_environment_id(environment_id))
             .await
     }
@@ -210,19 +244,59 @@ impl DbAgentSecretRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         revision: AgentSecretRevisionRecord,
     ) -> Result<AgentSecretRevisionRecord, AgentSecretRepoError> {
-        let revision: AgentSecretRevisionRecord = tx
-            .fetch_one_as(
-                sqlx::query_as(indoc! { r#"
-                    INSERT INTO agent_secret_revisions
-                    (agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted
-                "# })
-                .bind(revision.agent_secret_id)
+        if matches!(&revision.destinations, AgentSecretDestinations::Set(destinations) if !destinations.is_empty())
+        {
+            let (owner_kind,): (String,) = tx
+                .fetch_one_as(
+                    sqlx::query_as(
+                        "SELECT owner_kind FROM agent_secrets WHERE agent_secret_id = $1",
+                    )
+                    .bind(revision.agent_secret_id),
+                )
+                .await?;
+            if owner_kind != "environment" {
+                return Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner);
+            }
+        }
+        let destinations = if revision.audit.deleted {
+            AgentSecretDestinations::Set(vec![])
+        } else {
+            revision.destinations
+        };
+        let query = match destinations {
+            AgentSecretDestinations::Copy => sqlx::query_as(indoc! { r#"
+                INSERT INTO agent_secret_revisions
+                (agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted, destinations)
+                SELECT $1, $2, $3, $4, $5, $6, cur.destinations
+                FROM agent_secrets sec
+                JOIN agent_secret_revisions cur ON cur.agent_secret_id = sec.agent_secret_id
+                    AND cur.revision_id = sec.current_revision_id
+                WHERE sec.agent_secret_id = $1
+                RETURNING agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted, destinations
+            "# }).bind(revision.agent_secret_id)
                 .bind(revision.revision_id)
                 .bind(revision.agent_secret_revision_data)
                 .bind_deletable_revision_audit(revision.audit),
-            )
+            AgentSecretDestinations::Set(destinations) => {
+                let mut canonical = destinations.into_iter()
+                    .map(|destination| destination.to_string().parse().map_err(anyhow::Error::from))
+                    .collect::<anyhow::Result<Vec<golem_common::model::agent_secret::SecretDestination>>>()?;
+                canonical.sort_by_cached_key(ToString::to_string);
+                canonical.dedup();
+                sqlx::query_as(indoc! { r#"
+                    INSERT INTO agent_secret_revisions
+                    (agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted, destinations)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted, destinations
+                "# }).bind(revision.agent_secret_id)
+                    .bind(revision.revision_id)
+                    .bind(revision.agent_secret_revision_data)
+                    .bind_deletable_revision_audit(revision.audit)
+                    .bind(sqlx::types::Json(canonical))
+            }
+        };
+        let revision: AgentSecretRevisionRecord = tx
+            .fetch_one_as(query)
             .await
             .to_error_on_unique_violation(AgentSecretRepoError::ConcurrentModification)?;
 
@@ -233,12 +307,18 @@ impl DbAgentSecretRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         record: AgentSecretCreationRecord,
     ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+        let owner = AgentSecretOwner::try_from(&record.owner)?;
+        if owner != AgentSecretOwner::Environment
+            && matches!(&record.revision.destinations, AgentSecretDestinations::Set(destinations) if !destinations.is_empty())
+        {
+            return Err(AgentSecretRepoError::DestinationsRequireEnvironmentOwner);
+        }
         let agent_secret_record: AgentSecretRecord = tx
             .fetch_one_as(
                 sqlx::query_as(indoc! {r#"
-                    INSERT INTO agent_secrets (agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                    VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7)
-                    RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                    INSERT INTO agent_secrets (agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, owner_kind, agent_id, agent_fingerprint, agent_type, tool_name)
+                    VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7, $8, $9, $10, $11, $12)
+                    RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, owner_kind, agent_id, agent_fingerprint, agent_type, tool_name
                 "#})
                     .bind(record.revision.agent_secret_id)
                     .bind(record.environment_id)
@@ -247,18 +327,27 @@ impl DbAgentSecretRepo<PostgresPool> {
                     .bind(&record.revision.audit.created_at)
                     .bind(record.revision.audit.created_by)
                     .bind(record.revision.revision_id)
+                    .bind(record.owner.owner_kind)
+                    .bind(record.owner.agent_id)
+                    .bind(record.owner.agent_fingerprint)
+                    .bind(record.owner.agent_type)
+                    .bind(record.owner.tool_name)
             )
             .await
             .to_error_on_unique_violation(AgentSecretRepoError::SecretViolatesUniqueness)?;
 
         let revision = Self::insert_revision(tx, record.revision).await?;
 
-        let change_event = NewRegistryChangeEvent::agent_secret_changed(record.environment_id);
-        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event).await?;
+        if owner == AgentSecretOwner::Environment {
+            let change_event = NewRegistryChangeEvent::agent_secret_changed(record.environment_id);
+            DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                .await?;
+        }
 
         Ok(AgentSecretExtRevisionRecord {
             environment_id: agent_secret_record.environment_id,
             path: agent_secret_record.path,
+            owner: agent_secret_record.owner,
             agent_secret_data: agent_secret_record.agent_secret_data,
             entity_created_at: agent_secret_record.audit.created_at,
             revision,
@@ -277,7 +366,7 @@ impl DbAgentSecretRepo<PostgresPool> {
                     UPDATE agent_secrets
                     SET updated_at = $1, modified_by = $2, current_revision_id = $3
                     WHERE agent_secret_id = $4
-                    RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                    RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, owner_kind, agent_id, agent_fingerprint, agent_type, tool_name
                 "#})
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
@@ -286,13 +375,18 @@ impl DbAgentSecretRepo<PostgresPool> {
             ).await?
             .ok_or(AgentSecretRepoError::ConcurrentModification)?;
 
-        let change_event =
-            NewRegistryChangeEvent::agent_secret_changed(agent_secret_record.environment_id);
-        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event).await?;
+        if AgentSecretOwner::try_from(&agent_secret_record.owner)? == AgentSecretOwner::Environment
+        {
+            let change_event =
+                NewRegistryChangeEvent::agent_secret_changed(agent_secret_record.environment_id);
+            DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                .await?;
+        }
 
         Ok(AgentSecretExtRevisionRecord {
             environment_id: agent_secret_record.environment_id,
             path: agent_secret_record.path,
+            owner: agent_secret_record.owner,
             agent_secret_data: agent_secret_record.agent_secret_data,
             entity_created_at: agent_secret_record.audit.created_at,
             revision,
@@ -311,7 +405,7 @@ impl DbAgentSecretRepo<PostgresPool> {
                     UPDATE agent_secrets
                     SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
                     WHERE agent_secret_id = $4
-                    RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                    RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, owner_kind, agent_id, agent_fingerprint, agent_type, tool_name
                 "#})
                 .bind(&revision.audit.created_at)
                 .bind(revision.audit.created_by)
@@ -321,13 +415,18 @@ impl DbAgentSecretRepo<PostgresPool> {
             .await?
             .ok_or(AgentSecretRepoError::ConcurrentModification)?;
 
-        let change_event =
-            NewRegistryChangeEvent::agent_secret_changed(agent_secret_record.environment_id);
-        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event).await?;
+        if AgentSecretOwner::try_from(&agent_secret_record.owner)? == AgentSecretOwner::Environment
+        {
+            let change_event =
+                NewRegistryChangeEvent::agent_secret_changed(agent_secret_record.environment_id);
+            DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                .await?;
+        }
 
         Ok(AgentSecretExtRevisionRecord {
             environment_id: agent_secret_record.environment_id,
             path: agent_secret_record.path,
+            owner: agent_secret_record.owner,
             agent_secret_data: agent_secret_record.agent_secret_data,
             entity_created_at: agent_secret_record.audit.created_at,
             revision,
@@ -385,7 +484,8 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
         let result: Option<AgentSecretAuthExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted,
+                    SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted, secr.destinations,
+                        sec.owner_kind, sec.agent_id, sec.agent_fingerprint, sec.agent_type, sec.tool_name,
                         er.name AS environment_name,
                         ap.name AS application_name,
                         a.email AS owner_account_email
@@ -417,10 +517,11 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
         let results: Vec<AgentSecretExtRevisionRecord> = self.with_ro("get_for_environment")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                    SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted, secr.destinations,
+                        sec.owner_kind, sec.agent_id, sec.agent_fingerprint, sec.agent_type, sec.tool_name
                     FROM agent_secrets sec
                     JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = sec.current_revision_id
-                    WHERE sec.environment_id = $1 AND sec.deleted_at IS NULL
+                    WHERE sec.environment_id = $1 AND sec.deleted_at IS NULL AND sec.owner_kind = 'environment'
                 "#})
                     .bind(environment_id),
             )
@@ -435,34 +536,80 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
         path: Vec<String>,
     ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         Ok(self.with_ro("get_for_environment_and_path").fetch_optional_as(sqlx::query_as(indoc! {r#"
-            SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+            SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted, secr.destinations,
+                sec.owner_kind, sec.agent_id, sec.agent_fingerprint, sec.agent_type, sec.tool_name
             FROM agent_secrets sec
             JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = sec.current_revision_id
-            WHERE sec.environment_id = $1 AND sec.path = $2 AND sec.deleted_at IS NULL
+            WHERE sec.environment_id = $1 AND sec.path = $2 AND sec.deleted_at IS NULL AND sec.owner_kind = 'environment'
         "#}).bind(environment_id).bind(sqlx::types::Json(path))).await?)
+    }
+
+    async fn get_for_agent_owner(
+        &self,
+        environment_id: Uuid,
+        agent_id: AgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        Ok(self.with_ro("get_for_agent_owner").fetch_all_as(sqlx::query_as(indoc! {r#"
+            SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted, secr.destinations,
+                sec.owner_kind, sec.agent_id, sec.agent_fingerprint, sec.agent_type, sec.tool_name
+            FROM agent_secrets sec
+            JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = sec.current_revision_id
+            JOIN environments e ON e.environment_id = sec.environment_id
+            JOIN applications ap ON ap.application_id = e.application_id
+            JOIN accounts a ON a.account_id = ap.account_id
+            WHERE sec.environment_id = $1 AND sec.agent_id = $2 AND sec.agent_fingerprint = $3
+                AND sec.owner_kind = 'agent' AND sec.deleted_at IS NULL
+                AND e.deleted_at IS NULL AND ap.deleted_at IS NULL AND a.deleted_at IS NULL
+        "#}).bind(environment_id).bind(agent_id.0).bind(fingerprint.0)).await?)
+    }
+
+    async fn get_for_agent_type(
+        &self,
+        environment_id: Uuid,
+        type_id: TypeId,
+    ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        Ok(self.with_ro("get_for_agent_type").fetch_all_as(sqlx::query_as(indoc! {r#"
+            SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted, secr.destinations,
+                sec.owner_kind, sec.agent_id, sec.agent_fingerprint, sec.agent_type, sec.tool_name
+            FROM agent_secrets sec
+            JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = sec.current_revision_id
+            JOIN environments e ON e.environment_id = sec.environment_id
+            JOIN applications ap ON ap.application_id = e.application_id
+            JOIN accounts a ON a.account_id = ap.account_id
+            WHERE sec.environment_id = $1 AND sec.agent_type = $2
+                AND sec.owner_kind = 'agent' AND sec.deleted_at IS NULL
+                AND e.deleted_at IS NULL AND ap.deleted_at IS NULL AND a.deleted_at IS NULL
+        "#}).bind(environment_id).bind(i64::from(type_id.get()))).await?)
     }
 
     async fn get_revision(
         &self,
         environment_id: Uuid,
+        owner: &AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: Vec<String>,
-        revision: AgentSecretRevision,
-        include_deleted: bool,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
-        let revision_id = i64::try_from(revision.get())
-            .map_err(|err| AgentSecretRepoError::InternalError(anyhow::anyhow!(err)))?;
+        let revision_id: Option<i64> = match selector {
+            AgentSecretRevisionSelector::Current => None,
+            AgentSecretRevisionSelector::Fixed(revision) => Some(revision.into()),
+        };
 
-        let result: Option<AgentSecretExtRevisionRecord> = if include_deleted {
+        let result: Option<AgentSecretExtRevisionRecord> = if mode
+            == AgentSecretReadMode::Historical
+        {
             self.with_ro("get_revision")
                 .fetch_optional_as(
                     sqlx::query_as(indoc! {r#"
-                        SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                        SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted, secr.destinations,
+                            sec.owner_kind, sec.agent_id, sec.agent_fingerprint, sec.agent_type, sec.tool_name
                         FROM agent_secrets sec
                         JOIN environments e ON e.environment_id = sec.environment_id
                         JOIN applications ap ON ap.application_id = e.application_id
                         JOIN accounts a ON a.account_id = ap.account_id
-                        JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = $4
+                        JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = COALESCE($4, sec.current_revision_id)
                         WHERE sec.environment_id = $1 AND sec.agent_secret_id = $2 AND sec.path = $3 AND secr.deleted = FALSE
                     "#})
                         .bind(environment_id)
@@ -475,12 +622,13 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
             self.with_ro("get_revision")
                 .fetch_optional_as(
                     sqlx::query_as(indoc! {r#"
-                        SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                        SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted, secr.destinations,
+                            sec.owner_kind, sec.agent_id, sec.agent_fingerprint, sec.agent_type, sec.tool_name
                         FROM agent_secrets sec
                         JOIN environments e ON e.environment_id = sec.environment_id
                         JOIN applications ap ON ap.application_id = e.application_id
                         JOIN accounts a ON a.account_id = ap.account_id
-                        JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = $4
+                        JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = COALESCE($4, sec.current_revision_id)
                         WHERE sec.environment_id = $1 AND sec.agent_secret_id = $2 AND sec.path = $3 AND secr.deleted = FALSE
                             AND sec.deleted_at IS NULL
                             AND e.deleted_at IS NULL
@@ -495,6 +643,11 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
                 .await?
         };
 
-        Ok(result)
+        match result {
+            Some(record) if AgentSecretOwner::try_from(&record.owner)? == *owner => {
+                Ok(Some(record))
+            }
+            _ => Ok(None),
+        }
     }
 }

@@ -25,6 +25,7 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::ComponentId;
+use golem_common::model::diff::Hash;
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
 use std::fmt::{Debug, Formatter};
@@ -109,9 +110,15 @@ impl CompileGrpcService {
             .component_revision
             .try_into()
             .map_err(|e| bad_request_error(format!("missing component version: {e}")))?;
-        let environment_id = make_environment_id(request.environment_id)?;
+        make_environment_id(request.environment_id)?;
+        let wasm_hash = Hash::try_from(
+            request
+                .wasm_hash
+                .ok_or_else(|| bad_request_error("Missing Wasm hash"))?,
+        )
+        .map_err(bad_request_error)?;
         self.service
-            .enqueue_compilation(component_id, component_revision, environment_id, sender)
+            .enqueue_compilation(component_id, component_revision, wasm_hash, sender)
             .await?;
         Ok(())
     }

@@ -86,7 +86,7 @@ struct CachedAgentTypes {
     >,
     cached_agent_types_by_type_id:
         Cache<(EnvironmentId, TypeId), (), FetchedAgentType, WorkerExecutorError>,
-    generations: Arc<InvalidationGenerations>,
+    generations: Arc<InvalidationGenerations<EnvironmentId>>,
 }
 
 #[derive(Clone)]

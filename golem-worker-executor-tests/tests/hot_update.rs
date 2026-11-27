@@ -1290,6 +1290,12 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
                 grants.push(
                     parse_polymorphic_permission("config(?agent) @ * : read : control").unwrap(),
                 );
+                // The save hook revokes the queued card, or installs it into the target.
+                let card_verb = if revoke { "revoke" } else { "install" };
+                grants.push(
+                    parse_polymorphic_permission(&format!("card(*) @ * : {card_verb} : *"))
+                        .unwrap(),
+                );
             })
             .store()
             .await?;
@@ -1310,7 +1316,7 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,

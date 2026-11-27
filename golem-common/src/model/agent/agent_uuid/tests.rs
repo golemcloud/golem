@@ -28,6 +28,36 @@ use uuid::{Uuid, Variant, Version, uuid};
 const ENV: EnvironmentId = EnvironmentId(uuid!("6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"));
 const OTHER_ENV: EnvironmentId = EnvironmentId(uuid!("0e0d0c0b-0a09-4807-8605-040302010000"));
 
+#[test]
+fn standalone_tool_address_golden_and_domain_separation() {
+    let unique = InvocationId(uuid!("0d6d6617-2d2c-52cc-b6c7-144ab49c5e39"));
+    let address = AgentId::standalone_tool_invocation(ENV, type_id(7), unique);
+    assert_eq!(address.0, uuid!("00000007-6c95-8a53-a5e8-7638203fda27"));
+    assert_eq!(
+        address,
+        AgentId::standalone_tool_invocation(ENV, type_id(7), unique)
+    );
+    assert_eq!(address.type_id(), Some(type_id(7)));
+    assert!(address.is_issued());
+    for other in [
+        AgentId::standalone_tool_invocation(OTHER_ENV, type_id(7), unique),
+        AgentId::standalone_tool_invocation(ENV, type_id(8), unique),
+        AgentId::standalone_tool_invocation(ENV, type_id(7), InvocationId(Uuid::from_u128(1))),
+    ] {
+        assert_ne!(address, other);
+    }
+    // Identical input bytes under an agent domain must not select this address.
+    let agent = AgentId::typed(
+        type_id(7),
+        HashInput::new(KEYED_DOMAIN)
+            .environment(ENV)
+            .type_id(type_id(7))
+            .fixed(unique.0.as_bytes()),
+    );
+    assert_ne!(address, agent);
+    assert_ne!(address, AgentId::keyed(ENV, type_id(7), &key("alice", 42)));
+}
+
 fn type_id(id: u32) -> TypeId {
     TypeId::try_from(id).unwrap()
 }
@@ -80,7 +110,7 @@ fn all_derivations() -> Vec<(&'static str, AgentId)> {
         ),
         (
             "durable_stream_fork",
-            AgentId::durable_stream_fork(ENV, root, "route:api/stream", "fork-a"),
+            AgentId::durable_stream_fork(ENV, root, "fork-a"),
         ),
         (
             "durable_stream_session",
@@ -123,7 +153,7 @@ fn golden_vectors() {
             ),
             (
                 "durable_stream_fork",
-                "00000007-f5b8-8e68-bb15-0dac9ac1608c".to_string()
+                "00000007-8bbd-8649-ab48-43b063c528dd".to_string()
             ),
             (
                 "durable_stream_session",
@@ -346,32 +376,22 @@ fn random_ids_carry_the_tag_and_differ() {
 fn durable_stream_forks() {
     let root = AgentId::keyed(ENV, type_id(7), &key("alice", 42));
     let other_root = AgentId::keyed(ENV, type_id(7), &key("bob", 42));
-    let fork = AgentId::durable_stream_fork(ENV, root, "route:api/stream", "fork-a");
+    let fork = AgentId::durable_stream_fork(ENV, root, "fork-a");
     assert_eq!(fork.type_tag(), root.type_tag());
-    assert_eq!(
+    assert_eq!(fork, AgentId::durable_stream_fork(ENV, root, "fork-a"));
+    assert_ne!(fork, AgentId::durable_stream_fork(ENV, root, "fork-b"));
+    assert_ne!(
         fork,
-        AgentId::durable_stream_fork(ENV, root, "route:api/stream", "fork-a")
+        AgentId::durable_stream_fork(ENV, other_root, "fork-a")
     );
     assert_ne!(
         fork,
-        AgentId::durable_stream_fork(ENV, root, "route:api/stream", "fork-b")
-    );
-    assert_ne!(
-        fork,
-        AgentId::durable_stream_fork(ENV, other_root, "route:api/stream", "fork-a")
-    );
-    assert_ne!(
-        fork,
-        AgentId::durable_stream_fork(OTHER_ENV, root, "route:api/stream", "fork-a")
-    );
-    assert_ne!(
-        fork,
-        AgentId::durable_stream_fork(ENV, root, "route:other", "fork-a")
+        AgentId::durable_stream_fork(OTHER_ENV, root, "fork-a")
     );
     assert_ne!(fork, root);
     let tagged_root = AgentId::from_parts(u32::MAX, 5);
     assert_eq!(
-        AgentId::durable_stream_fork(ENV, tagged_root, "route:api/stream", "fork-a").type_tag(),
+        AgentId::durable_stream_fork(ENV, tagged_root, "fork-a").type_tag(),
         u32::MAX
     );
 }

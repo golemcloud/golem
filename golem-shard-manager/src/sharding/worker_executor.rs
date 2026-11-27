@@ -24,6 +24,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::Pod;
 use golem_common::model::ShardId;
+use golem_common::model::protobuf::executor_count_to_proto;
 use golem_common::retries::with_retriable_errors;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
@@ -39,6 +40,30 @@ use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::{info, warn};
+
+pub(crate) fn assignment_to_proto(
+    assignment: &ShardAssignmentPush,
+    incarnation_id: String,
+) -> Result<golem::workerexecutor::v1::AssignShardsRequest, String> {
+    let executor_count = executor_count_to_proto(
+        assignment.executor_count,
+        "AssignShardsRequest.executor_count",
+    )?;
+    Ok(golem::workerexecutor::v1::AssignShardsRequest {
+        shard_epochs: assignment
+            .shard_epochs
+            .iter()
+            .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
+                shard_id: Some((*shard_id).into()),
+                epoch: epoch.0,
+            })
+            .collect(),
+        revision: assignment.revision.0,
+        number_of_shards: assignment.number_of_shards as u32,
+        executor_count,
+        incarnation_id,
+    })
+}
 
 #[async_trait]
 pub trait WorkerExecutorService: Send + Sync {
@@ -61,6 +86,7 @@ pub trait WorkerExecutorService: Send + Sync {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<(), ShardManagerError>;
 }
 
@@ -72,6 +98,7 @@ pub async fn revoke_shards(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     unassignments: &Unassignments,
     revision: ShardLeaseRevision,
+    executor_count: usize,
     addrs: &ExecutorAddrs,
 ) -> BTreeSet<ExecutorId> {
     fan_out(
@@ -82,7 +109,7 @@ pub async fn revoke_shards(
             let worker_executors = worker_executors.clone();
             Box::pin(async move {
                 worker_executors
-                    .revoke_shards(&pod, shard_ids, revision)
+                    .revoke_shards(&pod, shard_ids, revision, executor_count)
                     .await
             })
         },
@@ -216,6 +243,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<(), ShardManagerError> {
         info!(
             revoked_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
@@ -228,9 +256,9 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             "revoke_shards",
             Some(format!("{pod}")),
             &self.config.retries,
-            &(pod, shard_ids, revision),
-            |(pod, shard_ids, revision)| {
-                Box::pin(self.revoke_shards_internal(pod, shard_ids, *revision))
+            &(pod, shard_ids, revision, executor_count),
+            |(pod, shard_ids, revision, executor_count)| {
+                Box::pin(self.revoke_shards_internal(pod, shard_ids, *revision, *executor_count))
             },
         )
         .await
@@ -258,19 +286,8 @@ impl WorkerExecutorServiceDefault {
         pod: &Pod,
         assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
-        let assign_shards_request = golem::workerexecutor::v1::AssignShardsRequest {
-            shard_epochs: assignment
-                .shard_epochs
-                .iter()
-                .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
-                    shard_id: Some((*shard_id).into()),
-                    epoch: epoch.0,
-                })
-                .collect(),
-            revision: assignment.revision.0,
-            number_of_shards: assignment.number_of_shards as u32,
-            incarnation_id: super::model::incarnation_id(),
-        };
+        let assign_shards_request = assignment_to_proto(assignment, super::model::incarnation_id())
+            .map_err(invalid_delivery)?;
 
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,
@@ -310,6 +327,7 @@ impl WorkerExecutorServiceDefault {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<(), ShardManagerError> {
         let revoke_shards_request = golem::workerexecutor::v1::RevokeShardsRequest {
             shard_ids: shard_ids
@@ -319,6 +337,11 @@ impl WorkerExecutorServiceDefault {
                 .collect(),
             revision: revision.0,
             incarnation_id: super::model::incarnation_id(),
+            executor_count: executor_count_to_proto(
+                executor_count,
+                "RevokeShardsRequest.executor_count",
+            )
+            .map_err(invalid_delivery)?,
         };
 
         let revoke_shards_response = timeout(
@@ -353,6 +376,10 @@ impl WorkerExecutorServiceDefault {
             }
         }
     }
+}
+
+fn invalid_delivery(error: String) -> ShardManagerError {
+    ShardManagerError::WorkerExecutionError(WorkerExecutorError::invalid_request(error))
 }
 
 fn health_check_serving_status(response: Response<HealthCheckResponse>) -> ServingStatus {

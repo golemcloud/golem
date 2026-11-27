@@ -436,10 +436,9 @@ fn remember_acceptance(
 ) -> Result<(), String> {
     let identity = AcceptedInvocation {
         id: golem_common::model::OwnedInvocationId::new(
-            identity
-                .agent_id
-                .ok_or("acceptance has no agent ID")?
-                .try_into()?,
+            golem_common::model::AgentId::try_from(
+                identity.agent_id.ok_or("acceptance has no agent ID")?,
+            )?,
             identity
                 .idempotency_key
                 .ok_or("acceptance has no invocation ID")?
@@ -548,6 +547,8 @@ where
 pub struct ExistingAgent {
     pub metadata: AgentMetadataDto,
     pub component_id: ComponentId,
+    /// The index of the latest oplog entry other than an invocation settlement.
+    pub state_oplog_index: OplogIndex,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for ExistingAgent {
@@ -560,9 +561,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for ExistingAg
             .component_id
             .ok_or("Missing component_id in agent metadata")?
             .try_into()?;
+        let state_oplog_index = OplogIndex::from_u64(metadata.state_oplog_idx);
         Ok(Self {
             metadata: metadata.try_into()?,
             component_id,
+            state_oplog_index,
         })
     }
 }
@@ -3494,7 +3497,7 @@ mod one_shot_session_tests {
                 if let Some(receipt) = receipt.get() {
                     assert_eq!(receipt.environment_id, environment);
                     assert_eq!(
-                        *receipt.id.agent_id(),
+                        *receipt.id.agent_id().unwrap(),
                         golem_common::model::AgentId::from_parts(7, 1)
                     );
                     assert_eq!(
@@ -4780,7 +4783,7 @@ mod rejection_mapping_tests {
                     else {
                         panic!("terminal error lost the accepted identity");
                     };
-                    assert_eq!(*accepted.id.agent_id(), owner);
+                    assert_eq!(accepted.id.agent_id(), Some(&owner));
                     assert_eq!(accepted.id.id(), invocation);
                     assert_eq!(accepted.environment_id, environment);
                     if outcome == 1 {

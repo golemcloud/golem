@@ -87,6 +87,12 @@ pub trait DeploymentRepo: Send + Sync {
         type_id: i64,
     ) -> RepoResult<Option<EnvironmentTypeIdRecord>>;
 
+    async fn get_environment_tool_type_id(
+        &self,
+        environment_id: Uuid,
+        tool_name: &str,
+    ) -> RepoResult<Option<EnvironmentTypeIdRecord>>;
+
     /// The latest declaration on each component that has implemented this retained type.
     async fn list_retained_agent_types(
         &self,
@@ -342,6 +348,17 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     ) -> RepoResult<Option<EnvironmentTypeIdRecord>> {
         self.repo
             .get_environment_type_id(environment_id, type_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn get_environment_tool_type_id(
+        &self,
+        environment_id: Uuid,
+        tool_name: &str,
+    ) -> RepoResult<Option<EnvironmentTypeIdRecord>> {
+        self.repo
+            .get_environment_tool_type_id(environment_id, tool_name)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -886,6 +903,17 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         self.with_ro("get_environment_type_id").fetch_optional_as(
             sqlx::query_as("SELECT kind, name, type_id FROM environment_agent_type_ids WHERE environment_id = $1 AND type_id = $2")
                 .bind(environment_id).bind(type_id),
+        ).await
+    }
+
+    async fn get_environment_tool_type_id(
+        &self,
+        environment_id: Uuid,
+        tool_name: &str,
+    ) -> RepoResult<Option<EnvironmentTypeIdRecord>> {
+        self.with_ro("get_environment_tool_type_id").fetch_optional_as(
+            sqlx::query_as("SELECT kind, name, type_id FROM environment_agent_type_ids WHERE environment_id = $1 AND kind = 'tool' AND name = $2")
+                .bind(environment_id).bind(tool_name),
         ).await
     }
 

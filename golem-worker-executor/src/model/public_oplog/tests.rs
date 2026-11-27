@@ -550,6 +550,7 @@ fn make_agent_metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        standalone_tool: None,
         component_id: test_component_id(),
         agent_type_name: None,
         canonical_key: None,
@@ -672,7 +673,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
                 ..Default::default()
             },
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: String::new(),
@@ -871,7 +872,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
                 ..Default::default()
             },
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: String::new(),
@@ -955,6 +956,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     }
 
     let projection = CreateProjectionParameters {
+        standalone_tool: None,
         agent_id: AgentId::from_parts(0, 1),
         agent_type_name: None,
         owner_kind: OwnerKind::EphemeralExternalTool,
@@ -1360,7 +1362,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             secret_id,
             config_key: Some(vec!["database".to_string(), "password".to_string()]),
             version: 7,
-            resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            resolved_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
             category: Some("api-key".to_string()),
         }),
     );
@@ -3353,7 +3355,7 @@ fn metadata_component_service(owned_agent_id: &OwnedAgentId) -> Arc<dyn Componen
             Vec::new(),
             BTreeMap::new(),
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: String::new(),

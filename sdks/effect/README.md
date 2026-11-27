@@ -114,8 +114,9 @@ const program = Effect.scoped(
 - Every durable remote client has `agentId: Effect<AgentId, RemoteCallError>`, read from the host.
   On a client of `upsert` it creates the agent when it is missing. A method named `agentId` is not
   part of a typed client.
-- `AgentId.parse(text)` and `AgentId.format(id)` convert an ID to and from its UUID text. The
-  parse checks only the text form; only the host knows whether an agent has the ID.
+- An `AgentId` is a branded string: its lower-case UUID text. Use it as text where a `string` is
+  expected; `AgentId.parse(text)` reads text back into an `AgentId`. The parse checks only the
+  text form; only the host knows whether an agent has the ID.
 
 Awaited RPC is interruptible: fiber interruption cancels the result handle. Cancellation is best
 effort; remote side effects may already have happened. Triggering and scheduling methods whose

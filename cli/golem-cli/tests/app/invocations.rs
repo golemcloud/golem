@@ -179,7 +179,7 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
     assert!(!outputs.success());
 
     // A call scheduled for later is `scheduled` until it is cancelled.
-    let schedule_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let schedule_at = (jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)).to_string();
     let outputs = ctx
         .cli([
             flag::YES,
@@ -401,8 +401,10 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
 }
 
 /// An invocation whose background work fails the agent after the result is `background-failed`:
-/// `invocation get` shows the recorded result and the error, the state filter finds it, and a
-/// same-key `agent invoke` by agent ID prints the result with a warning and exits 0.
+/// the invoke by key, which goes through the invocation session, prints the result and exits 0,
+/// `invocation get` shows the recorded result and the error, the state filter finds it, a
+/// same-key `agent invoke` by agent ID prints the result with a warning and exits 0. A method
+/// that fails before its result still fails the invoke by key and by agent ID.
 #[test]
 #[timeout("15 minutes")]
 async fn invocation_commands_show_a_background_failure(_tracing: &Tracing) {
@@ -443,6 +445,7 @@ async fn invocation_commands_show_a_background_failure(_tracing: &Tracing) {
             pub trait CounterAgent {
                 fn new(name: String) -> Self;
                 async fn fail_in_background(&self) -> String;
+                async fn fail_before_result(&self) -> String;
             }
 
             struct CounterImpl {
@@ -461,6 +464,10 @@ async fn invocation_commands_show_a_background_failure(_tracing: &Tracing) {
                         panic!("background work failed after the result");
                     });
                     "returned".to_string()
+                }
+
+                async fn fail_before_result(&self) -> String {
+                    panic!("failed before the result");
                 }
             }
         "# },
@@ -482,6 +489,10 @@ async fn invocation_commands_show_a_background_failure(_tracing: &Tracing) {
         ])
         .await;
     assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("returned"),
+        "the invoke prints the result"
+    );
 
     let get = [
         flag::FORMAT,
@@ -585,5 +596,60 @@ async fn invocation_commands_show_a_background_failure(_tracing: &Tracing) {
         outputs.stderr_contains("failed during the background work")
             || outputs.stdout_contains("failed during the background work"),
         "the text output warns about the background failure"
+    );
+
+    let failing = format!("CounterAgent(\"{}\")", Uuid::new_v4());
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "--idempotency-key",
+            "failing-key",
+            &failing,
+            "fail_before_result",
+        ])
+        .await;
+    assert!(
+        !outputs.success(),
+        "a failure before the result fails the invoke"
+    );
+    assert!(
+        outputs.stderr_contains("failed before the result"),
+        "the invoke reports the failure"
+    );
+    let outputs = ctx
+        .cli([
+            flag::FORMAT,
+            "json",
+            INVOCATION,
+            cmd::GET,
+            "--agent",
+            failing.as_str(),
+            "--idempotency-key",
+            "failing-key",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let failed = single_json(&outputs);
+    assert_eq!(failed["summary"]["state"], "failed", "{failed:?}");
+    let failing_id = failed["summary"]["agentId"].as_str().unwrap().to_string();
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            "--idempotency-key",
+            "failing-key",
+            &failing_id,
+            "fail_before_result",
+        ])
+        .await;
+    assert!(
+        !outputs.success(),
+        "a same-key invoke by agent ID of a failed invocation fails"
+    );
+    assert!(
+        outputs.stderr_contains("failed before the result"),
+        "a same-key invoke by agent ID reports the recorded failure"
     );
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::config::benchmark::TestMode;
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -23,6 +23,10 @@ pub enum BenchmarkConfig {
     Benchmark {
         /// Name of the benchmark to be executed
         name: String,
+
+        /// Manual workload version, bumped when the benchmark definition changes.
+        #[arg(long, default_value_t = 1)]
+        version: u32,
 
         /// Number of repetitions of the benchmark with the same configuration.
         #[arg(long, default_value = "3")]
@@ -61,6 +65,22 @@ pub enum BenchmarkConfig {
         #[arg(long, default_value = "false")]
         check_artifacts: bool,
 
+        /// Measure only this partition of the suite.
+        #[arg(long, value_enum, conflicts_with = "merge_partials", requires_all = ["run_id", "timestamp", "source_commit_sha"])]
+        partition: Option<BenchmarkPartition>,
+
+        /// Merge a partial result instead of measuring. Repeat for every partition.
+        #[arg(long = "merge-partial", requires = "save_to_json", conflicts_with_all = ["add_to_json", "check_artifacts"])]
+        merge_partials: Vec<PathBuf>,
+
+        /// Common logical run ID for all parallel measurements.
+        #[arg(long)]
+        run_id: Option<String>,
+
+        /// Common RFC3339 logical start time for all parallel measurements.
+        #[arg(long)]
+        timestamp: Option<jiff::Timestamp>,
+
         /// Save the results to a new JSON file
         #[arg(long)]
         save_to_json: Option<PathBuf>,
@@ -70,7 +90,7 @@ pub enum BenchmarkConfig {
         add_to_json: Option<PathBuf>,
 
         /// Stable identifier for the runner hardware class
-        #[arg(long)]
+        #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
         runner_id: Option<String>,
 
         /// Human-readable runner name
@@ -443,16 +463,137 @@ pub struct BenchmarkSuite {
     pub benchmarks: Vec<BenchmarkSuiteItem>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum BenchmarkPartition {
+    Startup,
+    DurabilityEcho,
+    Bulk,
+    Streaming,
+}
+
+impl BenchmarkSuite {
+    pub fn validate_entry_names(&self) -> anyhow::Result<()> {
+        let mut names = std::collections::BTreeSet::new();
+        for item in &self.benchmarks {
+            let name = if item.disable_compilation_cache.unwrap_or_default() {
+                format!("{}-no-cache", item.name)
+            } else {
+                item.name.clone()
+            };
+            anyhow::ensure!(names.insert(name.clone()), "duplicate suite entry {name}");
+        }
+        Ok(())
+    }
+
+    pub fn fixture_names(&self) -> std::collections::BTreeSet<&'static str> {
+        let mut fixtures = std::collections::BTreeSet::new();
+        for benchmark in &self.benchmarks {
+            let names: &[&str] = match benchmark.name.as_str() {
+                "cold-start-unknown-medium" | "latency-medium" => &["benchmark_agent_ts"],
+                "throughput-large-input-effect" => &["benchmark_agent_effect"],
+                "throughput-echo"
+                | "throughput-echo-aggregate"
+                | "throughput-large-input"
+                | "throughput-large-input-aggregate"
+                | "throughput-cpu-intensive"
+                | "throughput-cpu-intensive-aggregate" => {
+                    &["benchmark_agent_rust_release", "benchmark_agent_ts"]
+                }
+                "streaming-tool" => &[
+                    "golem_it_tool_streaming_rust_caller_release",
+                    "golem_it_tool_streaming_rust_provider_release",
+                ],
+                name if name == "streaming-rpc" || name.starts_with("streaming-rpc-") => {
+                    &["golem_it_agent_rpc_rust_release"]
+                }
+                _ => &["benchmark_agent_rust_release"],
+            };
+            fixtures.extend(names);
+        }
+        fixtures
+    }
+
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(self).expect("suite is serializable"))
+        )
+    }
+
+    pub fn select_partition(&self, partition: BenchmarkPartition) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            self.benchmarks.iter().all(|item| item.partition.is_some()),
+            "every entry in a partitioned suite must name a partition"
+        );
+        let benchmarks: Vec<_> = self
+            .benchmarks
+            .iter()
+            .filter(|item| item.partition == Some(partition))
+            .cloned()
+            .collect();
+        anyhow::ensure!(!benchmarks.is_empty(), "requested partition has no entries");
+        Ok(Self {
+            name: self.name.clone(),
+            benchmarks,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(try_from = "BenchmarkSuiteItemInput")]
 pub struct BenchmarkSuiteItem {
     pub name: String,
+    pub version: u32,
     pub iterations: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partition: Option<BenchmarkPartition>,
     pub cluster_size: Vec<usize>,
     pub size: Vec<usize>,
     pub length: Vec<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_compilation_cache: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BenchmarkSuiteItemInput {
+    name: String,
+    version: Option<u32>,
+    iterations: usize,
+    partition: Option<BenchmarkPartition>,
+    cluster_size: Vec<usize>,
+    size: Vec<usize>,
+    length: Vec<usize>,
+    disable_compilation_cache: Option<bool>,
+}
+
+impl TryFrom<BenchmarkSuiteItemInput> for BenchmarkSuiteItem {
+    type Error = String;
+
+    fn try_from(input: BenchmarkSuiteItemInput) -> Result<Self, Self::Error> {
+        let version = input
+            .version
+            .ok_or_else(|| format!("benchmark {} requires a manual version", input.name))?;
+        if input.iterations == 0 {
+            return Err(format!(
+                "benchmark {} requires at least one iteration",
+                input.name
+            ));
+        }
+        Ok(Self {
+            name: input.name,
+            version,
+            iterations: input.iterations,
+            partition: input.partition,
+            cluster_size: input.cluster_size,
+            size: input.size,
+            length: input.length,
+            disable_compilation_cache: input.disable_compilation_cache,
+        })
+    }
 }
 
 impl BenchmarkSuiteItem {
@@ -531,6 +672,100 @@ mod cloud_mode_smoke {
     use url::Url;
     use uuid::Uuid;
 
+    #[test]
+    fn ci_partitions_cover_every_expanded_entry_exactly_once() {
+        use crate::config::BenchmarkCliParameters;
+        use clap::Parser;
+        use std::collections::BTreeSet;
+        let params =
+            BenchmarkCliParameters::parse_from(["benchmarks", "benchmark", "noop", "spawned"]);
+        let suite: BenchmarkSuite = serde_yaml::from_str(include_str!(
+            "../../../integration-tests/benchmark_suites/ci.yaml"
+        ))
+        .unwrap();
+        let workflow: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../.github/workflows/benchmark.yaml"))
+                .unwrap();
+        let jobs: Vec<BenchmarkPartition> = serde_yaml::from_value(
+            workflow["jobs"]["run-benchmark"]["strategy"]["matrix"]["partition"].clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            jobs.iter().copied().collect::<BTreeSet<_>>(),
+            BenchmarkPartition::value_variants()
+                .iter()
+                .copied()
+                .collect()
+        );
+        let expanded = |suite: &BenchmarkSuite| {
+            suite
+                .benchmarks
+                .iter()
+                .flat_map(|item| {
+                    assert!(item.iterations >= 3);
+                    item.runs(params.benchmark_config.mode())
+                        .into_iter()
+                        .map(|config| serde_json::to_string(&(&item.name, config)).unwrap())
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = expanded(&suite);
+        let selected: Vec<_> = jobs
+            .into_iter()
+            .flat_map(|partition| expanded(&suite.select_partition(partition).unwrap()))
+            .collect();
+        let selected_set: BTreeSet<_> = selected.iter().cloned().collect();
+        assert_eq!(
+            selected.len(),
+            selected_set.len(),
+            "an expanded entry belongs to multiple jobs"
+        );
+        assert_eq!(selected_set, expected.into_iter().collect());
+        let mut invalid = suite.clone();
+        invalid.benchmarks[0].partition = None;
+        assert!(
+            invalid
+                .select_partition(BenchmarkPartition::Startup)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn suites_require_named_manual_versions_and_positive_iterations() {
+        let yaml = "name: example\nbenchmarks:\n  - name: asymmetric-case\n    iterations: 3\n    clusterSize: [1]\n    size: [7]\n    length: [13]\n";
+        let error = serde_yaml::from_str::<BenchmarkSuite>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("asymmetric-case") && error.contains("version"),
+            "{error}"
+        );
+        let versioned = yaml.replace("    iterations:", "    version: 2\n    iterations:");
+        assert_eq!(
+            serde_yaml::from_str::<BenchmarkSuite>(&versioned)
+                .unwrap()
+                .benchmarks[0]
+                .version,
+            2
+        );
+        assert!(
+            serde_yaml::from_str::<BenchmarkSuite>(
+                &versioned.replace("iterations: 3", "iterations: 0")
+            )
+            .is_err()
+        );
+        for yaml in [
+            include_str!("../../../integration-tests/benchmark_suites/ci.yaml"),
+            include_str!("../../../integration-tests/benchmark_suites/cloud-perf.yaml"),
+            include_str!("../../../integration-tests/benchmark_suites/mcp-latency.yaml"),
+            include_str!("../../../integration-tests/benchmark_suites/streaming.yaml"),
+            include_str!("../../../integration-tests/benchmark_suites/quick-all.yaml"),
+            include_str!("../../../integration-tests/benchmark_suites/gol-552-smoke.yaml"),
+        ] {
+            serde_yaml::from_str::<BenchmarkSuite>(yaml).unwrap();
+        }
+    }
+
     fn cloud_mode() -> TestMode {
         TestMode::Cloud {
             api_url: Url::parse("https://release.dev-api.golem.cloud").unwrap(),
@@ -551,7 +786,9 @@ mod cloud_mode_smoke {
         let mode = cloud_mode();
         let item = BenchmarkSuiteItem {
             name: "cold-start-unknown-small".to_string(),
+            version: 1,
             iterations: 3,
+            partition: None,
             cluster_size: vec![1, 3, 5], // must be ignored in cloud mode
             size: vec![10],
             length: vec![100],
@@ -571,7 +808,9 @@ mod cloud_mode_smoke {
         let mode = cloud_mode();
         let item = BenchmarkSuiteItem {
             name: "latency-small".to_string(),
+            version: 1,
             iterations: 1,
+            partition: None,
             cluster_size: vec![1, 3],
             size: vec![5, 10],
             length: vec![50, 100],
