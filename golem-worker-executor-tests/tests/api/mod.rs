@@ -13741,12 +13741,16 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
     ] {
         let mut fresh = lookup(fingerprint);
         fresh.mode = mode as i32;
+        fresh.component_id = Some(component.id.into());
         if let Some(tool) = fresh.external_tool.as_mut() {
             tool.fresh_owner = true;
         }
         let fresh = answer(executor.invoke_agent_session(fresh).await);
         assert!(
-            fresh.contains("VALIDATION") && fresh.contains("fresh external tool owner"),
+            fresh.contains("VALIDATION")
+                && fresh.contains(
+                    "a fresh external tool owner cannot have an expected agent fingerprint",
+                ),
             "{mode:?}: {fresh}"
         );
     }
