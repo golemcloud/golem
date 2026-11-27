@@ -19,20 +19,21 @@
 
 use super::execution::{classify_rpc_error, known_fresh_dispatch_allowed};
 use super::{
-    InvocationEntry, RpcCallTarget, WasmRpcEntry, activate_known_target, dispatch_target,
-    find_agent_method, remote_method_uses_streams,
+    InvocationEntry, RemoteCall, RpcCallTarget, WasmRpcEntry, activate_known_target,
+    dispatch_target, find_agent_method, interruptible, remote_method_uses_streams,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessPermissionCheck, CallReplayOutcome, Cancellable, DurableCallSession,
     reserve_invocation_id_before_await,
 };
-use crate::durable_host::durability::{DurabilityHost, HostFailureKind};
+use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::services::rpc::RpcError as InternalRpcError;
-use crate::workerctx::{InvocationContextManagement, WorkerCtx};
+use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
 use golem_common::model::invocation_context::{InvocationContextSpan, InvocationContextStack};
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcSchedule;
@@ -63,9 +64,9 @@ struct PreparedSchedule {
     config: Vec<AgentConfigEntryDto>,
     /// The context the scheduled invocation runs in: a child of the scheduling span.
     stack: InvocationContextStack,
-    /// The context of the call that creates an ephemeral target.
-    inherited_stack: InvocationContextStack,
-    caller: golem_common::model::caller::Caller,
+    /// The remote steps of the schedule. Its stack is the context of the call that creates an
+    /// ephemeral target.
+    remote: RemoteCall,
 }
 
 pub(super) async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
@@ -147,8 +148,7 @@ pub(super) async fn schedule<U: Send + 'static, Ctx: WorkerCtx>(
             env,
             config,
             stack,
-            inherited_stack: ctx.clone_as_inherited_stack(&span_id),
-            caller: ctx.outgoing_caller(),
+            remote: RemoteCall::of(ctx, &span_id),
         };
         Ok::<_, anyhow::Error>((prepared, target, call_target))
     })?;
@@ -251,23 +251,14 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
     first_live_dispatch: bool,
 ) -> anyhow::Result<Result<OwnedInvocationId, InternalRpcError>> {
     let auth_ctx = handle.agent_auth_ctx().clone();
-    let (rpc, created_by, agent_id, worker) = accessor.with(|mut access| {
-        let ctx = access.get();
-        (
-            ctx.rpc(),
-            ctx.created_by(),
-            *ctx.agent_id(),
-            ctx.public_state.worker().clone(),
-        )
-    });
-    let interrupt = || accessor.with(|mut access| access.get().create_interrupt_signal());
+    let remote = &prepared.remote;
 
     let target_fingerprint = if prepared.ephemeral.is_some() {
         // The ephemeral target is created now, so the schedule commits in its oplog and the
         // wake pins this incarnation. The target runs nothing before the deadline. Only the
         // first live dispatch may create a fresh target; a repair may find it.
         let freshness = if known_fresh_dispatch_allowed(first_live_dispatch, true) {
-            worker
+            with_import_access(accessor, |mut access| access.get().public_state.worker())
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
                 .await
                 .map_err(|error| handle.trap(error))?;
@@ -281,27 +272,21 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
             false,
         )
         .map_err(|error| handle.trap(anyhow::Error::from(error)))?;
-        let demand = rpc.create_demand(
+        let demand = remote.rpc.create_demand(
             dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
             &prepared.method_name,
             Some(invocation),
-            created_by,
-            &agent_id,
+            remote.created_by,
+            &remote.agent_id,
             &prepared.env,
-            prepared.inherited_stack.clone(),
-            &prepared.caller,
+            remote.stack.clone(),
+            &remote.caller,
             prepared.config.clone(),
             &auth_ctx,
             Some(idempotency_key.clone()),
             freshness,
         );
-        let interrupt = interrupt();
-        let result = tokio::select! {
-            biased;
-            kind = interrupt => return Err(handle.trap(kind)),
-            result = demand => result,
-        };
-        match result {
+        match interruptible(accessor, handle, demand).await? {
             Ok(demand) => demand.fingerprint(),
             Err(error) => return refusal(handle, error),
         }
@@ -324,27 +309,21 @@ async fn schedule_live<U: Send + 'static, Ctx: WorkerCtx>(
             .try_into()
             .map_err(|error: String| handle.trap(anyhow::anyhow!(error)))?,
         invocation_context: prepared.stack,
-        caller: prepared.caller,
+        caller: remote.caller.clone(),
         scope_card: None,
     };
-    let scheduled = rpc.schedule_invocation(
+    let scheduled = remote.rpc.schedule_invocation(
         remote_agent_id,
         target_fingerprint,
         request_key,
         invocation,
         prepared.scheduled_at,
-        &agent_id,
+        &remote.agent_id,
         &auth_ctx,
     );
-    let interrupt = interrupt();
-    let result = tokio::select! {
-        biased;
-        kind = interrupt => return Err(handle.trap(kind)),
-        result = scheduled => result,
-    };
     // The schedule's wake is not recorded: the handle cancels the invocation by its ID, and a
     // wake that finds no pending invocation has no effect.
-    match result {
+    match interruptible(accessor, handle, scheduled).await? {
         Ok(_) => Ok(Ok(invocation_id)),
         Err(error) => refusal(handle, error),
     }
@@ -367,9 +346,9 @@ fn accepted<U: Send + 'static, Ctx: WorkerCtx>(
     response: HostResponseGolemRpcInvocationAccepted,
 ) -> anyhow::Result<Result<Resource<InvocationEntry>, RpcError>> {
     Ok(match response.result {
-        Ok(id) => {
-            Ok(accessor.with(|mut access| access.get().table().push(InvocationEntry { id }))?)
-        }
+        Ok(id) => Ok(with_import_access(accessor, |mut access| {
+            access.get().table().push(InvocationEntry { id })
+        })?),
         Err(error) => Err(InternalRpcError::from(error).into()),
     })
 }

@@ -15,12 +15,12 @@
 //! Creation of the one-shot instance that runs one invocation of an ephemeral agent type.
 
 use super::execution::classify_rpc_error;
-use super::{PreparedRpcInvocation, dispatch_target};
+use super::{PreparedRpcInvocation, RemoteCall, dispatch_target, interruptible};
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{Cancellable, DurableCallSession, HostInternalCallOwner};
-use crate::durable_host::durability::{DurabilityHost, InternalRetryResult};
+use crate::durable_host::durability::InternalRetryResult;
 use crate::services::rpc::RpcError as InternalRpcError;
-use crate::workerctx::{InvocationContextManagement, WorkerCtx};
+use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcPrepareInvocation;
@@ -111,39 +111,26 @@ pub(super) async fn prepare_ephemeral_identity<
                 prepared.is_streaming(),
             )
             .map_err(anyhow::Error::from)?;
+            let remote = RemoteCall::capture(accessor, span_id);
             let mut freshness = freshness;
             let result = loop {
-                let (rpc, created_by, agent_id, stack, caller, interrupt) =
-                    accessor.with(|mut access| {
-                        let ctx = access.get();
-                        (
-                            ctx.rpc(),
-                            ctx.created_by(),
-                            *ctx.agent_id(),
-                            ctx.clone_as_inherited_stack(span_id),
-                            ctx.outgoing_caller(),
-                            ctx.create_interrupt_signal(),
-                        )
-                    });
-                let demand = rpc.create_demand(
+                let demand = remote.rpc.create_demand(
                     dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
                     &prepared.method_name,
                     Some(invocation.clone()),
-                    created_by,
-                    &agent_id,
+                    remote.created_by,
+                    &remote.agent_id,
                     &prepared.env,
-                    stack,
-                    &caller,
+                    remote.stack.clone(),
+                    &remote.caller,
                     prepared.config.clone(),
                     &auth_ctx,
                     Some(idempotency_key.clone()),
                     freshness,
                 );
-                let result = tokio::select! {
-                    biased;
-                    kind = interrupt => return Err(handle.trap(kind)),
-                    result = demand => result.map(|demand| demand.fingerprint()),
-                };
+                let result = interruptible(accessor, handle, demand)
+                    .await?
+                    .map(|demand| demand.fingerprint());
                 freshness = InvocationFreshnessDisposition::MayExist;
                 match handle
                     .try_trigger_retry_or_loop_context(

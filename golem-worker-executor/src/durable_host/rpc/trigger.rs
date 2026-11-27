@@ -20,20 +20,22 @@
 use super::denial::denied_rpc_request;
 use super::execution::classify_rpc_error;
 use super::{
-    InvocationEntry, PreparedRpcInvocation, RpcCallTarget, WasmRpcEntry, activate_known_target,
-    claim_completed_preparation, dispatch_target, embedded_invocation_span_builder,
-    known_fresh_dispatch_allowed, preparation_request, prepare_ephemeral_identity,
-    prepare_rpc_invocation, recorded_target_fingerprint, restore_embedded_span, rpc_span_finished,
+    InvocationEntry, PreparedRpcInvocation, RemoteCall, RpcCallTarget, WasmRpcEntry,
+    activate_known_target, claim_completed_preparation, dispatch_target,
+    embedded_invocation_span_builder, interruptible, known_fresh_dispatch_allowed,
+    preparation_request, prepare_ephemeral_identity, prepare_rpc_invocation,
+    recorded_target_fingerprint, restore_embedded_span, rpc_span_finished,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessPermissionCheck, CallReplayOutcome, Cancellable, DurableCallSession,
     finish_span_in_memory, reserve_invocation_id_before_await,
 };
-use crate::durable_host::durability::{DurabilityHost, InternalRetryResult};
+use crate::durable_host::durability::InternalRetryResult;
+use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::rpc::RpcError as InternalRpcError;
-use crate::workerctx::{InvocationContextManagement, WorkerCtx};
+use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcTrigger;
 use golem_common::model::oplog::payload::denied;
@@ -144,9 +146,10 @@ pub(super) async fn trigger<U: Send + 'static, Ctx: WorkerCtx>(
             )
         })
         .map_err(|error| handle.trap(error))?;
-    let span = accessor
-        .with(|mut access| restore_embedded_span(access.get(), &started))
-        .map_err(|error| handle.trap(error))?;
+    let span = with_import_access(accessor, |mut access| {
+        restore_embedded_span(access.get(), &started)
+    })
+    .map_err(|error| handle.trap(error))?;
     let span_id = span.span_id().clone();
     handle.close_span_on_cancellation(span_id.clone());
 
@@ -259,7 +262,7 @@ fn accepted<U: Send + 'static, Ctx: WorkerCtx>(
     response: HostResponseGolemRpcInvocationAccepted,
     span_id: &golem_common::model::invocation_context::SpanId,
 ) -> anyhow::Result<Result<Resource<InvocationEntry>, RpcError>> {
-    accessor.with(|mut access| {
+    with_import_access(accessor, |mut access| {
         let ctx = access.get();
         finish_span_in_memory(ctx, span_id)?;
         Ok(match response.result {
@@ -290,39 +293,25 @@ async fn dispatch<U: Send + 'static, Ctx: WorkerCtx>(
     };
     let auth_ctx = handle.agent_auth_ctx().clone();
     let retry_properties = prepared.retry_properties("trigger", remote_agent_id);
+    let remote = RemoteCall::capture(accessor, span_id);
     let result = loop {
-        let (rpc, created_by, agent_id, stack, caller, interrupt) = accessor.with(|mut access| {
-            let ctx = access.get();
-            (
-                ctx.rpc(),
-                ctx.created_by(),
-                *ctx.agent_id(),
-                ctx.clone_as_inherited_stack(span_id),
-                ctx.outgoing_caller(),
-                ctx.create_interrupt_signal(),
-            )
-        });
         // A durable target exists, and preparation already created an ephemeral one.
-        let invocation = rpc.invoke(
+        let invocation = remote.rpc.invoke(
             dispatch_target(remote_agent_id, prepared.ephemeral.as_ref()),
             Some(idempotency_key.clone()),
             InvocationFreshnessDisposition::MayExist,
             expected_callee_fingerprint,
             prepared.method_name.clone(),
             prepared.input_value.clone(),
-            created_by,
-            &agent_id,
+            remote.created_by,
+            &remote.agent_id,
             &prepared.env,
-            stack,
-            &caller,
+            remote.stack.clone(),
+            &remote.caller,
             prepared.config.clone(),
             &auth_ctx,
         );
-        let result = tokio::select! {
-            biased;
-            kind = interrupt => return Err(handle.trap(kind)),
-            result = invocation => result,
-        };
+        let result = interruptible(accessor, handle, invocation).await?;
         match handle
             .try_trigger_retry_or_loop_context(
                 accessor,

@@ -25,6 +25,7 @@ use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::durable_host::concurrent::finish_span_in_memory;
+use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::rpc::ReplayedDemand;
 use crate::services::rpc::Rpc;
@@ -594,7 +595,7 @@ pub(super) fn recorded_target_fingerprint<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     this: &Resource<WasmRpcEntry>,
 ) -> anyhow::Result<Option<AgentFingerprint>> {
-    accessor.with(|mut access| {
+    with_import_access(accessor, |mut access| {
         Ok(access
             .get()
             .table()
@@ -611,7 +612,7 @@ pub(super) fn activate_known_target<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     this: &Resource<WasmRpcEntry>,
 ) -> anyhow::Result<AgentFingerprint> {
-    accessor.with(|mut access| {
+    with_import_access(accessor, |mut access| {
         let payload = &mut access.get().table().get_mut(this)?.payload;
         match &payload.target_activation {
             WasmRpcTargetActivation::Activated {

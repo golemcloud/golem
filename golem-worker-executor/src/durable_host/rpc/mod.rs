@@ -180,6 +180,7 @@ mod execution;
 mod host;
 mod invocation;
 mod invoke_and_await;
+mod remote_call;
 mod schedule;
 mod spans;
 mod target;
@@ -188,6 +189,7 @@ mod values;
 
 use ephemeral::*;
 use execution::*;
+use remote_call::*;
 use spans::*;
 use target::*;
 use values::*;

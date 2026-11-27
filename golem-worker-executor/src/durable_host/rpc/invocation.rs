@@ -20,6 +20,7 @@
 
 use super::InvocationEntry;
 use super::admit_rpc_result_secret_holds;
+use super::suspendable;
 use super::values::invoke_and_await_response_to_wire;
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
@@ -28,6 +29,7 @@ use crate::durable_host::concurrent::Cancellable;
 use crate::durable_host::concurrent::DeferredCallReplayOutcome;
 use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::reserve_invocation_id_before_await;
+use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::HostInvocation;
 use crate::preview2::golem::agent::host::HostInvocationWithStore;
 use crate::preview2::golem::agent::host::InvocationStatus;
@@ -308,33 +310,14 @@ async fn observe<U: Send + 'static, Ctx: WorkerCtx>(
     Result<InvocationHandleSuccess, WorkerExecutorError>,
     golem_service_base::error::worker_executor::InterruptKind,
 > {
-    let (rpc, caller, rpc_wait, interrupt) = accessor.with(|mut access| {
+    let (rpc, caller) = with_import_access(accessor, |mut access| {
         let ctx = access.get();
-        let wait = accessor.runtime_activity().and_then(|activity| {
-            ctx.runtime_suspension.as_ref().and_then(|runtime| {
-                runtime.rpc_wait(
-                    activity,
-                    ctx.state.config.suspend.rpc_suspend_after,
-                    ctx.state.config.suspend.rpc_resume_after,
-                )
-            })
-        });
-        (
-            ctx.rpc(),
-            ctx.outgoing_caller().immediate,
-            wait,
-            ctx.create_interrupt_signal(),
-        )
+        (ctx.rpc(), ctx.outgoing_caller().immediate)
     });
-    let request = async move { rpc.invocation_handle(id, &caller, operation, &auth).await };
-    match rpc_wait {
-        Some(wait) => wait.wait_result(request, interrupt).await,
-        None => tokio::select! {
-            biased;
-            kind = interrupt => Err(kind),
-            result = request => Ok(result),
-        },
-    }
+    suspendable(accessor, async move {
+        rpc.invocation_handle(id, &caller, operation, &auth).await
+    })
+    .await
 }
 
 /// The recorded refusal of a handle operation, or `None` when the error is operational and the

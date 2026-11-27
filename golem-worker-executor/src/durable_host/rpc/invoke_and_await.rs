@@ -22,16 +22,14 @@
 use super::denial::denied_rpc_request;
 use super::{
     CallerStreamsContext, DurableStreamingTaskParams, PreparedRpcInvocation, RpcCallTarget,
-    RpcTask, RpcTaskResult, WasmRpcEntry, admit_rpc_result_secret_holds,
-    caller_durable_rpc_streams, claim_completed_preparation, current_streaming_origin,
-    discard_owned_rpc_input, dispatch_target, embedded_invocation_span_builder,
-    invocation_metadata, invoke_and_await_response_to_wire, known_fresh_dispatch_allowed,
-    preparation_request, prepare_ephemeral_identity, prepare_rpc_invocation,
-    recorded_target_fingerprint, restore_embedded_span, retry_after_backoff, rpc_input_root,
-    rpc_output_root, rpc_span_finished, spawn_invoke_and_await_task,
-    spawn_streaming_invoke_and_await_task,
+    WasmRpcEntry, admit_rpc_result_secret_holds, caller_durable_rpc_streams,
+    claim_completed_preparation, current_streaming_origin, discard_owned_rpc_input,
+    dispatch_target, embedded_invocation_span_builder, invocation_metadata,
+    invoke_and_await_response_to_wire, known_fresh_dispatch_allowed, preparation_request,
+    prepare_ephemeral_identity, prepare_rpc_invocation, recorded_target_fingerprint,
+    restore_embedded_span, retry_after_backoff, rpc_input_root, rpc_output_root, rpc_span_finished,
+    spawn_invoke_and_await_task, spawn_streaming_invoke_and_await_task, suspendable,
 };
-use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessPermissionCheck, Cancellable, DeferredCallReplayOutcome,
@@ -57,7 +55,7 @@ use golem_common::model::{
 };
 use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::wire as core_wire;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use wasmtime::component::{Accessor, HasSelf, Resource};
@@ -194,9 +192,10 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
             )
         })
         .map_err(|error| handle.trap(error))?;
-    let span = accessor
-        .with(|mut access| restore_embedded_span(access.get(), &started))
-        .map_err(|error| handle.trap(error))?;
+    let span = with_import_access(accessor, |mut access| {
+        restore_embedded_span(access.get(), &started)
+    })
+    .map_err(|error| handle.trap(error))?;
     let span_id = span.span_id().clone();
     handle.close_span_on_cancellation(span_id.clone());
 
@@ -366,8 +365,8 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
     );
     // A client reconstructed after a restart activates its recorded incarnation inside each
     // dispatch task, as before the restart, and creates nothing.
-    let (deferred_activation, expected_callee_fingerprint) = accessor
-        .with(|mut access| {
+    let (deferred_activation, expected_callee_fingerprint) =
+        with_import_access(accessor, |mut access| {
             let activation = &access.get().table().get(&this)?.payload.target_activation;
             anyhow::Ok((
                 activation.deferred_activation(),
@@ -470,7 +469,7 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
     );
     let mut task = spawn(&handle);
     let result = loop {
-        let task_result = wait_for_task(accessor, &mut task).await;
+        let task_result = suspendable(accessor, &mut task).await;
         let rpc_result = match task_result {
             Ok(Ok(rpc_result)) => rpc_result,
             Ok(Err(error)) => {
@@ -527,35 +526,6 @@ pub(super) async fn invoke_and_await<U: Send + 'static, Ctx: WorkerCtx>(
         response.result = Ok(value);
     }
     deliver(accessor, response, Some(&final_id), delivery, &span_id).await
-}
-
-/// Waits for the call's RPC task. The wait lets the agent suspend while the call is long, and an
-/// interrupt of the agent ends it.
-async fn wait_for_task<U: Send + 'static, Ctx: WorkerCtx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    task: &mut RpcTask,
-) -> Result<RpcTaskResult, InterruptKind> {
-    let (rpc_wait, interrupt_signal) = with_import_access(accessor, |mut access| {
-        let ctx = access.get();
-        let wait = accessor.runtime_activity().and_then(|activity| {
-            ctx.runtime_suspension.as_ref().and_then(|runtime| {
-                runtime.rpc_wait(
-                    activity,
-                    ctx.state.config.suspend.rpc_suspend_after,
-                    ctx.state.config.suspend.rpc_resume_after,
-                )
-            })
-        });
-        (wait, ctx.create_interrupt_signal())
-    });
-    match rpc_wait {
-        Some(wait) => wait.wait_result(task, interrupt_signal).await,
-        None => tokio::select! {
-            biased;
-            kind = interrupt_signal => Err(kind),
-            result = task => Ok(result),
-        },
-    }
 }
 
 /// Finishes the call's span and returns the recorded result to the guest. A completion that
