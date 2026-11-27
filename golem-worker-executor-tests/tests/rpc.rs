@@ -16,16 +16,15 @@ use crate::Tracing;
 use async_trait::async_trait;
 use axum::Router;
 use axum::routing::post;
-use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::{
     InputStreamItem, InvocationAccepted, InvocationFailureKind, InvocationRequest,
-    InvocationResponse, InvocationStart, ResumeAttach, ResumeOperation, StreamConsumerCancelled,
-    StreamCursor, StreamDirection, StreamEnd, StreamInvocationIdentity, StreamTerminalAuthor,
-    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
+    InvocationResponse, InvocationStart, ResumeAttach, ResumeOperation, StreamCursor,
+    StreamDirection, StreamEnd, StreamInvocationIdentity, StreamTerminalAuthor, input_stream_item,
+    invocation_request, invocation_response, invocation_session_completion,
     invocation_session_result, stream_terminal,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
@@ -45,7 +44,7 @@ use golem_common::model::{
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
-use golem_schema::proto::golem::schema::{RecordValue, SchemaValueStreamReference, schema_value};
+use golem_schema::proto::golem::schema::{RecordValue, schema_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::services::direct_invocation_auth::{
@@ -54,6 +53,10 @@ use golem_worker_executor::services::direct_invocation_auth::{
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::{
+    InvocationError, InvocationSession, InvocationSessionResultExt, SessionTerminal, id_target,
+    resume_attach, stream_reference,
+};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, RecordingRpc, RpcCheckpoint, TestContext,
     TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, start,
@@ -1680,46 +1683,31 @@ async fn invalid_start_is_rejected_before_acceptance(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let (requests, receiver) = mpsc::channel(1);
-    requests
-        .send(InvocationRequest {
-            request: Some(invocation_request::Request::Start(InvocationStart {
-                target: Some(crate::agent::id_target(&OwnedAgentId::new(
-                    context.default_environment_id,
-                    &AgentId::random_reserved(),
-                ))),
-                method_name: Some("run".to_string()),
-                input: Some(golem_schema::proto::golem::schema::SchemaValue {
-                    value: Some(
-                        golem_schema::proto::golem::schema::schema_value::Value::U8Value(1),
-                    ),
-                }),
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
-                auth_ctx: None,
-                caller: Some(callers::anonymous().into()),
-                ..Default::default()
-            })),
-        })
-        .await?;
+    // A start without an auth context or environment, which the protocol state would refuse.
+    let invalid_start = InvocationStart {
+        target: Some(id_target(&OwnedAgentId::new(
+            context.default_environment_id,
+            &AgentId::random_reserved(),
+        ))),
+        method_name: Some("run".to_string()),
+        input: Some(SchemaValue::U8(1).try_into().map_err(anyhow::Error::msg)?),
+        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        auth_ctx: None,
+        caller: Some(callers::anonymous().into()),
+        ..Default::default()
+    };
 
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let response = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("invalid invocation start returned no rejection"))?;
+    let mut session = executor.open_unvalidated_session(invalid_start).await?;
+    let first = session.next().await?;
 
-    match response.response {
-        Some(invocation_response::Response::Rejected(_)) => {}
-        other => {
-            panic!("invalid invocation start must be rejected before acceptance, got {other:?}")
-        }
-    }
-    assert!(responses.message().await?.is_none());
+    assert!(
+        matches!(first, Some(invocation_response::Response::Rejected(_))),
+        "invalid invocation start must be rejected before acceptance, got {first:?}"
+    );
+    assert!(
+        session.next().await?.is_none(),
+        "the rejection ends the session"
+    );
     Ok(())
 }
 
@@ -1743,121 +1731,38 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let (_, input) = data_value!().into_parts();
-    let key = IdempotencyKey::fresh();
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("produce_siblings".to_string()),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
-            ),
-            idempotency_key: Some(key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let mut cancellation_sent = false;
+    let start = executor
+        .invocation(&component, "produce_siblings")
+        .on_agent(&worker_agent_id)
+        .input(data_value!())?
+        .with_request_key()
+        .allow_streams()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .build()?;
+    let mut session = executor.open_session(start).await?;
+    session.accepted().await?;
 
-    while let Some(response) = responses.message().await? {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-        match response.response {
-            Some(invocation_response::Response::Result(result)) => {
-                let value = match &result.result {
-                    Some(invocation_session_result::Result::MethodResult(value)) => value,
-                    other => anyhow::bail!("expected a method result, got {other:?}"),
-                };
-                let stream_id = match &value.value {
-                    Some(schema_value::Value::TupleValue(tuple)) => match tuple.elements.first() {
-                        Some(golem_schema::proto::golem::schema::SchemaValue {
-                            value: Some(schema_value::Value::StreamReference(reference)),
-                        }) => reference.stream_id,
-                        other => anyhow::bail!("expected first sibling stream, got {other:?}"),
-                    },
-                    other => anyhow::bail!("expected sibling tuple result, got {other:?}"),
-                };
-                let mapping = result
-                    .new_stream_mappings
-                    .iter()
-                    .find(|mapping| mapping.transport_stream_id == stream_id)
-                    .ok_or_else(|| anyhow::anyhow!("result omitted the durable output mapping"))?;
-                let cancel = InvocationRequest {
-                    request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                        transport_stream_id: stream_id,
-                        producer_sequence: 0,
-                        direction: StreamDirection::Output as i32,
-                        authored_by: StreamTerminalAuthor::Guest as i32,
-                        outcome: Some(golem_api_grpc::proto::golem::worker::StreamTerminal {
-                            terminal: Some(stream_terminal::Terminal::ConsumerCancelled(
-                                StreamConsumerCancelled {
-                                    details: Some("consumer stopped reading".to_string()),
-                                },
-                            )),
-                        }),
-                        durable_stream_id: mapping
-                            .handle
-                            .as_ref()
-                            .and_then(|handle| handle.stream_id),
-                        epoch: 1,
-                        durable_offset: Vec::new(),
-                    })),
-                };
-                state
-                    .validate_trusted_request(&cancel)
-                    .map_err(anyhow::Error::msg)?;
-                requests.send(cancel).await?;
-                cancellation_sent = true;
-            }
-            Some(invocation_response::Response::Finished(finished)) => {
-                assert!(cancellation_sent, "session finished before cancellation");
-                assert!(
-                    matches!(
-                        finished.outcome,
-                        Some(invocation_session_completion::Outcome::Success(_))
-                    ),
-                    "output consumer cancellation must not fail the invocation: {finished:?}"
-                );
-                assert!(state.is_complete());
-                assert!(responses.message().await?.is_none());
-                return Ok(());
-            }
-            Some(invocation_response::Response::Rejected(rejected)) => {
-                anyhow::bail!("invocation rejected: {}", rejected.error)
-            }
-            _ => {}
-        }
-    }
+    // Action: cancel the first sibling output once the result names it.
+    let result = session.wait_for_result().await?;
+    let output = result.first_output_stream()?;
+    session
+        .cancel_output(
+            output.transport_stream_id,
+            output.handle.as_ref().and_then(|handle| handle.stream_id),
+            "consumer stopped reading",
+        )
+        .await?;
+    let outcome = session.collect_with_output().await?;
 
-    anyhow::bail!("invocation response closed without InvocationFinished")
+    // Checks: a consumer that stops reading an output is a valid terminal of the session.
+    assert!(
+        outcome.terminal.is_success(),
+        "output consumer cancellation must not fail the invocation: {:?}",
+        outcome.terminal
+    );
+    assert!(outcome.complete, "the protocol state saw the whole session");
+    Ok(())
 }
 
 fn selected_stream_terminals(oplog: &[PublicOplogEntryWithIndex]) -> Vec<StreamTerminalRecord> {
@@ -1917,103 +1822,43 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
             .await?
             .into_typed::<PromiseId>()?;
         let key = IdempotencyKey::fresh();
-        let input = golem_schema::proto::golem::schema::SchemaValue {
-            value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![
-                    golem_schema::proto::golem::schema::SchemaValue {
-                        value: Some(schema_value::Value::StreamReference(
-                            SchemaValueStreamReference { stream_id: 1 },
-                        )),
-                    },
-                    gate.to_value().try_into().map_err(anyhow::Error::msg)?,
-                ],
-            })),
-        };
-        let (mut frames, mut responses, accepted) = open_raw_session(
-            &executor,
-            InvocationStart {
-                allow_streams: true,
-                captured_method_input: None,
-                target: Some(crate::agent::id_target(&worker)),
-                constructor: None,
-                component_id: None,
-                method_name: Some("observe_input_terminal".into()),
-                input: Some(input),
-                request_key: Some(
-                    InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
-                        Some(&key),
-                    )
-                    .into(),
-                ),
-                idempotency_key: Some(key.clone().into()),
-                auth_ctx: Some(executor.auth_ctx().into()),
-                environment_id: Some(component.environment_id.into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-                caller: Some(callers::anonymous().into()),
-                ..Default::default()
-            },
-        )
-        .await?;
-        let stream_id = accepted.stream_mappings[0]
-            .handle
-            .as_ref()
-            .unwrap()
-            .stream_id;
-        frames
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                    transport_stream_id: 1,
-                    sequence: 0,
-                    durable_stream_id: stream_id,
-                    epoch: accepted.epoch,
-                    payload: Some(input_stream_item::Payload::Value(
-                        SchemaValue::U32(17)
-                            .try_into()
-                            .map_err(anyhow::Error::msg)?,
-                    )),
-                })),
-            })
-            .await?;
-        let acknowledgment = responses
-            .message()
-            .await?
-            .expect("input item acknowledgment");
+        let invocation = executor
+            .invocation(&component, "observe_input_terminal")
+            .on_agent(&worker)
+            .idempotency_key(&key)
+            .with_request_key()
+            .allow_streams()
+            .fresh_attempt()
+            .expect_fingerprint(metadata.fingerprint.0)
+            .input_record(vec![
+                stream_reference(1),
+                gate.to_value().try_into().map_err(anyhow::Error::msg)?,
+            ])
+            .build()?;
+        let mut session = executor.open_unvalidated_session(invocation).await?;
+        let accepted = session.accepted().await?;
+        session.send_input(1, 0, SchemaValue::U32(17)).await?;
+        let acknowledgment = session.next().await?.expect("input item acknowledgment");
         assert!(
-            matches!(&acknowledgment.response,
-                Some(invocation_response::Response::InputAck(ack))
+            matches!(&acknowledgment,
+                invocation_response::Response::InputAck(ack)
                     if ack.transport_stream_id == 1 && ack.highest_contiguous_sequence == 0
             ),
             "{acknowledgment:?}"
         );
-        frames
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                    transport_stream_id: 1,
-                    producer_sequence: 1,
-                    durable_stream_id: stream_id,
-                    epoch: accepted.epoch,
-                    direction: StreamDirection::Input as i32,
-                    authored_by: StreamTerminalAuthor::Guest as i32,
-                    outcome: Some(terminal.clone().try_into().map_err(anyhow::Error::msg)?),
-                    ..Default::default()
-                })),
-            })
-            .await?;
+        session.end_input(1, 1, terminal.clone()).await?;
         loop {
-            let response = responses
-                .message()
+            let response = session
+                .next()
                 .await?
                 .expect("input terminal acknowledgment");
-            match response.response {
-                Some(invocation_response::Response::InputAck(ack))
+            match response {
+                invocation_response::Response::InputAck(ack)
                     if ack.highest_contiguous_sequence == 1 =>
                 {
                     break;
                 }
-                Some(invocation_response::Response::InputAck(_)) => {}
+                invocation_response::Response::InputAck(_) => {}
                 other => anyhow::bail!("terminal read escaped the promise gate: {other:?}"),
             }
         }
@@ -2045,8 +1890,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         if restart {
             // The selected terminal is durable, but the guest cannot read it before this crash.
             // Resume restarts the pending invocation, rather than looking up a failed result.
-            drop(frames);
-            drop(responses);
+            drop(session);
             tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
                     let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -2065,52 +1909,35 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
             .await??;
             drop(executor);
             executor = start(deps, &context).await?;
-            let (sender, receiver) = mpsc::channel(8);
-            sender
-                .send(InvocationRequest {
-                    request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                        agent_id: Some(worker.agent_id.into()),
-                        environment_id: Some(component.environment_id.into()),
-                        idempotency_key: accepted.idempotency_key,
-                        attachment_id: accepted.attachment_id,
-                        attempt_id: Some(uuid::Uuid::new_v4().into()),
-                        expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-                        expected_epoch: accepted.epoch,
-                        operation: ResumeOperation::Resume as i32,
-                        auth_ctx: Some(executor.auth_ctx().into()),
-                        caller: Some(callers::anonymous().into()),
-                        ..Default::default()
-                    })),
-                })
-                .await?;
-            responses = executor
-                .client
-                .clone()
-                .invoke_agent_session(ReceiverStream::new(receiver))
-                .await?
-                .into_inner();
-            let response = responses
-                .message()
-                .await?
-                .expect("recovered input acceptance");
+            let resume = ResumeAttach {
+                agent_id: Some(worker.agent_id.into()),
+                environment_id: Some(component.environment_id.into()),
+                idempotency_key: accepted.idempotency_key,
+                attachment_id: accepted.attachment_id,
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                expected_epoch: accepted.epoch,
+                operation: ResumeOperation::Resume as i32,
+                auth_ctx: Some(executor.auth_ctx().into()),
+                caller: Some(callers::anonymous().into()),
+                ..Default::default()
+            };
+            session = executor.resume_unvalidated_session(resume).await?;
+            let response = session.next().await?.expect("recovered input acceptance");
             assert!(
-                matches!(
-                    response.response,
-                    Some(invocation_response::Response::Accepted(_))
-                ),
+                matches!(response, invocation_response::Response::Accepted(_)),
                 "{response:?}"
             );
-            frames = sender;
         }
         executor
             .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
             .await?;
         let mut observed = None;
         let mut finished = false;
-        while let Some(response) = responses.message().await? {
-            match response.response {
-                Some(invocation_response::Response::InputAck(_)) => {}
-                Some(invocation_response::Response::Result(result)) => {
+        while let Some(response) = session.next().await? {
+            match response {
+                invocation_response::Response::InputAck(_) => {}
+                invocation_response::Response::Result(result) => {
                     let Some(invocation_session_result::Result::MethodResult(value)) =
                         result.result
                     else {
@@ -2118,7 +1945,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                     };
                     observed = Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
                 }
-                Some(invocation_response::Response::Finished(completion)) => {
+                invocation_response::Response::Finished(completion) => {
                     match completion.outcome {
                         Some(invocation_session_completion::Outcome::Success(_)) => {
                             let expected = match &terminal {
@@ -2150,8 +1977,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
             }
         }
         assert!(finished);
-        drop(frames);
-        drop(responses);
+        drop(session);
         let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         assert_eq!(selected_stream_terminals(&history), before);
         let observed_terminals = history
@@ -2380,56 +2206,24 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
         .await?;
     let metadata = executor.get_worker_metadata(&agent_id).await?;
     let loads = executor.instance_load_count(&agent_id.agent_id);
-    let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("produce_after_timer".to_string()),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    let start = executor
+        .invocation(&component, "produce_after_timer")
+        .on_agent(&agent_id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input(data_value!())?
+        .build()?;
+    let mut session = executor.open_session(start).await?;
     let stream_id = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let response = responses
+            let response = session
                 .message()
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("closed before result"))?;
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
             match response.response {
                 Some(invocation_response::Response::Accepted(_))
                 | Some(invocation_response::Response::Ready(_)) => {}
@@ -2476,7 +2270,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
             .await
     );
     tokio::select! {
-        response = responses.message() => anyhow::bail!("output advanced before observed unload: {response:?}"),
+        response = session.message() => anyhow::bail!("output advanced before observed unload: {response:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(10), async {
             executor.wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(8)).await?;
             while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &agent_id.agent_id)).await {
@@ -2490,10 +2284,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
     let mut ends = 0;
     let mut finishes = 0;
     tokio::time::timeout(Duration::from_secs(60), async {
-        while let Some(response) = responses.message().await? {
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
+        while let Some(response) = session.message().await? {
             match response.response {
                 Some(invocation_response::Response::OutputItem(item)) => {
                     assert_eq!(item.transport_stream_id, stream_id);
@@ -2533,7 +2324,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
         Ok::<(), anyhow::Error>(())
     })
     .await??;
-    assert!(state.is_complete());
+    assert!(session.is_complete());
     assert_eq!(values, vec![23, 169, 7]);
     assert_eq!(ends, 1);
     assert_eq!(finishes, 1);
@@ -2642,54 +2433,21 @@ async fn output_prefix_survives_autonomous_suspension(
         .await?;
     let metadata = executor.get_worker_metadata(&agent_id).await?;
     let loads = executor.instance_load_count(&agent_id.agent_id);
-    let (_, input) = data_value!().into_parts();
-    let start_key = IdempotencyKey::fresh();
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some(
-                if nested {
-                    "produce_nested_after_prefix_timer"
-                } else {
-                    "produce_bytes_after_prefix_timer"
-                }
-                .to_string(),
-            ),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
+    let method = if nested {
+        "produce_nested_after_prefix_timer"
+    } else {
+        "produce_bytes_after_prefix_timer"
     };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    let start = executor
+        .invocation(&component, method)
+        .on_agent(&agent_id)
+        .allow_streams()
+        .input(data_value!())?
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .build()?;
+    let mut session = executor.open_session(start).await?;
     let mut root = None;
     let mut nested_id = None;
     let mut handles = BTreeMap::new();
@@ -2702,10 +2460,7 @@ async fn output_prefix_survives_autonomous_suspension(
     let mut finished = 0;
     let mut unloaded = false;
     tokio::time::timeout(Duration::from_secs(60), async {
-        while let Some(response) = responses.message().await? {
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
+        while let Some(response) = session.message().await? {
             match response.response {
                 Some(invocation_response::Response::Accepted(_))
                 | Some(invocation_response::Response::Ready(_)) => {}
@@ -2947,7 +2702,7 @@ async fn output_prefix_survives_autonomous_suspension(
     })
     .await??;
     assert!(unloaded);
-    assert!(state.is_complete());
+    assert!(session.is_complete());
     assert_eq!(finished, 1);
     assert_eq!(
         values,
@@ -3159,63 +2914,27 @@ async fn interrupt_output_producer_after_result(
             .await?
     };
     let metadata = executor.get_worker_metadata(&agent_id).await?;
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("produce_then_spin".to_string()),
-            input: Some(golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::RecordValue(RecordValue {
-                    fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                        value: Some(schema_value::Value::StreamReference(
-                            SchemaValueStreamReference { stream_id: 1 },
-                        )),
-                    }],
-                })),
-            }),
-            request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
-            ),
-            idempotency_key: Some(key.clone().into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (mut requests, receiver) = mpsc::channel(8);
-    requests.send(start.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    let start = executor
+        .invocation(&component, "produce_then_spin")
+        .on_agent(&agent_id)
+        .allow_streams()
+        .idempotency_key(&key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    let mut session = executor.open_session(start.clone()).await?;
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut result_seen = false;
         let mut first_item_seen = false;
         let mut accepted = None;
         let mut restarted = false;
         loop {
-            let response = responses
+            let response = session
                 .message()
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("producer ended before the spin handshake"))?;
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
             let next_input = match response.response {
                 Some(invocation_response::Response::Accepted(value))
                 | Some(invocation_response::Response::Ready(value)) => {
@@ -3226,38 +2945,9 @@ async fn interrupt_output_producer_after_result(
                     let acceptance = accepted.as_ref().expect("acceptance before result");
                     if restart_before_input && !restarted {
                         executor.simulated_crash(&agent_id).await?;
-                        let resume = InvocationRequest {
-                            request: Some(invocation_request::Request::ResumeAttach(
-                                ResumeAttach {
-                                    idempotency_key: acceptance.idempotency_key,
-                                    agent_id: Some(agent_id.agent_id.into()),
-                                    environment_id: Some(component.environment_id.into()),
-                                    attachment_id: acceptance.attachment_id,
-                                    attempt_id: Some(uuid::Uuid::new_v4().into()),
-                                    expected_callee_fingerprint: Some(
-                                        metadata.fingerprint.0.into(),
-                                    ),
-                                    expected_epoch: acceptance.epoch,
-                                    operation: ResumeOperation::Resume as i32,
-                                    cursors: Vec::new(),
-                                    auth_ctx: Some(executor.auth_ctx().into()),
-                                    caller: Some(callers::anonymous().into()),
-                                },
-                            )),
-                        };
-                        state = InvocationSessionState::default();
-                        state
-                            .validate_trusted_request(&resume)
-                            .map_err(anyhow::Error::msg)?;
-                        let (resumed_requests, receiver) = mpsc::channel(8);
-                        resumed_requests.send(resume).await?;
-                        requests = resumed_requests;
-                        responses = executor
-                            .client
-                            .clone()
-                            .invoke_agent_session(ReceiverStream::new(receiver))
-                            .await?
-                            .into_inner();
+                        session = executor
+                            .resume_session(resume_attach(&start, acceptance))
+                            .await?;
                         accepted = None;
                         restarted = true;
                         continue;
@@ -3289,32 +2979,9 @@ async fn interrupt_output_producer_after_result(
                 _ => None,
             };
             if let Some((sequence, value)) = next_input {
-                let acceptance = accepted.as_ref().expect("acceptance before input");
-                let input = acceptance
-                    .stream_mappings
-                    .iter()
-                    .find(|mapping| mapping.transport_stream_id == 1)
-                    .expect("input mapping");
-                let item = InvocationRequest {
-                    request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                        transport_stream_id: 1,
-                        sequence,
-                        payload: Some(input_stream_item::Payload::Value(
-                            SchemaValue::U32(value)
-                                .try_into()
-                                .map_err(anyhow::Error::msg)?,
-                        )),
-                        durable_stream_id: input
-                            .handle
-                            .as_ref()
-                            .and_then(|handle| handle.stream_id),
-                        epoch: acceptance.epoch,
-                    })),
-                };
-                state
-                    .validate_trusted_request(&item)
-                    .map_err(anyhow::Error::msg)?;
-                requests.send(item).await?;
+                session
+                    .send_input(1, sequence, SchemaValue::U32(value))
+                    .await?;
             }
         }
     })
@@ -3341,9 +3008,8 @@ async fn interrupt_output_producer_after_result(
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
         "interruption must not become an invocation error or retry"
     );
-    assert_interrupted_transport_closed(&mut responses, &mut state).await?;
-    drop(requests);
-    drop(responses);
+    assert_interrupted_transport_closed(&mut session).await?;
+    drop(session);
     assert_failed_redispatch(&executor, start).await?;
     let method_starts = executor
         .get_oplog(&agent_id, OplogIndex::INITIAL)
@@ -3369,29 +3035,27 @@ async fn interrupt_output_producer_after_result(
 }
 
 async fn assert_interrupted_transport_closed(
-    responses: &mut tonic::Streaming<InvocationResponse>,
-    state: &mut InvocationSessionState,
+    session: &mut InvocationSession,
 ) -> anyhow::Result<()> {
     // Owner retirement does not wait for transport delivery. Durable interruption and
     // same-key redispatch are checked separately from this disposable attachment.
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let response = match responses.message().await {
+            let response = match session.message().await {
                 Ok(Some(response)) => response,
                 Ok(None) => return Ok(()),
                 Err(error)
-                    if matches!(
-                        error.code(),
-                        tonic::Code::Cancelled | tonic::Code::Unavailable
-                    ) =>
+                    if error.downcast_ref::<tonic::Status>().is_some_and(|status| {
+                        matches!(
+                            status.code(),
+                            tonic::Code::Cancelled | tonic::Code::Unavailable
+                        )
+                    }) =>
                 {
                     return Ok(());
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error),
             };
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
             if let Some(invocation_response::Response::Finished(finished)) = response.response {
                 let Some(invocation_session_completion::Outcome::Failure(failure)) =
                     finished.outcome
@@ -3409,33 +3073,16 @@ async fn assert_interrupted_transport_closed(
 
 async fn assert_failed_redispatch(
     executor: &TestWorkerExecutor,
-    mut start: InvocationRequest,
+    mut start: InvocationStart,
 ) -> anyhow::Result<String> {
-    let Some(invocation_request::Request::Start(request)) = start.request.as_mut() else {
-        unreachable!("redispatch requires the original Start");
-    };
-    request.attempt_id = Some(uuid::Uuid::new_v4().into());
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(1);
-    requests.send(start).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    start.attempt_id = Some(uuid::Uuid::new_v4().into());
+    let mut session = executor.open_session(start).await?;
     let failure = tokio::time::timeout(Duration::from_secs(10), async {
         let failure = loop {
-            let response = responses
+            let response = session
                 .message()
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("same-key redispatch closed without a terminal"))?;
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
             match response.response {
                 Some(invocation_response::Response::Finished(finished)) => {
                     let Some(invocation_session_completion::Outcome::Failure(failure)) =
@@ -3450,12 +3097,12 @@ async fn assert_failed_redispatch(
                 _ => {}
             }
         };
-        assert!(state.is_complete());
+        assert!(session.is_complete());
         Ok::<_, anyhow::Error>(failure)
     })
     .await
     .map_err(|_| anyhow::anyhow!("same-key redispatch did not terminalize"))??;
-    drop(requests);
+    drop(session);
     Ok(failure)
 }
 
@@ -3477,60 +3124,25 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
     let agent_id = agent_key!("StreamingRpcTarget", "stream-local-sibling-error");
     let worker_agent_id = executor.start_agent(&component.id, agent_id).await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("produce_sibling_error".to_string()),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    let start = executor
+        .invocation(&component, "produce_sibling_error")
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input(data_value!())?
+        .build()?;
+    let mut session = executor.open_session(start).await?;
     let mut mapped_outputs = 0;
     let mut output_items = 0;
     let mut output_errors = 0;
     let mut output_ends = 0;
     let mut finished_successfully = false;
 
-    while let Some(response) = responses.message().await? {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+    while let Some(response) = session.message().await? {
         match response.response {
             Some(invocation_response::Response::Accepted(_))
             | Some(invocation_response::Response::Ready(_)) => {}
@@ -3559,7 +3171,7 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
         }
     }
 
-    assert!(state.is_complete());
+    assert!(session.is_complete());
     assert_eq!(mapped_outputs, 2);
     assert_eq!(output_items, 65);
     assert_eq!(output_errors, 1);
@@ -4177,74 +3789,27 @@ async fn streaming_output_resume_restores_exact_cursors(
         )
     };
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let (_, input) = input.into_parts();
-    let start_request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some(method_name.to_string()),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&idempotency_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(idempotency_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut first_state = InvocationSessionState::default();
-    first_state
-        .validate_trusted_request(&start_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(1);
-    requests.send(start_request.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let accepted = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("streaming output ended before acceptance"))?;
-    first_state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
-    let accepted = match accepted.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
-        other => anyhow::bail!("expected durable output acceptance, got {other:?}"),
-    };
-    let accepted =
-        await_session_readiness(&mut responses, Some(&mut first_state), accepted).await?;
+    let start = executor
+        .invocation(&component, method_name)
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&idempotency_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input(input)?
+        .build()?;
+    let mut session = executor.open_session(start.clone()).await?;
+    let accepted = session.accepted().await?;
     let mut observed_output_items = 0;
     let mut cursors = BTreeMap::new();
     let mut observed_values = BTreeMap::<u64, Vec<SchemaValue>>::new();
     let mut observed_offsets = BTreeMap::<u64, BTreeSet<Vec<u8>>>::new();
     while observed_output_items < 10 {
-        let response = responses
+        let response = session
             .message()
             .await?
             .ok_or_else(|| anyhow::anyhow!("streaming output ended before cursor checkpoint"))?;
-        first_state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
         if !restart_executor
             && let Some(invocation_response::Response::Result(result)) = &response.response
         {
@@ -4295,8 +3860,7 @@ async fn streaming_output_resume_restores_exact_cursors(
     if restart_executor {
         executor.shutdown_and_wait_for_invocation_loops().await?;
     }
-    drop(requests);
-    drop(responses);
+    drop(session);
     let executor = if restart_executor {
         drop(executor);
         start_with_overrides(deps, &context, overrides).await?
@@ -4360,32 +3924,15 @@ async fn streaming_output_resume_restores_exact_cursors(
             metadata.fingerprint
         );
     }
-    let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
-        anyhow::bail!("streaming output request is not Start");
-    };
-    let resume_request = InvocationRequest {
-        request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: accepted.idempotency_key,
-            agent_id: if restart_executor {
-                crate::agent::start_target_id(start)
-            } else {
-                accepted.agent_id
-            },
-            environment_id: start.environment_id,
-            attachment_id: accepted.attachment_id,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: start.expected_callee_fingerprint,
-            expected_epoch: accepted.epoch,
-            operation: if restart_executor {
-                ResumeOperation::Takeover
-            } else {
-                ResumeOperation::Resume
-            } as i32,
-            cursors: cursors.into_values().collect(),
-            auth_ctx: start.auth_ctx.clone(),
-            caller: start.caller.clone(),
-        })),
-    };
+    // After a restart the resume takes over the start's target; a resident ephemeral resume
+    // names the final agent from the acceptance.
+    let mut resume = resume_attach(&start, &accepted);
+    if restart_executor {
+        resume.operation = ResumeOperation::Takeover as i32;
+    } else {
+        resume.agent_id = accepted.agent_id;
+    }
+    resume.cursors = cursors.into_values().collect();
 
     // A resume whose caller differs from the pinned one, here only in its original caller, is
     // refused: no resume replaces the recorded caller.
@@ -4397,15 +3944,15 @@ async fn streaming_output_resume_restores_exact_cursors(
     )
     .map_err(anyhow::Error::msg)?;
     changed_caller.original = callers::account_principal(AccountId::new());
-    let mut changed_request = resume_request.clone();
-    if let Some(invocation_request::Request::ResumeAttach(resume)) =
-        changed_request.request.as_mut()
-    {
-        resume.caller = Some(changed_caller.into());
-        resume.attempt_id = Some(uuid::Uuid::new_v4().into());
-    }
+    let mut changed_resume = resume.clone();
+    changed_resume.caller = Some(changed_caller.into());
+    changed_resume.attempt_id = Some(uuid::Uuid::new_v4().into());
     let (changed_requests, changed_receiver) = mpsc::channel(1);
-    changed_requests.send(changed_request).await?;
+    changed_requests
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::ResumeAttach(changed_resume)),
+        })
+        .await?;
     let refusal = match executor
         .client
         .clone()
@@ -4430,26 +3977,12 @@ async fn streaming_output_resume_restores_exact_cursors(
     );
     drop(changed_requests);
 
-    let mut recovered_state = InvocationSessionState::default();
-    recovered_state
-        .validate_trusted_request(&resume_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(1);
-    requests.send(resume_request).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    let mut session = executor.resume_session(resume).await?;
     let mut mapped_outputs = 0;
     let mut output_items = 0;
     let mut output_ends = 0;
     let mut finished_successfully = false;
-    while let Some(response) = responses.message().await? {
-        recovered_state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+    while let Some(response) = session.message().await? {
         match response.response {
             Some(invocation_response::Response::Accepted(resumed)) => {
                 assert_eq!(resumed.epoch, accepted.epoch + 1);
@@ -4499,7 +4032,7 @@ async fn streaming_output_resume_restores_exact_cursors(
             None => anyhow::bail!("empty recovered output response"),
         }
     }
-    assert!(recovered_state.is_complete());
+    assert!(session.is_complete());
     assert_eq!(mapped_outputs, 2);
     assert_eq!(output_items, 66 - observed_output_items);
     assert_eq!(output_ends, 2);
@@ -4761,7 +4294,7 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
     executor.interrupt(&target_final).await?;
     let mut initialization_success =
         executor.gate_next_agent_invocation_success(&target_final.agent_id);
-    let (mut state, _frames, mut inbound) = open_invocation_session_with_key(
+    let mut session = open_invocation_session_with_key(
         &executor,
         &component,
         &target_logical,
@@ -4770,17 +4303,11 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
         data_value!(),
     )
     .await?;
-    let accepted = tokio::time::timeout(Duration::from_secs(10), inbound.message())
+    let accepted = tokio::time::timeout(Duration::from_secs(10), session.next())
         .await
         .map_err(|_| anyhow::anyhow!("pending invocation was not accepted"))??
         .ok_or_else(|| anyhow::anyhow!("pending invocation ended before acceptance"))?;
-    state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
-    if !matches!(
-        accepted.response,
-        Some(invocation_response::Response::Accepted(_))
-    ) {
+    if !matches!(accepted, invocation_response::Response::Accepted(_)) {
         anyhow::bail!("expected pending acceptance after absent interrupt, got {accepted:?}");
     }
 
@@ -4820,14 +4347,11 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
         .map_err(|_| anyhow::anyhow!("initialization interrupt was not acknowledged"))???;
     let finished = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let response = inbound
-                .message()
+            let response = session
+                .next()
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("pending invocation closed without a terminal"))?;
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
-            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+            if let invocation_response::Response::Finished(finished) = response {
                 return Ok::<_, anyhow::Error>(finished);
             }
         }
@@ -4838,7 +4362,7 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
         finished.outcome,
         Some(invocation_session_completion::Outcome::Failure(_))
     ));
-    assert!(state.is_complete());
+    assert!(session.is_complete());
     executor
         .wait_for_status(
             &target_final,
@@ -4901,73 +4425,28 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     )
     .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let start_request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("hold_input".to_string()),
-            input: Some(golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::RecordValue(RecordValue {
-                    fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                        value: Some(schema_value::Value::StreamReference(
-                            SchemaValueStreamReference { stream_id: 1 },
-                        )),
-                    }],
-                })),
-            }),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&idempotency_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(idempotency_key.clone().into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start_request.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let accepted = tokio::time::timeout(Duration::from_secs(10), responses.message())
+    let start = executor
+        .invocation(&component, "hold_input")
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&idempotency_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    let mut session = executor.open_session(start.clone()).await?;
+    let accepted = tokio::time::timeout(Duration::from_secs(10), session.message())
         .await
         .map_err(|_| anyhow::anyhow!("held-input invocation was not accepted"))??
         .ok_or_else(|| anyhow::anyhow!("held-input session ended before acceptance"))?;
-    state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
     let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
         anyhow::bail!("expected held-input acceptance, got {accepted:?}");
     };
     // A queued acceptance is followed by readiness when the selected revision starts the method.
-    tokio::time::timeout(
-        Duration::from_secs(10),
-        await_session_readiness(&mut responses, Some(&mut state), accepted),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("held-input invocation did not become ready"))??;
+    tokio::time::timeout(Duration::from_secs(10), session.ready(accepted))
+        .await
+        .map_err(|_| anyhow::anyhow!("held-input invocation did not become ready"))??;
 
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -4996,19 +4475,17 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     .await
     .map_err(|_| anyhow::anyhow!("hold_input did not reach its method-start marker"))??;
 
-    if let Ok(response) =
-        tokio::time::timeout(Duration::from_millis(100), responses.message()).await
+    if let Ok(response) = tokio::time::timeout(Duration::from_millis(100), session.message()).await
     {
         panic!("host-wait invocation terminated before interruption: {response:?}");
     }
     executor.interrupt(&worker_agent_id).await?;
-    assert_interrupted_transport_closed(&mut responses, &mut state).await?;
+    assert_interrupted_transport_closed(&mut session).await?;
     assert_eq!(
         executor.get_worker_metadata(&worker_agent_id).await?.status,
         AgentStatus::Interrupted
     );
-    drop(requests);
-    drop(responses);
+    drop(session);
 
     let resume = executor.resume(&worker_agent_id, false).await;
     assert!(
@@ -5025,7 +4502,7 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
 
     // Start with a new attempt cannot replace the persisted streaming session;
     // it is rejected at attachment admission before ephemeral lifecycle checks.
-    let redispatch_error = assert_failed_redispatch(&executor, start_request).await?;
+    let redispatch_error = assert_failed_redispatch(&executor, start.clone()).await?;
     assert!(
         redispatch_error.contains("AttemptConflict"),
         "same-key redispatch failed with the wrong category: {redispatch_error}"
@@ -5060,21 +4537,8 @@ struct NestedSiblingOutputSnapshot {
 }
 
 async fn read_nested_sibling_output(
-    executor: &TestWorkerExecutor,
-    request: &InvocationRequest,
+    mut session: InvocationSession,
 ) -> anyhow::Result<(NestedSiblingOutputSnapshot, InvocationAccepted)> {
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(1);
-    requests.send(request.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
     let mut root_stream_ids = BTreeSet::new();
     let mut observed_root_stream_ids = BTreeSet::new();
     let mut labels_by_nested_stream = BTreeMap::new();
@@ -5085,10 +4549,7 @@ async fn read_nested_sibling_output(
     let mut finished_successfully = false;
     let mut acceptance = None;
 
-    while let Some(response) = responses.message().await? {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+    while let Some(response) = session.message().await? {
         match response.response {
             Some(invocation_response::Response::Accepted(accepted))
             | Some(invocation_response::Response::Ready(accepted)) => {
@@ -5209,7 +4670,7 @@ async fn read_nested_sibling_output(
         }
     }
 
-    assert!(state.is_complete());
+    assert!(session.is_complete());
     assert!(finished_successfully);
     assert_eq!(terminal_count, 4);
     assert_eq!(observed_root_stream_ids, root_stream_ids);
@@ -5244,62 +4705,29 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
     let agent_id = agent_key!("StreamingRpcTarget", "nested-sibling-output-restart");
     let worker_agent_id = executor.start_agent(&component.id, agent_id).await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
-    let start_request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("produce_nested_siblings".to_string()),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
+    let start_request = executor
+        .invocation(&component, "produce_nested_siblings")
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input(data_value!())?
+        .build()?;
 
-    let (first, accepted) = read_nested_sibling_output(&executor, &start_request).await?;
+    let (first, accepted) =
+        read_nested_sibling_output(executor.open_session(start_request.clone()).await?).await?;
     drop(executor);
 
     let executor = start(deps, &context).await?;
-    let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
-        anyhow::bail!("nested sibling output request is not Start");
-    };
-    let resume_request = InvocationRequest {
-        request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: accepted.idempotency_key,
-            agent_id: crate::agent::start_target_id(start),
-            environment_id: start.environment_id,
-            attachment_id: accepted.attachment_id,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: start.expected_callee_fingerprint,
-            expected_epoch: accepted.epoch,
-            operation: ResumeOperation::Resume as i32,
-            cursors: Vec::new(),
-            auth_ctx: start.auth_ctx.clone(),
-            caller: start.caller.clone(),
-        })),
-    };
-    let (replayed, _) = read_nested_sibling_output(&executor, &resume_request).await?;
+    let (replayed, _) = read_nested_sibling_output(
+        executor
+            .resume_session(resume_attach(&start_request, &accepted))
+            .await?,
+    )
+    .await?;
     assert_eq!(replayed, first);
     Ok(())
 }
@@ -5324,67 +4752,24 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_schema::proto::golem::schema::SchemaValue {
-        value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::StreamReference(
-                    SchemaValueStreamReference { stream_id: 1 },
-                )),
-            }],
-        })),
-    };
     let start_key = IdempotencyKey::fresh();
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("transform".to_string()),
-            input: Some(input),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    let start = executor
+        .invocation(&component, "transform")
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    let mut session = executor.open_session(start.clone()).await?;
     let mut expected_stream_ids = vec![1];
     let mut terminal_stream_ids = Vec::new();
     let mut accepted = false;
     let mut result_received = false;
 
-    while let Some(response) = responses.message().await? {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+    while let Some(response) = session.message().await? {
         match response.response {
             Some(invocation_response::Response::Accepted(_)) => {
                 assert!(!accepted, "invocation was accepted more than once");
@@ -5404,7 +4789,10 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
                     }
                     other => anyhow::bail!("expected transform stream, got {other:?}"),
                 });
-                requests.send(start.clone()).await?;
+                // A second Start on the open session is the malformed request.
+                session
+                    .send_unvalidated(invocation_request::Request::Start(start.clone()))
+                    .await?;
             }
             Some(invocation_response::Response::StreamEnd(end)) => {
                 assert!(matches!(
@@ -5427,8 +4815,8 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
                 expected_stream_ids.sort_unstable();
                 terminal_stream_ids.sort_unstable();
                 assert_eq!(terminal_stream_ids, expected_stream_ids);
-                assert!(state.is_complete());
-                assert!(responses.message().await?.is_none());
+                assert!(session.is_complete());
+                assert!(session.message().await?.is_none());
                 let oplog = executor
                     .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
                     .await?;
@@ -5465,106 +4853,32 @@ fn origin_observer_start(
     key: &IdempotencyKey,
     method: &str,
 ) -> InvocationStart {
-    InvocationStart {
-        allow_streams: true,
-        captured_method_input: None,
-        target: Some(crate::agent::id_target(target)),
-        method_name: Some(method.to_string()),
-        input: Some(golem_schema::proto::golem::schema::SchemaValue {
-            value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                    value: Some(schema_value::Value::StreamReference(
-                        SchemaValueStreamReference { stream_id: 1 },
-                    )),
-                }],
-            })),
-        }),
-        request_key: Some(
-            InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(key))
-                .into(),
-        ),
-        idempotency_key: Some(key.clone().into()),
-        context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-            parent: Some(caller.agent_id.into()),
-            ..Default::default()
-        }),
-        auth_ctx: Some(executor.auth_ctx().into()),
-        caller: Some(
-            callers::agent(
-                caller.agent_id,
-                golem_common::model::agent::AgentTypeName("StreamingRpcCaller".to_string()),
-            )
-            .into(),
-        ),
-        environment_id: Some(component.environment_id.into()),
-        component_owner_account_id: Some(component.account_id.into()),
-        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-        freshness_disposition:
-            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
-        attempt_id: Some(uuid::Uuid::new_v4().into()),
-        expected_callee_fingerprint: Some(fingerprint.into()),
-        origin_invocation: Some(StreamInvocationIdentity {
-            callee_environment_id: Some(component.environment_id.into()),
-            callee: Some(caller.agent_id.into()),
-            callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
-            idempotency_key: Some(golem_common::model::InvocationId::new().into()),
-        }),
+    let mut start = executor
+        .invocation(component, method)
+        .on_agent(target)
+        .allow_streams()
+        .input_record(vec![stream_reference(1)])
+        .idempotency_key(key)
+        .with_request_key()
+        .caller(callers::agent(
+            caller.agent_id,
+            AgentTypeName("StreamingRpcCaller".to_string()),
+        ))
+        .fresh_attempt()
+        .expect_fingerprint(fingerprint)
+        .build()
+        .expect("the origin observer start is valid");
+    start.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+        parent: Some(caller.agent_id.into()),
         ..Default::default()
-    }
-}
-
-async fn await_session_readiness(
-    responses: &mut tonic::Streaming<InvocationResponse>,
-    mut state: Option<&mut InvocationSessionState>,
-    accepted: InvocationAccepted,
-) -> anyhow::Result<InvocationAccepted> {
-    if accepted.component_revision.is_some() {
-        return Ok(accepted);
-    }
-    let response = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("queued session ended before readiness"))?;
-    if let Some(state) = state.as_mut() {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-    }
-    match response.response {
-        Some(invocation_response::Response::Ready(ready)) => Ok(ready),
-        other => anyhow::bail!("expected execution readiness, got {other:?}"),
-    }
-}
-
-async fn open_raw_session(
-    executor: &TestWorkerExecutor,
-    start: InvocationStart,
-) -> anyhow::Result<(
-    mpsc::Sender<InvocationRequest>,
-    tonic::Streaming<InvocationResponse>,
-    InvocationAccepted,
-)> {
-    let (requests, receiver) = mpsc::channel(8);
-    requests
-        .send(InvocationRequest {
-            request: Some(invocation_request::Request::Start(start)),
-        })
-        .await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let first = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("session closed before acceptance"))?;
-    let Some(invocation_response::Response::Accepted(accepted)) = first.response else {
-        anyhow::bail!("expected acceptance, got {first:?}");
-    };
-    let accepted = await_session_readiness(&mut responses, None, accepted).await?;
-    Ok((requests, responses, accepted))
+    });
+    start.origin_invocation = Some(StreamInvocationIdentity {
+        callee_environment_id: Some(component.environment_id.into()),
+        callee: Some(caller.agent_id.into()),
+        callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
+        idempotency_key: Some(golem_common::model::InvocationId::new().into()),
+    });
+    start
 }
 
 #[test]
@@ -5603,109 +4917,50 @@ async fn queued_stream_sessions_accept_before_preparation_and_deliver_selected_o
             method,
         )
     };
-    let (gate_tx, mut gate_rx, gate) =
-        open_raw_session(&executor, start_request("consume")).await?;
+    // Setup: a gate session holds the agent, so the next sessions queue behind it.
+    let mut gate = executor
+        .open_unvalidated_session(start_request("consume"))
+        .await?;
+    gate.accepted().await?;
     let mut queued = Vec::new();
     for method in ["consume", "missing_queued_method"] {
-        let request = InvocationRequest {
-            request: Some(invocation_request::Request::Start(start_request(method))),
-        };
-        let mut state = InvocationSessionState::default();
-        state
-            .validate_trusted_request(&request)
-            .map_err(anyhow::Error::msg)?;
-        let (frames, receiver) = mpsc::channel(8);
-        frames.send(request).await?;
-        let mut responses = executor
-            .client
-            .clone()
-            .invoke_agent_session(ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let response = tokio::time::timeout(Duration::from_secs(10), responses.message())
-            .await??
-            .expect("queued acceptance before the gate releases");
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-        let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
-            anyhow::bail!("expected queued acceptance: {response:?}");
-        };
-        assert!(accepted.component_revision.is_none());
-        assert!(accepted.stream_mappings.is_empty());
-        queued.push((frames, responses, state, accepted));
+        let mut session = executor.open_session(start_request(method)).await?;
+        let accepted = tokio::time::timeout(Duration::from_secs(10), session.acceptance())
+            .await
+            .expect("queued acceptance before the gate releases")?;
+        assert!(
+            accepted.component_revision.is_none(),
+            "a queued acceptance selects no revision yet"
+        );
+        assert!(
+            accepted.stream_mappings.is_empty(),
+            "a queued acceptance binds no streams yet"
+        );
+        queued.push((session, accepted));
     }
-    gate_tx
-        .send(InvocationRequest {
-            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                transport_stream_id: 1,
-                producer_sequence: 0,
-                direction: StreamDirection::Input as i32,
-                authored_by: StreamTerminalAuthor::Guest as i32,
-                outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
-                durable_stream_id: gate.stream_mappings[0].handle.as_ref().unwrap().stream_id,
-                epoch: gate.epoch,
-                ..Default::default()
-            })),
-        })
-        .await?;
-    while let Some(response) = gate_rx.message().await? {
-        if matches!(
-            response.response,
-            Some(invocation_response::Response::Finished(_))
-        ) {
+
+    // Action: release the gate.
+    gate.finish_input(1, 0).await?;
+    while let Some(response) = gate.next().await? {
+        if matches!(response, invocation_response::Response::Finished(_)) {
             break;
         }
     }
-    let (frames, mut responses, mut state, accepted) = queued.remove(0);
-    let ready = await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
+
+    // Checks: the first queued session becomes ready and completes with its input.
+    let (mut selected, accepted) = queued.remove(0);
+    let ready = selected.ready(accepted).await?;
     assert_eq!(ready.component_revision, Some(component.revision.get()));
-    let stream_id = ready.stream_mappings[0].handle.as_ref().unwrap().stream_id;
-    for frame in [
-        invocation_request::Request::InputItem(InputStreamItem {
-            transport_stream_id: 1,
-            sequence: 0,
-            durable_stream_id: stream_id,
-            epoch: ready.epoch,
-            payload: Some(input_stream_item::Payload::Value(
-                SchemaValue::U32(37)
-                    .try_into()
-                    .map_err(anyhow::Error::msg)?,
-            )),
-        }),
-        invocation_request::Request::StreamEnd(StreamEnd {
-            transport_stream_id: 1,
-            producer_sequence: 1,
-            direction: StreamDirection::Input as i32,
-            authored_by: StreamTerminalAuthor::Guest as i32,
-            outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
-            durable_stream_id: stream_id,
-            epoch: ready.epoch,
-            ..Default::default()
-        }),
-    ] {
-        let request = InvocationRequest {
-            request: Some(frame),
-        };
-        state
-            .validate_trusted_request(&request)
-            .map_err(anyhow::Error::msg)?;
-        frames.send(request).await?;
-    }
+    selected.send_input(1, 0, SchemaValue::U32(37)).await?;
+    selected.finish_input(1, 1).await?;
     let mut output = None;
-    while !state.is_complete() {
-        let response = responses
-            .message()
+    while !selected.is_complete() {
+        let response = selected
+            .next()
             .await?
             .expect("selected invocation completion");
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-        if let Some(invocation_response::Response::Result(result)) = response.response {
-            let Some(invocation_session_result::Result::MethodResult(value)) = result.result else {
-                anyhow::bail!("missing method result");
-            };
-            output = Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
+        if let invocation_response::Response::Result(result) = response {
+            output = Some(result.method_result()?);
         }
     }
     assert_eq!(
@@ -5714,18 +4969,14 @@ async fn queued_stream_sessions_accept_before_preparation_and_deliver_selected_o
             elements: vec![SchemaValue::U32(37)]
         })
     );
-    let (_frames, mut responses, mut state, _) = queued.remove(0);
-    let failure = responses
-        .message()
-        .await?
-        .expect("selected validation failure");
-    state
-        .validate_response(&failure)
-        .map_err(anyhow::Error::msg)?;
-    assert!(matches!(failure.response,
-        Some(invocation_response::Response::Finished(ref completion))
+
+    // Checks: the second queued session, for a missing method, fails at selection.
+    let (mut failing, _) = queued.remove(0);
+    let failure = failing.next().await?.expect("selected validation failure");
+    assert!(matches!(failure,
+        invocation_response::Response::Finished(ref completion)
             if matches!(completion.outcome, Some(invocation_session_completion::Outcome::Failure(_)))));
-    assert!(state.is_complete());
+    assert!(failing.is_complete());
     Ok(())
 }
 
@@ -5767,18 +5018,15 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
         &IdempotencyKey::fresh(),
         "transform",
     );
-    let (original_tx, mut original_rx, original_accepted) =
-        open_raw_session(&executor, start.clone()).await?;
+    let mut original = executor.open_unvalidated_session(start.clone()).await?;
+    let original_accepted = original.accepted().await?;
     let original_result = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let response = original_rx
-                .message()
+            let response = original
+                .next()
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("original closed before Result"))?;
-            if matches!(
-                response.response,
-                Some(invocation_response::Response::Result(_))
-            ) {
+            if matches!(response, invocation_response::Response::Result(_)) {
                 return Ok::<_, anyhow::Error>(response);
             }
         }
@@ -5787,18 +5035,17 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
     let mut observer = start.clone();
     observer.attempt_id = Some(uuid::Uuid::new_v4().into());
     observer.durable_input_mappings = original_accepted.stream_mappings.clone();
-    original_tx
-        .send(InvocationRequest {
-            request: Some(invocation_request::Request::Start(start)),
-        })
+    // A second start on the open session is a protocol failure of the original.
+    original
+        .send_unvalidated(invocation_request::Request::Start(start))
         .await?;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let response = original_rx
-                .message()
+            let response = original
+                .next()
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("original closed before failed Finished"))?;
-            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+            if let invocation_response::Response::Finished(finished) = response {
                 assert!(matches!(
                     finished.outcome,
                     Some(invocation_session_completion::Outcome::Failure(_))
@@ -5817,26 +5064,26 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
             .into(),
     );
     fresh.idempotency_key = Some(fresh_key.into());
-    let (_observer_tx, mut observer_rx, observer_accepted) =
-        open_raw_session(&executor, observer).await?;
+    let mut observer = executor.open_unvalidated_session(observer).await?;
+    let observer_accepted = observer.accepted().await?;
     assert!(observer_accepted.joined_origin_observer);
     assert!(observer_accepted.attachment_id.is_none());
     let mut saw_result = false;
     let failure = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let response = observer_rx
-                .message()
+            let response = observer
+                .next()
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("observer closed before failed Finished"))?;
-            match response.response {
-                Some(invocation_response::Response::Result(result)) => {
+            match response {
+                invocation_response::Response::Result(result) => {
                     saw_result = true;
                     assert!(
                         !result.new_stream_mappings.is_empty(),
                         "observer Result omitted stream handles"
                     );
                 }
-                Some(invocation_response::Response::Finished(finished)) => {
+                invocation_response::Response::Finished(finished) => {
                     break Ok::<_, anyhow::Error>(finished);
                 }
                 _ => {}
@@ -5850,10 +5097,13 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
         Some(invocation_session_completion::Outcome::Failure(_))
     ));
     assert!(matches!(
-        original_result.response,
-        Some(invocation_response::Response::Result(_))
+        original_result,
+        invocation_response::Response::Result(_)
     ));
-    let error = open_raw_session(&executor, fresh)
+    let error = executor
+        .open_unvalidated_session(fresh)
+        .await?
+        .accepted()
         .await
         .expect_err("a fresh invocation must not start on a failed worker");
     assert!(error.to_string().contains("Previous invocation failed"));
@@ -5890,23 +5140,23 @@ async fn joined_origin_observer_promptly_receives_failure_without_result(
         &IdempotencyKey::fresh(),
         "hold_input",
     );
-    let (original_tx, _original_rx, accepted) = open_raw_session(&executor, start.clone()).await?;
+    let mut original = executor.open_unvalidated_session(start.clone()).await?;
+    let accepted = original.accepted().await?;
     let mut observer = start.clone();
     observer.attempt_id = Some(uuid::Uuid::new_v4().into());
     observer.durable_input_mappings = accepted.stream_mappings;
-    let (_observer_tx, mut observer_rx, observer_accepted) =
-        open_raw_session(&executor, observer).await?;
+    let mut observer = executor.open_unvalidated_session(observer).await?;
+    let observer_accepted = observer.accepted().await?;
     assert!(observer_accepted.joined_origin_observer);
-    original_tx
-        .send(InvocationRequest {
-            request: Some(invocation_request::Request::Start(start)),
-        })
+    // A second start on the open session is a protocol failure of the original.
+    original
+        .send_unvalidated(invocation_request::Request::Start(start))
         .await?;
-    let response = tokio::time::timeout(Duration::from_secs(10), observer_rx.message())
+    let response = tokio::time::timeout(Duration::from_secs(10), observer.next())
         .await??
         .ok_or_else(|| anyhow::anyhow!("observer closed before Finished"))?;
     assert!(
-        matches!(response.response, Some(invocation_response::Response::Finished(ref finished)) if matches!(finished.outcome, Some(invocation_session_completion::Outcome::Failure(_))))
+        matches!(response, invocation_response::Response::Finished(ref finished) if matches!(finished.outcome, Some(invocation_session_completion::Outcome::Failure(_))))
     );
     Ok(())
 }
@@ -5947,8 +5197,8 @@ async fn joined_origin_observer_disconnect_and_control_do_not_detach_original(
             &IdempotencyKey::fresh(),
             "consume",
         );
-        let (original_tx, mut original_rx, accepted) =
-            open_raw_session(&executor, start.clone()).await?;
+        let mut original = executor.open_unvalidated_session(start.clone()).await?;
+        let accepted = original.accepted().await?;
         let mapping = accepted.stream_mappings[0].clone();
         let stream_id = mapping
             .handle
@@ -5958,56 +5208,15 @@ async fn joined_origin_observer_disconnect_and_control_do_not_detach_original(
         let mut observer = start;
         observer.attempt_id = Some(uuid::Uuid::new_v4().into());
         observer.durable_input_mappings = accepted.stream_mappings;
-        let (observer_tx, mut observer_rx, observer_accepted) =
-            open_raw_session(&executor, observer).await?;
+        let mut observer = executor.open_unvalidated_session(observer).await?;
+        let observer_accepted = observer.accepted().await?;
         assert!(observer_accepted.joined_origin_observer);
         if forbidden_control {
-            observer_tx
-                .send(InvocationRequest {
-                    request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                        transport_stream_id: 1,
-                        producer_sequence: 0,
-                        direction: StreamDirection::Input as i32,
-                        authored_by: StreamTerminalAuthor::Guest as i32,
-                        outcome: Some(
-                            StreamTerminal::Finished
-                                .try_into()
-                                .expect("finished terminal"),
-                        ),
-                        durable_stream_id: Some(stream_id),
-                        epoch: accepted.epoch,
-                        ..Default::default()
-                    })),
-                })
-                .await?;
-            let failed = tokio::time::timeout(Duration::from_secs(10), observer_rx.message())
-                .await??
-                .expect("observer protocol failure");
-            assert!(
-                matches!(failed.response, Some(invocation_response::Response::Finished(ref finished)) if matches!(finished.outcome, Some(invocation_session_completion::Outcome::Failure(_))))
-            );
-        } else {
-            drop(observer_tx);
-            drop(observer_rx);
-        }
-        original_tx
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::InputItem(InputStreamItem {
+            // A joined observer must not send stream control; it fails only the observer.
+            observer
+                .send_unvalidated(invocation_request::Request::StreamEnd(StreamEnd {
                     transport_stream_id: 1,
-                    sequence: 0,
-                    payload: Some(input_stream_item::Payload::Value(
-                        SchemaValue::U32(7).try_into().map_err(anyhow::Error::msg)?,
-                    )),
-                    durable_stream_id: Some(stream_id),
-                    epoch: accepted.epoch,
-                })),
-            })
-            .await?;
-        original_tx
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                    transport_stream_id: 1,
-                    producer_sequence: 1,
+                    producer_sequence: 0,
                     direction: StreamDirection::Input as i32,
                     authored_by: StreamTerminalAuthor::Guest as i32,
                     outcome: Some(
@@ -6018,16 +5227,26 @@ async fn joined_origin_observer_disconnect_and_control_do_not_detach_original(
                     durable_stream_id: Some(stream_id),
                     epoch: accepted.epoch,
                     ..Default::default()
-                })),
-            })
-            .await?;
+                }))
+                .await?;
+            let failed = tokio::time::timeout(Duration::from_secs(10), observer.next())
+                .await??
+                .expect("observer protocol failure");
+            assert!(
+                matches!(failed, invocation_response::Response::Finished(ref finished) if matches!(finished.outcome, Some(invocation_session_completion::Outcome::Failure(_))))
+            );
+        } else {
+            drop(observer);
+        }
+        original.send_input(1, 0, SchemaValue::U32(7)).await?;
+        original.finish_input(1, 1).await?;
         let result = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
-                let response = original_rx
-                    .message()
+                let response = original
+                    .next()
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("original closed before success"))?;
-                if let Some(invocation_response::Response::Result(result)) = response.response {
+                if let invocation_response::Response::Result(result) = response {
                     return Ok::<_, anyhow::Error>(result);
                 }
             }
@@ -6081,70 +5300,18 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
     )
     .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_schema::proto::golem::schema::SchemaValue {
-        value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::StreamReference(
-                    SchemaValueStreamReference { stream_id: 1 },
-                )),
-            }],
-        })),
-    };
-    let start_request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("transform".to_string()),
-            input: Some(input),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&idempotency_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(idempotency_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut first_state = InvocationSessionState::default();
-    first_state
-        .validate_trusted_request(&start_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start_request.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let accepted = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("ephemeral input ended before acceptance"))?;
-    first_state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
-    let accepted = match accepted.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
-        other => anyhow::bail!("expected ephemeral input acceptance, got {other:?}"),
-    };
-    let accepted =
-        await_session_readiness(&mut responses, Some(&mut first_state), accepted).await?;
+    let start = executor
+        .invocation(&component, "transform")
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&idempotency_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    let mut session = executor.open_session(start.clone()).await?;
+    let accepted = session.accepted().await?;
     let mapping = accepted
         .stream_mappings
         .first()
@@ -6166,34 +5333,14 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
             .into(),
     );
 
-    let make_item = |sequence, value| InvocationRequest {
-        request: Some(invocation_request::Request::InputItem(InputStreamItem {
-            transport_stream_id: 1,
-            sequence,
-            payload: Some(input_stream_item::Payload::Value(
-                SchemaValue::U32(value)
-                    .try_into()
-                    .expect("u32 schema value"),
-            )),
-            durable_stream_id: Some(durable_stream_id),
-            epoch: accepted.epoch,
-        })),
-    };
-    let first_item = make_item(0, 7);
-    first_state
-        .validate_trusted_request(&first_item)
-        .map_err(anyhow::Error::msg)?;
-    requests.send(first_item).await?;
+    session.send_input(1, 0, SchemaValue::U32(7)).await?;
     let mut values = Vec::<SchemaValue>::new();
     let mut offsets = BTreeSet::new();
     let first_ack = loop {
-        let response = responses
+        let response = session
             .message()
             .await?
             .ok_or_else(|| anyhow::anyhow!("ephemeral input ended before its first ACK"))?;
-        first_state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
         match response.response {
             Some(invocation_response::Response::InputAck(ack)) => break ack,
             // The empty-cursor resume below observes output from the beginning.
@@ -6208,11 +5355,8 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
     assert_eq!(first_ack.logical_item_count, 1);
     assert!(!first_ack.resulting_offset.is_empty());
 
-    let lost_ack_item = make_item(1, 19);
-    first_state
-        .validate_trusted_request(&lost_ack_item)
-        .map_err(anyhow::Error::msg)?;
-    requests.send(lost_ack_item).await?;
+    // The ACK of this item is lost with the transport.
+    session.send_input(1, 1, SchemaValue::U32(19)).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let second_input_was_recorded = executor
@@ -6244,8 +5388,7 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
     })
     .await
     .map_err(|_| anyhow::anyhow!("second input was not accepted before transport loss"))??;
-    drop(requests);
-    drop(responses);
+    drop(session);
 
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -6273,47 +5416,10 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
     .await
     .map_err(|_| anyhow::anyhow!("ephemeral input session did not detach before resume"))??;
 
-    let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
-        anyhow::bail!("ephemeral input request is not Start");
-    };
-    let resume_request = InvocationRequest {
-        request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: accepted.idempotency_key,
-            agent_id: accepted.agent_id,
-            environment_id: start.environment_id,
-            attachment_id: accepted.attachment_id,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: start.expected_callee_fingerprint,
-            expected_epoch: accepted.epoch,
-            operation: ResumeOperation::Resume as i32,
-            cursors: Vec::new(),
-            auth_ctx: start.auth_ctx.clone(),
-            caller: start.caller.clone(),
-        })),
-    };
-    let mut resumed_state = InvocationSessionState::default();
-    resumed_state
-        .validate_trusted_request(&resume_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(resume_request).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let resumed = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("ephemeral resume ended before acceptance"))?;
-    resumed_state
-        .validate_response(&resumed)
-        .map_err(anyhow::Error::msg)?;
-    let resumed = match resumed.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
-        other => anyhow::bail!("expected resumed ephemeral acceptance, got {other:?}"),
-    };
+    let mut resume = resume_attach(&start, &accepted);
+    resume.agent_id = accepted.agent_id;
+    let mut session = executor.resume_session(resume).await?;
+    let resumed = session.acceptance().await?;
     assert_eq!(resumed.attachment_id, accepted.attachment_id);
     assert_eq!(resumed.epoch, accepted.epoch + 1);
     let resumed_mapping = resumed
@@ -6329,50 +5435,16 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
                 && !high_water.terminal
     ));
 
-    let final_item = InvocationRequest {
-        request: Some(invocation_request::Request::InputItem(InputStreamItem {
-            transport_stream_id: 1,
-            sequence: 2,
-            payload: Some(input_stream_item::Payload::Value(
-                SchemaValue::U32(3).try_into().map_err(anyhow::Error::msg)?,
-            )),
-            durable_stream_id: Some(durable_stream_id),
-            epoch: resumed.epoch,
-        })),
-    };
-    resumed_state
-        .validate_trusted_request(&final_item)
-        .map_err(anyhow::Error::msg)?;
-    requests.send(final_item).await?;
-    let end = InvocationRequest {
-        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-            transport_stream_id: 1,
-            producer_sequence: 3,
-            direction: StreamDirection::Input as i32,
-            authored_by: StreamTerminalAuthor::Guest as i32,
-            outcome: Some(
-                StreamTerminal::Finished
-                    .try_into()
-                    .expect("finished terminal"),
-            ),
-            durable_stream_id: Some(durable_stream_id),
-            epoch: resumed.epoch,
-            ..Default::default()
-        })),
-    };
-    resumed_state
-        .validate_trusted_request(&end)
-        .map_err(anyhow::Error::msg)?;
-    requests.send(end).await?;
+    // The resumed acceptance carries the same handle, so the session sends the rest of the input
+    // on the same durable stream with the resumed epoch.
+    session.send_input(1, 2, SchemaValue::U32(3)).await?;
+    session.finish_input(1, 3).await?;
 
-    while !resumed_state.is_complete() {
-        let response = responses
+    while !session.is_complete() {
+        let response = session
             .message()
             .await?
             .ok_or_else(|| anyhow::anyhow!("resumed ephemeral input closed before completion"))?;
-        resumed_state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
         match response.response {
             Some(invocation_response::Response::OutputItem(item)) => {
                 assert!(
@@ -6749,12 +5821,6 @@ async fn consumed_input_boundary(
     let id = executor.start_agent(&component.id, parsed.clone()).await?;
     let metadata = executor.get_worker_metadata(&id).await?;
     let loads = executor.instance_load_count(&id.agent_id);
-    let wire = |value: SchemaValue| value.try_into().map_err(anyhow::Error::msg);
-    let stream = |stream_id| golem_schema::proto::golem::schema::SchemaValue {
-        value: Some(schema_value::Value::StreamReference(
-            SchemaValueStreamReference { stream_id },
-        )),
-    };
     let numbers = [23, 169, 7, 201];
     let (method, argument, streams, expected) = match kind {
         "byte" => {
@@ -6764,7 +5830,7 @@ async fn consumed_input_boundary(
                 .collect::<Vec<_>>();
             (
                 "consume_bytes_before_timer",
-                stream(1),
+                stream_reference(1),
                 vec![values.clone()],
                 SchemaValue::List { elements: values },
             )
@@ -6781,11 +5847,11 @@ async fn consumed_input_boundary(
             let argument = golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
                     fields: vec![
-                        stream(1),
+                        stream_reference(1),
                         golem_schema::proto::golem::schema::SchemaValue {
                             value: Some(schema_value::Value::OptionValue(Box::new(
                                 golem_schema::proto::golem::schema::OptionValue {
-                                    inner: Some(Box::new(stream(2))),
+                                    inner: Some(Box::new(stream_reference(2))),
                                 },
                             ))),
                         },
@@ -6811,64 +5877,25 @@ async fn consumed_input_boundary(
                 .collect::<Vec<_>>();
             (
                 "consume_before_timer",
-                stream(1),
+                stream_reference(1),
                 vec![values.clone()],
                 SchemaValue::List { elements: values },
             )
         }
     };
     let start_key = IdempotencyKey::fresh();
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some(method.into()),
-            input: Some(golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::RecordValue(RecordValue {
-                    fields: vec![argument],
-                })),
-            }),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let response = responses.message().await?.unwrap();
-    state
-        .validate_response(&response)
-        .map_err(anyhow::Error::msg)?;
-    let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
-        anyhow::bail!("not accepted")
-    };
-    let accepted = await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
+    let start = executor
+        .invocation(&component, method)
+        .on_agent(&id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![argument])
+        .build()?;
+    let mut session = executor.open_session(start).await?;
+    let accepted = session.accepted().await?;
     assert_eq!(accepted.stream_mappings.len(), streams.len());
     let mut acknowledged = BTreeMap::new();
     for (index, values) in streams.iter().enumerate() {
@@ -6880,23 +5907,10 @@ async fn consumed_input_boundary(
             .unwrap();
         let durable_stream_id = mapping.handle.as_ref().unwrap().stream_id;
         for (sequence, value) in values.iter().enumerate() {
-            let item = InvocationRequest {
-                request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                    transport_stream_id,
-                    sequence: sequence as u64,
-                    payload: Some(input_stream_item::Payload::Value(wire(value.clone())?)),
-                    durable_stream_id,
-                    epoch: accepted.epoch,
-                })),
-            };
-            state
-                .validate_trusted_request(&item)
-                .map_err(anyhow::Error::msg)?;
-            requests.send(item).await?;
-            let response = responses.message().await?.unwrap();
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
+            session
+                .send_input(transport_stream_id, sequence as u64, value.clone())
+                .await?;
+            let response = session.message().await?.unwrap();
             let Some(invocation_response::Response::InputAck(ack)) = response.response else {
                 anyhow::bail!("expected item ACK")
             };
@@ -6951,30 +5965,10 @@ async fn consumed_input_boundary(
                 );
             }
         }
-        let end = InvocationRequest {
-            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                transport_stream_id,
-                producer_sequence: values.len() as u64,
-                direction: StreamDirection::Input as i32,
-                authored_by: StreamTerminalAuthor::Guest as i32,
-                outcome: Some(
-                    StreamTerminal::Finished
-                        .try_into()
-                        .expect("finished terminal"),
-                ),
-                durable_stream_id,
-                epoch: accepted.epoch,
-                ..Default::default()
-            })),
-        };
-        state
-            .validate_trusted_request(&end)
-            .map_err(anyhow::Error::msg)?;
-        requests.send(end).await?;
-        let response = responses.message().await?.unwrap();
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+        session
+            .finish_input(transport_stream_id, values.len() as u64)
+            .await?;
+        let response = session.message().await?.unwrap();
         let Some(invocation_response::Response::InputAck(ack)) = response.response else {
             anyhow::bail!("expected terminal ACK")
         };
@@ -6991,7 +5985,7 @@ async fn consumed_input_boundary(
         );
     }
     tokio::select! {
-        response = responses.message() => anyhow::bail!("result before unload: {response:?}"),
+        response = session.message() => anyhow::bail!("result before unload: {response:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(10), async {
             executor.wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(8)).await?;
             while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id.agent_id)).await { tokio::time::sleep(Duration::from_millis(10)).await; }
@@ -7039,11 +6033,8 @@ async fn consumed_input_boundary(
     );
     let mut results = 0;
     let mut finishes = 0;
-    while !state.is_complete() {
-        let response = responses.message().await?.unwrap();
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+    while !session.is_complete() {
+        let response = session.message().await?.unwrap();
         match response.response {
             Some(invocation_response::Response::Result(result)) => {
                 let Some(invocation_session_result::Result::MethodResult(value)) = result.result
@@ -7253,133 +6244,50 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_schema::proto::golem::schema::SchemaValue {
-        value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::StreamReference(
-                    SchemaValueStreamReference { stream_id: 1 },
-                )),
-            }],
-        })),
-    };
     let idempotency_key = IdempotencyKey::fresh();
-    let attempt_id = Some(uuid::Uuid::new_v4().into());
-    let start_request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("consume".to_string()),
-            input: Some(input),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&idempotency_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(idempotency_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id,
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start_request.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let first = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("streaming invocation ended before acceptance"))?;
-    state
-        .validate_response(&first)
-        .map_err(anyhow::Error::msg)?;
-    let first_accepted = match first.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
-        other => anyhow::bail!("expected durable acceptance, got {other:?}"),
-    };
-    let first_accepted =
-        await_session_readiness(&mut responses, Some(&mut state), first_accepted).await?;
+    let start = executor
+        .invocation(&component, "consume")
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&idempotency_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    let mut session = executor.open_session(start.clone()).await?;
+    let first_accepted = session.accepted().await?;
     let first_mapping = first_accepted
         .stream_mappings
         .first()
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("durable acceptance omitted its input mapping"))?;
-    let first_durable_stream_id = first_mapping
-        .handle
-        .as_ref()
-        .and_then(|handle| handle.stream_id)
-        .ok_or_else(|| anyhow::anyhow!("durable input mapping omitted its stream ID"))?;
-    let first_item = InvocationRequest {
-        request: Some(invocation_request::Request::InputItem(InputStreamItem {
-            transport_stream_id: 1,
-            sequence: 0,
-            payload: Some(input_stream_item::Payload::Value(
-                SchemaValue::U32(1).try_into().map_err(anyhow::Error::msg)?,
-            )),
-            durable_stream_id: Some(first_durable_stream_id),
-            epoch: first_accepted.epoch,
-        })),
-    };
-    state
-        .validate_trusted_request(&first_item)
-        .map_err(anyhow::Error::msg)?;
-    requests.send(first_item.clone()).await?;
-    let first_ack = responses
+    anyhow::ensure!(
+        first_mapping
+            .handle
+            .as_ref()
+            .and_then(|handle| handle.stream_id)
+            .is_some(),
+        "durable input mapping omitted its stream ID"
+    );
+    session.send_input(1, 0, SchemaValue::U32(1)).await?;
+    let first_ack = session
         .message()
         .await?
         .ok_or_else(|| anyhow::anyhow!("durable input ended before its first ACK"))?;
-    state
-        .validate_response(&first_ack)
-        .map_err(anyhow::Error::msg)?;
     let first_ack_value = match &first_ack.response {
         Some(invocation_response::Response::InputAck(ack)) => ack.clone(),
         other => anyhow::bail!("expected first durable input ACK, got {other:?}"),
     };
 
     for (sequence, value) in [(1_u64, 2_u32), (2, 3)] {
-        let item = InvocationRequest {
-            request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                transport_stream_id: 1,
-                sequence,
-                payload: Some(input_stream_item::Payload::Value(
-                    SchemaValue::U32(value)
-                        .try_into()
-                        .map_err(anyhow::Error::msg)?,
-                )),
-                durable_stream_id: Some(first_durable_stream_id),
-                epoch: first_accepted.epoch,
-            })),
-        };
-        state
-            .validate_trusted_request(&item)
-            .map_err(anyhow::Error::msg)?;
-        requests.send(item.clone()).await?;
-        let ack = responses
+        session
+            .send_input(1, sequence, SchemaValue::U32(value))
+            .await?;
+        let ack = session
             .message()
             .await?
             .ok_or_else(|| anyhow::anyhow!("durable input ended before its ACK"))?;
-        state.validate_response(&ack).map_err(anyhow::Error::msg)?;
         assert!(matches!(
             &ack.response,
             Some(invocation_response::Response::InputAck(ack))
@@ -7388,27 +6296,9 @@ async fn durable_streaming_input_recovers_after_executor_restart(
                     && !ack.resulting_offset.is_empty()
         ));
     }
-    let end = InvocationRequest {
-        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-            transport_stream_id: 1,
-            producer_sequence: 3,
-            direction: StreamDirection::Input as i32,
-            authored_by: StreamTerminalAuthor::Guest as i32,
-            outcome: Some(
-                StreamTerminal::Finished
-                    .try_into()
-                    .expect("finished terminal"),
-            ),
-            durable_stream_id: Some(first_durable_stream_id),
-            epoch: first_accepted.epoch,
-            ..Default::default()
-        })),
-    };
-    state
-        .validate_trusted_request(&end)
-        .map_err(anyhow::Error::msg)?;
-    requests.send(end).await?;
-    drop(requests);
+    session.finish_input(1, 3).await?;
+    // The client closes its request stream but leaves the terminal ACK unread.
+    session.close_requests();
 
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -7448,51 +6338,14 @@ async fn durable_streaming_input_recovers_after_executor_restart(
     assert_eq!(committed_terminals.len(), 1);
     assert_eq!(committed_terminals[0].1.terminal, StreamTerminal::Finished);
     let consumed_before_restart = input_consumer_history(&before_restart)?;
-    drop(responses);
+    drop(session);
     drop(executor);
 
     let executor = golem_worker_executor_test_utils::start(deps, &context).await?;
-    let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
-        anyhow::bail!("durable input restart request is not Start");
-    };
-    let resume_request = InvocationRequest {
-        request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: first_accepted.idempotency_key,
-            agent_id: crate::agent::start_target_id(start),
-            environment_id: start.environment_id,
-            attachment_id: first_accepted.attachment_id,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: start.expected_callee_fingerprint,
-            expected_epoch: first_accepted.epoch,
-            operation: ResumeOperation::Resume as i32,
-            cursors: Vec::new(),
-            auth_ctx: start.auth_ctx.clone(),
-            caller: start.caller.clone(),
-        })),
-    };
-    let mut final_state = InvocationSessionState::default();
-    final_state
-        .validate_trusted_request(&resume_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(resume_request).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let accepted = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("terminal retry ended before acceptance"))?;
-    final_state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
-    let accepted = match accepted.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
-        other => anyhow::bail!("expected terminal retry acceptance, got {other:?}"),
-    };
+    let mut session = executor
+        .resume_session(resume_attach(&start, &first_accepted))
+        .await?;
+    let accepted = session.acceptance().await?;
     assert_eq!(accepted.attachment_id, first_accepted.attachment_id);
     assert_ne!(accepted.attempt_id, first_accepted.attempt_id);
     assert_eq!(accepted.epoch, first_accepted.epoch + 1);
@@ -7513,14 +6366,11 @@ async fn durable_streaming_input_recovers_after_executor_restart(
 
     let mut result = None;
     let mut terminal_ack_count = 0;
-    while !final_state.is_complete() {
-        let response = responses
+    while !session.is_complete() {
+        let response = session
             .message()
             .await?
             .ok_or_else(|| anyhow::anyhow!("terminal retry closed before completion"))?;
-        final_state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
         match response.response {
             Some(invocation_response::Response::InputAck(ack)) => {
                 terminal_ack_count += 1;
@@ -7627,72 +6477,19 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_schema::proto::golem::schema::SchemaValue {
-        value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::StreamReference(
-                    SchemaValueStreamReference { stream_id: 1 },
-                )),
-            }],
-        })),
-    };
     let start_key = IdempotencyKey::fresh();
-    let start_request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("drop_input".to_string()),
-            input: Some(input),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start_request.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let first = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("streaming invocation ended before acceptance"))?;
-    state
-        .validate_response(&first)
-        .map_err(anyhow::Error::msg)?;
-    let first_accepted = match first.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
-        other => anyhow::bail!("expected durable acceptance, got {other:?}"),
-    };
-    let first_accepted =
-        await_session_readiness(&mut responses, Some(&mut state), first_accepted).await?;
+    let start = executor
+        .invocation(&component, "drop_input")
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    let mut session = executor.open_session(start.clone()).await?;
+    let first_accepted = session.accepted().await?;
     let first_mapping = first_accepted
         .stream_mappings
         .first()
@@ -7701,14 +6498,11 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
 
     let mut first_input_cancelled = false;
     let mut first_result = None;
-    while !state.is_complete() {
-        let response = responses
+    while !session.is_complete() {
+        let response = session
             .message()
             .await?
             .ok_or_else(|| anyhow::anyhow!("first attempt closed before completion"))?;
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
         match response.response {
             Some(invocation_response::Response::StreamEnd(cancel)) => {
                 assert_eq!(cancel.transport_stream_id, 1);
@@ -7742,8 +6536,7 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
         "the guest drop did not cancel the input stream"
     );
     assert_eq!(first_result, Some(SchemaValue::U64(42)));
-    drop(requests);
-    drop(responses);
+    drop(session);
 
     // Finished precedes asynchronous attachment cleanup; Resume requires the persisted detach.
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -7769,47 +6562,10 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
     .await
     .map_err(|_| anyhow::anyhow!("finished session did not detach before resume"))??;
 
-    let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
-        anyhow::bail!("durable input resume request is not Start");
-    };
-    let resume_request = InvocationRequest {
-        request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: first_accepted.idempotency_key,
-            agent_id: crate::agent::start_target_id(start),
-            environment_id: start.environment_id,
-            attachment_id: first_accepted.attachment_id,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: start.expected_callee_fingerprint,
-            expected_epoch: first_accepted.epoch,
-            operation: ResumeOperation::Resume as i32,
-            cursors: Vec::new(),
-            auth_ctx: start.auth_ctx.clone(),
-            caller: start.caller.clone(),
-        })),
-    };
-    let mut final_state = InvocationSessionState::default();
-    final_state
-        .validate_trusted_request(&resume_request)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(resume_request).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let accepted = responses
-        .message()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("resume ended before acceptance"))?;
-    final_state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
-    let accepted = match accepted.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
-        other => anyhow::bail!("expected resume acceptance, got {other:?}"),
-    };
+    let mut session = executor
+        .resume_session(resume_attach(&start, &first_accepted))
+        .await?;
+    let accepted = session.acceptance().await?;
     assert_eq!(accepted.attachment_id, first_accepted.attachment_id);
     assert_ne!(accepted.attempt_id, first_accepted.attempt_id);
     assert_eq!(accepted.epoch, first_accepted.epoch + 1);
@@ -7826,14 +6582,11 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
     );
 
     let mut result = None;
-    while !final_state.is_complete() {
-        let response = responses
+    while !session.is_complete() {
+        let response = session
             .message()
             .await?
             .ok_or_else(|| anyhow::anyhow!("resumed session closed before completion"))?;
-        final_state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
         match response.response {
             Some(invocation_response::Response::Result(invocation_result)) => {
                 let value = match invocation_result.result {
@@ -7945,7 +6698,7 @@ async fn reacquire_permits_restart_preserves_accepted_queued_live_invocation(
         )
         .await?;
 
-    let (mut state, _frames, mut inbound) = open_invocation_session(
+    let mut session = open_invocation_session(
         &executor,
         &component,
         &target_agent,
@@ -7953,16 +6706,13 @@ async fn reacquire_permits_restart_preserves_accepted_queued_live_invocation(
         data_value!(0u64, 0u64),
     )
     .await?;
-    let accepted = tokio::time::timeout(Duration::from_secs(3), inbound.message())
+    let accepted = tokio::time::timeout(Duration::from_secs(3), session.next())
         .await
         .map_err(|_| anyhow::anyhow!("live invocation was not accepted while durable work ran"))??
         .ok_or_else(|| anyhow::anyhow!("live invocation ended before acceptance"))?;
-    state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
     assert!(matches!(
-        accepted.response,
-        Some(invocation_response::Response::Accepted(_))
+        accepted,
+        invocation_response::Response::Accepted(_)
     ));
     assert!(
         !blocker.is_finished(),
@@ -7972,15 +6722,15 @@ async fn reacquire_permits_restart_preserves_accepted_queued_live_invocation(
     let blocker_result = blocker.await??;
     assert_eq!(blocker_result.into_typed::<u64>()?, 0);
 
-    let live_result = tokio::time::timeout(
-        Duration::from_secs(60),
-        receive_invocation_session(&mut state, &mut inbound),
-    )
-    .await
-    .map_err(|_| {
-        anyhow::anyhow!("accepted live invocation was stranded by permit reacquisition restart")
-    })??
-    .map_err(anyhow::Error::msg)?;
+    let live_result =
+        tokio::time::timeout(Duration::from_secs(60), receive_invocation_session(session))
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "accepted live invocation was stranded by permit reacquisition restart"
+                )
+            })??
+            .map_err(anyhow::Error::msg)?;
     assert_eq!(live_result, SchemaValue::U64(0));
     assert!(
         !executor.worker_is_loaded(&victim_owned).await,
@@ -8735,53 +7485,22 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
     let source = agent_key!("StreamingRpcTarget", "fork-completed-stream");
     let source_id = executor.start_agent(&component.id, source.clone()).await?;
     let metadata = executor.get_worker_metadata(&source_id).await?;
-    let (_, input) = data_value!().into_parts();
     let start_key = IdempotencyKey::fresh();
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&source_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("increment_stream".into()),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (frames, receiver) = mpsc::channel(1);
-    frames.send(start).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    let start = executor
+        .invocation(&component, "increment_stream")
+        .on_agent(&source_id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input(data_value!())?
+        .build()?;
+    let mut session = executor.open_session(start).await?;
     let mut items = Vec::new();
     let mut ends = 0;
     let mut finished = false;
-    while let Some(response) = responses.message().await? {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+    while let Some(response) = session.message().await? {
         match response.response {
             Some(invocation_response::Response::OutputItem(item)) => {
                 items.push(
@@ -8811,9 +7530,8 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
     }
     assert_eq!(items, vec![SchemaValue::U64(1)]);
     assert_eq!(ends, 1);
-    assert!(finished && state.is_complete());
-    drop(frames);
-    drop(responses);
+    assert!(finished && session.is_complete());
+    drop(session);
     let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
     let cut = prefix.last().unwrap().oplog_index;
     let target_id = executor.fork_worker(&source_id, cut).await?;
@@ -8930,51 +7648,20 @@ async fn reverted_retained_stream_start(
     let stored_key = executor
         .external_invocation_key(&worker_id.agent_id, &key, "consume")
         .await?;
-    let start = InvocationStart {
-        allow_streams: true,
-        captured_method_input: None,
-        target: Some(crate::agent::id_target(&worker_id)),
-        constructor: None,
-        component_id: None,
-        method_name: Some("consume".into()),
-        input: Some(golem_schema::proto::golem::schema::SchemaValue {
-            value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                    value: Some(schema_value::Value::StreamReference(
-                        SchemaValueStreamReference { stream_id: 1 },
-                    )),
-                }],
-            })),
-        }),
-        request_key: Some(
-            InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                .into(),
-        ),
-        idempotency_key: Some(key.clone().into()),
-        auth_ctx: Some(executor.auth_ctx().into()),
-        environment_id: Some(component.environment_id.into()),
-        component_owner_account_id: Some(component.account_id.into()),
-        attempt_id: Some(uuid::Uuid::new_v4().into()),
-        expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-        caller: Some(callers::anonymous().into()),
-        ..Default::default()
-    };
-    let request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(start.clone())),
-    };
-    let (old_frames, receiver) = mpsc::channel(8);
-    old_frames.send(request.clone()).await?;
-    let mut old_responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let accepted = old_responses.message().await?.unwrap();
-    let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
-        anyhow::bail!("expected acceptance: {accepted:?}");
-    };
-    let accepted = await_session_readiness(&mut old_responses, None, accepted).await?;
+    let start = executor
+        .invocation(&component, "consume")
+        .on_agent(&worker_id)
+        .allow_streams()
+        .idempotency_key(&key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    // The attachments before the resume skip client-side frame validation.
+    let mut original = executor.open_unvalidated_session(start.clone()).await?;
+    let accepted = original.acceptance().await?;
+    let accepted = original.ready(accepted).await?;
     assert_eq!(accepted.epoch, 1);
     // Revert must retain the running invocation, not delete its start: processed invocations
     // are deliberately not put back on the pending queue by ordinary revert.
@@ -8996,28 +7683,10 @@ async fn reverted_retained_stream_start(
     })
     .await??;
     // Persist a suffix to remove, independently of the guest's incidental host calls.
-    old_frames
-        .send(InvocationRequest {
-            request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                transport_stream_id: 1,
-                sequence: 0,
-                durable_stream_id: accepted.stream_mappings[0]
-                    .handle
-                    .as_ref()
-                    .unwrap()
-                    .stream_id,
-                epoch: accepted.epoch,
-                payload: Some(input_stream_item::Payload::Value(
-                    SchemaValue::U32(17)
-                        .try_into()
-                        .map_err(anyhow::Error::msg)?,
-                )),
-            })),
-        })
-        .await?;
+    original.send_input(1, 0, SchemaValue::U32(17)).await?;
     assert!(matches!(
-        old_responses.message().await?.unwrap().response,
-        Some(invocation_response::Response::InputAck(_))
+        original.next().await?.unwrap(),
+        invocation_response::Response::InputAck(_)
     ));
     executor
         .revert(
@@ -9029,168 +7698,46 @@ async fn reverted_retained_stream_start(
             ),
         )
         .await?;
-    drop(old_frames);
-    drop(old_responses);
+    drop(original);
 
-    let (frames, receiver) = mpsc::channel(8);
-    frames.send(request.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let response = responses.message().await?.unwrap();
-    let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
-        anyhow::bail!("{response:?}");
-    };
+    let mut reattached = executor.open_unvalidated_session(start.clone()).await?;
+    let accepted = reattached.acceptance().await?;
     assert_eq!(accepted.epoch, 2);
     assert!(matches!(
-        responses.message().await?.unwrap().response,
-        Some(invocation_response::Response::AttachmentRevoked(_))
+        reattached.next().await?.unwrap(),
+        invocation_response::Response::AttachmentRevoked(_)
     ));
-    drop(frames);
-    drop(responses);
+    drop(reattached);
 
-    let resume = InvocationRequest {
-        request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            agent_id: crate::agent::start_target_id(&start),
-            environment_id: start.environment_id,
-            idempotency_key: accepted.idempotency_key,
-            expected_callee_fingerprint: start.expected_callee_fingerprint,
-            auth_ctx: start.auth_ctx,
-            attachment_id: accepted.attachment_id,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_epoch: accepted.epoch,
-            operation: ResumeOperation::Resume as i32,
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&resume)
-        .map_err(anyhow::Error::msg)?;
-    let (frames, receiver) = mpsc::channel(8);
-    frames.send(resume.clone()).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let response = responses.message().await?.unwrap();
-    state
-        .validate_response(&response)
-        .map_err(anyhow::Error::msg)?;
-    let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
-        anyhow::bail!("{response:?}");
-    };
+    let resume = resume_attach(&start, &accepted);
+    let mut resumed = executor.resume_session(resume.clone()).await?;
+    let accepted = resumed.acceptance().await?;
     assert_eq!(accepted.epoch, 3);
 
     // Replaying Start while another attempt is still attached must report its current epoch.
-    let (replayed_frames, receiver) = mpsc::channel(8);
-    replayed_frames.send(request).await?;
-    let mut replayed_responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let response = replayed_responses.message().await?.unwrap();
-    let Some(invocation_response::Response::Accepted(replayed)) = response.response else {
-        anyhow::bail!("{response:?}");
-    };
+    let mut replayed_session = executor.open_unvalidated_session(start.clone()).await?;
+    let replayed = replayed_session.acceptance().await?;
     assert_eq!(replayed.epoch, 3);
     assert!(matches!(
-        replayed_responses.message().await?.unwrap().response,
-        Some(invocation_response::Response::AttachmentRevoked(_))
+        replayed_session.next().await?.unwrap(),
+        invocation_response::Response::AttachmentRevoked(_)
     ));
     let mut takeover = resume;
-    let Some(invocation_request::Request::ResumeAttach(attach)) = &mut takeover.request else {
-        unreachable!();
-    };
-    attach.expected_epoch = replayed.epoch;
-    attach.attempt_id = Some(uuid::Uuid::new_v4().into());
-    attach.operation = ResumeOperation::Takeover as i32;
-    let old_frames = frames;
-    let old_responses = responses;
-    let (frames, receiver) = mpsc::channel(8);
-    state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&takeover)
-        .map_err(anyhow::Error::msg)?;
-    frames.send(takeover).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let response = responses.message().await?.unwrap();
-    state
-        .validate_response(&response)
-        .map_err(anyhow::Error::msg)?;
-    let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
-        anyhow::bail!("{response:?}");
-    };
+    takeover.expected_epoch = replayed.epoch;
+    takeover.attempt_id = Some(uuid::Uuid::new_v4().into());
+    takeover.operation = ResumeOperation::Takeover as i32;
+    let mut session = executor.resume_session(takeover).await?;
+    let accepted = session.acceptance().await?;
     assert_eq!(accepted.epoch, 4);
-    drop(old_frames);
-    drop(old_responses);
-    drop(replayed_frames);
-    drop(replayed_responses);
+    drop(resumed);
+    drop(replayed_session);
 
-    let stream = accepted.stream_mappings[0]
-        .handle
-        .as_ref()
-        .unwrap()
-        .stream_id;
-    for frame in [
-        InvocationRequest {
-            request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                transport_stream_id: 1,
-                sequence: 0,
-                durable_stream_id: stream,
-                epoch: accepted.epoch,
-                payload: Some(input_stream_item::Payload::Value(
-                    SchemaValue::U32(29)
-                        .try_into()
-                        .map_err(anyhow::Error::msg)?,
-                )),
-            })),
-        },
-        InvocationRequest {
-            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                transport_stream_id: 1,
-                producer_sequence: 1,
-                direction: StreamDirection::Input as i32,
-                authored_by: StreamTerminalAuthor::Guest as i32,
-                outcome: Some(
-                    StreamTerminal::Finished
-                        .try_into()
-                        .expect("finished terminal"),
-                ),
-                durable_stream_id: stream,
-                epoch: accepted.epoch,
-                ..Default::default()
-            })),
-        },
-    ] {
-        state
-            .validate_trusted_request(&frame)
-            .map_err(anyhow::Error::msg)?;
-        frames.send(frame).await?;
-    }
+    session.send_input(1, 0, SchemaValue::U32(29)).await?;
+    session.finish_input(1, 1).await?;
     let mut result = None;
-    while !state.is_complete() {
-        let response = responses
-            .message()
-            .await?
-            .expect("resumed session completion");
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-        if let Some(invocation_response::Response::Result(result_frame)) = response.response
+    while !session.is_complete() {
+        let response = session.next().await?.expect("resumed session completion");
+        if let invocation_response::Response::Result(result_frame) = response
             && let Some(invocation_session_result::Result::MethodResult(value)) =
                 result_frame.result
         {
@@ -9239,93 +7786,45 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
     wait_for_agent_initialization(&executor, &worker_id).await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
     let cut = metadata.last_oplog_index;
-    let input = golem_schema::proto::golem::schema::SchemaValue {
-        value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::StreamReference(
-                    SchemaValueStreamReference { stream_id: 1 },
-                )),
-            }],
-        })),
-    };
     let start_key = IdempotencyKey::fresh();
-    let request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("consume".into()),
-            input: Some(input),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
+    let invocation = executor
+        .invocation(&component, "consume")
+        .on_agent(&worker_id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    // The connections before the revert skip client-side frame validation.
     let mut old_connections = Vec::new();
     for queued in [false, true] {
-        let mut request = request.clone();
-        if queued && let Some(invocation_request::Request::Start(start)) = &mut request.request {
+        let mut start = invocation.clone();
+        if queued {
             start.idempotency_key = Some(IdempotencyKey::fresh().into());
         }
-        let (frames, receiver) = mpsc::channel(8);
-        frames.send(request).await?;
-        let mut responses = executor
-            .client
-            .clone()
-            .invoke_agent_session(ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let response = responses.message().await?.expect("acceptance response");
-        let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
-            anyhow::bail!("expected acceptance: {response:?}");
-        };
+        let mut connection = executor.open_unvalidated_session(start).await?;
+        let accepted = connection.acceptance().await?;
         if queued {
             assert!(accepted.component_revision.is_none());
             assert!(accepted.stream_mappings.is_empty());
-            old_connections.push((frames, responses, None));
+            old_connections.push((connection, None));
             continue;
         }
-        let accepted = await_session_readiness(&mut responses, None, accepted).await?;
+        let accepted = connection.ready(accepted).await?;
         assert_eq!(accepted.epoch, 1);
         let stream = accepted.stream_mappings[0]
             .handle
             .as_ref()
             .unwrap()
             .stream_id;
-        frames
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                    transport_stream_id: 1,
-                    sequence: 0,
-                    durable_stream_id: stream,
-                    epoch: accepted.epoch,
-                    payload: Some(input_stream_item::Payload::Value(
-                        SchemaValue::U32(13)
-                            .try_into()
-                            .map_err(anyhow::Error::msg)?,
-                    )),
-                })),
-            })
-            .await?;
+        connection.send_input(1, 0, SchemaValue::U32(13)).await?;
         assert!(matches!(
-            responses.message().await?.unwrap().response,
-            Some(invocation_response::Response::InputAck(_))
+            connection.next().await?.unwrap(),
+            invocation_response::Response::InputAck(_)
         ));
-        old_connections.push((frames, responses, stream));
+        old_connections.push((connection, stream));
     }
     executor
         .revert(
@@ -9342,95 +7841,34 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
             .pending_invocation_count,
         0
     );
-    for (frames, _, stream) in &old_connections {
-        let _ = frames
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                    transport_stream_id: 1,
-                    sequence: 1,
-                    durable_stream_id: *stream,
-                    epoch: 1,
-                    payload: Some(input_stream_item::Payload::Value(
-                        SchemaValue::U32(71)
-                            .try_into()
-                            .map_err(anyhow::Error::msg)?,
-                    )),
-                })),
-            })
+    // Each old connection sends an item of the reverted epoch 1; its send may fail when the
+    // executor already closed the connection.
+    for (connection, stream) in &mut old_connections {
+        let _ = connection
+            .send_unvalidated(invocation_request::Request::InputItem(InputStreamItem {
+                transport_stream_id: 1,
+                sequence: 1,
+                durable_stream_id: *stream,
+                epoch: 1,
+                payload: Some(input_stream_item::Payload::Value(
+                    SchemaValue::U32(71)
+                        .try_into()
+                        .map_err(anyhow::Error::msg)?,
+                )),
+            }))
             .await;
     }
     drop(old_connections);
     drop(executor);
     let executor = start(deps, &context).await?;
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&request)
-        .map_err(anyhow::Error::msg)?;
-    let (frames, receiver) = mpsc::channel(8);
-    frames.send(request).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let response = responses.message().await?.expect("reacceptance response");
-    state
-        .validate_response(&response)
-        .map_err(anyhow::Error::msg)?;
-    let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
-        anyhow::bail!("expected reacceptance: {response:?}");
-    };
-    let accepted = await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
+    let mut session = executor.open_session(invocation).await?;
+    let accepted = session.accepted().await?;
     assert_eq!(accepted.epoch, 2);
-    let stream = accepted.stream_mappings[0]
-        .handle
-        .as_ref()
-        .unwrap()
-        .stream_id;
-    let item = InvocationRequest {
-        request: Some(invocation_request::Request::InputItem(InputStreamItem {
-            transport_stream_id: 1,
-            sequence: 0,
-            durable_stream_id: stream,
-            epoch: accepted.epoch,
-            payload: Some(input_stream_item::Payload::Value(
-                SchemaValue::U32(29)
-                    .try_into()
-                    .map_err(anyhow::Error::msg)?,
-            )),
-        })),
-    };
-    state
-        .validate_trusted_request(&item)
-        .map_err(anyhow::Error::msg)?;
-    frames.send(item).await?;
-    let end = InvocationRequest {
-        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-            transport_stream_id: 1,
-            producer_sequence: 1,
-            direction: StreamDirection::Input as i32,
-            authored_by: StreamTerminalAuthor::Guest as i32,
-            outcome: Some(
-                StreamTerminal::Finished
-                    .try_into()
-                    .expect("finished terminal"),
-            ),
-            durable_stream_id: stream,
-            epoch: accepted.epoch,
-            ..Default::default()
-        })),
-    };
-    state
-        .validate_trusted_request(&end)
-        .map_err(anyhow::Error::msg)?;
-    frames.send(end).await?;
+    session.send_input(1, 0, SchemaValue::U32(29)).await?;
+    session.finish_input(1, 1).await?;
     let mut result = None;
-    while !state.is_complete() {
-        let response = responses.message().await?.expect("session completion");
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+    while !session.is_complete() {
+        let response = session.message().await?.expect("session completion");
         match response.response {
             Some(invocation_response::Response::InputAck(_)) => {}
             Some(invocation_response::Response::Result(value)) => {
@@ -9456,6 +7894,8 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
     Ok(())
 }
 
+/// Invokes `method_name` of the agent of `agent_id` in a session that allows streams, and returns
+/// its method result, or the message of its failure or rejection.
 async fn invoke_agent_session(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
@@ -9463,9 +7903,9 @@ async fn invoke_agent_session(
     method_name: &str,
     params: TypedSchemaValue,
 ) -> anyhow::Result<Result<SchemaValue, String>> {
-    let (mut state, _frames, mut inbound) =
+    let session =
         open_invocation_session(executor, component, agent_id, method_name, params).await?;
-    receive_invocation_session(&mut state, &mut inbound).await
+    receive_invocation_session(session).await
 }
 
 async fn wait_for_agent_initialization(
@@ -9494,11 +7934,7 @@ async fn open_invocation_session(
     agent_id: &ParsedAgentKey,
     method_name: &str,
     params: TypedSchemaValue,
-) -> anyhow::Result<(
-    InvocationSessionState,
-    mpsc::Sender<InvocationRequest>,
-    tonic::Streaming<InvocationResponse>,
-)> {
+) -> anyhow::Result<InvocationSession> {
     open_invocation_session_with_key(
         executor,
         component,
@@ -9517,123 +7953,40 @@ async fn open_invocation_session_with_key(
     idempotency_key: &IdempotencyKey,
     method_name: &str,
     params: TypedSchemaValue,
-) -> anyhow::Result<(
-    InvocationSessionState,
-    mpsc::Sender<InvocationRequest>,
-    tonic::Streaming<InvocationResponse>,
-)> {
-    let (target, constructor) = crate::agent::invocation_target(
-        executor,
-        component,
-        agent_id,
-        idempotency_key,
-        method_name,
-    )?;
-    let (_, input) = params.into_parts();
-    let input = input.try_into().map_err(anyhow::Error::msg)?;
-    let (frames, receiver) = mpsc::channel(8);
-    let request = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(target),
-            constructor,
-            component_id: Some(component.id.into()),
-            method_name: Some(method_name.to_string()),
-            input: Some(input),
-            idempotency_key: Some(idempotency_key.clone().into()),
-            context: None,
-            auth_ctx: Some(executor.auth_ctx().into()),
-            caller: Some(callers::anonymous().into()),
-            environment_id: Some(component.environment_id.into()),
-            config: Vec::new(),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            schedule_at: None,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: None,
-            durable_input_mappings: Vec::new(),
-            scope_card: None,
-            origin_invocation: None,
-            external_tool: None,
-            request_key: Some(
-                golem_common::model::InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(idempotency_key),
-                )
-                .into(),
-            ),
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&request)
-        .map_err(anyhow::Error::msg)?;
-    frames.send(request).await?;
-    let inbound = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    Ok((state, frames, inbound))
+) -> anyhow::Result<InvocationSession> {
+    let start = executor
+        .invocation(component, method_name)
+        .on_key(agent_id)
+        .with_component_id()
+        .input(params)?
+        .idempotency_key(idempotency_key)
+        .with_request_key()
+        .allow_streams()
+        .fresh_attempt()
+        .build()?;
+    executor.open_session(start).await
 }
 
+/// Reads the session to its end: its method result, or the message of its failure or rejection.
 async fn receive_invocation_session(
-    state: &mut InvocationSessionState,
-    inbound: &mut tonic::Streaming<InvocationResponse>,
+    session: InvocationSession,
 ) -> anyhow::Result<Result<SchemaValue, String>> {
-    let mut result = None;
-    let mut terminal = None;
-    while let Some(response) = inbound.message().await? {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-        match response.response {
-            Some(invocation_response::Response::Accepted(_))
-            | Some(invocation_response::Response::Ready(_)) => {}
-            Some(invocation_response::Response::Rejected(rejected)) => {
-                terminal = Some(Err(rejected.error));
-            }
-            Some(invocation_response::Response::Result(value)) => {
-                if result.is_some() {
-                    anyhow::bail!("invocation session returned more than one result");
-                }
-                result = match value.result {
-                    Some(invocation_session_result::Result::MethodResult(value)) => {
-                        Some(value.try_into().map_err(anyhow::Error::msg)?)
-                    }
-                    Some(invocation_session_result::Result::ToolResult(_)) => {
-                        anyhow::bail!("method invocation session returned a tool result")
-                    }
-                    Some(invocation_session_result::Result::NoResult(_)) | None => {
-                        anyhow::bail!("invocation session returned no method result")
-                    }
-                };
-            }
-            Some(invocation_response::Response::Finished(finished)) => {
-                terminal = Some(match finished.outcome {
-                    Some(invocation_session_completion::Outcome::Success(_)) => {
-                        result.take().map(Ok).ok_or_else(|| {
-                            anyhow::anyhow!("invocation session ended without a result")
-                        })?
-                    }
-                    Some(invocation_session_completion::Outcome::Failure(failure)) => {
-                        Err(failure.message)
-                    }
-                    None => anyhow::bail!("invocation session completion has no outcome"),
-                });
-            }
-            Some(other) => {
-                anyhow::bail!("unexpected outer invocation session frame: {other:?}")
-            }
-            None => anyhow::bail!("empty outer invocation session frame"),
+    let outcome = session.collect().await?;
+    // A result frame must carry a method result, whatever the terminal.
+    let value = outcome
+        .result
+        .map(|result| result.method_result())
+        .transpose()?;
+    Ok(match outcome.terminal {
+        SessionTerminal::Succeeded => Ok(
+            value.ok_or_else(|| anyhow::anyhow!("invocation session ended without a result"))?
+        ),
+        SessionTerminal::Failed(InvocationError::Failed { failure, .. }) => Err(failure.message),
+        SessionTerminal::Rejected(InvocationError::Rejected { rejected, .. }) => {
+            Err(rejected.error)
         }
-    }
-    terminal.ok_or_else(|| anyhow::anyhow!("invocation session response ended before completion"))
+        other => anyhow::bail!("unexpected session terminal {other:?}"),
+    })
 }
 
 #[test]
@@ -9656,70 +8009,20 @@ async fn typescript_streaming_guest_abi_e2e(
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_schema::proto::golem::schema::SchemaValue {
-        value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::StreamReference(
-                    SchemaValueStreamReference { stream_id: 1 },
-                )),
-            }],
-        })),
-    };
     let start_key = IdempotencyKey::fresh();
-    let start = InvocationRequest {
-        request: Some(invocation_request::Request::Start(InvocationStart {
-            allow_streams: true,
-            captured_method_input: None,
-            target: Some(crate::agent::id_target(&worker_agent_id)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("transform".to_string()),
-            input: Some(input),
-            request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
-            ),
-            idempotency_key: Some(start_key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })),
-    };
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_trusted_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    let (requests, receiver) = mpsc::channel(8);
-    requests.send(start).await?;
-    let mut responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
+    let start = executor
+        .invocation(&component, "transform")
+        .on_agent(&worker_agent_id)
+        .allow_streams()
+        .idempotency_key(&start_key)
+        .with_request_key()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input_record(vec![stream_reference(1)])
+        .build()?;
+    let mut session = executor.open_session(start).await?;
 
-    let accepted = responses.message().await?.ok_or_else(|| {
-        anyhow::anyhow!("TypeScript streaming invocation ended before acceptance")
-    })?;
-    state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
-    let accepted = match accepted.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
-        other => anyhow::bail!("expected TypeScript streaming acceptance, got {other:?}"),
-    };
-    let accepted = await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
+    let accepted = session.accepted().await?;
     let [input_mapping] = accepted.stream_mappings.as_slice() else {
         anyhow::bail!(
             "expected one TypeScript input stream mapping, got {}",
@@ -9727,61 +8030,25 @@ async fn typescript_streaming_guest_abi_e2e(
         );
     };
     assert_eq!(input_mapping.transport_stream_id, 1);
-    let durable_stream_id = input_mapping
-        .handle
-        .as_ref()
-        .and_then(|handle| handle.stream_id)
-        .ok_or_else(|| anyhow::anyhow!("TypeScript input mapping omitted its durable stream ID"))?;
+    anyhow::ensure!(
+        input_mapping
+            .handle
+            .as_ref()
+            .and_then(|handle| handle.stream_id)
+            .is_some(),
+        "TypeScript input mapping omitted its durable stream ID"
+    );
 
-    for (sequence, value) in [(0_u64, 2_u32), (1, 3)] {
-        let item = InvocationRequest {
-            request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                transport_stream_id: 1,
-                sequence,
-                payload: Some(input_stream_item::Payload::Value(
-                    SchemaValue::U32(value)
-                        .try_into()
-                        .map_err(anyhow::Error::msg)?,
-                )),
-                durable_stream_id: Some(durable_stream_id),
-                epoch: accepted.epoch,
-            })),
-        };
-        state
-            .validate_trusted_request(&item)
-            .map_err(anyhow::Error::msg)?;
-        requests.send(item).await?;
-    }
-    let end = InvocationRequest {
-        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-            transport_stream_id: 1,
-            producer_sequence: 2,
-            direction: StreamDirection::Input as i32,
-            authored_by: StreamTerminalAuthor::Guest as i32,
-            outcome: Some(
-                StreamTerminal::Finished
-                    .try_into()
-                    .expect("finished terminal"),
-            ),
-            durable_stream_id: Some(durable_stream_id),
-            epoch: accepted.epoch,
-            ..Default::default()
-        })),
-    };
-    state
-        .validate_trusted_request(&end)
-        .map_err(anyhow::Error::msg)?;
-    requests.send(end).await?;
+    session.send_input(1, 0, SchemaValue::U32(2)).await?;
+    session.send_input(1, 1, SchemaValue::U32(3)).await?;
+    session.finish_input(1, 2).await?;
 
     let mut output_stream_id = None;
     let mut output_values = Vec::new();
     let mut input_acks = 0;
     let mut output_ends = 0;
     let mut finished_successfully = false;
-    while let Some(response) = responses.message().await? {
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+    while let Some(response) = session.message().await? {
         match response.response {
             Some(invocation_response::Response::InputAck(_)) => input_acks += 1,
             Some(invocation_response::Response::Result(result)) => {
@@ -9835,7 +8102,7 @@ async fn typescript_streaming_guest_abi_e2e(
         }
     }
 
-    assert!(state.is_complete());
+    assert!(session.is_complete());
     assert_eq!(input_acks, 3);
     assert_eq!(output_values, vec![20, 30]);
     assert_eq!(output_ends, 1);
@@ -9912,120 +8179,42 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
             let agent_id = agent_key!("ConcurrentStreamProbe", name, readers as f64, port as f64);
             let worker_id = executor.start_agent(&component.id, agent_id).await?;
             let metadata = executor.get_worker_metadata(&worker_id).await?;
-            let input = golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::RecordValue(RecordValue {
-                    fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                        value: Some(schema_value::Value::StreamReference(
-                            SchemaValueStreamReference { stream_id: 1 },
-                        )),
-                    }],
-                })),
-            };
             let start_key = IdempotencyKey::fresh();
-            let request = InvocationRequest {
-                request: Some(invocation_request::Request::Start(InvocationStart {
-                    allow_streams: true,
-                    captured_method_input: None,
-                    target: Some(crate::agent::id_target(&worker_id)),
-                    constructor: None,
-                    component_id: None,
-                    method_name: Some("echo".to_string()),
-                    input: Some(input),
-                    request_key: Some(
-                        InvocationRequestKey::external(
-                            executor.auth_ctx().idempotency_scope(),
-                            Some(&start_key),
-                        )
-                        .into(),
-                    ),
-                    idempotency_key: Some(start_key.into()),
-                    auth_ctx: Some(executor.auth_ctx().into()),
-                    environment_id: Some(component.environment_id.into()),
-                    component_owner_account_id: Some(component.account_id.into()),
-                    mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-                    attempt_id: Some(uuid::Uuid::new_v4().into()),
-                    expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-                    caller: Some(callers::anonymous().into()),
-                    ..Default::default()
-                })),
-            };
-            let mut state = InvocationSessionState::default();
-            state
-                .validate_trusted_request(&request)
-                .map_err(anyhow::Error::msg)?;
-            let (requests, receiver) = mpsc::channel(8);
-            requests.send(request).await?;
-            let mut responses = executor
-                .client
-                .clone()
-                .invoke_agent_session(ReceiverStream::new(receiver))
-                .await?
-                .into_inner();
+            let start = executor
+                .invocation(&component, "echo")
+                .on_agent(&worker_id)
+                .allow_streams()
+                .idempotency_key(&start_key)
+                .with_request_key()
+                .fresh_attempt()
+                .expect_fingerprint(metadata.fingerprint.0)
+                .input_record(vec![stream_reference(1)])
+                .build()?;
+            let mut session = executor.open_session(start).await?;
             let budget = Duration::from_secs(if readers == 0 { 60 } else { 10 });
             tokio::time::timeout(budget, async {
-                let accepted = responses
-                    .message()
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("missing acceptance"))?;
-                state
-                    .validate_response(&accepted)
-                    .map_err(anyhow::Error::msg)?;
-                let Some(invocation_response::Response::Accepted(accepted)) = accepted.response
-                else {
-                    anyhow::bail!("expected acceptance, got {accepted:?}");
-                };
-                let accepted =
-                    await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
+                let accepted = session.accepted().await?;
                 let [mapping] = accepted.stream_mappings.as_slice() else {
                     anyhow::bail!("expected one input stream mapping");
                 };
                 assert_eq!(mapping.transport_stream_id, 1);
-                let stream_id = mapping.handle.as_ref().and_then(|handle| handle.stream_id);
-                assert!(stream_id.is_some());
-                for request in [
-                    invocation_request::Request::InputItem(InputStreamItem {
-                        transport_stream_id: 1,
-                        sequence: 0,
-                        payload: Some(input_stream_item::Payload::Value(
-                            SchemaValue::String(expected.clone())
-                                .try_into()
-                                .map_err(anyhow::Error::msg)?,
-                        )),
-                        durable_stream_id: stream_id,
-                        epoch: accepted.epoch,
-                    }),
-                    invocation_request::Request::StreamEnd(StreamEnd {
-                        transport_stream_id: 1,
-                        producer_sequence: 1,
-                        direction: StreamDirection::Input as i32,
-                        authored_by: StreamTerminalAuthor::Guest as i32,
-                        outcome: Some(
-                            StreamTerminal::Finished
-                                .try_into()
-                                .expect("finished terminal"),
-                        ),
-                        durable_stream_id: stream_id,
-                        epoch: accepted.epoch,
-                        ..Default::default()
-                    }),
-                ] {
-                    let request = InvocationRequest {
-                        request: Some(request),
-                    };
-                    state
-                        .validate_trusted_request(&request)
-                        .map_err(anyhow::Error::msg)?;
-                    requests.send(request).await?;
-                }
+                assert!(
+                    mapping
+                        .handle
+                        .as_ref()
+                        .and_then(|handle| handle.stream_id)
+                        .is_some()
+                );
+                session
+                    .send_input(1, 0, SchemaValue::String(expected.clone()))
+                    .await?;
+                session.finish_input(1, 1).await?;
 
                 let mut output_stream_id = None;
                 let mut values = Vec::new();
                 let mut ends = 0;
                 let mut finished = false;
-                while let Some(response) = responses.message().await? {
-                    state
-                        .validate_response(&response)
-                        .map_err(anyhow::Error::msg)?;
+                while let Some(response) = session.message().await? {
                     match response.response {
                         Some(invocation_response::Response::InputAck(_)) => {}
                         Some(invocation_response::Response::Result(result)) => {
@@ -10067,7 +8256,7 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
                         other => anyhow::bail!("unexpected streaming response: {other:?}"),
                     }
                 }
-                assert!(state.is_complete());
+                assert!(session.is_complete());
                 assert!(finished);
                 assert_eq!(values, vec![expected.clone()]);
                 assert_eq!(ends, 1);

@@ -105,10 +105,11 @@ use golem_worker_executor::services::environment_state::{
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::id_target;
 use golem_worker_executor_test_utils::standalone_tool::StandaloneToolCall;
 use golem_worker_executor_test_utils::{
-    AgentInvocationSuccessGateHandle, InvocationError, InvocationErrorExt, LastUniqueId, OplogShape,
-    PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
+    AgentInvocationSuccessGateHandle, InvocationError, InvocationErrorExt, LastUniqueId,
+    OplogShape, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
     TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
     native_test_tool_metadata, start_with_overrides,
 };
@@ -12305,7 +12306,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
     let input = b"retained-before-store".to_vec();
     let (_, value) = data_value!(input.clone()).into_parts();
     let request = InvocationStart {
-        target: Some(crate::agent::id_target(&worker)),
+        target: Some(id_target(&worker)),
         constructor: None,
         component_id: Some(caller_component.id.into()),
         method_name: Some("hold_fire_and_forget_capable_staging".to_string()),
@@ -23894,7 +23895,7 @@ async fn tool_guest_invocation_id_names_its_public_owner_and_can_call_an_agent(
             call.attach(&executor).await?.result().await?
         } else {
             let mut request = call.request;
-            request.target = Some(crate::agent::id_target(&hosted));
+            request.target = Some(id_target(&hosted));
             request.idempotency_key = Some(key.into());
             request.expected_callee_fingerprint = Some(fingerprint.0.into());
             request.external_tool.as_mut().unwrap().fresh_owner = false;
@@ -25137,7 +25138,10 @@ async fn verify_retained_startup_failure_after_restart(
     .expect("a retained primary startup failure must answer a same-key caller");
     let failure = failure.expect_err("a terminal startup failure became a success");
     assert!(
-        matches!(failure.invocation_error(), Some(InvocationError::Failed { .. })),
+        matches!(
+            failure.invocation_error(),
+            Some(InvocationError::Failed { .. })
+        ),
         "the same-key caller gets the failure outcome, not a rejection: {failure:#}"
     );
     let Some(WorkerExecutorError::FailedToResumeAgent { reason, .. }) = failure.worker_error()
@@ -26557,7 +26561,7 @@ async fn start_external_tool_command(
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                target: Some(crate::agent::id_target(&OwnedAgentId::new(
+                target: Some(id_target(&OwnedAgentId::new(
                     context.default_environment_id,
                     worker_id,
                 ))),

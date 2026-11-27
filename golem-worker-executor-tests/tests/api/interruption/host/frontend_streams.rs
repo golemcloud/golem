@@ -15,6 +15,7 @@ use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{HasOplog, HasOplogService};
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::id_target;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use test_r::{inherit_test_dep, test};
 use tokio_stream::wrappers::ReceiverStream;
@@ -140,7 +141,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                target: Some(crate::agent::id_target(&id)),
+                target: Some(id_target(&id)),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 caller: Some(callers::account(context.account_id).into()),

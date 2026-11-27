@@ -65,6 +65,7 @@ use golem_worker_executor::storage::scheduler::{
 };
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::id_target;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
     TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
@@ -1452,7 +1453,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
                 },
             );
             Ok(InvocationStart {
-                target: Some(crate::agent::id_target(&fixture.owner_id)),
+                target: Some(id_target(&fixture.owner_id)),
                 idempotency_key: Some(key.clone().into()),
                 mode: AgentInvocationMode::Schedule as i32,
                 schedule_at: Some(prost_types::Timestamp {
@@ -1608,40 +1609,21 @@ async fn invoke_owner_method_with_scope(
     method: &str,
     scope: &ScopeCard,
 ) -> anyhow::Result<String> {
-    use golem_api_grpc::proto::golem::worker::{
-        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
-        invocation_session_result,
-    };
-    let (_, input) = data_value!().into_parts();
+    use golem_api_grpc::proto::golem::worker::invocation_session_result;
     let result = fixture
         .executor
-        .invoke_agent_session(InvocationStart {
-            target: Some(crate::agent::id_target(&fixture.owner_id)),
-            constructor: None,
-            component_id: Some(fixture.owner_component.id.into()),
-            method_name: Some(method.to_string()),
-            allow_streams: false,
-            captured_method_input: None,
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            mode: AgentInvocationMode::Await as i32,
-            schedule_at: None,
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
-            component_owner_account_id: Some(fixture.owner_component.account_id.into()),
-            environment_id: Some(fixture.owner_component.environment_id.into()),
-            auth_ctx: Some(fixture.executor.auth_ctx().into()),
-            context: None,
-            caller: Some(callers::anonymous().into()),
-            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
-            config: Vec::new(),
-            attempt_id: None,
-            expected_callee_fingerprint: None,
-            durable_input_mappings: Vec::new(),
-            scope_card: Some(scope.try_into().map_err(anyhow::Error::msg)?),
-            origin_invocation: None,
-            external_tool: None,
-            request_key: Some(
-                golem_common::model::InvocationRequestKey::external(None, None).into(),
-            ),
+        .invoke_agent_session({
+            let mut start = fixture
+                .executor
+                .invocation(&fixture.owner_component, method)
+                .on_agent(&fixture.owner_id)
+                .with_component_id()
+                .input(data_value!())?
+                .build()?;
+            start.scope_card = Some(scope.try_into().map_err(anyhow::Error::msg)?);
+            start.request_key =
+                Some(golem_common::model::InvocationRequestKey::external(None, None).into());
+            start
         })
         .await?;
     let Some(invocation_session_result::Result::MethodResult(value)) = result.result else {

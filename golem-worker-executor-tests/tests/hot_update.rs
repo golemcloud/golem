@@ -2777,10 +2777,8 @@ async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::worker::{
-        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
-    };
-    use golem_common::model::{IdempotencyKey, InvocationRequestKey};
+    use golem_api_grpc::proto::golem::worker::{AgentInvocationMode, InvocationStart};
+    use golem_common::model::IdempotencyKey;
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2801,23 +2799,17 @@ async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
     let key = IdempotencyKey::fresh();
     let (_, input) = data_value!().into_parts();
     let trigger = |method_name: &str| -> anyhow::Result<InvocationStart> {
-        Ok(InvocationStart {
-            target: Some(crate::agent::id_target(&worker_id)),
-            component_id: Some(component.id.into()),
-            method_name: Some(method_name.to_string()),
-            input: Some(input.clone().try_into().map_err(anyhow::Error::msg)?),
-            mode: AgentInvocationMode::Schedule as i32,
-            idempotency_key: Some(key.clone().into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
-            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
-            request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
-            ),
-            ..Default::default()
+        Ok({
+            let mut start = executor
+                .invocation(&component, method_name)
+                .on_agent(&worker_id)
+                .with_component_id()
+                .idempotency_key(&key)
+                .with_request_key()
+                .mode(AgentInvocationMode::Schedule)
+                .build()?;
+            start.input = Some(input.clone().try_into().map_err(anyhow::Error::msg)?);
+            start
         })
     };
     let starts = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {

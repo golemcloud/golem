@@ -15,6 +15,7 @@
 use crate::Tracing;
 use golem_worker_executor_test_utils::callers;
 
+use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
 use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CreateWorkerRequest, create_worker_response,
@@ -42,6 +43,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, Teardown, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, copy_create_entry_to, scheduler_sqlite_storage_config, start,
 };
+use golem_worker_executor_test_utils::{id_target, key_target};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -359,26 +361,17 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         external_invocation_id(&executor, &worker, &key, "fail_stream_after_http").await?;
     let request_key =
         InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
-    let (_, input) = data_value!(url).into_parts();
-    let invocation = InvocationStart {
-        target: Some(id_target(&worker)),
-        component_id: Some(component.id.into()),
-        method_name: Some("fail_stream_after_http".to_string()),
-        input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-        allow_streams: true,
-        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-        idempotency_key: Some(key.clone().into()),
-        component_owner_account_id: Some(component.account_id.into()),
-        environment_id: Some(component.environment_id.into()),
-        auth_ctx: Some(executor.auth_ctx().into()),
-        freshness_disposition:
-            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
-        attempt_id: Some(uuid::Uuid::new_v4().into()),
-        expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-        request_key: Some(request_key.into()),
-        caller: Some(callers::anonymous().into()),
-        ..Default::default()
-    };
+    let mut invocation = executor
+        .invocation(&component, "fail_stream_after_http")
+        .on_agent(&worker)
+        .with_component_id()
+        .allow_streams()
+        .fresh_attempt()
+        .expect_fingerprint(metadata.fingerprint.0)
+        .input(data_value!(url))?
+        .build()?;
+    invocation.idempotency_key = Some(key.clone().into());
+    invocation.request_key = Some(request_key.into());
     let mut failure = Box::pin(executor.invoke_agent_session(invocation));
     tokio::select! {
         _ = gate.entered() => {}
@@ -1397,33 +1390,18 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
         }),
     ] {
         let error = executor
-            .invoke_agent_session(InvocationStart {
-                target: Some(key_target(&agent_id)?),
-                constructor: None,
-                component_id: Some(component.id.into()),
-                method_name: Some("produce".to_string()),
-                allow_streams: true,
-                captured_method_input: None,
-                input: Some(input.clone()),
-                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-                schedule_at,
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(executor.auth_ctx().into()),
-                context: None,
-                caller: Some(callers::anonymous().into()),
-                freshness_disposition:
-                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                        as i32,
-                config: Vec::new(),
-                attempt_id: None,
-                expected_callee_fingerprint: None,
-                durable_input_mappings: Vec::new(),
-                scope_card: None,
-                origin_invocation: None,
-                external_tool: None,
-                request_key: Some(InvocationRequestKey::external(None, None).into()),
+            .invoke_agent_session({
+                let mut start = executor
+                    .invocation(&component, "produce")
+                    .with_component_id()
+                    .allow_streams()
+                    .mode(AgentInvocationMode::Schedule)
+                    .build()?;
+                start.target = Some(key_target(&agent_id)?);
+                start.input = Some(input.clone());
+                start.schedule_at = schedule_at;
+                start.request_key = Some(InvocationRequestKey::external(None, None).into());
+                start
             })
             .await
             .expect_err("scheduled streaming invocation must be rejected");
@@ -1465,26 +1443,18 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
         .await?;
     let key = IdempotencyKey::fresh();
     executor
-        .invoke_agent_session(InvocationStart {
-            target: Some(id_target(&existing_worker)),
-            component_id: Some(component.id.into()),
-            method_name: Some("produce".to_string()),
-            allow_streams: true,
-            input: Some(input.clone()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-            idempotency_key: Some(key.clone().into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            caller: Some(callers::anonymous().into()),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
-            ),
-            ..Default::default()
+        .invoke_agent_session({
+            let mut start = executor
+                .invocation(&component, "produce")
+                .on_agent(&existing_worker)
+                .with_component_id()
+                .allow_streams()
+                .idempotency_key(&key)
+                .with_request_key()
+                .mode(AgentInvocationMode::Schedule)
+                .build()?;
+            start.input = Some(input.clone());
+            start
         })
         .await?;
     let invocation_id =
@@ -1525,40 +1495,20 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
         .update_component(&streaming_component.id, &agent_rpc.wasm_name)
         .await?;
 
-    let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
     let key = IdempotencyKey::fresh();
     executor
-        .invoke_agent_session(InvocationStart {
-            target: Some(id_target(&streaming_worker_id)),
-            constructor: None,
-            component_id: Some(streaming_component.id.into()),
-            method_name: Some("produce".to_string()),
-            allow_streams: true,
-            captured_method_input: None,
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-            schedule_at: None,
-            idempotency_key: Some(key.clone().into()),
-            component_owner_account_id: Some(streaming_component.account_id.into()),
-            environment_id: Some(streaming_component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            context: None,
-            caller: Some(callers::anonymous().into()),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            config: Vec::new(),
-            attempt_id: None,
-            expected_callee_fingerprint: None,
-            durable_input_mappings: Vec::new(),
-            scope_card: None,
-            origin_invocation: None,
-            external_tool: None,
-            request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
-            ),
-        })
+        .invoke_agent_session(
+            executor
+                .invocation(&streaming_component, "produce")
+                .on_agent(&streaming_worker_id)
+                .with_component_id()
+                .allow_streams()
+                .idempotency_key(&key)
+                .with_request_key()
+                .mode(AgentInvocationMode::Schedule)
+                .input(data_value!(vec![1_u32, 2, 3]))?
+                .build()?,
+        )
         .await?;
     // The old revision declares `produce` as a stream method, so its scheduled execution fails
     // even though the current revision has no such stream.
@@ -1629,9 +1579,6 @@ async fn rest_retry_of_a_session_result_uses_the_recorded_revision(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::worker::{
-        AgentInvocationMode, InvocationFreshnessDisposition,
-    };
     use golem_common::model::agent::{AgentMethodInput, NativeMethodInput};
 
     let context = TestContext::new(last_unique_id);
@@ -1646,24 +1593,16 @@ async fn rest_retry_of_a_session_result_uses_the_recorded_revision(
     let start_for = |executor: &TestWorkerExecutor,
                      target: golem_api_grpc::proto::golem::worker::AgentTarget|
      -> anyhow::Result<InvocationStart> {
-        let (_, input) = data_value!().into_parts();
-        Ok(InvocationStart {
-            target: Some(target),
-            component_id: Some(component.id.into()),
-            method_name: Some("increment".to_string()),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            mode: AgentInvocationMode::Await as i32,
-            idempotency_key: Some(key.clone().into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
-            request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
-            ),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
+        Ok({
+            let mut start = executor
+                .invocation(&component, "increment")
+                .with_component_id()
+                .idempotency_key(&key)
+                .with_request_key()
+                .input(data_value!())?
+                .build()?;
+            start.target = Some(target);
+            start
         })
     };
     let rest_retry = async |executor: &TestWorkerExecutor| -> anyhow::Result<_> {
@@ -2108,37 +2047,22 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
     );
 
     executor
-        .invoke_agent_session(InvocationStart {
-            target: Some(id_target(&worker_id)),
-            constructor: Some(proto_agent_key(&logical_agent_id)?),
-            component_id: Some(component.id.into()),
-            method_name: Some("changeAndGet".to_string()),
-            allow_streams: false,
-            captured_method_input: None,
-            input: Some(
+        .invoke_agent_session({
+            let mut start = executor
+                .invocation(&component, "changeAndGet")
+                .on_agent(&worker_id)
+                .with_component_id()
+                .idempotency_key(&idempotency_key)
+                .mode(AgentInvocationMode::Schedule)
+                .build()?;
+            start.constructor = Some(proto_agent_key(&logical_agent_id)?);
+            start.input = Some(
                 SchemaValue::Record { fields: vec![] }
                     .try_into()
                     .map_err(anyhow::Error::msg)?,
-            ),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-            schedule_at: None,
-            idempotency_key: Some(idempotency_key.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            context: None,
-            caller: Some(callers::anonymous().into()),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            config: Vec::new(),
-            attempt_id: None,
-            expected_callee_fingerprint: None,
-            durable_input_mappings: Vec::new(),
-            scope_card: None,
-            origin_invocation: None,
-            external_tool: None,
-            request_key: Some(request_key.into()),
+            );
+            start.request_key = Some(request_key.into());
+            start
         })
         .await?;
 
@@ -2242,40 +2166,26 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
     );
 
     executor
-        .invoke_agent_session(InvocationStart {
-            target: Some(id_target(&worker_id)),
-            constructor: Some(proto_agent_key(&logical_agent_id)?),
-            component_id: Some(component.id.into()),
-            method_name: Some("changeAndGet".to_string()),
-            allow_streams: false,
-            captured_method_input: None,
-            input: Some(
+        .invoke_agent_session({
+            let mut start = executor
+                .invocation(&component, "changeAndGet")
+                .on_agent(&worker_id)
+                .with_component_id()
+                .idempotency_key(&idempotency_key)
+                .mode(AgentInvocationMode::Schedule)
+                .build()?;
+            start.constructor = Some(proto_agent_key(&logical_agent_id)?);
+            start.input = Some(
                 SchemaValue::Record { fields: vec![] }
                     .try_into()
                     .map_err(anyhow::Error::msg)?,
-            ),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-            schedule_at: Some(prost_types::Timestamp {
+            );
+            start.schedule_at = Some(prost_types::Timestamp {
                 seconds: jiff::Timestamp::now().as_second() + 3,
                 nanos: 0,
-            }),
-            idempotency_key: Some(idempotency_key.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            context: None,
-            caller: Some(callers::anonymous().into()),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            config: Vec::new(),
-            attempt_id: None,
-            expected_callee_fingerprint: None,
-            durable_input_mappings: Vec::new(),
-            scope_card: None,
-            origin_invocation: None,
-            external_tool: None,
-            request_key: Some(request_key.into()),
+            });
+            start.request_key = Some(request_key.into());
+            start
         })
         .await?;
 
@@ -3549,30 +3459,6 @@ pub(crate) fn proto_agent_key(
         .map_err(anyhow::Error::msg)
 }
 
-/// An invocation target that reaches the agent with this ID.
-pub(crate) fn id_target(
-    agent_id: &OwnedAgentId,
-) -> golem_api_grpc::proto::golem::worker::AgentTarget {
-    golem_api_grpc::proto::golem::worker::AgentTarget {
-        target: Some(
-            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
-                agent_id.agent_id.into(),
-            ),
-        ),
-    }
-}
-
-/// An invocation target that upserts the keyed agent of `key`.
-pub(crate) fn key_target(
-    key: &ParsedAgentKey,
-) -> anyhow::Result<golem_api_grpc::proto::golem::worker::AgentTarget> {
-    Ok(golem_api_grpc::proto::golem::worker::AgentTarget {
-        target: Some(
-            golem_api_grpc::proto::golem::worker::agent_target::Target::Key(proto_agent_key(key)?),
-        ),
-    })
-}
-
 /// The ID of the keyed agent of `key` in `environment_id`.
 pub(crate) fn keyed_agent_id(environment_id: EnvironmentId, key: &ParsedAgentKey) -> OwnedAgentId {
     let agent_key = AgentKey::new(key.agent_type.clone(), key.parameters.clone())
@@ -3668,41 +3554,24 @@ pub(crate) async fn invoke_and_await_agent_by_id(
     method: &str,
     params: TypedSchemaValue,
 ) -> anyhow::Result<AgentResult> {
-    let (_, input) = params.into_parts();
     let result = executor
-        .invoke_agent_session(InvocationStart {
-            target: Some(id_target(agent_id)),
-            constructor: None,
-            component_id: Some(component.id.into()),
-            method_name: Some(method.to_string()),
-            allow_streams: false,
-            captured_method_input: None,
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            schedule_at: None,
-            idempotency_key: idempotency_key.cloned().map(Into::into),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(agent_id.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            context: None,
-            caller: Some(callers::anonymous().into()),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            config: Vec::new(),
-            attempt_id: None,
-            expected_callee_fingerprint: None,
-            durable_input_mappings: Vec::new(),
-            scope_card: None,
-            origin_invocation: None,
-            external_tool: None,
-            request_key: Some(
+        .invoke_agent_session({
+            let mut start = executor
+                .invocation(component, method)
+                .on_agent(agent_id)
+                .with_component_id()
+                .input(params)?
+                .build()?;
+            start.environment_id = Some(agent_id.environment_id.into());
+            start.idempotency_key = idempotency_key.cloned().map(Into::into);
+            start.request_key = Some(
                 InvocationRequestKey::external(
                     executor.auth_ctx().idempotency_scope(),
                     idempotency_key,
                 )
                 .into(),
-            ),
+            );
+            start
         })
         .await?;
     let value = match result.result {
@@ -3714,47 +3583,6 @@ pub(crate) async fn invoke_and_await_agent_by_id(
         _ => None,
     };
     Ok(AgentResult::new(value, agent_id.clone()))
-}
-
-/// The target and constructor with which the test DSL invokes `method` on `key` under
-/// `idempotency_key`: an ephemeral invocation reaches its own instance by ID and creates it from
-/// `key`, and a durable one upserts the keyed agent.
-pub(crate) fn invocation_target(
-    executor: &TestWorkerExecutor,
-    component: &ComponentDto,
-    key: &ParsedAgentKey,
-    idempotency_key: &IdempotencyKey,
-    method: &str,
-) -> anyhow::Result<(
-    golem_api_grpc::proto::golem::worker::AgentTarget,
-    Option<golem_api_grpc::proto::golem::worker::AgentKey>,
-)> {
-    let ephemeral = component.metadata.agent_types.iter().any(|agent| {
-        agent.declaration.type_name == key.agent_type
-            && agent.declaration.mode == AgentMode::Ephemeral
-    });
-    if ephemeral {
-        let agent_id = ephemeral_agent_id(
-            executor,
-            component.environment_id,
-            key,
-            idempotency_key,
-            method,
-        );
-        Ok((id_target(&agent_id), Some(proto_agent_key(key)?)))
-    } else {
-        Ok((key_target(key)?, None))
-    }
-}
-
-/// The agent ID that an invocation start with an ID target reaches.
-pub(crate) fn start_target_id(
-    start: &InvocationStart,
-) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
-    match start.target.as_ref()?.target.as_ref()? {
-        golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id) => Some(*id),
-        golem_api_grpc::proto::golem::worker::agent_target::Target::Key(_) => None,
-    }
 }
 
 /// When the ID that a key derives already holds an agent of another key, the key collides: an

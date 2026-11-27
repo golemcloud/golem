@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::invocation_session::{InvocationSession, id_target};
 use crate::{TestWorkerExecutor, callers};
 use golem_api_grpc::proto::golem::worker::{
-    AgentInvocationMode, AgentTarget, ExternalToolInvocation, InvocationRequest,
-    InvocationSessionResult, InvocationStart, agent_target, invocation_request,
+    AgentInvocationMode, ExternalToolInvocation, InvocationSessionResult, InvocationStart,
     invocation_response, invocation_session_completion::Outcome,
 };
 use golem_common::model::component::ComponentDto;
@@ -26,8 +26,6 @@ use golem_common::model::{
     StandaloneToolInvocation,
 };
 use golem_common::schema::TypedSchemaValue;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 /// A standalone call and its derived public identity. The protobuf remains available for
@@ -65,9 +63,7 @@ impl TestWorkerExecutor {
             &AgentId::standalone_tool_invocation(environment_id, type_id, invocation_id),
         );
         let request = InvocationStart {
-            target: Some(AgentTarget {
-                target: Some(agent_target::Target::Id(owned.agent_id.into())),
-            }),
+            target: Some(id_target(&owned)),
             component_id: Some(component_id.into()),
             idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
             auth_ctx: Some(self.auth_ctx().into()),
@@ -94,10 +90,10 @@ impl TestWorkerExecutor {
     }
 }
 
-/// Keeps the request side alive while a concurrent caller observes the response side.
+/// An attached same-key session; it keeps the request side open while the test reads the
+/// response side.
 pub struct AttachedToolSession {
-    _requests: mpsc::Sender<InvocationRequest>,
-    responses: tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    session: InvocationSession,
 }
 
 impl StandaloneToolCall {
@@ -122,32 +118,15 @@ impl StandaloneToolCall {
         &self,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<AttachedToolSession> {
-        let (requests, receiver) = mpsc::channel(1);
         let mut start = self.request.clone();
         start.attempt_id = Some(Uuid::new_v4().into());
-        requests
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::Start(start)),
-            })
-            .await?;
-        let mut responses = executor
-            .client
-            .clone()
-            .invoke_agent_session(ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let accepted = responses.message().await?.expect("same-key acceptance");
+        let mut session = executor.open_unvalidated_session(start).await?;
+        let accepted = session.next().await?;
         assert!(
-            matches!(
-                accepted.response,
-                Some(invocation_response::Response::Accepted(_))
-            ),
-            "{accepted:?}"
+            matches!(accepted, Some(invocation_response::Response::Accepted(_))),
+            "same-key acceptance: {accepted:?}"
         );
-        Ok(AttachedToolSession {
-            _requests: requests,
-            responses,
-        })
+        Ok(AttachedToolSession { session })
     }
 }
 
@@ -155,22 +134,22 @@ impl AttachedToolSession {
     pub async fn result(mut self) -> anyhow::Result<InvocationSessionResult> {
         let mut result = None;
         let mut finished = 0;
-        while let Some(response) = self.responses.message().await? {
-            match response.response {
-                Some(invocation_response::Response::Result(value)) => {
+        while let Some(response) = self.session.next().await? {
+            match response {
+                invocation_response::Response::Result(value) => {
                     assert!(
                         result.replace(value).is_none(),
                         "one result per attached session"
                     );
                 }
-                Some(invocation_response::Response::Finished(value)) => {
+                invocation_response::Response::Finished(value) => {
                     assert!(
                         matches!(value.outcome, Some(Outcome::Success(_))),
                         "attached session must finish successfully"
                     );
                     finished += 1;
                 }
-                Some(invocation_response::Response::Ready(_)) => {}
+                invocation_response::Response::Ready(_) => {}
                 other => anyhow::bail!("unexpected same-key response: {other:?}"),
             }
         }

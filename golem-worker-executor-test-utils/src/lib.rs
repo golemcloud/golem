@@ -26,6 +26,7 @@ pub mod dsl_impl;
 pub mod emulated_registry_service;
 pub mod emulated_worker_service;
 pub mod invocation_error;
+pub mod invocation_session;
 pub mod oplog_shape;
 pub mod oplog_view;
 pub mod restart;
@@ -39,6 +40,10 @@ pub use emulated_worker_service::{
     EmulatedWorkerService, RecordedCardTransfer, RemoteRpcEvidence, WorkerServiceOptions,
 };
 pub use invocation_error::{InvocationError, InvocationErrorExt};
+pub use invocation_session::{
+    InvocationSession, InvocationSessionResultExt, InvocationStartBuilder, SessionOutcome,
+    SessionTerminal, id_target, key_target, resume_attach, start_target_id, stream_reference,
+};
 pub use oplog_shape::OplogShape;
 pub use oplog_view::{CallRecord, InvocationRecord, OplogView};
 pub use restart::Teardown;

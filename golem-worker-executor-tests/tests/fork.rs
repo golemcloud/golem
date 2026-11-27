@@ -466,6 +466,7 @@ use crate::Tracing;
 use golem_common::model::ScanCursor;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor_test_utils::id_target;
 use golem_worker_executor_test_utils::{LastUniqueId, PrecompiledComponent};
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -493,7 +494,6 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     #[tagged_as("agent_sdk_rust")] component: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::worker::InvocationStart;
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AppendToStreamSlotRequest, ExternalStreamProducer, ForkStreamSlotRequest,
         ReadStreamSlotRequest, StreamSessionExpiryPolicy, StreamSlotReadAdmission,
@@ -535,18 +535,15 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
         }),
         creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
-        invocation: Some(InvocationStart {
-            target: Some(crate::agent::id_target(&source)),
-            constructor: None,
-            component_id: None,
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(AuthCtx::System.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
-            method_name: Some("echo".into()),
-            input: Some(input),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
+        invocation: Some({
+            let mut start = executor
+                .invocation(&component, "echo")
+                .on_agent(&source)
+                .idempotency_key(&IdempotencyKey::new(session.clone()))
+                .build()?;
+            start.auth_ctx = Some(AuthCtx::System.into());
+            start.input = Some(input);
+            start
         }),
     };
     let created = executor
@@ -1227,18 +1224,15 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             public_session_id: concurrent_session.clone(),
             expiry_policy: None,
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
-            invocation: Some(InvocationStart {
-                target: Some(crate::agent::id_target(&concurrent_source)),
-                constructor: None,
-                component_id: None,
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(AuthCtx::System.into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                idempotency_key: Some(IdempotencyKey::new(concurrent_session.clone()).into()),
-                method_name: Some("echo".into()),
-                input: Some(input),
-                caller: Some(callers::anonymous().into()),
-                ..Default::default()
+            invocation: Some({
+                let mut start = executor
+                    .invocation(&component, "echo")
+                    .on_agent(&concurrent_source)
+                    .idempotency_key(&IdempotencyKey::new(concurrent_session.clone()))
+                    .build()?;
+                start.auth_ctx = Some(AuthCtx::System.into());
+                start.input = Some(input);
+                start
             }),
         })
         .await?
@@ -1326,18 +1320,15 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(0)),
         }),
         creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
-        invocation: Some(InvocationStart {
-            target: Some(crate::agent::id_target(&source)),
-            constructor: None,
-            component_id: None,
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(AuthCtx::System.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            idempotency_key: Some(IdempotencyKey::new(expired_session.clone()).into()),
-            method_name: Some("echo".into()),
-            input: Some(input),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
+        invocation: Some({
+            let mut start = executor
+                .invocation(&component, "echo")
+                .on_agent(&source)
+                .idempotency_key(&IdempotencyKey::new(expired_session.clone()))
+                .build()?;
+            start.auth_ctx = Some(AuthCtx::System.into());
+            start.input = Some(input);
+            start
         }),
     };
     let first = executor
@@ -1446,18 +1437,15 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(1)),
             }),
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
-            invocation: Some(InvocationStart {
-                target: Some(crate::agent::id_target(&source)),
-                constructor: None,
-                component_id: None,
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(AuthCtx::System.into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                idempotency_key: Some(IdempotencyKey::new(restart_session).into()),
-                method_name: Some("echo".into()),
-                input: Some(input),
-                caller: Some(callers::anonymous().into()),
-                ..Default::default()
+            invocation: Some({
+                let mut start = executor
+                    .invocation(&component, "echo")
+                    .on_agent(&source)
+                    .idempotency_key(&IdempotencyKey::new(restart_session))
+                    .build()?;
+                start.auth_ctx = Some(AuthCtx::System.into());
+                start.input = Some(input);
+                start
             }),
         })
         .await?
@@ -1508,7 +1496,6 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
     #[tagged_as("agent_sdk_rust")] component: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::worker::InvocationStart;
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AppendToStreamSlotRequest, ExternalStreamProducer, ReadStreamSlotRequest,
         StreamSessionExpiryPolicy, StreamSlotReadAdmission, TypedStreamSlotItems,
@@ -1563,16 +1550,15 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
             }),
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
-            invocation: Some(InvocationStart {
-                target: Some(crate::agent::id_target(&source)),
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(AuthCtx::System.into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
-                method_name: Some("echo".into()),
-                input: Some(input),
-                caller: Some(callers::anonymous().into()),
-                ..Default::default()
+            invocation: Some({
+                let mut start = executor
+                    .invocation(&component, "echo")
+                    .on_agent(&source)
+                    .idempotency_key(&IdempotencyKey::new(session.clone()))
+                    .build()?;
+                start.auth_ctx = Some(AuthCtx::System.into());
+                start.input = Some(input);
+                start
             }),
         })
         .await?
@@ -1712,7 +1698,6 @@ async fn sliding_expiry_refreshes_are_coalesced(
     #[tagged_as("agent_sdk_rust")] component: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::worker::InvocationStart;
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AppendToStreamSlotRequest, ExternalStreamProducer, ReadStreamSlotRequest,
         StreamSessionExpiryPolicy, StreamSlotReadAdmission, TypedStreamSlotItems,
@@ -1755,18 +1740,15 @@ async fn sliding_expiry_refreshes_are_coalesced(
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(30)),
             }),
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
-            invocation: Some(InvocationStart {
-                target: Some(crate::agent::id_target(&source)),
-                constructor: None,
-                component_id: None,
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(AuthCtx::System.into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
-                method_name: Some("echo".into()),
-                input: Some(input),
-                caller: Some(callers::anonymous().into()),
-                ..Default::default()
+            invocation: Some({
+                let mut start = executor
+                    .invocation(&component, "echo")
+                    .on_agent(&source)
+                    .idempotency_key(&IdempotencyKey::new(session.clone()))
+                    .build()?;
+                start.auth_ctx = Some(AuthCtx::System.into());
+                start.input = Some(input);
+                start
             }),
         })
         .await?
@@ -2223,7 +2205,6 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
     // The executor keeps filesystem snapshots in a test store. A fork that its byte budget
     // rejects copies no snapshot. The store holds the copy of the first of two attempts of one
     // request, so the second attempt waits for it, then finds the published target.
-    use golem_api_grpc::proto::golem::worker::InvocationStart;
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         ForkStreamSlotRequest, StreamSessionExpiryPolicy, create_stream_session_response,
         fork_stream_slot_rejection::Reason, fork_stream_slot_response,
@@ -2283,18 +2264,15 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
             }),
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
-            invocation: Some(InvocationStart {
-                target: Some(crate::agent::id_target(&source)),
-                constructor: None,
-                component_id: None,
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(AuthCtx::System.into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
-                method_name: Some("echo".into()),
-                input: Some(input),
-                caller: Some(callers::anonymous().into()),
-                ..Default::default()
+            invocation: Some({
+                let mut start = executor
+                    .invocation(&component, "echo")
+                    .on_agent(&source)
+                    .idempotency_key(&IdempotencyKey::new(session.clone()))
+                    .build()?;
+                start.auth_ctx = Some(AuthCtx::System.into());
+                start.input = Some(input);
+                start
             }),
         })
         .await?
@@ -2481,7 +2459,7 @@ fn expiring_session_request(
         }),
         creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
         invocation: Some(InvocationStart {
-            target: Some(crate::agent::id_target(agent)),
+            target: Some(id_target(agent)),
             constructor: None,
             component_id: None,
             environment_id: Some(component.environment_id.into()),

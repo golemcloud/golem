@@ -77,8 +77,10 @@ use std::future::Future;
 use std::io::Write;
 use std::pin::Pin;
 
+use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
 use golem_common::model::InvocationRequestOperation;
 use golem_common::model::StoredAgentInvocationPayload;
+use golem_worker_executor_test_utils::id_target;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -8062,26 +8064,24 @@ async fn invalid_fresh_invocations_leave_no_agent(
     }
     let json =
         AgentMethodInput::PublicJson(JsonMethodInput::capture(br#"{"unexpected":7}"#).unwrap());
-    let start = golem_api_grpc::proto::golem::worker::InvocationStart {
-        target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+    let start = {
+        let mut start = executor
+            .invocation(&component, "increment")
+            .with_component_id()
+            .build()?;
+        start.target = Some(golem_api_grpc::proto::golem::worker::AgentTarget {
             target: Some(
                 golem_api_grpc::proto::golem::worker::agent_target::Target::Key(
                     counter.clone().try_into().map_err(anyhow::Error::msg)?,
                 ),
             ),
-        }),
-        method_name: Some("increment".into()),
-        captured_method_input: Some(
-            golem_common::serialization::serialize(&json).map_err(anyhow::Error::msg)?,
-        ),
-        component_id: Some(component.id.into()),
-        environment_id: Some(component.environment_id.into()),
-        component_owner_account_id: Some(component.account_id.into()),
-        auth_ctx: Some(executor.auth_ctx().into()),
-        caller: Some(golem_common::model::caller::Caller::anonymous().into()),
-        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
-        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-        ..Default::default()
+        });
+        start.idempotency_key = None;
+        start.captured_method_input =
+            Some(golem_common::serialization::serialize(&json).map_err(anyhow::Error::msg)?);
+        start.request_key =
+            Some(golem_common::model::InvocationRequestKey::external(None, None).into());
+        start
     };
     assert!(executor.invoke_agent_session(start).await.is_err());
     assert!(executor.get_worker_metadata(&worker_id).await.is_err());
@@ -8664,7 +8664,7 @@ async fn cancelling_pending_invocations(
 
     let lookup_status = |executor: &TestWorkerExecutor| {
         let start = golem_api_grpc::proto::golem::worker::InvocationStart {
-            target: Some(crate::agent::id_target(&worker_id)),
+            target: Some(id_target(&worker_id)),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
             idempotency_key: Some(IdempotencyKey::new(stored_ik2.to_string()).into()),
             component_owner_account_id: Some(component.account_id.into()),
@@ -9191,7 +9191,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::worker::{
-        InvocationRequest, InvocationStart, invocation_request, invocation_response,
+        InvocationRequest, invocation_request, invocation_response,
     };
     use golem_common::model::oplog::PublicAgentInvocation;
     use golem_common::model::{IdempotencyScope, InvocationRequestKey, OwnedInvocationId};
@@ -9241,27 +9241,21 @@ async fn grpc_schedule_commits_pending_without_loading_target(
             (future + jiff::SignedDuration::from_hours(1), 101),
             (future + jiff::SignedDuration::from_hours(1), 999),
         ] {
-            let (_, input) = data_value!(value).into_parts();
+            let mut request_start = executor
+                .invocation(&component, "inc_global_by")
+                .on_agent(&target)
+                .mode(AgentInvocationMode::Schedule)
+                .expect_fingerprint(fingerprint.0)
+                .input(data_value!(value))?
+                .build()?;
+            request_start.idempotency_key = Some(raw_key.clone().into());
+            request_start.request_key = Some(request_key.clone().into());
+            request_start.schedule_at = Some(prost_types::Timestamp {
+                seconds: at.as_second(),
+                nanos: at.subsec_nanosecond() as u32 as i32,
+            });
             let request = InvocationRequest {
-                request: Some(invocation_request::Request::Start(InvocationStart {
-                    target: Some(crate::agent::id_target(&target)),
-                    method_name: Some("inc_global_by".to_string()),
-                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-                    idempotency_key: Some(raw_key.clone().into()),
-                    request_key: Some(request_key.clone().into()),
-                    expected_callee_fingerprint: Some(fingerprint.0.into()),
-                    auth_ctx: Some(executor.auth_ctx().into()),
-                    environment_id: Some(component.environment_id.into()),
-                    component_owner_account_id: Some(component.account_id.into()),
-                    mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule
-                        as i32,
-                    schedule_at: Some(prost_types::Timestamp {
-                        seconds: at.as_second(),
-                        nanos: at.subsec_nanosecond() as u32 as i32,
-                    }),
-                    caller: Some(callers::anonymous().into()),
-                    ..Default::default()
-                })),
+                request: Some(invocation_request::Request::Start(request_start)),
             };
             let (sender, receiver) = tokio::sync::mpsc::channel(1);
             sender.send(request).await?;
@@ -12411,29 +12405,25 @@ async fn send_increment(
     mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode,
     delayed: bool,
 ) -> anyhow::Result<String> {
-    let start = golem_api_grpc::proto::golem::worker::InvocationStart {
-        target: Some(crate::agent::id_target(worker_id)),
-        method_name: Some("increment".to_string()),
-        input: Some(
+    let start = {
+        let mut start = executor
+            .invocation(component, "increment")
+            .on_agent(worker_id)
+            .build()?;
+        start.input = Some(
             SchemaValue::Record { fields: vec![] }
                 .try_into()
                 .map_err(anyhow::Error::msg)?,
-        ),
-        mode: mode as i32,
-        schedule_at: delayed.then(|| prost_types::Timestamp {
+        );
+        start.mode = mode as i32;
+        start.schedule_at = delayed.then(|| prost_types::Timestamp {
             seconds: jiff::Timestamp::now().as_second() + 3600,
             nanos: 0,
-        }),
-        idempotency_key: Some(IdempotencyKey::fresh().into()),
-        component_owner_account_id: Some(component.account_id.into()),
-        environment_id: Some(component.environment_id.into()),
-        auth_ctx: Some(executor.auth_ctx().into()),
-        freshness_disposition:
-            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
-        expected_callee_fingerprint: fingerprint.map(|fingerprint| fingerprint.0.into()),
-        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
-        caller: Some(callers::anonymous().into()),
-        ..Default::default()
+        });
+        start.expected_callee_fingerprint = fingerprint.map(|fingerprint| fingerprint.0.into());
+        start.request_key =
+            Some(golem_common::model::InvocationRequestKey::external(None, None).into());
+        start
     };
     let result = tokio::time::timeout(
         Duration::from_secs(10),
@@ -12862,31 +12852,24 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
         .expect("the executor wraps its scheduler storage");
     scheduler.target.set(worker_id.agent_id).unwrap();
     executor
-        .invoke_agent_session(golem_api_grpc::proto::golem::worker::InvocationStart {
-            target: Some(crate::agent::id_target(&worker_id)),
-            method_name: Some("increment".to_string()),
-            input: Some(
+        .invoke_agent_session({
+            let mut start = executor
+                .invocation(&component, "increment")
+                .on_agent(&worker_id)
+                .mode(AgentInvocationMode::Schedule)
+                .build()?;
+            start.input = Some(
                 SchemaValue::Record { fields: vec![] }
                     .try_into()
                     .map_err(anyhow::Error::msg)?,
-            ),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-            schedule_at: Some(prost_types::Timestamp {
+            );
+            start.schedule_at = Some(prost_types::Timestamp {
                 seconds: jiff::Timestamp::now().as_second() + 1,
                 nanos: 0,
-            }),
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            request_key: Some(
-                golem_common::model::InvocationRequestKey::external(None, None).into(),
-            ),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
+            });
+            start.request_key =
+                Some(golem_common::model::InvocationRequestKey::external(None, None).into());
+            start
         })
         .await?;
 
@@ -13179,7 +13162,7 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
     let lookup =
         |fingerprint: AgentFingerprint| golem_api_grpc::proto::golem::worker::InvocationStart {
-            target: Some(crate::agent::id_target(&worker_id)),
+            target: Some(id_target(&worker_id)),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
             idempotency_key: Some(IdempotencyKey::fresh().into()),
             component_owner_account_id: Some(component.account_id.into()),
@@ -13257,7 +13240,7 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
             .is_none()
     );
     let mut virtual_lookup = lookup(fingerprint);
-    virtual_lookup.target = Some(crate::agent::id_target(&virtual_owner));
+    virtual_lookup.target = Some(id_target(&virtual_owner));
     virtual_lookup.expected_callee_fingerprint = None;
     for _ in 0..2 {
         let result = executor

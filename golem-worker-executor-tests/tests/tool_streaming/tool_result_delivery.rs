@@ -825,8 +825,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
 ) -> anyhow::Result<()> {
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
     use golem_api_grpc::proto::golem::worker::{
-        AgentInvocationMode, InvocationRequest, InvocationStart, invocation_request,
-        invocation_response, invocation_session_completion,
+        InvocationRequest, invocation_request, invocation_response, invocation_session_completion,
     };
 
     let context = TestContext::new(last_unique_id);
@@ -857,31 +856,19 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
             .into_typed::<PromiseId>()?;
         let metadata = executor.get_worker_metadata(&worker).await?;
         let checkpoint = executor.oplog_max_index(&worker).await?;
-        let (_, input) = data_value!(mode.to_string(), gate.clone()).into_parts();
         let key = IdempotencyKey::fresh();
+        let request_start = executor
+            .invocation(&component, "produce_terminal")
+            .on_agent(&worker)
+            .allow_streams()
+            .idempotency_key(&key)
+            .with_request_key()
+            .fresh_attempt()
+            .expect_fingerprint(metadata.fingerprint.0)
+            .input(data_value!(mode.to_string(), gate.clone()))?
+            .build()?;
         let request = InvocationRequest {
-            request: Some(invocation_request::Request::Start(InvocationStart {
-                allow_streams: true,
-                target: Some(crate::agent::id_target(&worker)),
-                method_name: Some("produce_terminal".to_string()),
-                input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-                idempotency_key: Some(key.clone().into()),
-                auth_ctx: Some(executor.auth_ctx().into()),
-                environment_id: Some(component.environment_id.into()),
-                component_owner_account_id: Some(component.account_id.into()),
-                mode: AgentInvocationMode::Await as i32,
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-                request_key: Some(
-                    golem_common::model::InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
-                        Some(&key),
-                    )
-                    .into(),
-                ),
-                caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
-                ..Default::default()
-            })),
+            request: Some(invocation_request::Request::Start(request_start)),
         };
         let mut state = InvocationSessionState::default();
         state
