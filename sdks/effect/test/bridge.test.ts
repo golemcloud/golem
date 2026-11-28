@@ -6,7 +6,7 @@ import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { AgentId } from "../src/AgentId.js"
 import * as Bridge from "../src/Bridge.js"
 import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
-import { agentIdFor, hostAgentIdFor, hostInvocationMetadata } from "./invocation-metadata.js"
+import { agentIdFor, fakeRpcInvocation, hostAgentIdFor } from "./invocation-metadata.js"
 import { rpcLayer } from "./rpc-fake.js"
 
 const graph: Bridge.SchemaGraph = { defs: new Map(), root: Bridge.t.string() }
@@ -121,29 +121,19 @@ describe("Bridge", () => {
     }),
   )
 
-  it.live("keeps resolution and invocation lazy and cancels an interrupted await", () => {
+  it.live("keeps resolution and invocation lazy and aborts an interrupted await", () => {
     let connects = 0
     let invokes = 0
-    let cancels = 0
-    let drops = 0
+    let aborts = 0
     const connection: RpcConnection = {
       agentId: () => Promise.resolve(hostAgentIdFor("example")),
-      invokeAndAwait: () => ({ metadata: hostInvocationMetadata("agent") }),
-      invoke: () => hostInvocationMetadata("agent"),
-      asyncInvokeAndAwait: () => {
+      invokeAndAwait: (_method, _input, _scopeCard, signal) => {
         invokes++
-        return {
-          metadata: hostInvocationMetadata("agent"),
-          get: () => new Promise(() => undefined),
-          cancel: () => cancels++,
-          drop: () => drops++,
-        }
+        signal.addEventListener("abort", () => aborts++, { once: true })
+        return new Promise(() => undefined)
       },
-      scheduleInvocation: () => ({ metadata: hostInvocationMetadata("agent") }),
-      scheduleCancelableInvocation: () => ({
-        metadata: hostInvocationMetadata("agent"),
-        token: { cancel: () => undefined, drop: () => undefined },
-      }),
+      trigger: async () => fakeRpcInvocation("agent"),
+      schedule: async () => fakeRpcInvocation("agent"),
       drop: () => undefined,
     }
     const rpc = rpcLayer({
@@ -164,8 +154,7 @@ describe("Bridge", () => {
         yield* Effect.sleep("1 millis")
         expect(invokes).toBe(1)
         yield* Fiber.interrupt(fiber)
-        expect(cancels).toBe(1)
-        expect(drops).toBe(1)
+        expect(aborts).toBe(1)
       }),
     ).pipe(Effect.provide(rpc)) as Effect.Effect<void, unknown, never>
   })

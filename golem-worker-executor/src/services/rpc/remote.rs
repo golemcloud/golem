@@ -28,16 +28,26 @@ impl RemoteInvocationRpc {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl Rpc for RemoteInvocationRpc {
-    async fn cancel_scheduled_invocation(
+    async fn invocation_handle(
         &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &Principal,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &Principal,
+        operation: InvocationHandleOperation,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<InvocationHandleSuccess, WorkerExecutorError> {
+        let environment_id = invocation_handle_environment(caller)?;
+        let owner = invocation_handle_owner(invocation_id)?;
         self.worker_proxy
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
+            .invocation_handle(
+                golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest {
+                    agent_id: Some((*owner).into()),
+                    environment_id: Some(environment_id.into()),
+                    invocation_id: Some(invocation_id.id().0.into()),
+                    caller: Some(caller.clone().into()),
+                    auth_ctx: Some(auth.clone().into()),
+                    operation: operation as i32,
+                },
+            )
             .await
             .map_err(Into::into)
     }
@@ -51,7 +61,7 @@ impl Rpc for RemoteInvocationRpc {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         let (start, idempotency_key) = scheduled_invocation_start(
             owned_agent_id,
             expected_fingerprint,
@@ -75,7 +85,7 @@ impl Rpc for RemoteInvocationRpc {
             .invoke_agent_session(Box::pin(tokio_stream::iter([request])))
             .await?;
         if let Some(response) = inbound.next().await {
-            let response = response?;
+            let response = response.map_err(session_transport_failure)?;
             state
                 .lock()
                 .await
@@ -91,10 +101,7 @@ impl Rpc for RemoteInvocationRpc {
                             details: "scheduled invocation acceptance does not match the target invocation".to_string(),
                         });
                     }
-                    return Ok(golem_common::model::ScheduleId::for_invocation(
-                        expected_fingerprint,
-                        &idempotency_key,
-                    ));
+                    return Ok(());
                 }
                 Some(invocation_response::Response::Rejected(rejected)) => {
                     confirm_terminal_response_is_last(&mut inbound, &state).await?;
@@ -240,6 +247,7 @@ impl Rpc for RemoteInvocationRpc {
                 owned_agent_id.environment_id,
                 auth_ctx,
                 scope_card,
+                false,
             )
             .await?;
 
@@ -277,6 +285,7 @@ impl Rpc for RemoteInvocationRpc {
         let proto_target = target.to_proto()?;
         let start = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
+                requires_own_record: false,
                 target: Some(proto_target.target),
                 constructor: proto_target.constructor,
                 component_id: proto_target.component_id,
@@ -556,6 +565,7 @@ impl Rpc for RemoteInvocationRpc {
                 owned_agent_id.environment_id,
                 auth_ctx,
                 None,
+                true,
             )
             .await?;
 
@@ -569,11 +579,19 @@ async fn confirm_terminal_response_is_last(
 ) -> Result<(), RpcError> {
     match inbound.next().await {
         None => Ok(()),
-        Some(Err(error)) => Err(error.into()),
+        Some(Err(error)) => Err(session_transport_failure(error)),
         Some(Ok(response)) => {
             let details = state.lock().await.validate_response(&response).unwrap_err();
             Err(RpcError::ProtocolError { details })
         }
+    }
+}
+
+/// A transport failure of an open invocation session. The target may have committed the request,
+/// so the caller retries with the same key instead of taking it as the target's answer.
+fn session_transport_failure(status: tonic::Status) -> RpcError {
+    RpcError::RemoteInternalError {
+        details: format!("invocation session failed: {status}"),
     }
 }
 
@@ -657,6 +675,7 @@ pub(super) fn scheduled_invocation_start(
         }
     };
     let start = InvocationStart {
+        requires_own_record: false,
         target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
             target: Some(
                 golem_api_grpc::proto::golem::worker::agent_target::Target::Id(

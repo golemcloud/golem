@@ -8815,7 +8815,7 @@ async fn retained_start_counts_are_published_per_quota_class() {
         },
         start_now(),
         start_named(HostFunctionName::P3HttpClientSend),
-        start_named(HostFunctionName::GolemRpcWasmRpcInvoke),
+        start_named(HostFunctionName::GolemRpcWasmRpcTrigger),
         start_named(HostFunctionName::P3HttpClientSend),
         start_resolution(),
         end_for(2, 42),
@@ -8874,7 +8874,7 @@ async fn retained_start_counts_are_published_per_quota_class() {
 
     let handle_c = rs
         .claim_concurrent_start(
-            &HostFunctionName::GolemRpcWasmRpcInvoke,
+            &HostFunctionName::GolemRpcWasmRpcTrigger,
             &DurableFunctionType::ReadLocal,
         )
         .await

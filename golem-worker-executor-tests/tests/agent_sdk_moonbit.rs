@@ -14,7 +14,8 @@
 
 //! Custom durability scopes of the MoonBit SDK across concurrent coroutines of one
 //! invocation, driven through the `agent-sdk-moonbit` guest. Mirrors the custom
-//! durability rows of `durability.rs`.
+//! durability rows of `durability.rs`. The guest also exercises the MoonBit
+//! invocation handles of `trigger_*` and `schedule_*`.
 
 use crate::Tracing;
 use axum::Router;
@@ -26,6 +27,7 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -950,5 +952,145 @@ async fn moonbit_custom_scope_cancelled_while_finishing(
         "recovery leaves the scope finished"
     );
     fixture.server.abort();
+    Ok(())
+}
+
+/// The MoonBit SDK's invocation handles: a triggered invocation completes and can no
+/// longer be cancelled, a handle rebuilt with `get_value_invocation` awaits the same typed
+/// result, and an invocation scheduled an hour ahead is cancelled before it starts, so
+/// awaiting it raises `RpcError::Cancelled` and the counter never sees the scheduled addition.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn moonbit_invocation_handles(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(backend)] agent_sdk_moonbit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_moonbit)
+        .store()
+        .await?;
+    let caller_id = agent_key!("HandleCaller", "moonbit-invocation-handles");
+    let caller = executor
+        .start_agent_with(&component.id, caller_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "invocation_handles",
+            data_value!("moonbit-invocation-handles-target"),
+        )
+        .await?;
+    executor.check_oplog_is_queryable(&caller).await?;
+
+    let Some(SchemaValue::Record { fields }) = result.value() else {
+        panic!("expected the invocation handle report record: {result:?}");
+    };
+    assert_eq!(
+        fields.as_slice(),
+        [
+            SchemaValue::String("completed".to_string()),
+            SchemaValue::Bool(false),
+            SchemaValue::S64(3),
+            SchemaValue::String("scheduled".to_string()),
+            SchemaValue::Bool(true),
+            SchemaValue::String("cancelled".to_string()),
+            SchemaValue::String("cancelled".to_string()),
+            SchemaValue::S64(3),
+        ],
+        "triggered_status, cancel_completed, rebuilt_value, scheduled_status, cancel_scheduled, \
+         cancelled_status, await_cancelled, value"
+    );
+
+    // The cancelled addition of 100 never ran on the target.
+    let target_id = agent_key!("HandleTarget", "moonbit-invocation-handles-target");
+    let value = executor
+        .invoke_and_await_agent(&component, &target_id, "value", data_value!())
+        .await?
+        .into_typed::<i64>()?;
+    assert_eq!(value, 3, "only the triggered addition ran");
+    Ok(())
+}
+
+/// Cancelling an invocation that has already started raises `RpcError::CannotCancelRunning`,
+/// and the invocation keeps running: it returns once its gate promise is completed.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn moonbit_invocation_handle_cannot_cancel_running(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(backend)] agent_sdk_moonbit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_moonbit)
+        .store()
+        .await?;
+
+    let target_id = agent_key!("HandleTarget", "moonbit-cancel-running-target");
+    let target = executor
+        .start_agent_with(&component.id, target_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    let oplog_idx = executor
+        .invoke_and_await_agent(&component, &target_id, "create_gate", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+
+    let caller_id = agent_key!("HandleCaller", "moonbit-cancel-running-caller");
+    let caller = executor
+        .start_agent_with(&component.id, caller_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "cancel_running",
+            data_value!("moonbit-cancel-running-target"),
+        )
+        .await?;
+    executor.check_oplog_is_queryable(&caller).await?;
+
+    let Some(SchemaValue::Record { fields }) = result.value() else {
+        panic!("expected the cancel-running report record: {result:?}");
+    };
+    let [
+        SchemaValue::String(running_status),
+        SchemaValue::String(cancel_running),
+    ] = fields.as_slice()
+    else {
+        panic!("unexpected cancel-running report: {fields:?}");
+    };
+    assert!(
+        running_status == "running" || running_status == "waiting",
+        "the wait should have started: {running_status}"
+    );
+    assert_eq!(cancel_running, "cannot-cancel-running");
+
+    // The refused cancellation left the wait running: completing its gate lets it finish,
+    // and the target runs its next invocation only after that.
+    executor
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &executor
+                .promise_id(&target, OplogIndex::from_u64(oplog_idx))
+                .await?,
+            b"open".to_vec(),
+        )
+        .await?;
+    let value = executor
+        .invoke_and_await_agent(&component, &target_id, "value", data_value!())
+        .await?
+        .into_typed::<i64>()?;
+    assert_eq!(value, 0);
+    executor.check_oplog_is_queryable(&target).await?;
     Ok(())
 }

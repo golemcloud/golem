@@ -16,7 +16,7 @@ Use the mechanisms according to their semantics:
 | --------------------------------- | ------------------------------------------------------------------- |
 | `Effect.all`                      | Run remote-call Effects concurrently and collect ordered results    |
 | `Effect.forkChild` / `Fiber.join` | Manage individual child fibers within the current invocation        |
-| `remote.method.trigger(input)`    | Submit durable background work when no result is needed             |
+| `remote.method.trigger(input)`    | Submit durable background work; the handle can collect the result later |
 | `Agents.fork`                     | Clone the current Golem agent and its state into a new agent without a key |
 
 ## Fan Out to Durable Child Agents
@@ -184,8 +184,12 @@ yield *
   );
 ```
 
-Trigger success means the host accepted the invocation, not that the worker completed. There is no
-result or remote domain error to collect afterward. Use awaited calls when fan-in needs the result.
+Trigger success means the target accepted the invocation, not that the worker completed. Each
+trigger succeeds with an `InvocationId.Invocation` handle owned by the current Scope; yielding its
+`awaitResult` later collects the result or the remote domain error, and closing the Scope only
+detaches. To collect in a later invocation, store `InvocationId.format(handle.id)` and rebuild the
+handle with `InvocationId.get`. Use awaited calls when fan-in within the same invocation is
+simpler.
 Host-backed `Agents.Promises` can implement an explicit later rendezvous, but it is unrelated to a
 JavaScript `Promise`; this SDK version does not export a ready-made Effect Schema for passing its
 `PromiseId` through an agent method.

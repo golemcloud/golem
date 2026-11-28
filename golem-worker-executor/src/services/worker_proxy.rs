@@ -41,11 +41,9 @@ use golem_common::base_model::durable_stream::{
     DurableStreamReadRequest, StreamAttachmentControlRequest,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{
-    AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, ScheduleId,
-};
+use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
-use golem_common::model::caller::{Caller, Principal};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -129,6 +127,14 @@ fn launch_target(
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {
+    async fn invocation_handle(
+        &self,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerProxyError,
+    >;
+
     async fn prepare(
         &self,
         target: &ResolvedTarget,
@@ -175,6 +181,7 @@ pub trait WorkerProxy: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
+        requires_own_record: bool,
     ) -> Result<AgentInvocationOutput, WorkerProxyError>;
 
     async fn invoke_agent_session(
@@ -272,17 +279,6 @@ pub trait WorkerProxy: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: InvocationId,
         auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError>;
-
-    /// Cancels a scheduled call. `canceller` is the agent or tool that cancels; the target
-    /// cancels only when it is the immediate caller recorded for the call.
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: InvocationId,
-        receipt: ScheduleId,
-        canceller: &Principal,
-        auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError>;
 
     async fn lookup_invocation_status(
@@ -425,6 +421,36 @@ impl RemoteWorkerProxy {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl WorkerProxy for RemoteWorkerProxy {
+    async fn invocation_handle(
+        &self,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerProxyError,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::invocation_handle_response;
+        let response = self
+            .worker_service_client
+            .call_without_retry("invocation_handle", move |client| {
+                Box::pin(client.invocation_handle(request.clone()))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(invocation_handle_response::Result::Success(success)) => Ok(success),
+            Some(invocation_handle_response::Result::Failure(error)) => {
+                Err(WorkerProxyError::InternalError(error.try_into().unwrap_or(
+                    WorkerExecutorError::unknown(
+                        "Unknown error from the worker executor".to_string(),
+                    ),
+                )))
+            }
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty invocation handle response".to_string()),
+            )),
+        }
+    }
+
     async fn prepare(
         &self,
         target: &ResolvedTarget,
@@ -570,6 +596,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
+        requires_own_record: bool,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         let agent_id = &target.owned_agent_id.agent_id;
         debug!("Invoking remote agent method {method_name} on worker {agent_id}");
@@ -621,6 +648,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }
                 };
                 Box::pin(client.invoke_agent(InvokeAgentRequest {
+                    requires_own_record,
                     target: Some(proto_target.target.clone()),
                     constructor: proto_target.constructor.clone(),
                     component_id: proto_target.component_id,
@@ -1091,49 +1119,12 @@ impl WorkerProxy for RemoteWorkerProxy {
                     agent_id: Some(owned_agent_id.agent_id().into()),
                     idempotency_key: Some(idempotency_key.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    scheduled: None,
                     environment_id: Some(owned_agent_id.environment_id.into()),
                 }))
             })
             .await?
             .into_inner();
 
-        match response.result {
-            Some(cancel_invocation_response::Result::Success(canceled)) => Ok(canceled),
-            Some(cancel_invocation_response::Result::Error(error)) => Err(error.into()),
-            None => Err(WorkerProxyError::InternalError(
-                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
-            )),
-        }
-    }
-
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: InvocationId,
-        receipt: ScheduleId,
-        canceller: &Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        let response = self
-            .worker_service_client
-            .call("cancel_invocation", move |client| {
-                Box::pin(client.cancel_invocation(CancelInvocationRequest {
-                    agent_id: Some(target.agent_id().into()),
-                    idempotency_key: Some(key.into()),
-                    auth_ctx: Some(auth.clone().into()),
-                    scheduled: Some(
-                        golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                            schedule_id: Some(receipt.id.into()),
-                            target_environment_id: Some(target.environment_id.into()),
-                            canceller: Some(canceller.clone().into()),
-                        },
-                    ),
-                    environment_id: Some(target.environment_id.into()),
-                }))
-            })
-            .await?
-            .into_inner();
         match response.result {
             Some(cancel_invocation_response::Result::Success(canceled)) => Ok(canceled),
             Some(cancel_invocation_response::Result::Error(error)) => Err(error.into()),
@@ -1158,6 +1149,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("lookup_invocation_status", move |client| {
                 Box::pin(client.invoke_agent(InvokeAgentRequest {
+                    requires_own_record: false,
                     target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
                         target: Some(
                             golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
@@ -1267,6 +1259,7 @@ mod tests {
         StreamInvocationIdentity, StreamMappingRole, invocation_request, invocation_response,
         invocation_session_result,
     };
+    use golem_api_grpc::proto::golem::workerexecutor::v1 as handle_proto;
     use golem_common::model::InvocationId;
     use golem_common::model::component::ComponentId;
     use golem_schema::proto::golem::schema::{
@@ -1419,6 +1412,12 @@ mod tests {
         created_workers: Arc<Mutex<Vec<LaunchNewWorkerRequest>>>,
         create_responses:
             Arc<Mutex<std::collections::VecDeque<Result<LaunchNewWorkerResponse, Status>>>>,
+        handle_requests: Arc<Mutex<Vec<handle_proto::InvocationHandleRequest>>>,
+        handle_responses: Arc<
+            Mutex<
+                std::collections::VecDeque<Result<handle_proto::InvocationHandleResponse, Status>>,
+            >,
+        >,
     }
 
     macro_rules! unimplemented_rpc {
@@ -1486,6 +1485,21 @@ mod tests {
         }
         unimplemented_rpc!(update_worker, UpdateWorkerRequest, UpdateWorkerResponse);
         unimplemented_rpc!(resume_worker, ResumeWorkerRequest, ResumeWorkerResponse);
+        async fn invocation_handle(
+            &self,
+            request: Request<handle_proto::InvocationHandleRequest>,
+        ) -> Result<Response<handle_proto::InvocationHandleResponse>, Status> {
+            self.handle_requests
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            self.handle_responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(Status::unimplemented("no scripted handle response")))
+                .map(Response::new)
+        }
         unimplemented_rpc!(fork_worker, ForkWorkerRequest, ForkWorkerResponse);
         unimplemented_rpc!(revert_worker, RevertWorkerRequest, RevertWorkerResponse);
         unimplemented_rpc!(
@@ -1703,6 +1717,97 @@ mod tests {
                 }))
             }
         }
+    }
+
+    async fn assert_handle_failure_is_not_replayed(routing_error: bool) {
+        use handle_proto::invocation_handle_response::Result as Reply;
+
+        let service = FlakyWorkerService::default();
+        let requests = service.handle_requests.clone();
+        let responses = service.handle_responses.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerServiceServer::new(service)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+        });
+        let mut config = WorkerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            ..Default::default()
+        };
+        config.client_config.retries_on_unavailable.max_attempts = 2;
+        config.client_config.retries_on_unavailable.min_delay = std::time::Duration::from_millis(1);
+        config.client_config.retries_on_unavailable.max_delay = std::time::Duration::from_millis(1);
+        let proxy = RemoteWorkerProxy::new(&config);
+        for operation in [
+            handle_proto::InvocationHandleOperation::Status,
+            handle_proto::InvocationHandleOperation::Await,
+            handle_proto::InvocationHandleOperation::Cancel,
+        ] {
+            requests.lock().unwrap().clear();
+            let failure = if routing_error {
+                Ok(handle_proto::InvocationHandleResponse {
+                    result: Some(Reply::Failure(WorkerExecutorError::ShardingNotReady.into())),
+                })
+            } else {
+                Err(Status::unavailable("handle response lost after dispatch"))
+            };
+            *responses.lock().unwrap() = [
+                failure,
+                Ok(handle_proto::InvocationHandleResponse {
+                    result: Some(Reply::Success(Default::default())),
+                }),
+            ]
+            .into();
+            let request = handle_proto::InvocationHandleRequest {
+                agent_id: Some(AgentId::from_parts(7, 1).into()),
+                environment_id: Some(EnvironmentId::new().into()),
+                invocation_id: Some(Uuid::new_v4().into()),
+                caller: None,
+                auth_ctx: Some(AuthCtx::System.into()),
+                operation: operation as i32,
+            };
+            let error = proxy.invocation_handle(request.clone()).await.unwrap_err();
+            if routing_error {
+                assert_eq!(
+                    error,
+                    WorkerProxyError::InternalError(WorkerExecutorError::ShardingNotReady)
+                );
+            } else {
+                assert_eq!(
+                    error,
+                    WorkerProxyError::from(Status::unavailable(
+                        "handle response lost after dispatch"
+                    ))
+                );
+            }
+            assert_eq!(*requests.lock().unwrap(), vec![request]);
+        }
+        let _ = shutdown.send(());
+        server.await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("20s")]
+    async fn invocation_handle_does_not_replay_target_routing_failure() {
+        assert_handle_failure_is_not_replayed(true).await;
+    }
+
+    #[test]
+    #[test_r::timeout("20s")]
+    async fn invocation_handle_does_not_replay_ambiguous_transport_failure() {
+        assert_handle_failure_is_not_replayed(false).await;
     }
 
     #[test]
@@ -2298,6 +2403,7 @@ mod tests {
                     upper_negative: Vec::new(),
                     expires_at: None,
                 }),
+                false,
             )
             .await
             .unwrap();

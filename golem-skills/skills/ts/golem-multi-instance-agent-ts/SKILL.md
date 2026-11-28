@@ -36,7 +36,7 @@ Def.client.getById(agentId)                         // an existing agent
 | `Def.client.getById(agentId)` | Address an **existing** agent by its ID; an unknown ID, or the ID of an agent of another type, throws a `not-found` `RemoteCallError` |
 | `await client.agentId()` | The `AgentId` of the agent the client connects to |
 
-Each method on the client has, besides the awaited call: `.trigger(input)` (fire-and-forget) and `.schedule(at, input) → CancellationToken`. Cancel an awaited invocation with the normal call shape's trailing `{ signal }` option: `method(input, { signal })`, or `method({ signal })` for a method with no input.
+Each method on the client has, besides the awaited call: `.trigger(input)` and `.schedule(at, input)`, which both resolve to an `Invocation` handle once the target accepted the invocation; its `.cancel()` withdraws the invocation while it has not started. Withdraw an awaited call with the trailing `{ signal }` option: `method(input, { signal })`, or `method({ signal })` for a method with no input. Aborting withdraws the invocation on a best-effort basis while it has not started; after it starts, aborting only stops waiting.
 
 ### Example
 

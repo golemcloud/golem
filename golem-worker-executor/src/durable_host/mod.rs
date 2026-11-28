@@ -149,7 +149,7 @@ impl QuotaClass {
             | HostFunctionName::McpToolCall
             | HostFunctionName::GolemAgentDurableStreamReaderRead
             | HostFunctionName::GolemAgentDurableStreamWriterAppend => Some(Self::Http),
-            HostFunctionName::GolemRpcWasmRpcInvoke
+            HostFunctionName::GolemRpcWasmRpcTrigger
             | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => Some(Self::Rpc),
             _ => None,
         }
@@ -1261,10 +1261,6 @@ struct PrivateDurableWorkerState {
     runtime_retry_policy_mutations: BTreeMap<String, Option<NamedRetryPolicy>>,
     /// The identity of the next retry policy scope a task opens in this Store.
     next_retry_policy_scope_id: u64,
-
-    /// Maps child pollable rep → parent FutureInvokeResult rep.
-    /// Used to finalize deferred parent deletion when a child pollable is dropped.
-    rpc_pollable_to_parent: HashMap<u32, u32>,
 
     /// Transaction-owned protocol terminals. Each entry holds a host-call permit until closed.
     transaction_protocols: HashMap<OplogIndex, TransactionProtocol>,

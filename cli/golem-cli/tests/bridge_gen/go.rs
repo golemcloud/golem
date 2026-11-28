@@ -405,12 +405,12 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
     for expected in [
         "func (c CounterAgentClient) MustIncrement() float64 {",
         "func (c CounterAgentClient) MustAdd(by uint32) {",
-        "func (c CounterAgentClient) IncrementAsync() *golem.Future[float64] {",
-        "func (c CounterAgentClient) AddAsync(by uint32) *golem.Future[golem.Unit] {",
-        "func (c CounterAgentClient) TriggerAdd(by uint32) (golem.InvocationMetadata, error) {",
-        "func (c CounterAgentClient) MustTriggerAdd(by uint32) golem.InvocationMetadata {",
-        "func (c CounterAgentClient) ScheduleAdd(at time.Time, by uint32) (*golem.ScheduledInvocation, error) {",
-        "func (c CounterAgentClient) MustScheduleAdd(at time.Time, by uint32) *golem.ScheduledInvocation {",
+        "func (c CounterAgentClient) TriggerIncrement() (*golem.Invocation[float64], error) {",
+        "func (c CounterAgentClient) TriggerAdd(by uint32) (*golem.Invocation[golem.Unit], error) {",
+        "func (c CounterAgentClient) MustTriggerAdd(by uint32) *golem.Invocation[golem.Unit] {",
+        "func (c CounterAgentClient) ScheduleAdd(at time.Time, by uint32) (*golem.Invocation[golem.Unit], error) {",
+        "func (c CounterAgentClient) MustScheduleAdd(at time.Time, by uint32) *golem.Invocation[golem.Unit] {",
+        "func (c CounterAgentClient) IncrementInvocation(id golem.InvocationID) *golem.Invocation[float64] {\n\treturn counterAgentIncrementMethod.Invocation(id)\n}",
         "func MustUpsertCounterAgent(id CounterAgentID) CounterAgentClient {",
         "func MustCreateCounterAgent(id CounterAgentID, opts ...golem.CreateOpt) CounterAgentClient {",
         "func MustGetCounterAgentByID(id golem.AgentID) CounterAgentClient {",
@@ -424,6 +424,19 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         assert!(
             client.contains(expected),
             "missing {expected} in:\n{client}"
+        );
+    }
+    // The handle replaces the future of an awaited call and the token of a
+    // schedule.
+    for removed in [
+        "Async(",
+        "golem.Future",
+        "ScheduledInvocation",
+        "InvocationMetadata",
+    ] {
+        assert!(
+            !client.contains(removed),
+            "unexpected {removed} in:\n{client}"
         );
     }
     let go_mod = generated.read("go.mod");
@@ -880,8 +893,10 @@ fn go_guest_client_generates_stream_bearing_methods(env: &GoEnv) {
     // A trigger or a schedule cannot hand a stream back.
     assert!(client.contains(") MustUpload("), "{client}");
     assert!(client.contains(") TriggerCount("), "{client}");
+    assert!(client.contains(") CountInvocation("), "{client}");
     assert!(!client.contains("TriggerUpload"), "{client}");
     assert!(!client.contains("ScheduleFeed"), "{client}");
+    assert!(!client.contains("UploadInvocation"), "{client}");
     let types = generated.read("types.go");
     assert!(types.contains("golem.AgentStream[string]"), "{types}");
     generated.assert_gofmt_clean(env);

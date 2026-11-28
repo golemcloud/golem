@@ -220,19 +220,11 @@ async fn late_rejection_after_cancel(
     let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
 
     let key = InvocationId(uuid::Uuid::new_v4());
-    let receipt = worker.schedule_invocation(invocation(&key, 5), due).await?;
+    worker.schedule_invocation(invocation(&key, 5), due).await?;
     if cancel_first {
-        assert!(
-            worker
-                .cancel_scheduled_invocation(
-                    key,
-                    receipt,
-                    &callers::agent_principal(
-                        owner.agent_id,
-                        AgentTypeName("ScheduledInvocationClient".to_string())
-                    )
-                )
-                .await?
+        assert_eq!(
+            worker.cancel_invocation(key).await?,
+            golem_worker_executor::worker::CancelInvocationOutcome::Withdrawn
         );
     }
 
@@ -259,20 +251,12 @@ async fn late_rejection_after_cancel(
     // persisted index or the oplog.
     for _ in 0..4 {
         let other = InvocationId(uuid::Uuid::new_v4());
-        let receipt = worker
+        worker
             .schedule_invocation(invocation(&other, 1), due)
             .await?;
-        assert!(
-            worker
-                .cancel_scheduled_invocation(
-                    other,
-                    receipt,
-                    &callers::agent_principal(
-                        owner.agent_id,
-                        AgentTypeName("ScheduledInvocationClient".to_string())
-                    )
-                )
-                .await?
+        assert_eq!(
+            worker.cancel_invocation(other).await?,
+            golem_worker_executor::worker::CancelInvocationOutcome::Withdrawn
         );
     }
 
@@ -419,18 +403,10 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
     let mut cancelled = Vec::new();
     for _ in 0..3 {
         let key = InvocationId(uuid::Uuid::new_v4());
-        let receipt = worker.schedule_invocation(invocation(&key), due).await?;
-        assert!(
-            worker
-                .cancel_scheduled_invocation(
-                    key,
-                    receipt,
-                    &callers::agent_principal(
-                        owner.agent_id,
-                        AgentTypeName("ScheduledInvocationClient".to_string())
-                    )
-                )
-                .await?
+        worker.schedule_invocation(invocation(&key), due).await?;
+        assert_eq!(
+            worker.cancel_invocation(key).await?,
+            golem_worker_executor::worker::CancelInvocationOutcome::Withdrawn
         );
         cancelled.push(key);
     }
@@ -581,18 +557,10 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
     // Later results evict the finished one from the one-entry recent results.
     for _ in 0..3 {
         let other = InvocationId(uuid::Uuid::new_v4());
-        let receipt = worker.schedule_invocation(invocation(&other), due).await?;
-        assert!(
-            worker
-                .cancel_scheduled_invocation(
-                    other,
-                    receipt,
-                    &callers::agent_principal(
-                        owner.agent_id,
-                        AgentTypeName("ScheduledInvocationClient".to_string())
-                    )
-                )
-                .await?
+        worker.schedule_invocation(invocation(&other), due).await?;
+        assert_eq!(
+            worker.cancel_invocation(other).await?,
+            golem_worker_executor::worker::CancelInvocationOutcome::Withdrawn
         );
     }
     assert_eq!(

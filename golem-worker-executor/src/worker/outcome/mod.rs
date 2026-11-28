@@ -682,13 +682,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .1,
             ));
         }
-        let position = if let Some(position) = status.invocation_results.position(key) {
-            Some(position.clone())
-        } else if status.invocation_results.might_contain(key) {
-            self.resolve_old_invocation_result_index(&status, key)
+        let recent = status.invocation_results.position(key);
+        let position = match recent {
+            Some(position) if position.request.is_some() => Some(position.clone()),
+            // A withdrawal that was written again names no request: the request is in the
+            // invocation's older position.
+            _ if status.invocation_results.might_contain(key) => self
+                .resolve_old_invocation_result_index(&status, key)
                 .await?
-        } else {
-            None
+                .filter(|older| older.request.is_some())
+                .or_else(|| recent.cloned()),
+            _ => recent.cloned(),
         };
         let request = match position {
             Some(position) => position.request,
@@ -730,7 +734,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn lookup_invocation_result(&self, key: &InvocationId) -> LookupResult {
         let status = self.state_actor.status().await;
-        self.lookup_invocation_result_in(status, key).await
+        self.lookup_invocation_result_in(status, key)
+            .await
+            .unwrap_or_else(|error| LookupResult::Complete(Err(error)))
     }
 
     /// [`Self::lookup_invocation_result`] for a caller that may hold a generation whose state
@@ -746,7 +752,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Err(_) if self.retired_for_lost_shard() => Err(self.retirement_error()),
             status => status,
         }?;
-        Ok(self.lookup_invocation_result_in(status, key).await)
+        self.lookup_invocation_result_in(status, key).await
     }
 
     /// The lookup in a status read from the state actor with `status` or `try_status`, which are
@@ -758,7 +764,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // lookup cost more than the last.
         status: Arc<AgentStatusRecord>,
         key: &InvocationId,
-    ) -> LookupResult {
+    ) -> Result<LookupResult, WorkerExecutorError> {
         let cached = self
             .hydrated_invocation_results
             .read()
@@ -779,7 +785,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 match self.resolve_old_invocation_result_index(&status, key).await {
                     Ok(Some(older)) if older.end != InvocationEnd::Cancelled => older,
                     Ok(_) => position.clone(),
-                    Err(error) => return LookupResult::Complete(Err(error.into())),
+                    Err(error) => return Err(error.into()),
                 }
             } else {
                 position.clone()
@@ -795,7 +801,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // An oplog that does not read is not a miss: the key may well have a result there.
             match self.resolve_old_invocation_result_index(&status, key).await {
                 Ok(position) => position.map(|position| InvocationResult::lazy(&position)),
-                Err(error) => return LookupResult::Complete(Err(error.into())),
+                Err(error) => return Err(error.into()),
             }
         };
         let result = if let Some((mut result, result_oplog_idx)) = maybe_result {
@@ -809,7 +815,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await
             {
-                return LookupResult::Complete(Err(error.into()));
+                return Err(error.into());
             }
             self.hydrated_invocation_results.write().await.insert(
                 *key,
@@ -817,7 +823,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 status.invocation_results.revert_generation(),
                 result_oplog_idx,
             );
-            lookup_result_from_cached_result(&status, key, Arc::unwrap_or_clone(result))
+            Ok(lookup_result_from_cached_result(
+                &status,
+                key,
+                Arc::unwrap_or_clone(result),
+            ))
         } else {
             let is_pending = status
                 .pending_invocations
@@ -825,14 +835,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .any(|entry| entry.has_idempotency_key(key));
             let is_current = status.current_idempotency_key() == Some(key);
             if is_pending || is_current {
-                LookupResult::Pending
+                Ok(LookupResult::Pending)
             } else {
-                LookupResult::New
+                Ok(LookupResult::New)
             }
         };
         // A terminal standalone owner cannot resume its accepted work. Its primary may
         // have failed before the invocation started, leaving only the owner's error.
-        if result == LookupResult::Pending
+        if matches!(result, Ok(LookupResult::Pending))
             && self.standalone_invocation_id() == Some(*key)
             && let Err(error) = Self::ensure_not_failed(
                 &self.deps,
@@ -842,7 +852,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
         {
-            return LookupResult::Complete(Err(error));
+            return Ok(LookupResult::Complete(Err(error)));
         }
         result
     }
@@ -1303,9 +1313,22 @@ impl InvocationResult {
                 } => {
                     let invocation_result: AgentInvocationResult = services
                         .oplog()
-                        .download_payload(result)
+                        .download_payload_classified(result)
                         .await
-                        .expect("failed to deserialize function response payload");
+                        .map_err(|error| {
+                            use crate::services::oplog::{OplogReadError, OplogReadSource};
+                            let source = OplogReadSource::Other("invocation result payload");
+                            let detail = error.to_string();
+                            let error = match error {
+                                OplogPayloadDownloadError::Backend(_) => {
+                                    OplogReadError::source_unavailable(source, detail)
+                                }
+                                OplogPayloadDownloadError::Corrupt(_) => {
+                                    OplogReadError::corruption(source, detail)
+                                }
+                            };
+                            UnreadableOplog::new(&owned_agent_id.agent_id, error)
+                        })?;
                     let background_failure = match background_failure_idx {
                         Some(failure_idx) => Some(
                             read_background_failure(

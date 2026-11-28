@@ -518,12 +518,14 @@ object SchemaRefSpec extends ZIOSpecDefault {
       val single = AgentMethod("single", "", None, input, Some(output))
 
       assertTrue(
-        ReflectionInternals.validateInvocationOutput(unit, Invocation(metadata, None)).isRight,
-        ReflectionInternals.validateInvocationOutput(unit, Invocation(metadata, Some(StringValue("extra")))).isLeft,
-        ReflectionInternals.validateInvocationOutput(single, Invocation(metadata, None)).isLeft,
-        ReflectionInternals.validateInvocationOutput(single, Invocation(metadata, Some(U32Value(1)))).isLeft,
+        ReflectionInternals.validateInvocationOutput(unit, InvocationOutput(metadata, None)).isRight,
         ReflectionInternals
-          .validateInvocationOutput(single, Invocation(metadata, Some(StringValue("ok"))))
+          .validateInvocationOutput(unit, InvocationOutput(metadata, Some(StringValue("extra"))))
+          .isLeft,
+        ReflectionInternals.validateInvocationOutput(single, InvocationOutput(metadata, None)).isLeft,
+        ReflectionInternals.validateInvocationOutput(single, InvocationOutput(metadata, Some(U32Value(1)))).isLeft,
+        ReflectionInternals
+          .validateInvocationOutput(single, InvocationOutput(metadata, Some(StringValue("ok"))))
           .isRight
       )
     },

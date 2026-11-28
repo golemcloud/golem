@@ -82,8 +82,13 @@ const configured = await counterType.client.create(
 
 With `keyed: true`, `create` creates the keyed agent and rejects with a `conflict` `RemoteCallError` when it exists; without it, every `create` makes a new agent without a key, with a new agent ID. The reflected factory rejects unknown paths, secret fields, and invalid values locally. Required local fields may already have component defaults. The host validates the effective configuration when it creates the agent and supplies secrets. An existing agent keeps its original configuration.
 
-`invoke` and `invokeJson` return `{ value, metadata }`. `trigger` and `schedule`
-also return identity metadata. Client creation and invocation failures are
+`invoke` and `invokeJson` return `{ value, metadata }`. `trigger(input)` and
+`schedule(at, input)` (and `triggerValue` / `scheduleValue` for schema values)
+resolve to an `Invocation` handle once the target accepted the invocation; its
+`id` identifies the invocation, and `status()`, `awaitResult()` and `cancel()`
+observe or withdraw it. `invocation(id)` (and `invocationValue(id)` for schema
+values) rebuilds the handle of the method from a stored ID without a remote
+call. Client creation and invocation failures are
 reported as structured `RemoteCallError` values; use `isRemoteCallError` to
 inspect their `cause` without parsing messages.
 
@@ -245,7 +250,7 @@ Capabilities, futures, and streams cannot be packed or unpacked as reflected JSO
 
 ## Cancellation, Streams, and Cleanup
 
-Cancel an awaited agent call with `AbortSignal`; cancel a scheduled durable call with its token. A triggered call has no result observer:
+Withdraw an awaited agent call with `AbortSignal`: an abort before the invocation starts withdraws it on a best-effort basis, and an abort after it starts only stops waiting. Cancel a triggered or scheduled call with its handle while it has not started:
 
 ```typescript
 import { getReflectedAgentType, isRemoteCallError } from '@golemcloud/golem-ts-sdk';
@@ -258,15 +263,15 @@ const abort = new AbortController();
 
 try {
   const pending = add.invoke({ by: 1 }, abort.signal);
-  // abort.abort(); // cancels observation; remote side effects may already have happened
+  // abort.abort(); // stops waiting; remote side effects may already have happened
   console.log((await pending).value);
 } catch (error) {
   if (isRemoteCallError(error)) console.error(error.cause);
   else throw error;
 }
 
-const scheduled = add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2 });
-scheduled.cancellationToken.cancel();
+const scheduled = await add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2 });
+const withdrawn = await scheduled.cancel(); // false once it finished; rejects while it runs
 ```
 
 Schema-native streams and opaque capabilities cannot be packed as JSON. Use `invokeValue`, transfer an owned input stream once, consume returned streams to EOF or call `return()` when abandoning them, and do not reuse transferred handles. For reflected tools, `startJson`/`startValue` return independent `stdout`, `stderr`, `result`, `collect()`, and `cancel()` handles. `collect()` concurrently settles both outputs and the result, reporting a result failure before output failures; always consume or cancel a started operation.

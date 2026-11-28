@@ -454,7 +454,10 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       Custom { output =>
         assertTrue(
           output.contains("pong"),
-          output.contains("10")
+          output.contains("10"),
+          "Completed:false:5:pong:Scheduled:true:Cancelled:Cancelled:(Running|Waiting):CannotCancelRunning:5".r
+            .findFirstIn(output)
+            .isDefined
         )
       }
     ),

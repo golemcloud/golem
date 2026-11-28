@@ -1482,6 +1482,16 @@ pub(crate) fn recording_accepting_card_transfer_proxy(
 
 #[async_trait]
 impl WorkerProxy for RecordingWorkerProxy {
+    async fn invocation_handle(
+        &self,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerProxyError,
+    > {
+        self.inner.invocation_handle(request).await
+    }
+
     async fn prepare(
         &self,
         target: &ResolvedTarget,
@@ -1558,6 +1568,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
+        requires_own_record: bool,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         self.inner
             .invoke_agent(
@@ -1577,6 +1588,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 environment_id,
                 auth_ctx,
                 scope_card,
+                requires_own_record,
             )
             .await
     }
@@ -1729,19 +1741,6 @@ impl WorkerProxy for RecordingWorkerProxy {
     ) -> Result<bool, WorkerProxyError> {
         self.inner
             .cancel_invocation(owned_agent_id, idempotency_key, auth_ctx)
-            .await
-    }
-
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -10294,7 +10293,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
 
     for (key, value, cancel_wins) in [(cancelled_key, 71u64, true), (started_key, 29u64, false)] {
         let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
-        let receipt = worker
+        worker
             .schedule_invocation(
                 AgentInvocation::AgentMethod {
                     idempotency_key: key,
@@ -10347,22 +10346,11 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 .await
                 .context("waiting for selected invocation hydration timed out")??;
             // Hydration has selected the pending item, but cancellation can still remove it.
-            assert!(
-                tokio::time::timeout(
-                    Duration::from_secs(30),
-                    worker.cancel_scheduled_invocation(
-                        key,
-                        receipt,
-                        &callers::agent_principal(
-                            owner.agent_id,
-                            golem_common::model::agent::AgentTypeName(
-                                "ScheduledInvocationClient".to_string()
-                            ),
-                        ),
-                    ),
-                )
-                .await
-                .context("cancelling the selected invocation before Started timed out")??
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(30), worker.cancel_invocation(key))
+                    .await
+                    .context("cancelling the selected invocation before Started timed out")??,
+                golem_worker_executor::worker::CancelInvocationOutcome::Withdrawn
             );
             release_selection.send(()).unwrap();
         } else {
@@ -10383,16 +10371,8 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
             let (blocked_tx, blocked_rx) = tokio::sync::oneshot::channel();
             let cancel = tokio::spawn({
                 let worker = worker.clone();
-                let owner = owner.clone();
                 async move {
-                    let canceller = callers::agent_principal(
-                        owner.agent_id,
-                        golem_common::model::agent::AgentTypeName(
-                            "ScheduledInvocationClient".to_string(),
-                        ),
-                    );
-                    let mut cancellation =
-                        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &canceller));
+                    let mut cancellation = Box::pin(worker.cancel_invocation(key));
                     assert!(futures::poll!(&mut cancellation).is_pending());
                     blocked_tx.send(()).unwrap();
                     cancellation.await
@@ -10403,10 +10383,11 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 .context("waiting for cancellation to block behind Started timed out")??;
             // The Started append holds the instance lock; cancellation has already tried it.
             drop(started);
-            assert!(
-                !tokio::time::timeout(Duration::from_secs(30), cancel)
+            assert_ne!(
+                tokio::time::timeout(Duration::from_secs(30), cancel)
                     .await
-                    .context("cancellation did not finish after releasing Started")???
+                    .context("cancellation did not finish after releasing Started")???,
+                golem_worker_executor::worker::CancelInvocationOutcome::Withdrawn
             );
         }
 
@@ -10512,19 +10493,9 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
     let receipt = worker
         .schedule_invocation(invocation(&key, 71), due)
         .await?;
-    assert!(
-        worker
-            .cancel_scheduled_invocation(
-                key,
-                receipt,
-                &callers::agent_principal(
-                    owner.agent_id,
-                    golem_common::model::agent::AgentTypeName(
-                        "ScheduledInvocationClient".to_string()
-                    ),
-                ),
-            )
-            .await?
+    assert_eq!(
+        worker.cancel_invocation(key).await?,
+        golem_worker_executor::worker::CancelInvocationOutcome::Withdrawn
     );
     assert_eq!(
         worker
@@ -10625,7 +10596,20 @@ async fn scheduled_cancellation_by_another_agent_is_refused(
     use golem_worker_executor::model::LookupResult;
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    // Without management permission, only the recorded starter may cancel.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            create_direct_invocation_auth: Some(Arc::new(|| {
+                Arc::new(crate::invocation_reads::HandleManagementAuth::new(
+                    Arc::new(AtomicBool::new(false)),
+                ))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
@@ -10648,7 +10632,7 @@ async fn scheduled_cancellation_by_another_agent_is_refused(
     let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let receipt = worker
+    worker
         .schedule_invocation(
             AgentInvocation::AgentMethod {
                 idempotency_key: key,
@@ -10668,20 +10652,26 @@ async fn scheduled_cancellation_by_another_agent_is_refused(
         )
         .await?;
 
-    // Another agent holds the right receipt, but it is not the recorded immediate caller.
+    // Another agent knows the invocation's ID, but it is not the recorded immediate caller and
+    // has no management permission.
+    let refused = crate::invocation_reads::handle_operation(
+        &executor,
+        &target,
+        &other.agent_id,
+        key,
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation::Cancel,
+    )
+    .await?;
     assert!(
-        !worker
-            .cancel_scheduled_invocation(
-                key,
-                receipt,
-                &callers::agent_principal(
-                    other.agent_id,
-                    golem_common::model::agent::AgentTypeName(
-                        "ScheduledInvocationClient".to_string()
-                    )
-                ),
-            )
-            .await?
+        matches!(
+            &refused,
+            golem_api_grpc::proto::golem::workerexecutor::v1::invocation_handle_response::Result::Failure(error)
+                if matches!(
+                    error.error,
+                    Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::PermissionDenied(_))
+                )
+        ),
+        "{refused:?}"
     );
 
     // The call completes with a successful result: it was not cancelled.
@@ -10815,12 +10805,23 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
     executor.start_agent(&component.id, server.clone()).await?;
     let successor = executor.get_worker_metadata(&target).await?.fingerprint;
     assert_ne!(successor, fingerprint);
+    // The successor's invocations get IDs derived from its own fingerprint, so the same request
+    // key gives it another ID, and the old ID names nothing there: a cancel through it is not
+    // found and leaves the successor's schedule alone.
+    let request_key = golem_common::model::InvocationRequestKey::Internal(IdempotencyKey::fresh());
+    let derived = |fingerprint| {
+        request_key
+            .finalize(target.agent_id, fingerprint, "inc_global_by")
+            .id()
+    };
+    let successor_key = derived(successor);
+    assert_ne!(successor_key, derived(fingerprint));
     {
         let worker = executor.active_agent(&owned).await.unwrap().primary();
         let successor_receipt = worker
             .schedule_invocation(
                 AgentInvocation::AgentMethod {
-                    idempotency_key: key,
+                    idempotency_key: successor_key,
                     method_name: "inc_global_by".to_string(),
                     allow_streams: false,
                     input: data_value!(91u64).into_parts().1.try_into().unwrap(),
@@ -10833,16 +10834,32 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
             .await?;
         assert_ne!(successor_receipt, receipt);
     }
-    executor
-        .invoke_and_await_agent(&component, &caller, "cancel_scheduled", data_value!())
-        .await?;
+    let stale = crate::invocation_reads::handle_operation(
+        &executor,
+        &target,
+        &caller_id.agent_id,
+        key,
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation::Cancel,
+    )
+    .await?;
+    assert!(
+        matches!(
+            &stale,
+            golem_api_grpc::proto::golem::workerexecutor::v1::invocation_handle_response::Result::Success(success)
+                if matches!(
+                    success.result,
+                    Some(golem_api_grpc::proto::golem::workerexecutor::v1::invocation_handle_success::Result::NotFound(_))
+                )
+        ),
+        "{stale:?}"
+    );
     assert!(
         executor
             .attached_agent_status(&target.agent_id)
             .await?
             .pending_invocations
             .iter()
-            .any(|pending| pending.has_idempotency_key(&key))
+            .any(|pending| pending.has_idempotency_key(&successor_key))
     );
     assert_eq!(
         executor

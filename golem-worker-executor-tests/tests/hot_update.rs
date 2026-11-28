@@ -10331,3 +10331,131 @@ async fn a_diverging_automatic_update_keeps_its_class_and_divergence_across_a_re
     assert_eq!(expected.request.as_deref(), recorded.request.as_ref());
     Ok(())
 }
+
+/// After an update removed its method, a completed invocation stays observable through its
+/// handle: the status is `Completed` and the await returns the result recorded by the old
+/// revision, without running the method again.
+#[test]
+#[timeout("120s")]
+async fn a_handle_reads_a_completed_result_after_an_update_removed_its_method(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::invocation_session_result;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        InvocationHandleOperation as Operation, InvocationLifecycleState,
+        invocation_handle_response as response, invocation_handle_success as success,
+    };
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocation, InvocationId};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    let key = InvocationId(uuid::Uuid::new_v4());
+    worker
+        .clone()
+        .invoke(AgentInvocation::AgentMethod {
+            idempotency_key: key,
+            method_name: "revision_one_only".to_string(),
+            input: data_value!().into_parts().1.try_into().unwrap(),
+            allow_streams: false,
+            invocation_context: InvocationContextStack::fresh(),
+            caller: callers::agent_in(
+                worker_id.agent_id,
+                AgentTypeName("SnapshotUpdateTest".to_string()),
+                worker.get_initial_worker_metadata().fingerprint,
+                worker_id.environment_id,
+            ),
+            scope_card: None,
+        })
+        .await?;
+    drop(worker);
+    // Invocations run in order, so this read returns after the invocation finished.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    // Revision two has no `revision_one_only`, so the update restores a snapshot.
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+
+    let status = crate::invocation_reads::handle_operation(
+        &executor,
+        &worker_id,
+        &worker_id.agent_id,
+        key,
+        Operation::Status,
+    )
+    .await?;
+    assert!(
+        matches!(&status, response::Result::Success(value)
+            if value.result == Some(success::Result::Status(InvocationLifecycleState::Completed as i32))),
+        "{status:?}"
+    );
+    let awaited = crate::invocation_reads::handle_operation(
+        &executor,
+        &worker_id,
+        &worker_id.agent_id,
+        key,
+        Operation::Await,
+    )
+    .await?;
+    let response::Result::Success(value) = &awaited else {
+        anyhow::bail!("the await failed: {awaited:?}");
+    };
+    let Some(success::Result::Output(output)) = &value.result else {
+        anyhow::bail!("expected the recorded result: {value:?}");
+    };
+    assert_eq!(
+        output.result,
+        Some(invocation_session_result::Result::MethodResult(
+            golem_common::schema::SchemaValue::U32(1)
+                .try_into()
+                .unwrap()
+        )),
+        "the result recorded by revision one"
+    );
+    let started = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(start)
+                    if matches!(&start.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(call)
+                            if call.method_name == "revision_one_only"))
+        })
+        .count();
+    assert_eq!(
+        started, 1,
+        "observing the result does not run the method again"
+    );
+
+    http_server.abort();
+    Ok(())
+}

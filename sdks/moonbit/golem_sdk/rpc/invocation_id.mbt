@@ -95,3 +95,26 @@ pub fn InvocationId::from_host(
     uuid: @schema.Uuid::from_wit(metadata.invocation_id.id),
   }
 }
+
+///|
+/// Reads the ID of an agent invocation. An agent method invocation always
+/// belongs to an agent, so another owner is a broken host and aborts.
+pub fn InvocationId::from_wit(id : @types.InvocationId) -> InvocationId {
+  match id.owner {
+    Agent(agent_id) =>
+      {
+        agent_id: @schema.AgentId::from_wit(agent_id),
+        uuid: @schema.Uuid::from_wit(id.id),
+      }
+    Tool(tool) =>
+      abort(
+        "the host returned an agent invocation that the tool '\{tool}' owns",
+      )
+  }
+}
+
+///|
+/// The host form of the invocation ID.
+pub fn InvocationId::to_wit(self : InvocationId) -> @types.InvocationId {
+  { owner: Agent(self.agent_id.to_wit()), id: self.uuid.to_wit(), }
+}

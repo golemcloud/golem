@@ -249,6 +249,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(entry.map(summary))
     }
 
+    pub async fn invocation_handle_internal(
+        &self,
+        request: golem::workerexecutor::v1::InvocationHandleRequest,
+    ) -> Result<golem::workerexecutor::v1::InvocationHandleSuccess, WorkerExecutorError> {
+        use crate::services::HasRpc;
+        use golem_common::model::OwnedInvocationId;
+        let target = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        self.ensure_worker_belongs_to_this_executor(&target)?;
+        let caller: golem_common::model::caller::Principal = request
+            .caller
+            .ok_or_else(|| WorkerExecutorError::invalid_request("caller not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if crate::services::rpc::invocation_handle_environment(&caller)? != target.environment_id {
+            return Err(WorkerExecutorError::invalid_request(
+                "the invocation handle caller belongs to another environment",
+            ));
+        }
+        let key = request
+            .invocation_id
+            .ok_or_else(|| WorkerExecutorError::invalid_request("invocation_id not found"))?
+            .into();
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let operation =
+            golem::workerexecutor::v1::InvocationHandleOperation::try_from(request.operation)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid handle operation"))?;
+        self.rpc()
+            .invocation_handle(
+                &OwnedInvocationId::new(target.agent_id, key),
+                &caller,
+                operation,
+                &auth,
+            )
+            .await
+    }
+
     pub(super) async fn list_invocations_internal(
         &self,
         request: ListInvocationsRequest,

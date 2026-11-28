@@ -65,8 +65,8 @@ with several kind types prefixes each with its type's stem (`AgentInvalidInput`,
 same prefix rule. A switch over a host error variant is pinned and has no catch-all kind.
 
 Generated clients follow where they run. A guest client runs in a component, so it has
-the forms of a same-component `MethodDef` — call, trigger, schedule, async — each with
-its `Must` variant, and `MustGet<Agent>` beside `Get<Agent>`. An external client runs in
+the forms of a same-component `MethodDef` — call, trigger, schedule and rebuilding a handle
+from its ID — with a `Must` variant for each that can fail, and `MustGet<Agent>` beside `Get<Agent>`. An external client runs in
 an ordinary Go program, where a panic is not a trap, so it returns errors only.
 
 A Go identifier becomes a schema name in the lowerCamelCase the other SDKs use, with each

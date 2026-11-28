@@ -447,13 +447,14 @@ Config values are provisioned via `golem.yaml` (`env`/`envDefaults`/`secretDefau
 
 ## Calling Other Agents (RPC)
 
-Every agent definition exposes a `.client` factory. Use `.upsert(id)` for the keyed agent of the constructor parameters (created when it is missing), `await .create(id, { keyed, config, env })` to create a new agent (without `keyed`, it has no key and a new agent ID; with `keyed`, an existing keyed agent rejects with a `conflict` error), or `.getById(agentId)` to address an existing agent by its ID (an unknown ID throws `not-found`). `await client.agentId()` returns a durable client's agent ID. An ephemeral agent offers only `.upsert(id)`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
+Every agent definition exposes a `.client` factory. Use `.upsert(id)` for the keyed agent of the constructor parameters (created when it is missing), `await .create(id, { keyed, config, env })` to create a new agent (without `keyed`, it has no key and a new agent ID; with `keyed`, an existing keyed agent rejects with a `conflict` error), or `.getById(agentId)` to address an existing agent by its ID (an unknown ID throws `not-found`). `await client.agentId()` returns a durable client's agent ID. An ephemeral agent offers only `.upsert(id)`. `await client.m(input, { signal })` invokes; aborting `signal` drops the call, and the target withdraws it if it has not started. `await client.m.trigger(input)` starts the call without awaiting its result, and `await client.m.schedule(at, input)` enqueues it for later; both return an `Invocation` handle with `id`, `status()`, `awaitResult({ signal })`, and `cancel()`. Rebuild a handle from a stored ID with `Invocation.get(id, Counter.methods.add)`. The ID only locates the invocation: only its starter or a manager can observe or cancel it. Dropping the handle or aborting its await only detaches. `cancel()` withdraws a call that has not started; a running call fails with `cannot-cancel-running`. `trigger` and `schedule` reject methods with streams and never send a scope card.
 
 ```typescript
 import { Counter } from './counter-agent.js';
 
 const next = await Counter.client.upsert({ name: 'c1' }).add({ by: 5 });
-Counter.client.upsert({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
+const started = await Counter.client.upsert({ name: 'c1' }).add.trigger({ by: 1 });
+const total = await started.awaitResult();
 ```
 
 ## Snapshotting

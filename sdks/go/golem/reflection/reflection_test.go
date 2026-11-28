@@ -29,6 +29,7 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -248,7 +249,6 @@ type fakeRPC struct {
 	has       bool
 	err       error
 	cancelled bool
-	noID      bool
 	scope     witTypes.Option[*types.PermissionCard]
 	idAsks    int
 }
@@ -263,27 +263,43 @@ var fakeID = golem.InvocationMetadata{
 	},
 }
 
-func (f *fakeRPC) start(method string, _ types.SchemaValueTree, scope witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
-	f.gotMethod, f.gotForm, f.scope = method, "call", scope
-	id := &fakeID
-	if f.noID {
-		id = nil
+func (f *fakeRPC) result() witTypes.Option[types.SchemaValueTree] {
+	if !f.has {
+		return witTypes.None[types.SchemaValueTree]()
 	}
-	return pendingRPC{
-		metadata: id,
-		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
-			if !f.has {
-				return witTypes.None[types.SchemaValueTree](), f.err
-			}
-			return witTypes.Some(f.tree), f.err
-		},
-		cancel: func() { f.cancelled = true },
-	}, nil
+	return witTypes.Some(f.tree)
 }
 
-func (f *fakeRPC) trigger(method string, _ types.SchemaValueTree) (golem.InvocationMetadata, error) {
+func (f *fakeRPC) call(method string, _ types.SchemaValueTree, scope witTypes.Option[*types.PermissionCard]) (witTypes.Option[types.SchemaValueTree], golem.InvocationMetadata, error) {
+	f.gotMethod, f.gotForm, f.scope = method, "call", scope
+	if f.err != nil {
+		return witTypes.None[types.SchemaValueTree](), golem.InvocationMetadata{}, f.err
+	}
+	return f.result(), fakeID, nil
+}
+
+// ops is the handle of an accepted invocation of the scripted result, which
+// cancels once.
+func (f *fakeRPC) ops() link.InvocationOps {
+	return link.InvocationOps{
+		ID: types.InvocationId{
+			Owner: types.MakeInvocationOwnerAgent(types.AgentId{Uuid: engine.UUIDToWit(greeterID.UUID())}),
+			Id:    engine.UUIDToWit(fakeID.InvocationID.UUID),
+		},
+		Await: func() witTypes.Result[witTypes.Option[types.SchemaValueTree], host.RpcError] {
+			return witTypes.Ok[witTypes.Option[types.SchemaValueTree], host.RpcError](f.result())
+		},
+		Cancel: func() witTypes.Result[bool, host.RpcError] {
+			first := !f.cancelled
+			f.cancelled = true
+			return witTypes.Ok[bool, host.RpcError](first)
+		},
+	}
+}
+
+func (f *fakeRPC) trigger(method string, _ types.SchemaValueTree) (link.InvocationOps, error) {
 	f.gotMethod, f.gotForm = method, "trigger"
-	return fakeID, f.err
+	return f.ops(), f.err
 }
 
 func (f *fakeRPC) agentID() (golem.AgentID, error) {
@@ -291,9 +307,9 @@ func (f *fakeRPC) agentID() (golem.AgentID, error) {
 	return greeterID, f.err
 }
 
-func (f *fakeRPC) schedule(_ time.Time, method string, _ types.SchemaValueTree) (*golem.ScheduledInvocation, error) {
+func (f *fakeRPC) schedule(_ time.Time, method string, _ types.SchemaValueTree) (link.InvocationOps, error) {
 	f.gotMethod, f.gotForm = method, "schedule"
-	return &golem.ScheduledInvocation{Metadata: fakeID}, f.err
+	return f.ops(), f.err
 }
 
 func greetResult(t *testing.T, r AgentType, value string) types.SchemaValueTree {
@@ -315,16 +331,16 @@ func TestReflectedClientCallsAndDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if rpc.gotMethod != "greet" || got != "hi hi" || id == nil || *id != fakeID {
+	if rpc.gotMethod != "greet" || got != "hi hi" || id != fakeID {
 		t.Errorf("invoked %q, got %v, id %+v", rpc.gotMethod, got, id)
 	}
 
 	triggered, err := client.Trigger("greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || rpc.gotForm != "trigger" || triggered != fakeID {
+	if err != nil || rpc.gotForm != "trigger" || triggered.ID() != fakeID.InvocationID {
 		t.Errorf("Trigger: %v %q %+v", err, rpc.gotForm, triggered)
 	}
 	sched, err := client.Schedule(time.Now(), "greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || rpc.gotForm != "schedule" || sched.Metadata != fakeID {
+	if err != nil || rpc.gotForm != "schedule" || sched.ID() != fakeID.InvocationID {
 		t.Errorf("Schedule: %v %q %+v", err, rpc.gotForm, sched)
 	}
 }
@@ -347,7 +363,7 @@ func TestReflectedClientsSendNoScopeCardUnlessOneIsAttached(t *testing.T) {
 	}
 	dynamic := &DynamicAgentClient{agentID: greeterID, rpc: rpc}
 	rpc.scope = witTypes.Some(&types.PermissionCard{})
-	if _, err := dynamic.CallAsync("greet", input); err != nil || rpc.scope.IsSome() {
+	if _, _, err := dynamic.Call("greet", input); err != nil || rpc.scope.IsSome() {
 		t.Errorf("the dynamic call sent a scope card: %v", err)
 	}
 
@@ -506,15 +522,19 @@ func TestDynamicAgentClientCallsWithPackedValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if rpc.gotMethod != "greet" || id == nil || *id != fakeID || got.IsNone() {
+	if rpc.gotMethod != "greet" || id != fakeID || got.IsNone() {
 		t.Fatalf("invoked %q id %+v result %v", rpc.gotMethod, id, got)
 	}
 	value, err := m.Output().Unwrap().UnpackJSON(got.Unwrap())
 	if err != nil || value != "hi" {
 		t.Errorf("result %v (%v)", value, err)
 	}
-	if _, err := client.Trigger("greet", input); err != nil || rpc.gotForm != "trigger" {
-		t.Errorf("Trigger: %v %q", err, rpc.gotForm)
+	triggered, err := client.Trigger("greet", input)
+	if err != nil || rpc.gotForm != "trigger" {
+		t.Fatalf("Trigger: %v %q", err, rpc.gotForm)
+	}
+	if got, err := triggered.AwaitResult(); err != nil || got.IsNone() {
+		t.Errorf("the triggered invocation gave %v, %v", got, err)
 	}
 }
 
@@ -578,80 +598,46 @@ func TestReflectedConfigOverridesAreChecked(t *testing.T) {
 	}
 }
 
-// TestAPendingCallIsCancelledOrAwaited — a pending call identifies itself
-// before its result, and cancelling it stops the wait.
-func TestAPendingCallIsCancelledOrAwaited(t *testing.T) {
+// TestATriggeredInvocationIsAwaitedOrCancelled — the handle of a triggered
+// call reads its result against the snapshot, and cancels through the host.
+func TestATriggeredInvocationIsAwaitedOrCancelled(t *testing.T) {
 	r := snapshotOf(t)
 	rpc := &fakeRPC{tree: greetResult(t, r, "hi"), has: true}
 	client := &AgentClient{agentType: r, id: knownAgentID(greeterID), rpc: rpc}
 
-	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || p.Metadata == nil || *p.Metadata != fakeID {
-		t.Fatalf("CallAsync gave %+v, %v", p, err)
+	inv, err := client.Trigger("greet", map[string]any{"greeting": "hi", "times": 1})
+	if err != nil || inv.ID() != fakeID.InvocationID {
+		t.Fatalf("Trigger gave %+v, %v", inv, err)
 	}
-	if got, err := p.Get(); got != "hi" || err != nil {
-		t.Fatalf("Wait gave %v, %v", got, err)
+	if got, err := inv.AwaitResult(); got != "hi" || err != nil {
+		t.Fatalf("AwaitResult gave %v, %v", got, err)
 	}
-	p.Cancel()
-	if rpc.cancelled {
-		t.Error("cancelling an awaited call reached the host")
+	if ok, err := inv.Cancel(); !ok || err != nil || !rpc.cancelled {
+		t.Fatalf("Cancel gave %v, %v", ok, err)
+	}
+	if ok, err := inv.Cancel(); ok || err != nil {
+		t.Fatalf("a repeated Cancel gave %v, %v; want false", ok, err)
 	}
 
-	p, _ = client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
-	p.Cancel()
-	if _, err := p.Get(); !errors.Is(err, golem.ErrCallCancelled) || !rpc.cancelled {
-		t.Errorf("a cancelled call gave %v (cancelled=%v)", err, rpc.cancelled)
+	// The result is read against the snapshot, as Call reads it.
+	rpc.has = false
+	var rce *golem.RemoteCallError
+	if _, err := inv.AwaitResult(); !errors.As(err, &rce) || rce.Kind != golem.RemoteProtocolError {
+		t.Errorf("a missing result gave %v; want a protocol error", err)
 	}
 }
 
-// TestARejectedCallHasNoIdentity — a call the host rejects before it starts
-// has no invocation identity, and awaiting it returns the rejection.
-func TestARejectedCallHasNoIdentity(t *testing.T) {
+// TestARejectedCallReturnsTheRejection — a call the host rejects returns the
+// rejection, with no invocation identity.
+func TestARejectedCallReturnsTheRejection(t *testing.T) {
 	r := snapshotOf(t)
 	denied := errors.New("denied")
-	rpc := &fakeRPC{noID: true, err: denied}
+	rpc := &fakeRPC{err: denied}
 	client := &AgentClient{agentType: r, id: knownAgentID(greeterID), rpc: rpc}
-
-	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
-	if err != nil || p.Metadata != nil {
-		t.Fatalf("CallAsync gave metadata %v, %v; want no metadata and no error", p.Metadata, err)
-	}
-	if _, err := p.Get(); !errors.Is(err, denied) {
-		t.Errorf("awaiting a rejected call gave %v, want the rejection", err)
-	}
-
-	_, id, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1})
-	if id != nil || !errors.Is(err, denied) {
+	if _, id, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1}); id != (golem.InvocationMetadata{}) || !errors.Is(err, denied) {
 		t.Errorf("Call gave id %v, %v; want no id and the rejection", id, err)
 	}
-
-	// Only a rejected call lacks an identity, so one that succeeds without
-	// one breaks the host contract, for reflected and dynamic clients alike.
-	// The dropped result gives its permission cards back to the host.
-	var released []*types.PermissionCard
-	prev := link.ReleaseCard
-	t.Cleanup(func() { link.ReleaseCard = prev })
-	link.ReleaseCard = func(h *types.PermissionCard) { released = append(released, h) }
-	card := &types.PermissionCard{}
-	withCard := greetResult(t, r, "hi")
-	withCard.ValueNodes = append(slices.Clone(withCard.ValueNodes), types.MakeSchemaValueNodePermissionCardHandle(card))
-	rpc = &fakeRPC{noID: true, tree: withCard, has: true}
-	client.rpc = rpc
-	var rce *golem.RemoteCallError
-	if got, id, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1}); !errors.As(err, &rce) || rce.Kind != golem.RemoteProtocolError || id != nil || got != nil {
-		t.Errorf("a successful call without an identity gave %v, id %v, %v; want a protocol error", got, id, err)
-	}
-	if len(released) != 1 || released[0] != card {
-		t.Errorf("released %v, want the dropped result's card", released)
-	}
-	rpc = &fakeRPC{noID: true, tree: greetResult(t, r, "hi"), has: true}
-	m, _ := r.Method("greet")
-	input, err := m.Input().PackJSON(map[string]any{"greeting": "hi", "times": 1})
-	if err != nil {
-		t.Fatalf("PackJSON: %v", err)
-	}
-	dynamic := &DynamicAgentClient{agentID: greeterID, rpc: rpc}
-	if got, id, err := dynamic.Call("greet", input); !errors.As(err, &rce) || rce.Kind != golem.RemoteProtocolError || id != nil || got.IsSome() {
-		t.Errorf("a dynamic call without an identity gave %v, id %v, %v; want a protocol error", got, id, err)
+	if inv, err := client.Trigger("greet", map[string]any{"greeting": "hi", "times": 1}); inv != nil || !errors.Is(err, denied) {
+		t.Errorf("Trigger gave %v, %v; want the rejection", inv, err)
 	}
 }

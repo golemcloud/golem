@@ -75,17 +75,31 @@ if err != nil {
 
 `MustCall` panics with the same error instead. A panic in a method traps the component, as in Rust: the calling invocation fails without retry.
 
-## Asynchronous call
+## Concurrent calls
 
-Start the call, do other work, then await:
+An awaited call is one blocking `Call`. To have several in flight at once, make each in its own goroutine; a goroutine blocked in `Call` yields while the others proceed:
 
 ```go
-fut := ledger.Record.CallAsync(c, ledger.RecordIn{Amount: in.Amount}) // *golem.Future[Out]
-// ... other work ...
-total := fut.MustGet().MustOk() // MustGet() blocks for the result; Get() returns (Out, error)
+totals := make([]int64, len(in.Regions))
+var wg sync.WaitGroup
+for i, region := range in.Regions {
+    wg.Go(func() {
+        c := ledger.Agent.Upsert(ledger.ID{Region: region})
+        totals[i] = ledger.Record.MustCall(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
+    })
+}
+wg.Wait()
 ```
 
-Launch several and await them to fan out work across other agents.
+A call cannot be withdrawn by abandoning its goroutine. To start work now and collect it later, `Trigger` it and keep the `*golem.Invocation[Out]` handle:
+
+```go
+inv := ledger.Record.MustTrigger(c, ledger.RecordIn{Amount: in.Amount}) // returns once accepted
+// ... other work ...
+total := golem.Must(inv.AwaitResult()).MustOk() // AwaitResult() returns (Out, error)
+```
+
+See `golem-fire-and-forget-go` for the handle's `Status`, `Cancel` and `Method.Invocation(id)`.
 
 ## Unwrapping a `golem.Result`
 
@@ -147,13 +161,13 @@ if err != nil {
 }
 forecast, err := client.Forecast(3)                   // (Out, error)
 forecast = client.MustForecast(3)                     // panics on a failed call
-receipt := client.MustTriggerForecast(3)              // enqueue, don't wait
-pending := client.ForecastAsync(3)                    // *golem.Future[Out]
+inv := client.MustTriggerForecast(3)                  // *golem.Invocation[Out], once accepted
+again := client.ForecastInvocation(inv.ID())          // rebuild a handle from its ID
 ```
 
 - `Upsert<Agent>(id)` addresses the keyed agent of the constructor parameters and creates it when it does not exist. `Create<Agent>(id, opts...)` creates a new agent and `Get<Agent>ByID(agentID)` addresses an existing agent by its `golem.AgentID` (an unknown ID is a `*golem.RemoteCallError` of kind `golem.RemoteNotFound`). They return an error when the host cannot resolve the target, as the callee lives in another component that may not be deployed. `MustUpsert<Agent>`, `MustCreate<Agent>` and `MustGet<Agent>ByID` panic instead. An ephemeral callee has only the `Upsert<Agent>` forms.
 - `client.AgentID()` returns the `golem.AgentID` of the client's agent, as `(golem.AgentID, error)`; `MustAgentID()` panics on a failure.
-- Each method has the forms of a same-component `MethodDef`: `<M>` (`MethodDef.Call`: `(Out, error)`, only `error` without output), `Trigger<M>`, `Schedule<M>(at, …)`, each with a `Must` form, and `<M>Async` (`CallAsync`). A failed call returns the SDK's own `*golem.RemoteCallError`, exactly as a same-component call does. Methods that take or return a stream have no trigger or schedule form.
+- Each method has the forms of a same-component `MethodDef`: `<M>` (`MethodDef.Call`: `(Out, error)`, only `error` without output), `Trigger<M>`, `Schedule<M>(at, …)`, each with a `Must` form, and `<M>Invocation(id)`, which rebuilds the handle that `Trigger<M>` or `Schedule<M>` returned. A failed call returns the SDK's own `*golem.RemoteCallError`, exactly as a same-component call does. Methods that take or return a stream have no trigger or schedule form.
 - The `.local` module path can never be fetched from a module proxy, so a missing `replace` fails the build rather than silently resolving something else.
 - The client's types are the callee's, generated from its schema: records become structs, variants sealed interfaces with one type per case, enums integer constants with a `String()` method.
 - Methods that take or return streams are included, with each stream spelled `golem.AgentStream[T]` (see `golem-streaming-agent-go`).
@@ -166,9 +180,9 @@ counter, err := counters.CreateCounterAgent(counters.CounterAgentID{Name: "fast"
 
 ## Key Constraints
 
-- You call `Method.Call(client, in)` (not `client.Call(method, in)`): the method descriptor carries the input/output types. Same for `Trigger`, `Schedule`, `CallAsync` and the `Must` forms.
+- You call `Method.Call(client, in)` (not `client.Call(method, in)`): the method descriptor carries the input/output types. Same for `Trigger`, `Schedule` and the `Must` forms.
 - The client comes from the **definition** (`Def.Agent.Upsert(id)`); the constructor parameters are encoded from the `ID` type, so the caller does not need the callee locally registered.
-- Don't hold a `*golem.Future` across invocations — await it (`Get()` / `MustGet()`) within the same handler.
+- Don't keep a `*golem.Invocation` handle across invocations — store its `ID()` and rebuild it with `Method.Invocation(id)`.
 
 ### Related Skills
 

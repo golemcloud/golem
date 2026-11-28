@@ -55,7 +55,8 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 
 3. **Durable agent RPC is exactly-once at the logical callee-invocation level.** Dispatch attempts
    (replay, transport retry, incomplete-call repair) share a durable key. An executing target persists one
-   invocation and result; read-only cache hits/followers persist neither. Attempts are not executions. Owner:
+   invocation and result; read-only cache hits/followers persist neither, except that a trigger
+   (`requires_own_record`) skips the cache hit because its handle observes the invocation by ID. Attempts are not executions. Owner:
    `durable_host/rpc/mod.rs`
    (`IdempotencyKeyPosition::derive(start_index)`), `worker/mod.rs::enqueue_worker_invocation_with_effect`
    (`lookup_invocation_result` dedupe before appending `PendingAgentInvocation`).
@@ -189,24 +190,27 @@ Delivery requires the scheduled entry still to exist and be due, then starts an 
 notifies its resident loop. It never appends another invocation. The recovery index follows status
 changes, and the entry was future at the last one, so delivery adds a durable target to
 `RunningWorkers` before the start: the wake is acknowledged once the start begins, and a crash
-before `AgentInvocationStarted` must still be recovered. Token cancellation validates the
-incarnation-bound receipt and recorded scheduling owner, commits pending removal before removing
-the wake, and shares the instance mutex with the committed pending-to-started transition. If
+before `AgentInvocationStarted` must still be recovered. Cancellation through the invocation
+handle (`golem::rpc::invocation::cancel`, `Rpc::invocation_handle`) authorizes the persisted
+starter of the invocation or a caller with the `CancelInvocation` permission, commits pending removal before removing the wake, and shares the
+instance mutex with the committed pending-to-started transition. If
 cancellation wins, selected-but-not-started work is skipped without executing. The
 `CancelPendingInvocation` entry retains the key in invocation-result membership, so a same-key
 schedule retry cannot restore the pending entry, even after restart or recent-index eviction.
 Result lookup reports cancellation rather than a successful execution. Cancelling an invocation
-that is no longer pending does not replace its completed result. If start wins, token cancellation
-returns false. A delayed wake cannot recreate cancelled work.
+that is no longer pending does not replace its completed result. If start wins, handle
+cancellation reports `cannot-cancel-running`. A delayed wake cannot recreate cancelled work.
 An ephemeral target is created at schedule time (`create_demand`, then `schedule_invocation`), so
 its pending entry is committed like a durable target's. Its first start waits for the due wake; an
 ephemeral wake that finds the agent inactive is acknowledged. Ephemeral targets are not in
 `RunningWorkers` and the wake is acknowledged once the start begins, so an executor lost before the
 start commits `Restart` loses the scheduled invocation, as fail-stop allows. Cancelling a scheduled
-invocation on a never-started ephemeral target, through either its token or the public cancellation
-endpoint, also withdraws its constructor reservation under the instance mutex. A later resume or
-reconstruction runs neither the constructor nor the cancelled method. Token cancellation returns
-false once execution has begun; ordinary public cancellation keeps its existing pending-work rules.
+invocation on a never-started ephemeral target, through either its handle or the public
+cancellation endpoint, also withdraws its constructor reservation under the instance mutex. A later resume or
+reconstruction runs neither the constructor nor the cancelled method. Once an ephemeral target's
+execution has begun, handle, public and export-stream session cancellation answer
+`cannot-cancel-running`, because withdrawing its one method would leave a constructor that ran
+for nothing.
 When an owner finishes construction, it registers the wake of every folded future entry
 again. Scheduler storage keeps an existing entry for the same schedule id, so this only restores a
 wake lost between the pending commit and the wake insert. A cancellation that commits during
@@ -1527,7 +1531,7 @@ in `worker/status/tests.rs` and `ordinary_agent_is_not_never_live_after_restart`
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.
-Management mutations carry the fingerprint of the metadata authorized by the worker service through every routing retry, even when the caller omitted `expectedFingerprint`. Delete compares it under the instance mutex before claiming deletion. Interrupt, resume, update, revert, plugin changes and public cancellation check the acquired worker under the same mutex, then operate only on that pinned worker. Fork carries the authorized source fingerprint into the source-oplog lifecycle guard. A retry cannot capture the fingerprint of a replacement at the same ID. Scheduled token cancellation and promise completion retain their separate incarnation-bound authority.
+Management mutations carry the fingerprint of the metadata authorized by the worker service through every routing retry, even when the caller omitted `expectedFingerprint`. Delete compares it under the instance mutex before claiming deletion. Interrupt, resume, update, revert, plugin changes and public cancellation check the acquired worker under the same mutex, then operate only on that pinned worker. Fork carries the authorized source fingerprint into the source-oplog lifecycle guard. A retry cannot capture the fingerprint of a replacement at the same ID. Invocation-handle operations and promise completion retain their separate incarnation-bound authority.
 `ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
 `AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
 whether the worker was resident or loaded cold. A caller that joined another caller's load loads
@@ -2555,7 +2559,7 @@ input to the ID; the raw key is not stored.
 A request carries an `InvocationRequestKey`, and admission finalizes it with
 `finalize(agent_id, fingerprint, operation)` once the target's fingerprint is known
 (`grpc/invocation_session/admission.rs`, `services/rpc/direct.rs`, `durable_host/rpc/target.rs`,
-`durable_host/rpc/schedule.rs`):
+`durable_host/rpc/schedule/mod.rs`):
 
 | Variant | Source | Unique part |
 |---|---|---|
@@ -2767,8 +2771,8 @@ a `CancelInvocationOutcome`: `Withdrawn`, `Running` (REST 409; a running invocat
 cancelled yet) or `NotPending` (finished or unknown). `withdraw_pending_invocation` commits
 `CancelPendingInvocation`, then publishes the completion, so callers that wait on the key wake with
 `cancelled`. A reused key, invoke-and-await, lookup mode (`InvocationStatus::Cancelled`) and RPC all
-answer the same outcome; RPC maps it to a permanent error with the detail `invocation-cancelled`,
-so a caller never retries a cancelled callee.
+answer the same outcome; RPC maps it to the permanent `rpc-error.cancelled`, so a caller never
+retries a cancelled callee.
 
 Each result position (`InvocationResultPosition`) also records how the invocation ended
 (`InvocationEnd`), its operation (the method name or `tool:<tool>/<command path>`, at most
@@ -3030,9 +3034,11 @@ repairs, retain admission without re-authorizing.
    (`golem::rpc::wasm-rpc.activate`, live or repaired) is the only step that may create the
    target. Re-activating a replayed `ReplayPending` target (`activate_rpc_target` with the
    recorded fingerprint) builds a `ReplayedDemand` and sends no create request. Every scalar
-   `invoke` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
-   targets carry none. Pinned local dispatch (`services/rpc/direct.rs`) resolves the callee only
-   through `get_existing_with_fingerprint` and never creates it, and the local streaming path uses
+   `trigger` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
+   targets carry none. `schedule` always pins its target: for an ephemeral target, the
+   fingerprint of the instance its `create_demand` prepares at schedule time. Pinned local
+   dispatch (`services/rpc/direct.rs`) resolves the callee only through
+   `get_existing_with_fingerprint` and never creates it, and the local streaming path uses
    the exact-existing lookup too. An unpinned ephemeral call may still create its instance, keyed by
    the owner key of its `request_key`. Pinned local dispatch holds no task-scope bind, so a deletion
    can still finish between the lookup and the enqueue; a refusal before admission is therefore
@@ -3045,6 +3051,20 @@ repairs, retain admission without re-authorizing.
    and recorded in the call's `End`; a call that meets a deletion still running gets the
    refusal an unpinned caller gets. The method never runs on another incarnation, and an
    executor restart does not create the deleted child again.
+
+`trigger` and `schedule` (`golem::rpc::wasm-rpc`) return an `invocation` handle only after the
+target durably accepts the invocation; their `End` records the accepted invocation ID
+(`GolemRpcInvocationAccepted`), and completed replay rebuilds the handle from that ID without
+contacting the target. The handle's own operations live in `durable_host/rpc/invocation/mod.rs`.
+`get`, `id` and dropping a handle are local and record nothing; dropping a handle, or
+abandoning its `await`, releases only the observation and never cancels the invocation.
+`status` and `await` are `ReadRemote` calls (`golem::rpc::invocation`), so replay returns the
+recorded status or result rather than the current one. `cancel` is a `WriteRemote` call.
+Repairing an incomplete handle call sends the same ID-addressed request again and never
+resubmits the invocation: an incomplete `await` attaches to the same existing invocation, and a
+repaired `cancel` that the first attempt already withdrew answers `false`. The target
+authorizes every handle operation (recorded immediate caller or management permission) before
+it discloses the invocation; an operational failure traps and leaves the `Start` incomplete.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native

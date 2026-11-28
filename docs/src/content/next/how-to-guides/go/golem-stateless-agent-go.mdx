@@ -76,7 +76,7 @@ for _, input := range inputs {
 }
 ```
 
-The `InvocationMetadata` that `Trigger` returns names, in `AgentID`, the one-shot instance that ran the invocation.
+The `*golem.Invocation` handle that `Trigger` returns has an `ID()` whose `AgentID` names the one-shot instance that runs the invocation.
 
 ```go
 // DURABLE (default) — state accumulates across calls.

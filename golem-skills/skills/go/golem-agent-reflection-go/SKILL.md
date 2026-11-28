@@ -118,8 +118,8 @@ fmt.Println(golem.Must(client.AgentID()), total, invocation.InvocationID)
 
 - `Upsert` takes the constructor arguments by name and addresses the keyed agent, which the host creates if it does not exist. `Create(ctorArgs, opts...)` creates a new agent with a new agent ID and no key (`reflection.Keyed()` creates the keyed agent instead, and fails with kind `golem.RemoteConflict` when it exists; `reflection.WithEnv(name, value)` adds an environment variable). `GetByID(agentID)` addresses an existing agent of this type and never creates it. `LookupID(ctorArgs)` returns the agent ID of the keyed agent, or `None`, without creating it. `client.AgentID()` returns `(golem.AgentID, error)`.
 - `reflection.WithConfigJSON(path, value)` overrides one declared configuration value at creation, as canonical JSON (`reflection.WithConfigValue(path, schema.SchemaValue)` takes a schema-model value); only `Create` accepts it. Undeclared paths, secrets and invalid values are refused before anything is sent.
-- `Trigger` returns the invocation's `golem.InvocationMetadata`, and the `*golem.ScheduledInvocation` that `Schedule` returns holds it as `Metadata`. `AgentID` names the agent that runs the invocation — for an ephemeral agent, the only record of which instance ran — and `InvocationID` is a `golem.InvocationID`, whose `String()` is `<agent-id>.<uuid>`; `golem.ParseInvocationID` reads that form back. `Call` returns the metadata as a `*golem.InvocationMetadata`, which is nil when Golem rejected the call; the error then says why.
-- `CallAsync` returns a `*reflection.PendingCall`: its `Metadata` is known at once, `Get()` returns the result (`MustGet()` panics on an error, and a second `Get` returns the same result), and `Cancel()` stops waiting (the call may already have run; `Get` then reports `golem.ErrCallCancelled`). It behaves like the `*golem.Future` that a typed `CallAsync` returns. A scheduled call is cancelled through the `*golem.ScheduledInvocation` that `Schedule` returns.
+- `Call` also returns the invocation's `golem.InvocationMetadata`. `AgentID` names the agent that ran the invocation — for an ephemeral agent, the only record of which instance ran — and `InvocationID` is a `golem.InvocationID`, whose `String()` is `<agent-id>.<uuid>`; `golem.ParseInvocationID` reads that form back. An awaited call cannot be withdrawn by abandoning it.
+- `Trigger(method, args)` and `Schedule(at, method, args)` return a `*golem.Invocation[any]` once the target has durably accepted the invocation. Its `ID()` identifies the invocation, `Status()` reads its state, `AwaitResult()` returns the result as canonical JSON, as `Call` does, and `Cancel()` withdraws it while it has not started (`false` once it finished; kind `golem.RemoteCannotCancelRunning` while it runs). Only the caller that started the invocation, or a manager, may use the handle. Neither carries a scope card.
 - Missing, unexpected or invalid arguments fail with `*schema.ValidationError`, listing every problem, before anything is sent.
 - Remote failures are `*golem.RemoteCallError`; for a remote agent error, its `Cause` is a `*golem.AgentError`.
 
@@ -158,7 +158,7 @@ if v, has := out.Get(); has {
 }
 ```
 
-A dynamic client also has `CallAsync`, `Trigger` and `Schedule`. `reflection.GetByID` reaches an existing agent only; to create one or reach a keyed agent by its constructor parameters, use a discovered client's `Upsert` or `Create`.
+A dynamic client also has `Trigger` and `Schedule`, which return a `*golem.Invocation[golem.Option[schema.SchemaValue]]`. `reflection.GetByID` reaches an existing agent only; to create one or reach a keyed agent by its constructor parameters, use a discovered client's `Upsert` or `Create`.
 
 ## Canonical JSON
 

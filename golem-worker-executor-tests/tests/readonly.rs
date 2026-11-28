@@ -21,7 +21,9 @@
 
 use crate::Tracing;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
@@ -886,7 +888,6 @@ fn method_invocation_input(
     entries: &[PublicOplogEntryWithIndex],
     method_name: &str,
 ) -> Option<golem_common::schema::TypedSchemaValue> {
-    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
     entries.iter().find_map(|e| match &e.entry {
         PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
             PublicAgentInvocation::AgentMethodInvocation(p) if p.method_name == method_name => {
@@ -1977,4 +1978,272 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     );
 
     Ok(())
+}
+
+/// The UUID of the invocation that a guest invocation ID names.
+fn invocation_uuid(id: &str) -> uuid::Uuid {
+    let (_, invocation) = id.split_once('.').expect("an invocation ID");
+    invocation.parse().expect("an invocation UUID")
+}
+
+#[derive(Debug)]
+struct SlowReadRun {
+    invocation: uuid::Uuid,
+    started: OplogIndex,
+    finished: OplogIndex,
+}
+
+/// The `slow_read` invocations the target ran, with the indexes of their `AgentInvocationStarted`
+/// and `AgentInvocationFinished` entries.
+fn slow_read_runs(entries: &[PublicOplogEntryWithIndex]) -> Vec<SlowReadRun> {
+    let mut runs: Vec<SlowReadRun> = Vec::new();
+    for entry in entries {
+        match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => {
+                if let PublicAgentInvocation::AgentMethodInvocation(call) = &started.invocation
+                    && call.method_name == "slow_read"
+                {
+                    runs.push(SlowReadRun {
+                        invocation: call.invocation_id.0,
+                        started: entry.oplog_index,
+                        finished: OplogIndex::NONE,
+                    });
+                }
+            }
+            PublicOplogEntry::AgentInvocationFinished(_) => {
+                if let Some(run) = runs.last_mut()
+                    && run.finished == OplogIndex::NONE
+                {
+                    run.finished = entry.oplog_index;
+                }
+            }
+            _ => {}
+        }
+    }
+    runs
+}
+
+/// The number of `AgentInvocationStarted` entries of the invocation with this UUID.
+fn starts_of_invocation(entries: &[PublicOplogEntryWithIndex], invocation: uuid::Uuid) -> usize {
+    entries
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(call)
+                    if call.invocation_id.0 == invocation))
+        })
+        .count()
+}
+
+/// The target's oplog once the invocation with this UUID has finished. A trigger returns when
+/// the target accepts the invocation, before the target runs it.
+async fn oplog_after_invocation_finished(
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    target: &OwnedAgentId,
+    invocation: uuid::Uuid,
+) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let entries = executor.get_oplog(target, OplogIndex::INITIAL).await?;
+        let started = entries.iter().position(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(call)
+                    if call.invocation_id.0 == invocation))
+        });
+        if let Some(started) = started
+            && entries[started..]
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        {
+            return Ok(entries);
+        }
+        if Instant::now() > deadline {
+            anyhow::bail!("invocation {invocation} did not finish on {target} within 30s");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// After a restart of the executor, the caller rebuilds the handle of the triggered read from
+/// its ID: it awaits the read's own result and then sees it completed.
+async fn assert_triggered_read_is_reachable_after_a_restart(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    component: &golem_common::model::component::ComponentDto,
+    caller_agent_id: &golem_common::model::agent::ParsedAgentKey,
+    id: &str,
+) -> anyhow::Result<()> {
+    let executor = start(deps, context).await?;
+    let value = executor
+        .invoke_and_await_agent(component, caller_agent_id, "await_read", data_value!(id))
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(value, 0, "the triggered read answers its own result");
+    let status = executor
+        .invoke_and_await_agent(component, caller_agent_id, "read_status", data_value!(id))
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(status, "Completed");
+    Ok(())
+}
+
+/// A trigger of a read-only method gets its own durable invocation on the target even when the
+/// target's read-only cache holds a result for the same caller and input, so its ID stays
+/// reachable after the caller and the target are reconstructed.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn read_only_trigger_on_a_warm_cache_records_its_own_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let unique_id = context.redis_prefix();
+    let target_str = format!("trigger-warm-target-{unique_id}");
+    let target_worker_id = executor
+        .start_agent(&component.id, agent_key!(AGENT_TYPE, target_str.clone()))
+        .await?;
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("trigger-warm-caller-{unique_id}"));
+    executor
+        .start_agent(&component.id, caller_agent_id.clone())
+        .await?;
+
+    // Warm the target's cache for this caller: an awaited read is answered without a new
+    // `AgentInvocationStarted`.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let before = executor.oplog_max_index(&target_worker_id).await?;
+        let warm = executor
+            .invoke_and_await_agent(
+                &component,
+                &caller_agent_id,
+                "read_via_rpc",
+                data_value!(target_str.clone()),
+            )
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(warm, 0);
+        let entries = executor
+            .get_oplog(&target_worker_id, OplogIndex::INITIAL)
+            .await?;
+        if count_agent_invocation_pair_since(&entries, before).0 == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected an RPC read-only cache hit within 5s for the calling agent"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let id = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_agent_id,
+            "trigger_read",
+            data_value!(target_str.clone()),
+        )
+        .await?
+        .into_typed::<String>()?;
+    let entries =
+        oplog_after_invocation_finished(&executor, &target_worker_id, invocation_uuid(&id)).await?;
+    assert_eq!(
+        starts_of_invocation(&entries, invocation_uuid(&id)),
+        1,
+        "the triggered read runs as its own invocation instead of the cached result"
+    );
+
+    drop(executor);
+    assert_triggered_read_is_reachable_after_a_restart(
+        deps,
+        &context,
+        &component,
+        &caller_agent_id,
+        &id,
+    )
+    .await
+}
+
+/// A trigger of a read-only method gets its own durable invocation on the target even while an
+/// equivalent awaited call of the same caller is in flight there. Only awaited calls coalesce, so
+/// this guards against a trigger joining the in-flight awaited call.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn read_only_trigger_beside_an_in_flight_equivalent_call_records_its_own_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let unique_id = context.redis_prefix();
+    let target_str = format!("trigger-in-flight-target-{unique_id}");
+    let target_worker_id = executor
+        .start_agent(&component.id, agent_key!(AGENT_TYPE, target_str.clone()))
+        .await?;
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("trigger-in-flight-caller-{unique_id}"));
+    executor
+        .start_agent(&component.id, caller_agent_id.clone())
+        .await?;
+
+    let (awaited, id) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_agent_id,
+            "trigger_read_beside_slow_read",
+            data_value!(target_str.clone(), 1500u64),
+        )
+        .await?
+        .into_typed::<(u64, String)>()?;
+    assert_eq!(awaited, 0);
+    let triggered = invocation_uuid(&id);
+    let entries = oplog_after_invocation_finished(&executor, &target_worker_id, triggered).await?;
+    let accepted_at = entries
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::PendingAgentInvocation(pending)
+                if matches!(&pending.invocation, PublicAgentInvocation::AgentMethodInvocation(call)
+                    if call.invocation_id.0 == triggered) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the triggered read is accepted by the target");
+    let awaited_run = slow_read_runs(&entries)
+        .into_iter()
+        .find(|run| run.invocation != triggered)
+        .expect("the awaited read ran on the target");
+    assert!(
+        awaited_run.started < accepted_at && accepted_at < awaited_run.finished,
+        "the trigger is accepted while the equivalent awaited read is in flight: {awaited_run:?}, accepted at {accepted_at}"
+    );
+    assert_eq!(
+        starts_of_invocation(&entries, triggered),
+        1,
+        "the triggered read runs as its own invocation instead of joining the awaited one"
+    );
+
+    drop(executor);
+    assert_triggered_read_is_reachable_after_a_restart(
+        deps,
+        &context,
+        &component,
+        &caller_agent_id,
+        &id,
+    )
+    .await
 }

@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
-use golem_common::model::caller::Principal;
+use golem_common::model::caller::Caller;
 
 use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::AgentStatusRecord;
-use golem_common::model::agent::ScheduleId;
 use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
@@ -1117,66 +1116,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             });
         }
     }
-    /// Commits cancellation only for scheduled work belonging to this incarnation whose recorded
-    /// immediate caller is `canceller`: the agent or tool that scheduled it. Returns false for a
-    /// stale receipt, another canceller, withdrawn work, or a start that already won.
-    /// Cancelling a never-started ephemeral target also withdraws its constructor reservation, so
-    /// it cannot run initialization after its scheduled method was withdrawn.
-    pub async fn cancel_scheduled_invocation(
-        &self,
-        idempotency_key: InvocationId,
-        schedule_id: ScheduleId,
-        canceller: &Principal,
-    ) -> Result<bool, WorkerExecutorError> {
-        let fingerprint = self.initial_worker_metadata.fingerprint;
-        if ScheduleId::for_invocation(fingerprint, &idempotency_key) != schedule_id {
-            return Ok(false);
-        }
-        let oplog_service = self.deps.oplog_service();
-        let _lifecycle = oplog_service
-            .lock_lifecycle(&self.owned_agent_id.agent_id)
-            .await;
-        let instance_guard = self.lock_non_stopping_worker().await;
-        if instance_guard.ensure_not_deleting().is_err() {
-            return Ok(false);
-        }
-        let identity = self
-            .deps
-            .worker_service()
-            .resolve_agent_identity(&self.owned_agent_id)
-            .await?;
-        if !identity.is_some_and(|identity| identity.fingerprint == fingerprint) {
-            return Ok(false);
-        }
-        let status = self
-            .state_actor
-            .repaired_status()
-            .await
-            .map_err(|refusal| self.refused_by(refusal))?;
-        let Some(pending) = status.pending_invocations.iter().find(|pending| {
-            pending.has_idempotency_key(&idempotency_key) && pending.not_before.is_some()
-        }) else {
-            return Ok(false);
-        };
-        let ephemeral = self.agent_mode() == AgentMode::Ephemeral;
-        if ephemeral && status.ephemeral_execution_begun {
-            return Ok(false);
-        }
-        let invocation = self.hydrate_pending_invocation(pending).await?.invocation;
-        if !invocation
-            .caller()
-            .is_some_and(|caller| caller.immediate.equals(canceller))
-        {
-            return Ok(false);
-        }
-        let withdrawn = self
-            .withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
-            .await?;
-        drop(instance_guard);
-        self.publish_cancelled(&withdrawn).await;
-        Ok(true)
-    }
-
     /// Cancels an invocation that has not started. The decision is taken under the instance
     /// lock, so a start that wins the race is reported as `Running`, never as a cancel. Waiters
     /// of a withdrawn invocation are woken with `InvocationCancelled`.
@@ -1205,6 +1144,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     CancelInvocationOutcome::NotPending
                 },
             );
+        }
+        // An ephemeral target runs one invocation. Once its execution began, its constructor
+        // runs for that invocation, so the invocation counts as started: withdrawing it would
+        // leave the target with a constructor and no method.
+        if self.agent_mode() == AgentMode::Ephemeral && status.ephemeral_execution_begun {
+            return Ok(CancelInvocationOutcome::Running);
         }
 
         let withdrawn = self

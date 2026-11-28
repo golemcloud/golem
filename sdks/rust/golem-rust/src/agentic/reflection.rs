@@ -31,14 +31,10 @@ use crate::schema::{
     MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
 use crate::{AgentId, ScheduledTime, Uuid};
-use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
-use std::future::Future;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 /// A graph-backed view of one schema root.
 #[derive(Clone, Debug)]
@@ -221,12 +217,17 @@ impl SchemaRef {
 #[derive(Debug)]
 pub enum GolemReflectError {
     AgentTypeNotFound(String),
-    MethodNotFound { agent_type: String, method: String },
+    MethodNotFound {
+        agent_type: String,
+        method: String,
+    },
     InvalidAgentId(String),
     InvalidInput(String),
     InvalidType(String),
     KnownEphemeralBinding(String),
-    InvalidSchemaValue { issues: Vec<String> },
+    InvalidSchemaValue {
+        issues: Vec<String>,
+    },
     MalformedRemoteOutput(String),
     SchemaRender(RenderError),
     SchemaEncode(String),
@@ -237,6 +238,10 @@ pub enum GolemReflectError {
     RemoteInternalError(String),
     RemoteAgent(RemoteAgentError),
     Conflict(String),
+    /// The awaited invocation was cancelled before it started.
+    Cancelled(String),
+    /// A cancellation found the invocation already running.
+    CannotCancelRunning(String),
 }
 
 #[derive(Debug)]
@@ -282,6 +287,10 @@ impl Display for GolemReflectError {
             }
             Self::RemoteAgent(error) => write!(f, "remote agent error: {error}"),
             Self::Conflict(message) => write!(f, "agent conflict: {message}"),
+            Self::Cancelled(message) => write!(f, "invocation cancelled: {message}"),
+            Self::CannotCancelRunning(message) => {
+                write!(f, "cannot cancel a running invocation: {message}")
+            }
         }
     }
 }
@@ -762,8 +771,8 @@ struct TestReflectedTransport {
 
 #[cfg(test)]
 impl TestReflectedTransport {
-    fn completion(&self) -> Invocation<Option<SchemaValue>> {
-        Invocation {
+    fn completion(&self) -> InvocationOutput<Option<SchemaValue>> {
+        InvocationOutput {
             metadata: InvocationMetadata {
                 agent_id: AgentId::new(Uuid::nil()),
                 invocation_id: OwnedInvocationId::new(
@@ -780,24 +789,12 @@ impl TestReflectedTransport {
         _method: &str,
         _input: SchemaValue,
         _scope_card: Option<&ScopeCard>,
-    ) -> PendingResult {
+    ) -> AwaitedResult {
         Ok(self.completion())
     }
-
-    fn pending(
-        &self,
-        _method: &str,
-        _input: SchemaValue,
-        _scope_card: Option<&ScopeCard>,
-    ) -> ReflectedTransportPending {
-        let completion = self.completion();
-        ReflectedTransportPending {
-            metadata: Some(completion.metadata.clone()),
-            cancel: Rc::new(|| {}),
-            future: Box::pin(std::future::ready(Ok(completion))),
-        }
-    }
 }
+
+type AwaitedResult = Result<InvocationOutput<Option<SchemaValue>>, GolemReflectError>;
 
 impl ReflectedTransport {
     async fn agent_id(&self) -> Result<AgentId, GolemReflectError> {
@@ -813,7 +810,7 @@ impl ReflectedTransport {
         method: &str,
         input: SchemaValue,
         scope_card: Option<&ScopeCard>,
-    ) -> PendingResult {
+    ) -> AwaitedResult {
         match self {
             Self::Host(transport) => transport.invoke_and_await(method, input, scope_card).await,
             #[cfg(test)]
@@ -821,51 +818,44 @@ impl ReflectedTransport {
         }
     }
 
-    fn pending(
+    async fn trigger(
         &self,
         method: &str,
         input: SchemaValue,
-        scope_card: Option<&ScopeCard>,
-    ) -> Result<ReflectedTransportPending, GolemReflectError> {
+    ) -> Result<host::Invocation, GolemReflectError> {
         match self {
-            Self::Host(transport) => {
-                let pending = transport.pending(method, input, scope_card)?;
-                let metadata = pending.metadata.clone();
-                let cancellation = Rc::clone(&pending.raw);
-                Ok(ReflectedTransportPending {
-                    metadata,
-                    cancel: Rc::new(move || cancellation.cancel()),
-                    future: Box::pin(pending),
-                })
-            }
-            #[cfg(test)]
-            Self::Test(transport) => Ok(transport.pending(method, input, scope_card)),
-        }
-    }
-
-    fn trigger(
-        &self,
-        method: &str,
-        input: SchemaValue,
-    ) -> Result<InvocationMetadata, GolemReflectError> {
-        match self {
-            Self::Host(transport) => transport.trigger(method, input),
+            Self::Host(transport) => transport.trigger(method, input).await,
             #[cfg(test)]
             Self::Test(_) => panic!("test reflected transport does not support trigger"),
         }
     }
 
-    fn schedule(
+    async fn schedule(
         &self,
         at: ScheduledTime,
         method: &str,
         input: SchemaValue,
-    ) -> Result<ScheduledInvocation, GolemReflectError> {
+    ) -> Result<host::Invocation, GolemReflectError> {
         match self {
-            Self::Host(transport) => transport.schedule(at, method, input),
+            Self::Host(transport) => transport.schedule(at, method, input).await,
             #[cfg(test)]
             Self::Test(_) => panic!("test reflected transport does not support scheduling"),
         }
+    }
+}
+
+/// Decodes the output of an invocation of `method` and checks it against its declared schema.
+fn checked_output_decoder(
+    output: Option<SchemaRef>,
+    method: String,
+) -> impl Fn(WireOutput) -> Result<Option<SchemaValue>, GolemReflectError> + 'static {
+    move |wire| {
+        let value = wire
+            .map(crate::decode_schema_value)
+            .transpose()
+            .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
+        validate_declared_output(output.as_ref(), value.as_ref(), &method)?;
+        Ok(value)
     }
 }
 
@@ -893,7 +883,7 @@ impl ReflectedAgentMethod {
     pub async fn invoke_value(
         &self,
         input: SchemaValue,
-    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<SchemaValue>>, GolemReflectError> {
         self.definition.input.validate_value(&input)?;
         self.invoke_checked_value(input, None).await
     }
@@ -904,7 +894,7 @@ impl ReflectedAgentMethod {
         &self,
         input: SchemaValue,
         scope_card: &ScopeCard,
-    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<SchemaValue>>, GolemReflectError> {
         self.definition.input.validate_value(&input)?;
         self.invoke_checked_value(input, Some(scope_card)).await
     }
@@ -913,7 +903,7 @@ impl ReflectedAgentMethod {
         &self,
         input: SchemaValue,
         scope_card: Option<&ScopeCard>,
-    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<SchemaValue>>, GolemReflectError> {
         let invocation = self
             .transport
             .invoke_and_await(&self.definition.raw.name, input, scope_card)
@@ -930,7 +920,7 @@ impl ReflectedAgentMethod {
     pub async fn invoke_json(
         &self,
         input: &serde_json::Value,
-    ) -> Result<Invocation<Option<serde_json::Value>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<serde_json::Value>>, GolemReflectError> {
         self.invoke_json_scoped(input, None).await
     }
 
@@ -941,7 +931,7 @@ impl ReflectedAgentMethod {
         &self,
         input: &serde_json::Value,
         scope_card: &ScopeCard,
-    ) -> Result<Invocation<Option<serde_json::Value>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<serde_json::Value>>, GolemReflectError> {
         self.invoke_json_scoped(input, Some(scope_card)).await
     }
 
@@ -950,7 +940,7 @@ impl ReflectedAgentMethod {
         &self,
         input: &serde_json::Value,
         scope_card: Option<&ScopeCard>,
-    ) -> Result<Invocation<Option<serde_json::Value>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<serde_json::Value>>, GolemReflectError> {
         let invocation = self
             .invoke_checked_value(self.definition.input.pack_json(input)?, scope_card)
             .await?;
@@ -962,70 +952,55 @@ impl ReflectedAgentMethod {
             ),
             _ => None,
         };
-        Ok(Invocation {
+        Ok(InvocationOutput {
             metadata: invocation.metadata,
             value,
         })
     }
 
-    pub fn trigger_value(
+    /// Triggers the method and returns the handle of the invocation once the target accepted
+    /// it, without waiting for its result.
+    pub async fn trigger_value(
         &self,
         input: SchemaValue,
-    ) -> Result<InvocationMetadata, GolemReflectError> {
+    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
         self.reject_non_awaited_streams("trigger")?;
         self.definition.input.validate_value(&input)?;
-        self.transport.trigger(&self.definition.raw.name, input)
+        let raw = self
+            .transport
+            .trigger(&self.definition.raw.name, input)
+            .await?;
+        Invocation::from_raw(raw, self.decoder())
     }
 
-    pub fn pending_value(
-        &self,
-        input: SchemaValue,
-    ) -> Result<ReflectedPendingInvocation, GolemReflectError> {
-        self.pending_value_scoped(input, None)
-    }
-
-    /// Like [`pending_value`](Self::pending_value), and lends `scope_card` to
-    /// the callee for the duration of the invocation.
-    pub fn pending_value_with_scope_card(
-        &self,
-        input: SchemaValue,
-        scope_card: &ScopeCard,
-    ) -> Result<ReflectedPendingInvocation, GolemReflectError> {
-        self.pending_value_scoped(input, Some(scope_card))
-    }
-
-    fn pending_value_scoped(
-        &self,
-        input: SchemaValue,
-        scope_card: Option<&ScopeCard>,
-    ) -> Result<ReflectedPendingInvocation, GolemReflectError> {
-        if self.definition.input.contains_stream() {
-            return Err(GolemReflectError::InvalidType(format!(
-                "method `{}` has streaming input; use invoke_value or invoke_json",
-                self.definition.raw.name
-            )));
-        }
-        self.definition.input.validate_value(&input)?;
-        Ok(ReflectedPendingInvocation {
-            checked: CheckedReflectedOutput {
-                inner: self
-                    .transport
-                    .pending(&self.definition.raw.name, input, scope_card)?,
-                output: self.definition.output.clone(),
-                method: self.definition.raw.name.clone(),
-            },
-        })
-    }
-
-    pub fn schedule_value(
+    /// Schedules the method for `at` and returns the handle of the invocation once the target
+    /// accepted it.
+    pub async fn schedule_value(
         &self,
         at: ScheduledTime,
         input: SchemaValue,
-    ) -> Result<ScheduledInvocation, GolemReflectError> {
+    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
         self.reject_non_awaited_streams("schedule")?;
         self.definition.input.validate_value(&input)?;
-        self.transport
+        let raw = self
+            .transport
             .schedule(at, &self.definition.raw.name, input)
+            .await?;
+        Invocation::from_raw(raw, self.decoder())
+    }
+
+    /// Rebuilds the handle of an invocation of this method from its ID. Makes no remote call.
+    pub fn invocation(&self, id: &OwnedInvocationId) -> Invocation<Option<SchemaValue>> {
+        Invocation::from_id(id, self.decoder())
+    }
+
+    fn decoder(
+        &self,
+    ) -> impl Fn(WireOutput) -> Result<Option<SchemaValue>, GolemReflectError> + 'static {
+        checked_output_decoder(
+            self.definition.output.clone(),
+            self.definition.raw.name.clone(),
+        )
     }
 
     fn reject_non_awaited_streams(&self, operation: &str) -> Result<(), GolemReflectError> {
@@ -1088,7 +1063,7 @@ impl DynamicAgentMethod {
     pub async fn invoke_value(
         &self,
         input: SchemaValue,
-    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<SchemaValue>>, GolemReflectError> {
         self.transport
             .invoke_and_await(&self.name, input, None)
             .await
@@ -1100,42 +1075,42 @@ impl DynamicAgentMethod {
         &self,
         input: SchemaValue,
         scope_card: &ScopeCard,
-    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<SchemaValue>>, GolemReflectError> {
         self.transport
             .invoke_and_await(&self.name, input, Some(scope_card))
             .await
     }
 
-    pub fn trigger_value(
+    /// Triggers the method and returns the handle of the invocation once the target accepted
+    /// it. The handle's result is not checked against a declared schema.
+    pub async fn trigger_value(
         &self,
         input: SchemaValue,
-    ) -> Result<InvocationMetadata, GolemReflectError> {
-        self.transport.trigger(&self.name, input)
+    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+        let raw = self.transport.trigger(&self.name, input).await?;
+        Invocation::from_raw(raw, Self::decode)
     }
 
-    pub fn pending_value(
-        &self,
-        input: SchemaValue,
-    ) -> Result<PendingInvocation, GolemReflectError> {
-        self.transport.pending(&self.name, input, None)
-    }
-
-    /// Like [`pending_value`](Self::pending_value), and lends `scope_card` to
-    /// the callee for the duration of the invocation.
-    pub fn pending_value_with_scope_card(
-        &self,
-        input: SchemaValue,
-        scope_card: &ScopeCard,
-    ) -> Result<PendingInvocation, GolemReflectError> {
-        self.transport.pending(&self.name, input, Some(scope_card))
-    }
-
-    pub fn schedule_value(
+    /// Schedules the method for `at` and returns the handle of the invocation once the target
+    /// accepted it.
+    pub async fn schedule_value(
         &self,
         at: ScheduledTime,
         input: SchemaValue,
-    ) -> Result<ScheduledInvocation, GolemReflectError> {
-        self.transport.schedule(at, &self.name, input)
+    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+        let raw = self.transport.schedule(at, &self.name, input).await?;
+        Invocation::from_raw(raw, Self::decode)
+    }
+
+    /// Rebuilds the handle of an invocation from its ID. Makes no remote call.
+    pub fn invocation(id: &OwnedInvocationId) -> Invocation<Option<SchemaValue>> {
+        Invocation::from_id(id, Self::decode)
+    }
+
+    fn decode(wire: WireOutput) -> Result<Option<SchemaValue>, GolemReflectError> {
+        wire.map(crate::decode_schema_value)
+            .transpose()
+            .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))
     }
 }
 
@@ -1176,6 +1151,30 @@ impl OwnedInvocationId {
 
     pub fn id(&self) -> InvocationId {
         self.id
+    }
+
+    fn from_wire(id: crate::schema::wit::wire::InvocationId) -> Result<Self, GolemReflectError> {
+        let agent_id = match id.owner {
+            crate::schema::wit::wire::InvocationOwner::Agent(agent_id) => AgentId::from(agent_id),
+            crate::schema::wit::wire::InvocationOwner::Tool(tool) => {
+                return Err(GolemReflectError::ProtocolError(format!(
+                    "the host returned an agent invocation owned by tool `{tool}`"
+                )));
+            }
+        };
+        Ok(Self::new(
+            agent_id,
+            InvocationId(crate::wire_uuid_to_schema(id.id)),
+        ))
+    }
+}
+
+impl From<&OwnedInvocationId> for crate::schema::wit::wire::InvocationId {
+    fn from(id: &OwnedInvocationId) -> Self {
+        Self {
+            owner: crate::schema::wit::wire::InvocationOwner::Agent((&id.agent_id).into()),
+            id: crate::schema_uuid_to_wire(id.id.0),
+        }
     }
 }
 
@@ -1226,268 +1225,176 @@ impl InvocationMetadata {
     }
 }
 
+/// The result of an awaited invocation, with the final identity of the invocation.
 #[derive(Clone, Debug)]
-pub struct Invocation<T> {
+pub struct InvocationOutput<T> {
     pub metadata: InvocationMetadata,
     pub value: T,
 }
 
-/// Cancels a scheduled invocation. Generated clients and the reflection API create it from
-/// different host bindings of the same `cancellation-token` resource.
-pub struct CancellationToken {
-    cancel: Box<dyn Fn() + Send + Sync>,
+/// The lifecycle state of an accepted invocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum InvocationStatus {
+    /// Accepted and waiting for its turn
+    Pending,
+    /// Accepted and waiting for its scheduled time
+    Scheduled,
+    /// Started and executing
+    Running,
+    /// Started and waiting, for example for a promise or a timer
+    Waiting,
+    /// Started and waiting to retry after a failure
+    Retrying,
+    /// Started, and its agent was interrupted by an operator
+    Interrupted,
+    /// Finished with a result
+    Completed,
+    /// Finished with a failure
+    Failed,
+    /// Withdrawn before it started
+    Cancelled,
+    /// Recorded its result, then its agent failed during the invocation's background work
+    BackgroundFailed,
 }
 
-impl From<host::CancellationToken> for CancellationToken {
-    fn from(raw: host::CancellationToken) -> Self {
-        Self {
-            cancel: Box::new(move || raw.cancel()),
+impl From<host::InvocationStatus> for InvocationStatus {
+    fn from(status: host::InvocationStatus) -> Self {
+        match status {
+            host::InvocationStatus::Pending => Self::Pending,
+            host::InvocationStatus::Scheduled => Self::Scheduled,
+            host::InvocationStatus::Running => Self::Running,
+            host::InvocationStatus::Waiting => Self::Waiting,
+            host::InvocationStatus::Retrying => Self::Retrying,
+            host::InvocationStatus::Interrupted => Self::Interrupted,
+            host::InvocationStatus::Completed => Self::Completed,
+            host::InvocationStatus::Failed => Self::Failed,
+            host::InvocationStatus::Cancelled => Self::Cancelled,
+            host::InvocationStatus::BackgroundFailed => Self::BackgroundFailed,
         }
     }
 }
 
-impl From<crate::golem_agentic::golem::agent::host::CancellationToken> for CancellationToken {
-    fn from(raw: crate::golem_agentic::golem::agent::host::CancellationToken) -> Self {
-        Self {
-            cancel: Box::new(move || raw.cancel()),
-        }
-    }
+type WireOutput = Option<crate::schema::wit::wire::SchemaValueTree>;
+type DecodeOutput<T> = Rc<dyn Fn(WireOutput) -> Result<T, GolemReflectError>>;
+
+/// The handle of an accepted invocation of an agent method, returned by `trigger` and
+/// `schedule`.
+///
+/// The ID only locates the invocation; it is not authority. Only the caller that started the
+/// invocation, or a caller with the applicable management permission, can observe or cancel
+/// it. Store [`id`](Self::id) to await the invocation from a later invocation of the same
+/// agent, and rebuild the handle with [`get`](Self::get). Dropping the handle, or an
+/// unfinished [`await_result`](Self::await_result), only detaches: the invocation keeps
+/// running.
+///
+/// `trigger` and `schedule` reject a method whose input or output contains a stream, and they
+/// never lend a scope card to the callee. Use an awaited call for a streaming method or to lend
+/// a scope card.
+pub struct Invocation<T> {
+    id: OwnedInvocationId,
+    raw: host::Invocation,
+    decode: DecodeOutput<T>,
 }
 
-impl CancellationToken {
-    pub fn cancel(&self) {
-        (self.cancel)();
-    }
-}
-
-impl std::fmt::Debug for CancellationToken {
+impl<T> std::fmt::Debug for Invocation<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CancellationToken").finish_non_exhaustive()
+        f.debug_struct("Invocation")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
     }
 }
 
-#[derive(Debug)]
-pub struct ScheduledInvocation {
-    pub metadata: InvocationMetadata,
-    pub cancellation_token: CancellationToken,
+impl<T: crate::schema::wit::direct::FromWire + 'static> Invocation<T> {
+    /// Rebuilds the handle of the invocation with the given ID. Makes no remote call.
+    pub fn get(id: &OwnedInvocationId) -> Self {
+        Self::from_id(id, |output| {
+            crate::schema::wit::direct::decode_result_payload::<T>(output)
+                .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))
+        })
+    }
 }
 
-impl From<crate::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt>
-    for ScheduledInvocation
-{
-    fn from(
-        receipt: crate::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt,
+impl<T> Invocation<T> {
+    fn from_raw(
+        raw: host::Invocation,
+        decode: impl Fn(WireOutput) -> Result<T, GolemReflectError> + 'static,
+    ) -> Result<Self, GolemReflectError> {
+        Ok(Self {
+            id: OwnedInvocationId::from_wire(raw.id())?,
+            raw,
+            decode: Rc::new(decode),
+        })
+    }
+
+    fn from_id(
+        id: &OwnedInvocationId,
+        decode: impl Fn(WireOutput) -> Result<T, GolemReflectError> + 'static,
     ) -> Self {
         Self {
-            metadata: receipt.metadata.into(),
-            cancellation_token: receipt.cancellation_token.into(),
+            id: id.clone(),
+            raw: host::Invocation::get(&id.into()),
+            decode: Rc::new(decode),
         }
     }
-}
 
-type PendingResult = Result<Invocation<Option<SchemaValue>>, GolemReflectError>;
-type PendingResultFuture = Pin<Box<dyn Future<Output = PendingResult>>>;
-
-struct ReflectedTransportPending {
-    metadata: Option<InvocationMetadata>,
-    cancel: Rc<dyn Fn()>,
-    future: PendingResultFuture,
-}
-
-impl Future for ReflectedTransportPending {
-    type Output = PendingResult;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().future.as_mut().poll(cx)
-    }
-}
-
-/// `metadata` is absent when the host rejected the call before accepting it; awaiting the
-/// invocation then returns the rejection.
-pub struct PendingInvocation {
-    pub metadata: Option<InvocationMetadata>,
-    raw: Rc<host::FutureInvokeResult>,
-    state: RefCell<Option<Pin<Box<dyn Future<Output = PendingResult>>>>>,
-}
-
-/// A reflected pending invocation that applies the selected method's output policy on completion.
-pub struct ReflectedPendingInvocation {
-    checked: CheckedReflectedOutput<ReflectedTransportPending>,
-}
-
-struct CheckedReflectedOutput<F> {
-    inner: F,
-    output: Option<SchemaRef>,
-    method: String,
-}
-
-impl ReflectedPendingInvocation {
-    pub fn metadata(&self) -> Option<&InvocationMetadata> {
-        self.checked.inner.metadata.as_ref()
+    /// The handle of an invocation that a generated client triggered or scheduled.
+    #[doc(hidden)]
+    #[cfg(feature = "export_golem_agentic")]
+    pub fn __from_agentic(
+        raw: crate::golem_agentic::golem::agent::host::Invocation,
+        decode: impl Fn(WireOutput) -> Result<T, GolemReflectError> + 'static,
+    ) -> Result<Self, GolemReflectError> {
+        // Both bindings import the same `invocation` resource, so its handle moves between them.
+        let raw = unsafe { host::Invocation::from_handle(raw.take_handle()) };
+        Self::from_raw(raw, decode)
     }
 
-    pub fn cancel(&self) {
-        (self.checked.inner.cancel)();
-    }
-
-    pub async fn get(self) -> PendingResult {
-        self.await
-    }
-}
-
-impl Future for ReflectedPendingInvocation {
-    type Output = PendingResult;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.get_mut().checked).poll(cx)
-    }
-}
-
-impl<F: Future<Output = PendingResult> + Unpin> Future for CheckedReflectedOutput<F> {
-    type Output = PendingResult;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        match Pin::new(&mut this.inner).poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-            Poll::Ready(Ok(invocation)) => {
-                if let Err(error) = validate_declared_output(
-                    this.output.as_ref(),
-                    invocation.value.as_ref(),
-                    &this.method,
-                ) {
-                    return Poll::Ready(Err(error));
-                }
-                Poll::Ready(Ok(invocation))
-            }
+    /// The handle of the same invocation, with `f` applied to its decoded result.
+    #[doc(hidden)]
+    pub fn __map_output<U>(
+        self,
+        f: impl Fn(T) -> Result<U, GolemReflectError> + 'static,
+    ) -> Invocation<U>
+    where
+        T: 'static,
+    {
+        let decode = self.decode;
+        Invocation {
+            id: self.id,
+            raw: self.raw,
+            decode: Rc::new(move |output| f(decode(output)?)),
         }
     }
-}
 
-impl PendingInvocation {
-    pub fn cancel(&self) {
-        self.raw.cancel();
+    /// The ID of the invocation.
+    pub fn id(&self) -> &OwnedInvocationId {
+        &self.id
     }
 
-    pub async fn get(self) -> PendingResult {
-        self.await
-    }
-}
-
-impl Future for PendingInvocation {
-    type Output = PendingResult;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        if this.state.borrow().is_none() {
-            let raw = this.raw.clone();
-            let metadata = this.metadata.clone();
-            *this.state.borrow_mut() = Some(Box::pin(async move {
-                let result = raw.get().await.map_err(rpc_error_to_reflect)?;
-                let metadata = accepted_metadata(metadata)?;
-                let value = result
-                    .map(crate::decode_schema_value)
-                    .transpose()
-                    .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
-                Ok(Invocation { metadata, value })
-            }));
-        }
-        let mut state = this.state.borrow_mut();
-        state
-            .as_mut()
-            .expect("pending invocation future initialized")
-            .as_mut()
-            .poll(cx)
-    }
-}
-
-type CallerPendingResult<T> = Result<Invocation<T>, GolemReflectError>;
-type CallerPendingFuture<T> = Pin<Box<dyn Future<Output = CallerPendingResult<T>>>>;
-
-/// A cancellable pending invocation generated for a full caller-owned client.
-/// `metadata` is absent when the host rejected the call before accepting it; awaiting the
-/// invocation then returns the rejection.
-pub struct CallerPendingInvocation<T> {
-    pub metadata: Option<InvocationMetadata>,
-    raw: Rc<crate::golem_agentic::golem::agent::host::FutureInvokeResult>,
-    state: RefCell<Option<CallerPendingFuture<T>>>,
-    decode: Rc<dyn Fn(Option<SchemaValue>) -> Result<T, GolemReflectError>>,
-}
-
-impl<T: 'static> CallerPendingInvocation<T> {
-    pub fn cancel(&self) {
-        self.raw.cancel();
+    /// The current lifecycle state of the invocation. Fails with
+    /// [`GolemReflectError::RemoteNotFound`] when its agent or the invocation no longer exists.
+    pub async fn status(&self) -> Result<InvocationStatus, GolemReflectError> {
+        self.raw
+            .status()
+            .await
+            .map(InvocationStatus::from)
+            .map_err(rpc_error_to_reflect)
     }
 
-    pub async fn get(self) -> CallerPendingResult<T> {
-        self.await
+    /// Awaits the result of the invocation, without starting, resuming or resubmitting it.
+    /// Fails with [`GolemReflectError::Cancelled`] when the invocation was cancelled before it
+    /// started.
+    pub async fn await_result(&self) -> Result<T, GolemReflectError> {
+        let output = self.raw.await_().await.map_err(rpc_error_to_reflect)?;
+        (self.decode)(output)
     }
-}
 
-impl<T: 'static> Future for CallerPendingInvocation<T> {
-    type Output = CallerPendingResult<T>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        if this.state.borrow().is_none() {
-            let raw = Rc::clone(&this.raw);
-            let metadata = this.metadata.clone();
-            let decode = this.decode.clone();
-            *this.state.borrow_mut() = Some(Box::pin(async move {
-                let value = raw
-                    .get()
-                    .await
-                    .map_err(agentic_rpc_error_to_reflect)?
-                    .map(crate::decode_schema_value)
-                    .transpose()
-                    .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
-                Ok(Invocation {
-                    metadata: accepted_metadata(metadata)?,
-                    value: decode(value)?,
-                })
-            }));
-        }
-        let mut state = this.state.borrow_mut();
-        state
-            .as_mut()
-            .expect("caller pending invocation future initialized")
-            .as_mut()
-            .poll(cx)
+    /// Withdraws the invocation if it has not started yet, and returns `true`. Returns `false`
+    /// when it already finished or was already cancelled, and fails with
+    /// [`GolemReflectError::CannotCancelRunning`] when it is running.
+    pub async fn cancel(&self) -> Result<bool, GolemReflectError> {
+        self.raw.cancel().await.map_err(rpc_error_to_reflect)
     }
-}
-
-#[doc(hidden)]
-pub fn start_caller_pending<T: 'static>(
-    rpc: &crate::golem_agentic::golem::agent::host::WasmRpc,
-    method: &str,
-    input: SchemaValue,
-    scope_card: Option<&ScopeCard>,
-    decode: impl Fn(Option<SchemaValue>) -> Result<T, GolemReflectError> + 'static,
-) -> Result<CallerPendingInvocation<T>, GolemReflectError> {
-    let input = crate::encode_schema_value(&input)
-        .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-    let invocation = crate::permissions::__async_invoke_and_await(rpc, method, input, scope_card);
-    Ok(CallerPendingInvocation {
-        metadata: invocation.metadata.map(|metadata| {
-            InvocationMetadata::from_host(metadata.agent_id, metadata.invocation_id)
-        }),
-        raw: Rc::new(invocation.future),
-        state: RefCell::new(None),
-        decode: Rc::new(decode),
-    })
-}
-
-/// The host omits the metadata only for a call it rejected, and then completes the call with
-/// the rejection, so a successful completion always has it.
-fn accepted_metadata(
-    metadata: Option<InvocationMetadata>,
-) -> Result<InvocationMetadata, GolemReflectError> {
-    metadata.ok_or_else(|| {
-        GolemReflectError::ProtocolError(
-            "the host completed an RPC call it did not accept".to_string(),
-        )
-    })
 }
 
 struct RpcTransport {
@@ -1532,75 +1439,53 @@ impl RpcTransport {
         method: &str,
         input: SchemaValue,
         scope_card: Option<&ScopeCard>,
-    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+    ) -> AwaitedResult {
         let input = crate::encode_schema_value_async(&input)
             .await
             .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-        let invocation =
-            self.raw
-                .async_invoke_and_await(method, input, scope_card.map(ScopeCard::raw));
-        let result = invocation
-            .future
-            .get()
+        let completed = self
+            .raw
+            .invoke_and_await(method.to_string(), input, scope_card.map(ScopeCard::raw))
             .await
             .map_err(rpc_error_to_reflect)?;
-        let metadata = accepted_metadata(invocation.metadata.map(|raw| self.metadata(raw)))?;
-        let value = result
+        let value = completed
+            .result
             .map(crate::decode_schema_value)
             .transpose()
             .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
-        Ok(Invocation { metadata, value })
-    }
-
-    fn trigger(
-        &self,
-        method: &str,
-        input: SchemaValue,
-    ) -> Result<InvocationMetadata, GolemReflectError> {
-        let input = crate::encode_schema_value(&input)
-            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-        let metadata = self
-            .raw
-            .invoke(method, input, None)
-            .map_err(rpc_error_to_reflect)?;
-        Ok(self.metadata(metadata))
-    }
-
-    fn pending(
-        &self,
-        method: &str,
-        input: SchemaValue,
-        scope_card: Option<&ScopeCard>,
-    ) -> Result<PendingInvocation, GolemReflectError> {
-        let input = crate::encode_schema_value(&input)
-            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-        let pending =
-            self.raw
-                .async_invoke_and_await(method, input, scope_card.map(ScopeCard::raw));
-        let metadata = pending.metadata.map(|raw| self.metadata(raw));
-        Ok(PendingInvocation {
-            metadata,
-            raw: Rc::new(pending.future),
-            state: RefCell::new(None),
+        Ok(InvocationOutput {
+            metadata: self.metadata(completed.metadata),
+            value,
         })
     }
 
-    fn schedule(
+    async fn trigger(
+        &self,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<host::Invocation, GolemReflectError> {
+        let input = crate::encode_schema_value_async(&input)
+            .await
+            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
+        self.raw
+            .trigger(method.to_string(), input)
+            .await
+            .map_err(rpc_error_to_reflect)
+    }
+
+    async fn schedule(
         &self,
         at: ScheduledTime,
         method: &str,
         input: SchemaValue,
-    ) -> Result<ScheduledInvocation, GolemReflectError> {
-        let input = crate::encode_schema_value(&input)
+    ) -> Result<host::Invocation, GolemReflectError> {
+        let input = crate::encode_schema_value_async(&input)
+            .await
             .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-        let receipt = self
-            .raw
-            .schedule_cancelable_invocation(at, method, input, None)
-            .map_err(rpc_error_to_reflect)?;
-        Ok(ScheduledInvocation {
-            metadata: self.metadata(receipt.metadata),
-            cancellation_token: receipt.cancellation_token.into(),
-        })
+        self.raw
+            .schedule(at, method.to_string(), input)
+            .await
+            .map_err(rpc_error_to_reflect)
     }
 
     fn metadata(&self, raw: host::InvocationMetadata) -> InvocationMetadata {
@@ -1670,6 +1555,10 @@ pub fn rpc_error_to_reflect(error: host::RpcError) -> GolemReflectError {
             GolemReflectError::RemoteAgent(remote_agent_error(error))
         }
         host::RpcError::Conflict(message) => GolemReflectError::Conflict(message),
+        host::RpcError::Cancelled(message) => GolemReflectError::Cancelled(message),
+        host::RpcError::CannotCancelRunning(message) => {
+            GolemReflectError::CannotCancelRunning(message)
+        }
     }
 }
 
@@ -1687,6 +1576,8 @@ pub fn agentic_rpc_error_to_reflect(
             GolemReflectError::RemoteAgent(agentic_remote_agent_error(error))
         }
         RpcError::Conflict(message) => GolemReflectError::Conflict(message),
+        RpcError::Cancelled(message) => GolemReflectError::Cancelled(message),
+        RpcError::CannotCancelRunning(message) => GolemReflectError::CannotCancelRunning(message),
     }
 }
 
@@ -1761,7 +1652,8 @@ fn decode_custom_error(value: crate::schema::wit::wire::TypedSchemaValue) -> Rem
 mod tests {
     use super::{
         AgentMethod, GolemReflectError, MethodOnlyAgentClientDefinition, ReflectedAgentMethod,
-        ReflectedTransport, SchemaRef, TestReflectedTransport, validate_declared_output,
+        ReflectedTransport, SchemaRef, TestReflectedTransport, checked_output_decoder,
+        validate_declared_output,
     };
     use crate::bindings::golem::agent::common as wire_common;
     use crate::schema::render::from_json_value;
@@ -2339,7 +2231,9 @@ mod tests {
                     input: input.clone(),
                     output: declared,
                 },
-                transport: ReflectedTransport::Test(Rc::new(TestReflectedTransport { value })),
+                transport: ReflectedTransport::Test(Rc::new(TestReflectedTransport {
+                    value: value.clone(),
+                })),
             };
             let empty = SchemaValue::Record { fields: vec![] };
 
@@ -2347,22 +2241,23 @@ mod tests {
                 .invoke_value(empty.clone())
                 .await
                 .expect_err("awaited completion must reject malformed output");
-            let pending = method
-                .pending_value(empty)
-                .expect("pending invocation starts")
-                .get()
-                .await
-                .expect_err("pending completion must reject malformed output");
+            let handle =
+                checked_output_decoder(method.definition.output.clone(), name.to_string())(
+                    value
+                        .as_ref()
+                        .map(|value| crate::encode_schema_value(value).expect("value encodes")),
+                )
+                .expect_err("a handle's result must reject malformed output");
 
             assert!(matches!(
                 awaited,
                 GolemReflectError::MalformedRemoteOutput(_)
             ));
             assert!(matches!(
-                pending,
+                handle,
                 GolemReflectError::MalformedRemoteOutput(_)
             ));
-            assert_eq!(awaited.to_string(), pending.to_string());
+            assert_eq!(awaited.to_string(), handle.to_string());
             let json_error = method.invoke_json(&json!({})).await.unwrap_err();
             assert!(matches!(
                 json_error,
@@ -2854,7 +2749,10 @@ where
     I: crate::IntoSchema,
     O: crate::FromSchema,
 {
-    pub async fn invoke(&self, input: &I) -> Result<Invocation<Option<O>>, GolemReflectError> {
+    pub async fn invoke(
+        &self,
+        input: &I,
+    ) -> Result<InvocationOutput<Option<O>>, GolemReflectError> {
         self.invoke_scoped(input, None).await
     }
 
@@ -2864,7 +2762,7 @@ where
         &self,
         input: &I,
         scope_card: &ScopeCard,
-    ) -> Result<Invocation<Option<O>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<O>>, GolemReflectError> {
         self.invoke_scoped(input, Some(scope_card)).await
     }
 
@@ -2873,7 +2771,7 @@ where
         &self,
         input: &I,
         scope_card: Option<&ScopeCard>,
-    ) -> Result<Invocation<Option<O>>, GolemReflectError> {
+    ) -> Result<InvocationOutput<Option<O>>, GolemReflectError> {
         let input = input.to_value();
         self.definition.input.validate_value(&input)?;
         let invocation = self
@@ -2891,65 +2789,66 @@ where
             .map(O::from_value)
             .transpose()
             .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?;
-        Ok(Invocation {
+        Ok(InvocationOutput {
             metadata: invocation.metadata,
             value,
         })
     }
 
-    pub fn trigger(&self, input: &I) -> Result<InvocationMetadata, GolemReflectError> {
+    /// Triggers the method and returns the handle of the invocation once the target accepted
+    /// it, without waiting for its result.
+    pub async fn trigger(&self, input: &I) -> Result<Invocation<Option<O>>, GolemReflectError>
+    where
+        O: 'static,
+    {
         self.reject_non_awaited_streams("trigger")?;
         let input = input.to_value();
         self.definition.input.validate_value(&input)?;
-        self.transport.trigger(&self.definition.name, input)
+        let raw = self.transport.trigger(&self.definition.name, input).await?;
+        Invocation::from_raw(raw, self.decoder())
     }
 
-    pub fn pending(&self, input: &I) -> Result<TypedPendingInvocation<O>, GolemReflectError> {
-        self.pending_scoped(input, None)
-    }
-
-    /// Like [`pending`](Self::pending), and lends `scope_card` to the callee
-    /// for the duration of the invocation.
-    pub fn pending_with_scope_card(
-        &self,
-        input: &I,
-        scope_card: &ScopeCard,
-    ) -> Result<TypedPendingInvocation<O>, GolemReflectError> {
-        self.pending_scoped(input, Some(scope_card))
-    }
-
-    #[doc(hidden)]
-    pub fn pending_scoped(
-        &self,
-        input: &I,
-        scope_card: Option<&ScopeCard>,
-    ) -> Result<TypedPendingInvocation<O>, GolemReflectError> {
-        if self.definition.input.contains_stream() {
-            return Err(GolemReflectError::InvalidType(format!(
-                "method `{}` has streaming input; use invoke",
-                self.definition.name
-            )));
-        }
-        let input = input.to_value();
-        self.definition.input.validate_value(&input)?;
-        Ok(TypedPendingInvocation {
-            inner: self
-                .transport
-                .pending(&self.definition.name, input, scope_card)?,
-            output: self.definition.output.clone(),
-            marker: PhantomData,
-        })
-    }
-
-    pub fn schedule(
+    /// Schedules the method for `at` and returns the handle of the invocation once the target
+    /// accepted it.
+    pub async fn schedule(
         &self,
         at: ScheduledTime,
         input: &I,
-    ) -> Result<ScheduledInvocation, GolemReflectError> {
+    ) -> Result<Invocation<Option<O>>, GolemReflectError>
+    where
+        O: 'static,
+    {
         self.reject_non_awaited_streams("schedule")?;
         let input = input.to_value();
         self.definition.input.validate_value(&input)?;
-        self.transport.schedule(at, &self.definition.name, input)
+        let raw = self
+            .transport
+            .schedule(at, &self.definition.name, input)
+            .await?;
+        Invocation::from_raw(raw, self.decoder())
+    }
+
+    /// Rebuilds the handle of an invocation of this method from its ID. Makes no remote call.
+    pub fn invocation(&self, id: &OwnedInvocationId) -> Invocation<Option<O>>
+    where
+        O: 'static,
+    {
+        Invocation::from_id(id, self.decoder())
+    }
+
+    fn decoder(&self) -> impl Fn(WireOutput) -> Result<Option<O>, GolemReflectError> + 'static
+    where
+        O: 'static,
+    {
+        let checked =
+            checked_output_decoder(self.definition.output.clone(), self.definition.name.clone());
+        move |wire| {
+            checked(wire)?
+                .as_ref()
+                .map(O::from_value)
+                .transpose()
+                .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))
+        }
     }
 
     fn reject_non_awaited_streams(&self, operation: &str) -> Result<(), GolemReflectError> {
@@ -2966,54 +2865,5 @@ where
             )));
         }
         Ok(())
-    }
-}
-
-pub struct TypedPendingInvocation<O> {
-    inner: PendingInvocation,
-    output: Option<SchemaRef>,
-    marker: PhantomData<fn() -> O>,
-}
-
-impl<O> TypedPendingInvocation<O> {
-    pub fn metadata(&self) -> Option<&InvocationMetadata> {
-        self.inner.metadata.as_ref()
-    }
-
-    pub fn cancel(&self) {
-        self.inner.cancel();
-    }
-}
-
-impl<O: crate::FromSchema> Future for TypedPendingInvocation<O> {
-    type Output = Result<Invocation<Option<O>>, GolemReflectError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        match Pin::new(&mut this.inner).poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-            Poll::Ready(Ok(invocation)) => {
-                if let Err(error) = validate_declared_output(
-                    this.output.as_ref(),
-                    invocation.value.as_ref(),
-                    "pending invocation",
-                ) {
-                    return Poll::Ready(Err(error));
-                }
-                let value = match invocation.value.as_ref().map(O::from_value).transpose() {
-                    Ok(value) => value,
-                    Err(error) => {
-                        return Poll::Ready(Err(GolemReflectError::MalformedRemoteOutput(
-                            error.to_string(),
-                        )));
-                    }
-                };
-                Poll::Ready(Ok(Invocation {
-                    metadata: invocation.metadata,
-                    value,
-                }))
-            }
-        }
     }
 }

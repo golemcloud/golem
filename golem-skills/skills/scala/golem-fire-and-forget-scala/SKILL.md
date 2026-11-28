@@ -7,22 +7,42 @@ description: "Triggering an agent invocation without waiting for the result in a
 
 ## Overview
 
-A **fire-and-forget** call enqueues a method invocation on the target agent and returns immediately without waiting for the result. The target agent processes the invocation asynchronously.
+A **fire-and-forget** call enqueues a method invocation on the target agent and returns its handle once the target has durably accepted the invocation, without waiting for the result. The target agent processes the invocation asynchronously.
 
 ## Usage
 
-For stream-free methods, access `.trigger()` on the per-method wrapper. Durable guest clients return `Future[Unit]`; ephemeral guest clients return `Future[golem.runtime.rpc.InvocationReceipt]`. Compose or return that future to observe enqueue completion/errors, without waiting for the target's result. Streaming methods require awaited calls; bridge clients omit trigger helpers for those methods, while definition-derived clients can expose unsupported helpers that reject live stream inputs at runtime.
+For stream-free methods, access `.trigger()` on the per-method wrapper. In both durable and ephemeral clients it returns `Future[golem.runtime.rpc.Invocation[Out]]`, where `Out` is the method's result type. The future completes with the invocation's handle once the target has durably accepted the invocation, without waiting for its result; it fails with `golem.runtime.rpc.AgentRpcException` when the target rejects it. Compose or return that future to observe acceptance. Streaming methods require awaited calls; bridge clients omit trigger helpers for those methods, while definition-derived clients can expose helpers that reject live stream inputs at runtime. `trigger` never lends a scope card.
 
 ```scala
 val counter = CounterAgentClient.upsert("my-counter")
 
-// Fire-and-forget — returns immediately
+// Fire-and-forget — completes when the target accepted the invocation
 counter.increment.trigger()
 
 // With arguments
 val processor = DataProcessorAgentClient.upsert("pipeline-1")
 processor.processBatch.trigger(batchData)
 ```
+
+## The Invocation Handle
+
+The handle has `id: golem.InvocationId`, `status(): Future[InvocationStatus]`, `awaitResult(): Future[Out]` and `cancel(): Future[Boolean]`:
+
+```scala
+import golem.runtime.rpc.{Invocation, InvocationStatus}
+
+for {
+  invocation <- processor.processBatch.trigger(batchData)
+  status     <- invocation.status()          // e.g. InvocationStatus.Pending
+  result     <- invocation.awaitResult()     // awaits without resubmitting
+} yield result
+```
+
+- The ID only locates the invocation; it is not authority. Only the agent that started the invocation, or a caller with the applicable management permission, can observe or cancel it; others fail with `AgentRpcError.Denied`.
+- Store `invocation.id` to await the result in a later invocation of the same agent: `Invocation.get[Out](id).awaitResult()`. `Invocation.get` makes no remote call; `Out` must have a `Schema`.
+- Dropping the handle, or not awaiting `awaitResult()`, only detaches: the invocation keeps running.
+- `cancel()` withdraws the invocation if it has not started and returns `true`; it returns `false` when the invocation already finished or was already cancelled. Cancelling a running invocation is not supported: it fails with `AgentRpcError.CannotCancelRunning`.
+- `awaitResult()` of a cancelled invocation fails with `AgentRpcError.Cancelled`; unknown or deleted work fails with `AgentRpcError.NotFound`.
 
 ## When to Use
 

@@ -28,70 +28,38 @@ import scala.concurrent.Future
  * `option<schema-value-tree>` (modelled as a Scala [[Option]]): `None` for a
  * `unit` output, `Some(tree)` for a `single` output.
  *
- * Only the await variants take a `scopeCard`. The implementation borrows the
- * card for the host call and leaves it usable.
+ * Only the awaited call takes a `scopeCard`. The implementation borrows the
+ * card for the host call and leaves it usable. Every operation fails with an
+ * [[AgentRpcException]] when the host reports an `rpc-error`.
  */
 private[rpc] trait RpcInvoker {
 
-  /**
-   * The ID of the target agent. Fails with [[AgentRpcException]] when the host
-   * reports an `rpc-error`.
-   */
+  /** The ID of the target agent. */
   def agentId(): Future[AgentId] =
     Future.failed(AgentRpcException(AgentRpcError.Unknown("unsupported", Some("agent ID is not supported"))))
 
+  /**
+   * Invokes the method and awaits its result together with its final identity.
+   */
   def invokeAndAwait(
     functionName: String,
     input: JsSchemaValueTree,
     scopeCard: Option[ScopeCard]
-  ): Either[String, Option[JsSchemaValueTree]]
+  ): Future[InvocationResult[Option[JsSchemaValueTree]]]
 
-  def invokeAndAwaitWithMetadata(
-    functionName: String,
-    input: JsSchemaValueTree,
-    scopeCard: Option[ScopeCard]
-  ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] = Left("invocation metadata is not supported")
+  /**
+   * Triggers the method, and returns its handle once the target has durably
+   * accepted it.
+   */
+  def trigger(functionName: String, input: JsSchemaValueTree): Future[Invocation[Option[JsSchemaValueTree]]]
 
-  def asyncInvokeAndAwait(
-    functionName: String,
-    input: JsSchemaValueTree,
-    scopeCard: Option[ScopeCard]
-  ): Future[Option[JsSchemaValueTree]]
-
-  def asyncInvokeAndAwaitWithMetadata(
-    functionName: String,
-    input: JsSchemaValueTree,
-    scopeCard: Option[ScopeCard]
-  ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] = Left("invocation metadata is not supported")
-
-  def cancelableAsyncInvokeAndAwait(
-    functionName: String,
-    input: JsSchemaValueTree,
-    scopeCard: Option[ScopeCard]
-  ): (Future[Option[JsSchemaValueTree]], CancellationToken)
-
-  def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit]
-
-  def invokeWithMetadata(functionName: String, input: JsSchemaValueTree): Either[String, InvocationMetadata] =
-    Left("invocation metadata is not supported")
-
-  def scheduleInvocation(datetime: Datetime, functionName: String, input: JsSchemaValueTree): Either[String, Unit]
-
-  def scheduleInvocationWithMetadata(
+  /**
+   * Schedules the method for `datetime`, and returns its handle once the target
+   * has durably accepted it.
+   */
+  def schedule(
     datetime: Datetime,
     functionName: String,
     input: JsSchemaValueTree
-  ): Either[String, InvocationReceipt] = Left("invocation metadata is not supported")
-
-  def scheduleCancelableInvocation(
-    datetime: Datetime,
-    functionName: String,
-    input: JsSchemaValueTree
-  ): Either[String, CancellationToken]
-
-  def scheduleCancelableInvocationWithMetadata(
-    datetime: Datetime,
-    functionName: String,
-    input: JsSchemaValueTree
-  ): Either[String, CancelableInvocationReceipt] = Left("invocation metadata is not supported")
+  ): Future[Invocation[Option[JsSchemaValueTree]]]
 }

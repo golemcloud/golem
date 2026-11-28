@@ -59,10 +59,9 @@ Generation is mode-aware:
 - durable clients expose `upsert`, `create` (keyed or not, with config and env overrides) and `getById`, plus `bindSelf`, which binds the current agent and fails when it has another type;
 - ephemeral clients expose only `upsert`, and every invocation runs on a new one-shot instance;
 - durable `apply` returns `Future[A]`, while ephemeral `apply` returns `Future[InvocationResult[A]]`;
-- durable `cancelable` returns `(Future[A], CancellationToken)`, while ephemeral returns `Future[CancelableAsyncInvocation[A]]`;
-- ephemeral trigger/schedule operations return metadata-bearing receipts; durable variants return `Unit` or a cancellation token as defined in `RpcCodegen.scala`.
+- `trigger` and `scheduleAt` return `Future[Invocation[A]]` in both modes; there are no `cancelable` or `scheduleCancelableAt` methods.
 
-Treat `RpcCodegen.scala`, `AgentClientRuntime.scala`, and `InvocationMetadata.scala` as authoritative for exact signatures.
+Treat `RpcCodegen.scala`, `AgentClientRuntime.scala`, and `Invocation.scala` as authoritative for exact signatures.
 
 ## Verification
 

@@ -484,6 +484,7 @@ impl TestWorkerExecutor {
 
         let result = self
             .invoke_agent_session(InvocationStart {
+                requires_own_record: false,
                 target: Some(target),
                 constructor,
                 component_id: Some(component.id.into()),
@@ -918,6 +919,7 @@ impl TestDsl for TestWorkerExecutor {
             value.try_into().map_err(anyhow::Error::msg)?;
 
         self.invoke_agent_session(InvocationStart {
+            requires_own_record: false,
             target: Some(target),
             constructor,
             component_id: Some(component.id.into()),
@@ -1433,7 +1435,6 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(agent_id.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 caller: Some(Caller::anonymous().into()),
-                scheduled: None,
                 expected_fingerprint: None,
             })
             .await?

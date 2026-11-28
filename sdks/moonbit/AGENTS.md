@@ -438,8 +438,14 @@ creates; an unknown or wrong-type ID raises `RpcError::NotFound`), async
 `agent_id()`, `bind_self()` and the `scoped_upsert` / `scoped_get_by_id` / `scoped_create`
 helpers. `upsert` takes no overrides, and no client copies the caller's environment.
 
-Awaited RPC methods and scoped client helpers are generated as `async`; trigger and scheduling
-methods remain synchronous because they only enqueue work.
+Awaited RPC methods and scoped client helpers are generated as `async`. `trigger_<m>` and
+`schedule_<m>` are `async` too: they wait until the target has durably accepted the invocation and
+return an `@rpc.Invocation[T]` handle (`id`, `status`, `await_result`, `cancel`, `drop`), and
+`get_<m>_invocation(id)` rebuilds a handle from its ID. The ID only locates the invocation; the
+target authorizes every operation for the recorded starter or a manager. Dropping a handle only
+detaches, a running invocation cannot be cancelled (`RpcError::CannotCancelRunning`), and trigger
+and schedule never attach a scope card and are not generated for stream-bearing methods. A remote
+RPC failure raises the typed `@agentHost.RpcError`.
 
 **Source annotations recognized:**
 - `#derive.agent` on a struct — marks it as a Golem agent (`#derive.agent("ephemeral")` for

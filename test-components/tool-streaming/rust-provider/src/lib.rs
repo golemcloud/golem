@@ -2331,14 +2331,19 @@ impl Streaming for StreamingImpl {
         if let Some(name) = mode.strip_prefix("schedule-bump:") {
             CallerReportClient::upsert(name.to_string())
                 .schedule_bump(two_seconds_from_now())
+                .await
                 .expect("schedule bump");
             return write_text(stdout, "scheduled".to_string()).await;
         }
         if let Some(name) = mode.strip_prefix("schedule-and-cancel-bump:") {
-            let token = CallerReportClient::upsert(name.to_string())
-                .schedule_cancelable_bump(two_seconds_from_now())
-                .expect("schedule cancelable bump");
-            token.cancel();
+            let invocation = CallerReportClient::upsert(name.to_string())
+                .schedule_bump(two_seconds_from_now())
+                .await
+                .expect("schedule bump");
+            assert!(
+                invocation.cancel().await.expect("cancel scheduled bump"),
+                "a scheduled bump that has not started must be cancellable"
+            );
             return write_text(stdout, "cancelled".to_string()).await;
         }
         if let Some(script) = mode.strip_prefix("bash:") {

@@ -432,27 +432,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(result)
     }
 
-    pub(crate) async fn try_agent_auth_ctx_at_boundary(
-        &mut self,
-    ) -> Result<Option<AuthCtx>, WorkerExecutorError> {
-        let Some(_boundary_guard) = self
-            .try_lock_synchronized_card_event_boundary_with_authority()
-            .await?
-        else {
-            return Ok(None);
-        };
-        let generation = self
-            .state
-            .published_authority_generation
-            .load(Ordering::Acquire);
-        self.refresh_authority_expiration_deadline();
-        if !self.authority_snapshot_is_stable(generation) {
-            return Ok(None);
-        }
-        self.adopt_authority_generation(generation);
-        Ok(Some(self.agent_auth_ctx()))
-    }
-
     pub(in crate::durable_host) async fn lock_synchronized_card_event_boundary(
         &mut self,
     ) -> Result<Arc<CardEventBoundary>, WorkerExecutorError> {
@@ -467,13 +446,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.lock_synchronized_card_event_boundary_inner(true, true)
             .await?
             .ok_or_else(|| WorkerExecutorError::runtime("card authority boundary did not reopen"))
-    }
-
-    async fn try_lock_synchronized_card_event_boundary_with_authority(
-        &mut self,
-    ) -> Result<Option<Arc<CardEventBoundary>>, WorkerExecutorError> {
-        self.lock_synchronized_card_event_boundary_inner(true, false)
-            .await
     }
 
     async fn lock_synchronized_card_event_boundary_inner(

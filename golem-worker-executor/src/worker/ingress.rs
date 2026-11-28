@@ -83,14 +83,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
-        self.invoke_with_attachment(invocation, None, true).await
+        self.invoke_with_attachment(invocation, None, true, false)
+            .await
     }
 
+    /// `requires_own_record` admits a new key with its own durable record even when the
+    /// read-only cache holds a matching result, so the key can be looked up later. The
+    /// invocation keeps its read-only classification.
     async fn invoke_with_attachment(
         self: Arc<Self>,
         invocation: AgentInvocation,
         attachment: Option<StreamSessionAttachedRecord>,
         allow_cache: bool,
+        requires_own_record: bool,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         self.ensure_invocation_owner(&invocation)?;
         if let Some(attachment) = &attachment {
@@ -122,7 +127,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         // Cache HIT: still refuse on deleting / startup-failed worker.
-        if let Some(ro) = &read_only_ctx {
+        if let Some(ro) = read_only_ctx.as_ref().filter(|_| !requires_own_record) {
             let no_cache = !ro.cacheable || is_no_cache(&ro.cfg.cache_policy);
             if !no_cache {
                 let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
@@ -869,7 +874,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map(|_| read_only_cache::PendingReadOnlyInvocation::new());
         let admission_wait = pending.clone();
         let result = self
-            .invoke_owned_prefix_with_attachment(invocation, pending, attachment, false)
+            .invoke_owned_prefix_with_attachment(invocation, pending, attachment, false, false)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
         if let Some(tx) = admission.take() {
@@ -908,11 +913,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
         }
     }
+    /// Admits `invocation` and starts the worker without waiting for the result.
+    /// `requires_own_record` is set for a call that returns an invocation handle: see
+    /// [`Self::invoke_with_attachment`].
     pub(crate) async fn invoke_and_start(
         self: Arc<Self>,
         invocation: AgentInvocation,
+        requires_own_record: bool,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
-        self.invoke_owned_prefix(invocation, None)
+        self.invoke_owned_prefix(invocation, None, requires_own_record)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
     }
@@ -920,8 +929,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         invocation: AgentInvocation,
         admission: Option<read_only_cache::PendingReadOnlyInvocation>,
+        requires_own_record: bool,
     ) -> tasks::FinishOnDrop<'_, Result<ResultOrSubscription, WorkerExecutorError>> {
-        self.invoke_owned_prefix_with_attachment(invocation, admission, None, true)
+        self.invoke_owned_prefix_with_attachment(
+            invocation,
+            admission,
+            None,
+            true,
+            requires_own_record,
+        )
     }
 
     fn invoke_owned_prefix_with_attachment(
@@ -930,12 +946,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         admission: Option<read_only_cache::PendingReadOnlyInvocation>,
         attachment: Option<StreamSessionAttachedRecord>,
         allow_cache: bool,
+        requires_own_record: bool,
     ) -> tasks::FinishOnDrop<'_, Result<ResultOrSubscription, WorkerExecutorError>> {
         let worker = self.clone();
         self.tasks.finish_on_drop(tokio::spawn(async move {
             let result = match worker
                 .clone()
-                .invoke_with_attachment(invocation, attachment, allow_cache)
+                .invoke_with_attachment(invocation, attachment, allow_cache, requires_own_record)
                 .await
             {
                 Ok(result) => result,
@@ -979,7 +996,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         attachment: Option<StreamSessionAttachedRecord>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let result = self
-            .invoke_owned_prefix_with_attachment(invocation, admission, attachment, true)
+            .invoke_owned_prefix_with_attachment(invocation, admission, attachment, true, false)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
         self.await_invocation_result(idempotency_key, result).await
@@ -1560,8 +1577,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let key = Self::require_idempotency_key(&invocation)?;
         let fingerprint = self.initial_worker_metadata.fingerprint;
         let schedule_id = ScheduleId::for_invocation(fingerprint, &key);
-        // A same-key retry returns the original receipt, also from an ephemeral agent that has
-        // already begun its execution and accepts nothing new.
+        // A same-key retry is accepted again, also from an ephemeral agent that has already begun
+        // its execution and accepts nothing new.
         if self.lookup_matching_invocation(&invocation).await? == LookupResult::New {
             let deadline = scheduled_invocation_deadline(scheduled_at)?;
             self.enqueue_worker_invocation_with_effect(
@@ -1573,7 +1590,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         // A local caller holds no task-scope bind, so a deletion or a retirement may have stopped
         // the state actor after the enqueue. Failing here leaves the wake to a same-key retry,
-        // which returns this receipt and registers the wake of the committed invocation.
+        // which is accepted again and registers the wake of the committed invocation.
         let status = self.try_get_last_known_status().await?;
         if let Some(pending) = status
             .pending_invocations

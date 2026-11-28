@@ -131,6 +131,7 @@ pub async fn invoke_resource(
                 proto_caller,
                 None,
                 None,
+                false,
             )
             .await
     }

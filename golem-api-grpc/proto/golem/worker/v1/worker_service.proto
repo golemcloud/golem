@@ -29,7 +29,7 @@ import "golem/worker/worker_id.proto";
 import "golem/worker/raw_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/worker_metadata.proto";
-import "golem/worker/scheduled_invocation_cancellation.proto";
+import "golem/workerexecutor/v1/worker_executor.proto";
 import "google/protobuf/timestamp.proto";
 
 service WorkerService {
@@ -47,6 +47,8 @@ service WorkerService {
   // agent-session WebSocket and its PublicInvocationRequest envelope.
   rpc InvokeAgentSession (stream golem.worker.InvocationRequest) returns (stream golem.worker.InvocationResponse);
   rpc CancelInvocation (CancelInvocationRequest) returns (CancelInvocationResponse);
+  // Internal host-authored control; the target enforces starter-or-management authorization.
+  rpc InvocationHandle (golem.workerexecutor.v1.InvocationHandleRequest) returns (golem.workerexecutor.v1.InvocationHandleResponse);
   rpc ControlDurableStreamAttachment (DurableStreamAttachmentControlRequest) returns (DurableStreamAttachmentControlResponse);
   rpc ReadDurableStreamSegment (DurableStreamSegmentReadRequest) returns (DurableStreamSegmentReadResponse);
   rpc ProcessOplogEntries (ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
@@ -201,6 +203,9 @@ message InvokeAgentRequest {
   // agent: a key target, or an ID target with `constructor`.
   optional golem.component.ComponentId component_id = 17;
   golem.component.Caller caller = 18;
+  // Set by a call that returns an invocation handle: a new key is admitted with its own durable
+  // record even when the read-only cache holds a matching result, so its ID can be looked up.
+  bool requires_own_record = 19;
 }
 
 enum InvocationFreshnessDisposition {
@@ -237,7 +242,8 @@ message CancelInvocationRequest {
   golem.worker.AgentId agent_id = 1;
   golem.common.UUID idempotency_key = 2;
   golem.auth.AuthCtx auth_ctx = 3;
-  optional golem.worker.ScheduledInvocationCancellation scheduled = 4;
+  reserved 4;
+  reserved "scheduled";
   golem.common.EnvironmentId environment_id = 5;
 }
 

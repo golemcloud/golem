@@ -28,6 +28,10 @@ pub(all) enum AgentRpcError {
   Custom(@model.TypedSchemaValue)
   /// A keyed create found an agent that already has the key.
   Conflict(String)
+  /// The awaited invocation was withdrawn before it started.
+  Cancelled(String)
+  /// A cancellation found the invocation already running.
+  CannotCancelRunning(String)
 } derive(Debug, Eq)
 
 ///|
@@ -45,26 +49,11 @@ pub(all) struct InvocationMetadata {
 } derive(Debug, Eq)
 
 ///|
-pub(all) struct Invocation[T] {
+/// The result of an awaited invocation together with its final identity.
+pub(all) struct InvocationOutput[T] {
   metadata : InvocationMetadata
   value : T
 } derive(Debug, Eq)
-
-///|
-pub(all) struct ScheduledInvocation {
-  metadata : InvocationMetadata
-  cancellation_token : @agentHost.CancellationToken
-}
-
-///|
-pub fn ScheduledInvocation::cancel(self : ScheduledInvocation) -> Unit {
-  self.cancellation_token.cancel()
-}
-
-///|
-pub fn ScheduledInvocation::drop(self : ScheduledInvocation) -> Unit {
-  self.cancellation_token.drop()
-}
 
 ///|
 fn agent_error_message(error : @common.AgentError) -> String {
@@ -86,6 +75,9 @@ fn rpc_error(error : @agentHost.RpcError) -> ReflectError {
       NotFound(message) => AgentRpcError::NotFound(message)
       RemoteInternalError(message) => AgentRpcError::RemoteInternal(message)
       Conflict(message) => AgentRpcError::Conflict(message)
+      Cancelled(message) => AgentRpcError::Cancelled(message)
+      CannotCancelRunning(message) =>
+        AgentRpcError::CannotCancelRunning(message)
       RemoteAgentError(error) =>
         match error {
           InvalidInput(message) => AgentRpcError::InvalidInput(message)

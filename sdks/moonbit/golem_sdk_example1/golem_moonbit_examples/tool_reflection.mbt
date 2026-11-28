@@ -410,13 +410,13 @@ pub async fn MoonBitToolReflectionCaller::principal_round_trip(
     error => return "method-binding:\{Repr(error)}"
   }
   defer method_only.drop()
-  let full_result : @reflection.Invocation[String] = full.invoke(
+  let full_result : @reflection.InvocationOutput[String] = full.invoke(
     "get_creator",
     EmptyAgentInput::{ },
   ) catch {
     error => return "full-call:\{Repr(error)}"
   }
-  let method_result : @reflection.Invocation[String] = method_only.invoke(
+  let method_result : @reflection.InvocationOutput[String] = method_only.invoke(
     "get_creator",
     EmptyAgentInput::{ },
   ) catch {

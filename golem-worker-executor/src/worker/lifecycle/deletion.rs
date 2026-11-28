@@ -30,6 +30,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             result => result,
         }
     }
+    /// A deletion whose last attempt failed leaves the agent in place until a retry or an
+    /// eviction replaces its generation, so the refusal it gives is not the answer to the
+    /// request: the error becomes a runtime error and the caller tries again.
+    pub async fn failed_deletion_as_retryable<T>(
+        &self,
+        result: Result<T, WorkerExecutorError>,
+    ) -> Result<T, WorkerExecutorError> {
+        match result {
+            Err(WorkerExecutorError::InvalidRequest { .. }) if self.deletion_failed().await => {
+                Err(WorkerExecutorError::runtime(
+                    "the agent's failed deletion blocks the request; try again",
+                ))
+            }
+            result => result,
+        }
+    }
     /// How a deletion of this generation answers a caller that pinned it by its fingerprint.
     /// Once the deletion has removed the durable state, no invocation committed to this
     /// generation can run, so the answer is `AgentNotFound`. Before that the deletion can still

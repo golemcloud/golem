@@ -259,7 +259,30 @@ enum AccessRequest<
     /// A request built between the durable-scope open and the `Start` write or claim; see
     /// [`DurableCallSession::start_access_with`].
     Built(AccessRequestBuilder<Req, T, D, Ctx, E>),
+    /// A request derived from the call's own `Start` index; see
+    /// [`DurableCallSession::start_access_with_agent_authority_and_indexed_request`].
+    Indexed(BuildIndexedRequestCallback<Req>),
 }
+
+/// The request a live call's `Start` records, resolved after the call's admission.
+enum StartRequest<Req> {
+    Ready(Req),
+    Indexed(BuildIndexedRequestCallback<Req>),
+}
+
+/// Builds a call's request and span metadata from the assigned durable `Start` index during the
+/// oplog's serialized writer step. The flag tells whether the `Start` records a denial, so a
+/// denied call can leave out its input. A replaying call claims its recorded `Start` and never
+/// builds them.
+type BuildIndexedRequestCallback<Req> = Box<
+    dyn FnOnce(
+            OplogIndex,
+            bool,
+        ) -> Result<
+            (Req, Option<golem_common::model::oplog::SpanStarted>),
+            WorkerExecutorError,
+        > + Send,
+>;
 
 type AccessRequestBuilder<Req, T, D, Ctx, E> = Box<
     dyn for<'a> FnOnce(
@@ -302,6 +325,7 @@ struct OwnedAccessStart<
 > {
     stage: OwnedStartStage<Pair, P, Ctx>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    requires_agent_authority: bool,
     request: AccessRequest<Pair::Req, T, D, Ctx, E>,
     build_span: Option<BuildSpanCallback>,
     span_observer: Option<Arc<dyn CallSpanObserver>>,
@@ -633,6 +657,46 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         })
     }
 
+    /// The request recorded in the claimed `Start`, read through an accessor.
+    pub async fn recorded_request_access<T, D, Ctx>(
+        &self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<Pair::Req, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        Pair::Req: TryFrom<HostRequest, Error = String>,
+    {
+        let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+        let entry = oplog.read(self.start_idx).await?;
+        let OplogEntry::Start {
+            request: Some(request),
+            ..
+        } = entry
+        else {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
+                format!("{entry:?}"),
+                format!("Start with request at {}", self.start_idx),
+            ));
+        };
+        let request = oplog.download_payload(request).await.map_err(|error| {
+            WorkerExecutorError::runtime(format!(
+                "failed to load durable call request at {}: {error}",
+                self.start_idx
+            ))
+        })?;
+        Pair::Req::try_from(request).map_err(|actual| {
+            WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
+                Pair::FQFN.to_string(),
+                actual,
+            )
+        })
+    }
+
     /// Returns tracing metadata carried by the claimed `Start`. This is deliberately loaded only
     /// after the ordinary call claim has selected the operation; tracing metadata never
     /// participates in request matching or cursor routing.
@@ -663,6 +727,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
         match oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
+            entry => Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
+                format!("{entry:?}"),
+                format!("Start at {}", self.start_idx),
+            )),
+        }
+    }
+
+    /// Whether the claimed `Start` records a denial: the call was refused before it did
+    /// anything.
+    pub async fn recorded_denial_access<T, D, Ctx>(
+        &self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<bool, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+        match oplog.read(self.start_idx).await? {
+            OplogEntry::Start { denial, .. } => Ok(denial.is_some()),
             entry => Err(WorkerExecutorError::unexpected_oplog_entry(
                 self.start_idx,
                 format!("{entry:?}"),

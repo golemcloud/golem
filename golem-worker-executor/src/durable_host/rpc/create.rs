@@ -16,7 +16,7 @@
 
 use super::host::RemoteAgentType;
 use super::{
-    WasmRpcEntry, WasmRpcEntryPayload, WasmRpcTargetActivation, discard_owned_rpc_config,
+    InvocationEntry, WasmRpcEntry, WasmRpcTargetActivation, discard_owned_rpc_config,
     discard_owned_rpc_input, install_embedded_span, restore_embedded_span, rpc_span_finished,
 };
 use crate::durable_host::DurabilityHost;
@@ -30,7 +30,9 @@ use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::finish_span_in_memory;
 use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
 use crate::preview2::golem::agent::common::AgentError as WitAgentError;
-use crate::preview2::golem::agent::host::{CreateOptions, Created, HostWasmRpcWithStore, RpcError};
+use crate::preview2::golem::agent::host::{
+    CreateOptions, Created, HostWasmRpcWithStore, InvocationResultWithMetadata, RpcError,
+};
 use crate::services::HasWorker;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::worker::target::{keyed_target, unkeyed_target};
@@ -50,6 +52,7 @@ use golem_common::model::oplog::{AttributeMap, DurableFunctionType, SpanKind, Sp
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::schema::agent::RegisteredAgentTypeSchema;
 use golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue;
+use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::decode_typed_rejecting_quota_with;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -58,7 +61,7 @@ use wasmtime::component::{Accessor, HasSelf, Resource};
 
 /// Decodes guest-owned config overrides into the plain JSON that the creation request carries.
 /// Every value is drained, so no handle in a later value leaks when an earlier one is rejected.
-pub(super) fn decode_rpc_config<Ctx: WorkerCtx>(
+fn decode_rpc_config<Ctx: WorkerCtx>(
     config: Vec<TypedAgentConfigValue>,
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<Vec<AgentConfigEntryDto>, String> {
@@ -175,6 +178,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
                 })?;
             accessor.with(|mut access| restore_embedded_span(access.get(), &recorded))?
         };
+        handle.close_span_on_cancellation(span.span_id().clone());
         let creation_index = accessor.with(|mut access| {
             (!access.get().state.snapshotting_mode).then(|| handle.start_index())
         });
@@ -251,12 +255,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
         let client = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.table().push(WasmRpcEntry {
-                payload: Box::new(WasmRpcEntryPayload {
-                    remote_agent_id: OwnedAgentId::new(target_environment_id, &creation.agent_id),
-                    ephemeral: None,
-                    span_id: span.span_id().clone(),
+                payload: Box::new(remote.client_payload(
+                    OwnedAgentId::new(target_environment_id, &creation.agent_id),
+                    span.span_id().clone(),
                     creation_index,
-                    target_activation: WasmRpcTargetActivation::Activated {
+                    WasmRpcTargetActivation::Activated {
                         demand: Box::new(crate::services::rpc::ReplayedDemand::new(
                             creation.fingerprint,
                         )),
@@ -264,11 +267,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
                         env: creation.env,
                         config: creation.config,
                     },
-                    remote_agent_type: remote.agent_type,
-                    remote_component_id: remote.registered.implemented_by.component_id,
-                    remote_method_streams: remote.method_streams,
-                    remote_owner: remote.owner,
-                }),
+                )),
             })
         })?;
         Ok(Ok(Created {
@@ -277,18 +276,43 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
         }))
     }
 
+    async fn invoke_and_await(
+        accessor: &Accessor<U, Self>,
+        self_: Resource<WasmRpcEntry>,
+        method_name: String,
+        input: core_wire::SchemaValueTree,
+        scope_card: Option<Resource<PermissionCardHandleRep>>,
+    ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
+        super::invoke_and_await::invoke_and_await(accessor, self_, method_name, input, scope_card)
+            .await
+    }
+
+    async fn trigger(
+        accessor: &Accessor<U, Self>,
+        self_: Resource<WasmRpcEntry>,
+        method_name: String,
+        input: core_wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<Resource<InvocationEntry>, RpcError>> {
+        super::trigger::trigger(accessor, self_, method_name, input).await
+    }
+
+    async fn schedule(
+        accessor: &Accessor<U, Self>,
+        self_: Resource<WasmRpcEntry>,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
+        method_name: String,
+        input: core_wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<Resource<InvocationEntry>, RpcError>> {
+        super::schedule::schedule(accessor, self_, scheduled_time, method_name, input).await
+    }
+
     async fn agent_id(
         accessor: &Accessor<U, Self>,
         self_: Resource<WasmRpcEntry>,
     ) -> anyhow::Result<Result<core_wire::AgentId, RpcError>> {
         accessor.with(|mut access| {
             let ctx = access.get();
-            let payload = ctx
-                .table()
-                .get(&self_)?
-                .payload
-                .downcast_ref::<WasmRpcEntryPayload>()
-                .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
+            let payload = &ctx.table().get(&self_)?.payload;
             Ok(if payload.ephemeral.is_some() {
                 Err(RpcError::RemoteAgentError(WitAgentError::InvalidType(
                     format!(
@@ -365,21 +389,16 @@ async fn replayed_creation<U: Send + 'static, Ctx: WorkerCtx>(
     .await?;
     let client = accessor.with(|mut access| {
         access.get().table().push(WasmRpcEntry {
-            payload: Box::new(WasmRpcEntryPayload {
-                remote_agent_id: OwnedAgentId::new(response.target_environment_id, &agent_id),
-                ephemeral: None,
-                span_id: span_id.clone(),
+            payload: Box::new(remote.client_payload(
+                OwnedAgentId::new(response.target_environment_id, &agent_id),
+                span_id.clone(),
                 creation_index,
-                target_activation: WasmRpcTargetActivation::ReplayPending {
+                WasmRpcTargetActivation::ReplayPending {
                     target_fingerprint: fingerprint,
                     env: vec![],
                     config: vec![],
                 },
-                remote_agent_type: remote.agent_type,
-                remote_component_id: remote.registered.implemented_by.component_id,
-                remote_method_streams: remote.method_streams,
-                remote_owner: remote.owner,
-            }),
+            )),
         })
     })?;
     Ok(Ok(Created {

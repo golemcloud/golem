@@ -3,3 +3,6 @@ const a = await t.process(10, "hello");
 const b = await t.process(32, "world");
 const c = await t.ping();
 console.log({ first: a, second: b, ping: c });
+const caller = await TriggerCaller.upsert("handles");
+const handles = await caller.inspectHandles();
+console.log({ handles });

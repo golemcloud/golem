@@ -106,6 +106,10 @@ const (
 	// A keyed create found an agent that already has the key, or the agent at the ID
 	// that a key derives has another key
 	RpcErrorConflict uint8 = 5
+	// The awaited invocation was cancelled before it started
+	RpcErrorCancelled uint8 = 6
+	// A cancellation found the invocation already running
+	RpcErrorCannotCancelRunning uint8 = 7
 )
 
 // Possible failures of an RPC call
@@ -154,6 +158,18 @@ func (self RpcError) Conflict() string {
 	}
 	return self.value.(string)
 }
+func (self RpcError) Cancelled() string {
+	if self.tag != RpcErrorCancelled {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self RpcError) CannotCancelRunning() string {
+	if self.tag != RpcErrorCannotCancelRunning {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
 
 func MakeRpcErrorProtocolError(value string) RpcError {
 	return RpcError{RpcErrorProtocolError, value}
@@ -172,6 +188,12 @@ func MakeRpcErrorRemoteAgentError(value golem_agent_common.AgentError) RpcError 
 }
 func MakeRpcErrorConflict(value string) RpcError {
 	return RpcError{RpcErrorConflict, value}
+}
+func MakeRpcErrorCancelled(value string) RpcError {
+	return RpcError{RpcErrorCancelled, value}
+}
+func MakeRpcErrorCannotCancelRunning(value string) RpcError {
+	return RpcError{RpcErrorCannotCancelRunning, value}
 }
 
 // Options of `wasm-rpc.create`
@@ -198,10 +220,31 @@ type InvocationResultWithMetadata struct {
 	Result   witTypes.Option[golem_core_types.SchemaValueTree]
 }
 
-// Receipt returned when an invocation has been scheduled.
-type ScheduledInvocationReceipt struct {
-	Metadata InvocationMetadata
-}
+const (
+	// Accepted and waiting for its turn
+	InvocationStatusPending uint8 = 0
+	// Accepted and waiting for its scheduled time
+	InvocationStatusScheduled uint8 = 1
+	// Started and executing
+	InvocationStatusRunning uint8 = 2
+	// Started and waiting, for example for a promise or a timer
+	InvocationStatusWaiting uint8 = 3
+	// Started and waiting to retry after a failure
+	InvocationStatusRetrying uint8 = 4
+	// Started, and its agent was interrupted by an operator
+	InvocationStatusInterrupted uint8 = 5
+	// Finished with a result
+	InvocationStatusCompleted uint8 = 6
+	// Finished with a failure
+	InvocationStatusFailed uint8 = 7
+	// Withdrawn before it started
+	InvocationStatusCancelled uint8 = 8
+	// Recorded its result, then its agent failed during the invocation's background work
+	InvocationStatusBackgroundFailed uint8 = 9
+)
+
+// The lifecycle state of an accepted invocation
+type InvocationStatus = uint8
 
 //go:wasmimport golem:agent/host@2.0.0 [resource-drop]wasm-rpc
 func resourceDropWasmRpc(handle int32)
@@ -253,105 +296,55 @@ type Created struct {
 	AgentId golem_core_types.AgentId
 }
 
-//go:wasmimport golem:agent/host@2.0.0 [resource-drop]future-invoke-result
-func resourceDropFutureInvokeResult(handle int32)
+//go:wasmimport golem:agent/host@2.0.0 [resource-drop]invocation
+func resourceDropInvocation(handle int32)
 
-// Represents an asynchronous invocation result
-type FutureInvokeResult struct {
+// The handle of an accepted invocation of an agent method, addressed by its ID.
+//
+// The ID only locates the invocation: every operation is authorized on the target,
+// which answers the invocation's recorded immediate caller or a caller with the
+// applicable management permission. Only such a caller learns that the agent or the
+// invocation no longer exists: once the agent is deleted, the target has no evidence of
+// the starter, so a caller without management permission is denied. Dropping the handle
+// releases only local resources; it does not cancel the invocation.
+type Invocation struct {
 	handle *witRuntime.Handle
 }
 
-func (self *FutureInvokeResult) TakeHandle() int32 {
+func (self *Invocation) TakeHandle() int32 {
 	return self.handle.Take()
 }
 
-func (self *FutureInvokeResult) SetHandle(handle int32) {
+func (self *Invocation) SetHandle(handle int32) {
 	self.handle.Set(handle)
 }
 
-func (self *FutureInvokeResult) Handle() int32 {
+func (self *Invocation) Handle() int32 {
 	return self.handle.Use()
 }
 
-func (self *FutureInvokeResult) Drop() {
+func (self *Invocation) Drop() {
 	handle := self.handle.TakeOrNil()
 	if handle != 0 {
-		resourceDropFutureInvokeResult(handle)
+		resourceDropInvocation(handle)
 	}
 }
 
-func FutureInvokeResultFromOwnHandle(handleValue int32) *FutureInvokeResult {
+func InvocationFromOwnHandle(handleValue int32) *Invocation {
 	handle := witRuntime.MakeHandle(handleValue)
-	value := &FutureInvokeResult{handle}
+	value := &Invocation{handle}
 	runtime.AddCleanup(value, func(_ int) {
 		handleValue := handle.TakeOrNil()
 		if handleValue != 0 {
-			resourceDropFutureInvokeResult(handleValue)
+			resourceDropInvocation(handleValue)
 		}
 	}, 0)
 	return value
 }
 
-func FutureInvokeResultFromBorrowHandle(handleValue int32) *FutureInvokeResult {
+func InvocationFromBorrowHandle(handleValue int32) *Invocation {
 	handle := witRuntime.MakeHandle(handleValue)
-	return &FutureInvokeResult{handle}
-}
-
-// Asynchronous invocation handle together with its final identity, when
-// preparation succeeded. Rejected calls report their error through the future.
-type AsyncInvocationWithMetadata struct {
-	Metadata witTypes.Option[InvocationMetadata]
-	Future   *FutureInvokeResult
-}
-
-//go:wasmimport golem:agent/host@2.0.0 [resource-drop]cancellation-token
-func resourceDropCancellationToken(handle int32)
-
-// Cancellation token for scheduled invocations
-type CancellationToken struct {
-	handle *witRuntime.Handle
-}
-
-func (self *CancellationToken) TakeHandle() int32 {
-	return self.handle.Take()
-}
-
-func (self *CancellationToken) SetHandle(handle int32) {
-	self.handle.Set(handle)
-}
-
-func (self *CancellationToken) Handle() int32 {
-	return self.handle.Use()
-}
-
-func (self *CancellationToken) Drop() {
-	handle := self.handle.TakeOrNil()
-	if handle != 0 {
-		resourceDropCancellationToken(handle)
-	}
-}
-
-func CancellationTokenFromOwnHandle(handleValue int32) *CancellationToken {
-	handle := witRuntime.MakeHandle(handleValue)
-	value := &CancellationToken{handle}
-	runtime.AddCleanup(value, func(_ int) {
-		handleValue := handle.TakeOrNil()
-		if handleValue != 0 {
-			resourceDropCancellationToken(handleValue)
-		}
-	}, 0)
-	return value
-}
-
-func CancellationTokenFromBorrowHandle(handleValue int32) *CancellationToken {
-	handle := witRuntime.MakeHandle(handleValue)
-	return &CancellationToken{handle}
-}
-
-// Receipt for a scheduled invocation that can still be cancelled.
-type CancelableScheduledInvocationReceipt struct {
-	Metadata          InvocationMetadata
-	CancellationToken *CancellationToken
+	return &Invocation{handle}
 }
 
 const (
@@ -691,269 +684,210 @@ func WasmRpcBindSelf() witTypes.Result[witTypes.Tuple2[golem_core_types.AgentId,
 
 }
 
-//go:wasmimport golem:agent/host@2.0.0 [method]wasm-rpc.invoke-and-await
-func wasm_import_method_wasm_rpc_invoke_and_await(arg0 int32, arg1 uintptr, arg2 uint32, arg3 uintptr, arg4 uint32, arg5 int32, arg6 int32, arg7 int32, arg8 uintptr)
+//go:wasmimport golem:agent/host@2.0.0 [async-lower][method]wasm-rpc.invoke-and-await
+func wasm_import_method_wasm_rpc_invoke_and_await(arg0 uintptr, arg1 uintptr) int32
 
 func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.SchemaValueTree, scopeCard witTypes.Option[*golem_core_types.PermissionCard]) witTypes.Result[InvocationResultWithMetadata, RpcError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (64 + 4*4), 8))
+	params := witRuntime.Allocate(pinner, (8 + 6*4), 4)
+	*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 0)), 0)) = (self).Handle()
 	utf8 := unsafe.Pointer(unsafe.StringData(methodName))
 	pinner.Pin(utf8)
-	slice := (input).ValueNodes
-	length := uint32(len(slice))
-	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
-	for index, element := range slice {
-		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t78(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 4)) = uint32(uint32(len(methodName)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 0)) = uint32(uintptr(uintptr(utf8)))
+	wasm_lower_1_t80(pinner, input, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (3*4))), 0))
 
-	}
-
-	var option int32
-	var option0 int32
 	switch scopeCard.Tag() {
 	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (6*4))), 0)) = int8(int32(0))
 
-		option = int32(0)
-		option0 = 0
 	case witTypes.OptionSome:
 		payload := scopeCard.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (6*4))), 0)) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (6*4))), 4)) = (payload).Handle()
 
-		option = int32(1)
-		option0 = (payload).Handle()
 	default:
 		panic("unreachable")
 	}
-	wasm_import_method_wasm_rpc_invoke_and_await((self).Handle(), uintptr(utf8), uint32(len(methodName)), uintptr(result), length, (input).Root, option, option0, returnArea)
-	var result3 witTypes.Result[InvocationResultWithMetadata, RpcError]
+
+	witAsync.SubtaskWait(uint32(wasm_import_method_wasm_rpc_invoke_and_await(uintptr(params), returnArea)))
+	var result1 witTypes.Result[InvocationResultWithMetadata, RpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result1 := wasm_lift_1_t598(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t598(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		result3 = witTypes.Ok[InvocationResultWithMetadata, RpcError](result1)
+		result1 = witTypes.Ok[InvocationResultWithMetadata, RpcError](result)
 	case 1:
-		result2 := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		result3 = witTypes.Err[InvocationResultWithMetadata, RpcError](result2)
+		result1 = witTypes.Err[InvocationResultWithMetadata, RpcError](result0)
 	default:
 		panic("unreachable")
 	}
-	result4 := result3
-	return result4
+
+	return result1
 
 }
 
-//go:wasmimport golem:agent/host@2.0.0 [method]wasm-rpc.invoke
-func wasm_import_method_wasm_rpc_invoke(arg0 int32, arg1 uintptr, arg2 uint32, arg3 uintptr, arg4 uint32, arg5 int32, arg6 int32, arg7 int32, arg8 uintptr)
+//go:wasmimport golem:agent/host@2.0.0 [async-lower][method]wasm-rpc.trigger
+func wasm_import_method_wasm_rpc_trigger(arg0 uintptr, arg1 uintptr) int32
 
-func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValueTree, scopeCard witTypes.Option[*golem_core_types.PermissionCard]) witTypes.Result[InvocationMetadata, RpcError] {
+func (self *WasmRpc) Trigger(methodName string, input golem_core_types.SchemaValueTree) witTypes.Result[*Invocation, RpcError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (40 + 6*4), 8))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (11 * 4), 4))
+	params := witRuntime.Allocate(pinner, (6 * 4), 4)
+	*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 0)), 0)) = (self).Handle()
 	utf8 := unsafe.Pointer(unsafe.StringData(methodName))
 	pinner.Pin(utf8)
-	slice := (input).ValueNodes
-	length := uint32(len(slice))
-	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
-	for index, element := range slice {
-		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t78(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 4)) = uint32(uint32(len(methodName)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 0)) = uint32(uintptr(uintptr(utf8)))
+	wasm_lower_1_t80(pinner, input, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (3*4))), 0))
 
-	}
-
-	var option int32
-	var option0 int32
-	switch scopeCard.Tag() {
-	case witTypes.OptionNone:
-
-		option = int32(0)
-		option0 = 0
-	case witTypes.OptionSome:
-		payload := scopeCard.Some()
-
-		option = int32(1)
-		option0 = (payload).Handle()
-	default:
-		panic("unreachable")
-	}
-	wasm_import_method_wasm_rpc_invoke((self).Handle(), uintptr(utf8), uint32(len(methodName)), uintptr(result), length, (input).Root, option, option0, returnArea)
-	var result3 witTypes.Result[InvocationMetadata, RpcError]
+	witAsync.SubtaskWait(uint32(wasm_import_method_wasm_rpc_trigger(uintptr(params), returnArea)))
+	var result0 witTypes.Result[*Invocation, RpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result1 := wasm_lift_1_t596(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		result3 = witTypes.Ok[InvocationMetadata, RpcError](result1)
+		result0 = witTypes.Ok[*Invocation, RpcError](InvocationFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result2 := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-		result3 = witTypes.Err[InvocationMetadata, RpcError](result2)
+		result0 = witTypes.Err[*Invocation, RpcError](result)
 	default:
 		panic("unreachable")
 	}
-	result4 := result3
-	return result4
+
+	return result0
 
 }
 
-//go:wasmimport golem:agent/host@2.0.0 [method]wasm-rpc.async-invoke-and-await
-func wasm_import_method_wasm_rpc_async_invoke_and_await(arg0 int32, arg1 uintptr, arg2 uint32, arg3 uintptr, arg4 uint32, arg5 int32, arg6 int32, arg7 int32, arg8 uintptr)
+//go:wasmimport golem:agent/host@2.0.0 [async-lower][method]wasm-rpc.schedule
+func wasm_import_method_wasm_rpc_schedule(arg0 uintptr, arg1 uintptr) int32
 
-func (self *WasmRpc) AsyncInvokeAndAwait(methodName string, input golem_core_types.SchemaValueTree, scopeCard witTypes.Option[*golem_core_types.PermissionCard]) AsyncInvocationWithMetadata {
+func (self *WasmRpc) Schedule(scheduledTime wasi_clocks_0_3_0_system_clock.Instant, methodName string, input golem_core_types.SchemaValueTree) witTypes.Result[*Invocation, RpcError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, 72, 8))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (11 * 4), 4))
+	params := witRuntime.Allocate(pinner, (32 + 4*4), 8)
+	*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 0)), 0)) = (self).Handle()
+	wasm_lower_1_t113(nil, scheduledTime, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), 0))
 	utf8 := unsafe.Pointer(unsafe.StringData(methodName))
 	pinner.Pin(utf8)
-	slice := (input).ValueNodes
-	length := uint32(len(slice))
-	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
-	for index, element := range slice {
-		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t78(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 24)), 4)) = uint32(uint32(len(methodName)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 24)), 0)) = uint32(uintptr(uintptr(utf8)))
+	wasm_lower_1_t80(pinner, input, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (24+2*4))), 0))
 
-	}
+	witAsync.SubtaskWait(uint32(wasm_import_method_wasm_rpc_schedule(uintptr(params), returnArea)))
+	var result0 witTypes.Result[*Invocation, RpcError]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	case 0:
 
-	var option int32
-	var option0 int32
-	switch scopeCard.Tag() {
-	case witTypes.OptionNone:
+		result0 = witTypes.Ok[*Invocation, RpcError](InvocationFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+	case 1:
+		result := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-		option = int32(0)
-		option0 = 0
-	case witTypes.OptionSome:
-		payload := scopeCard.Some()
-
-		option = int32(1)
-		option0 = (payload).Handle()
+		result0 = witTypes.Err[*Invocation, RpcError](result)
 	default:
 		panic("unreachable")
 	}
-	wasm_import_method_wasm_rpc_async_invoke_and_await((self).Handle(), uintptr(utf8), uint32(len(methodName)), uintptr(result), length, (input).Root, option, option0, returnArea)
-	result1 := wasm_lift_1_t606(unsafe.Add(unsafe.Pointer(returnArea), 0))
-	result2 := result1
-	return result2
+
+	return result0
 
 }
 
-//go:wasmimport golem:agent/host@2.0.0 [method]wasm-rpc.schedule-invocation
-func wasm_import_method_wasm_rpc_schedule_invocation(arg0 int32, arg1 int64, arg2 int32, arg3 uintptr, arg4 uint32, arg5 uintptr, arg6 uint32, arg7 int32, arg8 int32, arg9 int32, arg10 uintptr)
+//go:wasmimport golem:agent/host@2.0.0 [static]invocation.get
+func wasm_import_static_invocation_get(arg0 int32, arg1 int64, arg2 int64, arg3 int64, arg4 int64) int32
 
-func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_clock.Instant, methodName string, input golem_core_types.SchemaValueTree, scopeCard witTypes.Option[*golem_core_types.PermissionCard]) witTypes.Result[ScheduledInvocationReceipt, RpcError] {
+func InvocationGet(id golem_core_types.InvocationId) *Invocation {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (40 + 6*4), 8))
-	utf8 := unsafe.Pointer(unsafe.StringData(methodName))
-	pinner.Pin(utf8)
-	slice := (input).ValueNodes
-	length := uint32(len(slice))
-	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
-	for index, element := range slice {
-		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t78(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+	var variant int32
+	var variant0 int64
+	var variant1 int64
+	switch (id).Owner.Tag() {
+	case golem_core_types.InvocationOwnerAgent:
+		payload := (id).Owner.Agent()
 
-	}
+		variant = int32(0)
+		variant0 = int64(((payload).Uuid).HighBits)
+		variant1 = int64(((payload).Uuid).LowBits)
 
-	var option int32
-	var option0 int32
-	switch scopeCard.Tag() {
-	case witTypes.OptionNone:
+	case golem_core_types.InvocationOwnerTool:
+		payload := (id).Owner.Tool()
+		utf8 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8)
 
-		option = int32(0)
-		option0 = 0
-	case witTypes.OptionSome:
-		payload := scopeCard.Some()
+		variant = int32(1)
+		variant0 = int64(uintptr(utf8))
+		variant1 = int64(uint32(len(payload)))
 
-		option = int32(1)
-		option0 = (payload).Handle()
 	default:
 		panic("unreachable")
 	}
-	wasm_import_method_wasm_rpc_schedule_invocation((self).Handle(), (scheduledTime).Seconds, int32((scheduledTime).Nanoseconds), uintptr(utf8), uint32(len(methodName)), uintptr(result), length, (input).Root, option, option0, returnArea)
-	var result3 witTypes.Result[ScheduledInvocationReceipt, RpcError]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
-	case 0:
-		result1 := wasm_lift_1_t599(unsafe.Add(unsafe.Pointer(returnArea), 8))
-
-		result3 = witTypes.Ok[ScheduledInvocationReceipt, RpcError](result1)
-	case 1:
-		result2 := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 8))
-
-		result3 = witTypes.Err[ScheduledInvocationReceipt, RpcError](result2)
-	default:
-		panic("unreachable")
-	}
-	result4 := result3
-	return result4
+	result := wasm_import_static_invocation_get(variant, variant0, variant1, int64(((id).Id).HighBits), int64(((id).Id).LowBits))
+	return InvocationFromOwnHandle(int32(uintptr(result)))
 
 }
 
-//go:wasmimport golem:agent/host@2.0.0 [method]wasm-rpc.schedule-cancelable-invocation
-func wasm_import_method_wasm_rpc_schedule_cancelable_invocation(arg0 int32, arg1 int64, arg2 int32, arg3 uintptr, arg4 uint32, arg5 uintptr, arg6 uint32, arg7 int32, arg8 int32, arg9 int32, arg10 uintptr)
+//go:wasmimport golem:agent/host@2.0.0 [method]invocation.id
+func wasm_import_method_invocation_id(arg0 int32, arg1 uintptr)
 
-func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_0_system_clock.Instant, methodName string, input golem_core_types.SchemaValueTree, scopeCard witTypes.Option[*golem_core_types.PermissionCard]) witTypes.Result[CancelableScheduledInvocationReceipt, RpcError] {
+func (self *Invocation) Id() golem_core_types.InvocationId {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (56 + 4*4), 8))
-	utf8 := unsafe.Pointer(unsafe.StringData(methodName))
-	pinner.Pin(utf8)
-	slice := (input).ValueNodes
-	length := uint32(len(slice))
-	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
-	for index, element := range slice {
-		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t78(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
-
-	}
-
-	var option int32
-	var option0 int32
-	switch scopeCard.Tag() {
-	case witTypes.OptionNone:
-
-		option = int32(0)
-		option0 = 0
-	case witTypes.OptionSome:
-		payload := scopeCard.Some()
-
-		option = int32(1)
-		option0 = (payload).Handle()
-	default:
-		panic("unreachable")
-	}
-	wasm_import_method_wasm_rpc_schedule_cancelable_invocation((self).Handle(), (scheduledTime).Seconds, int32((scheduledTime).Nanoseconds), uintptr(utf8), uint32(len(methodName)), uintptr(result), length, (input).Root, option, option0, returnArea)
-	var result3 witTypes.Result[CancelableScheduledInvocationReceipt, RpcError]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
-	case 0:
-		result1 := wasm_lift_1_t609(unsafe.Add(unsafe.Pointer(returnArea), 8))
-
-		result3 = witTypes.Ok[CancelableScheduledInvocationReceipt, RpcError](result1)
-	case 1:
-		result2 := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 8))
-
-		result3 = witTypes.Err[CancelableScheduledInvocationReceipt, RpcError](result2)
-	default:
-		panic("unreachable")
-	}
-	result4 := result3
-	return result4
+	returnArea := uintptr(witRuntime.Allocate(pinner, 40, 8))
+	wasm_import_method_invocation_id((self).Handle(), returnArea)
+	result := wasm_lift_1_t10(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
 
 }
 
-//go:wasmimport golem:agent/host@2.0.0 [async-lower][method]future-invoke-result.get
-func wasm_import_method_future_invoke_result_get(arg0 int32, arg1 uintptr) int32
+//go:wasmimport golem:agent/host@2.0.0 [async-lower][method]invocation.status
+func wasm_import_method_invocation_status(arg0 int32, arg1 uintptr) int32
 
-func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core_types.SchemaValueTree], RpcError] {
+func (self *Invocation) Status() witTypes.Result[InvocationStatus, RpcError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (11 * 4), 4))
 
-	witAsync.SubtaskWait(uint32(wasm_import_method_future_invoke_result_get((self).Handle(), returnArea)))
+	witAsync.SubtaskWait(uint32(wasm_import_method_invocation_status((self).Handle(), returnArea)))
+	var result0 witTypes.Result[InvocationStatus, RpcError]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	case 0:
+
+		result0 = witTypes.Ok[InvocationStatus, RpcError](uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))))
+	case 1:
+		result := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 4))
+
+		result0 = witTypes.Err[InvocationStatus, RpcError](result)
+	default:
+		panic("unreachable")
+	}
+
+	return result0
+
+}
+
+//go:wasmimport golem:agent/host@2.0.0 [async-lower][method]invocation.await
+func wasm_import_method_invocation_await(arg0 int32, arg1 uintptr) int32
+
+func (self *Invocation) Await() witTypes.Result[witTypes.Option[golem_core_types.SchemaValueTree], RpcError] {
+	pinner := &runtime.Pinner{}
+	defer pinner.Unpin()
+
+	returnArea := uintptr(witRuntime.Allocate(pinner, (11 * 4), 4))
+
+	witAsync.SubtaskWait(uint32(wasm_import_method_invocation_await((self).Handle(), returnArea)))
 	var result1 witTypes.Result[witTypes.Option[golem_core_types.SchemaValueTree], RpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
@@ -983,21 +917,30 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 }
 
-//go:wasmimport golem:agent/host@2.0.0 [method]future-invoke-result.cancel
-func wasm_import_method_future_invoke_result_cancel(arg0 int32)
+//go:wasmimport golem:agent/host@2.0.0 [async-lower][method]invocation.cancel
+func wasm_import_method_invocation_cancel(arg0 int32, arg1 uintptr) int32
 
-func (self *FutureInvokeResult) Cancel() {
+func (self *Invocation) Cancel() witTypes.Result[bool, RpcError] {
+	pinner := &runtime.Pinner{}
+	defer pinner.Unpin()
 
-	wasm_import_method_future_invoke_result_cancel((self).Handle())
+	returnArea := uintptr(witRuntime.Allocate(pinner, (11 * 4), 4))
 
-}
+	witAsync.SubtaskWait(uint32(wasm_import_method_invocation_cancel((self).Handle(), returnArea)))
+	var result0 witTypes.Result[bool, RpcError]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	case 0:
 
-//go:wasmimport golem:agent/host@2.0.0 [method]cancellation-token.cancel
-func wasm_import_method_cancellation_token_cancel(arg0 int32)
+		result0 = witTypes.Ok[bool, RpcError]((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) != 0))
+	case 1:
+		result := wasm_lift_1_t591(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-func (self *CancellationToken) Cancel() {
+		result0 = witTypes.Err[bool, RpcError](result)
+	default:
+		panic("unreachable")
+	}
 
-	wasm_import_method_cancellation_token_cancel((self).Handle())
+	return result0
 
 }
 
@@ -1047,7 +990,7 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 		result8 = witTypes.Ok[golem_core_types.SchemaValueTree, ConfigValueError](result6)
 	case 1:
-		result7 := wasm_lift_1_t610(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result7 := wasm_lift_1_t604(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result8 = witTypes.Err[golem_core_types.SchemaValueTree, ConfigValueError](result7)
 	default:
@@ -1409,6 +1352,16 @@ func wasm_lift_1_t591(src unsafe.Pointer) RpcError {
 
 		variant = MakeRpcErrorConflict(value4)
 
+	case 6:
+		value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeRpcErrorCancelled(value5)
+
+	case 7:
+		value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeRpcErrorCannotCancelRunning(value6)
+
 	default:
 		panic("unreachable")
 	}
@@ -1501,43 +1454,18 @@ func wasm_lift_1_t598(src unsafe.Pointer) InvocationResultWithMetadata {
 }
 
 //go:noinline
-func wasm_lift_1_t596(src unsafe.Pointer) InvocationMetadata {
-	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t10(unsafe.Add(unsafe.Pointer(src), 16))
+func wasm_lower_1_t113(pinner *runtime.Pinner, value wasi_clocks_0_3_0_system_clock.Instant, dst unsafe.Pointer) {
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Seconds
+	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = int32((value).Nanoseconds)
 
-	return InvocationMetadata{AgentId: result, InvocationId: result0}
 }
 
 //go:noinline
-func wasm_lift_1_t606(src unsafe.Pointer) AsyncInvocationWithMetadata {
-	var option witTypes.Option[InvocationMetadata]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
-	case 0:
+func wasm_lift_1_t10(src unsafe.Pointer) golem_core_types.InvocationId {
+	result := wasm_lift_1_t9(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 24))
 
-		option = witTypes.None[InvocationMetadata]()
-	case 1:
-		result := wasm_lift_1_t596(unsafe.Add(unsafe.Pointer(src), 8))
-
-		option = witTypes.Some[InvocationMetadata](result)
-	default:
-		panic("unreachable")
-	}
-
-	return AsyncInvocationWithMetadata{Metadata: option, Future: FutureInvokeResultFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 64)))))}
-}
-
-//go:noinline
-func wasm_lift_1_t599(src unsafe.Pointer) ScheduledInvocationReceipt {
-	result := wasm_lift_1_t596(unsafe.Add(unsafe.Pointer(src), 0))
-
-	return ScheduledInvocationReceipt{Metadata: result}
-}
-
-//go:noinline
-func wasm_lift_1_t609(src unsafe.Pointer) CancelableScheduledInvocationReceipt {
-	result := wasm_lift_1_t596(unsafe.Add(unsafe.Pointer(src), 0))
-
-	return CancelableScheduledInvocationReceipt{Metadata: result, CancellationToken: CancellationTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 56)))))}
+	return golem_core_types.InvocationId{Owner: result, Id: result0}
 }
 
 //go:noinline
@@ -1587,7 +1515,7 @@ func wasm_lower_1_t20(pinner *runtime.Pinner, value golem_core_types.SchemaTypeD
 }
 
 //go:noinline
-func wasm_lift_1_t610(src unsafe.Pointer) ConfigValueError {
+func wasm_lift_1_t604(src unsafe.Pointer) ConfigValueError {
 	var variant ConfigValueError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -1872,11 +1800,32 @@ func wasm_lower_1_t546(pinner *runtime.Pinner, value golem_agent_common.TypedAge
 }
 
 //go:noinline
-func wasm_lift_1_t10(src unsafe.Pointer) golem_core_types.InvocationId {
-	result := wasm_lift_1_t9(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 24))
+func wasm_lift_1_t596(src unsafe.Pointer) InvocationMetadata {
+	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t10(unsafe.Add(unsafe.Pointer(src), 16))
 
-	return golem_core_types.InvocationId{Owner: result, Id: result0}
+	return InvocationMetadata{AgentId: result, InvocationId: result0}
+}
+
+//go:noinline
+func wasm_lift_1_t9(src unsafe.Pointer) golem_core_types.InvocationOwner {
+	var variant golem_core_types.InvocationOwner
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = golem_core_types.MakeInvocationOwnerAgent(result)
+
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+
+		variant = golem_core_types.MakeInvocationOwnerTool(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
 }
 
 //go:noinline
@@ -2836,27 +2785,6 @@ func wasm_lower_1_t81(pinner *runtime.Pinner, value golem_core_types.TypedSchema
 	wasm_lower_1_t61(pinner, (value).Graph, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t80(pinner, (value).Value, unsafe.Add(unsafe.Pointer(dst), (5*4)))
 
-}
-
-//go:noinline
-func wasm_lift_1_t9(src unsafe.Pointer) golem_core_types.InvocationOwner {
-	var variant golem_core_types.InvocationOwner
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
-	case 0:
-		result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 8))
-
-		variant = golem_core_types.MakeInvocationOwnerAgent(result)
-
-	case 1:
-		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
-
-		variant = golem_core_types.MakeInvocationOwnerTool(value0)
-
-	default:
-		panic("unreachable")
-	}
-
-	return variant
 }
 
 //go:noinline

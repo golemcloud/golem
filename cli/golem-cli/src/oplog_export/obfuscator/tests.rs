@@ -25,8 +25,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::public_oplog_entry::*;
 use golem_common::model::oplog::types::{
-    FileSystemError, SerializableFsErrorCode, SerializableHostFailureKind,
-    SerializableHttpErrorCode, SerializableHttpMethod, SerializableInvokeResult,
+    FileSystemError, SerializableFsErrorCode, SerializableHttpErrorCode, SerializableHttpMethod,
     SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpClientSendResult,
     SerializableResponseHeaders, SerializableRpcError,
 };
@@ -35,11 +34,10 @@ use golem_common::model::oplog::{
     HostRequestGolemToolInvoke, HostRequestRandomBytes, HostResponse, HostResponseEntityInvocation,
     HostResponseFileSystemStat, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemApiComponentId, HostResponseGolemRpcCreate, HostResponseGolemRpcCreated,
-    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
-    HostResponseGolemRpcPrepareInvocation, HostResponseKVGet, HostResponseMonotonicClockTimestamp,
-    HostResponseP3FileSystemStat, HostResponseP3HttpClientSendResult, OmittedOplogEntry,
-    PublicDurableFunctionType, PublicOplogEntry, PublicOplogEntryAttribution,
-    PublicOplogEntryWithIndex,
+    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcPrepareInvocation, HostResponseKVGet,
+    HostResponseMonotonicClockTimestamp, HostResponseP3FileSystemStat,
+    HostResponseP3HttpClientSendResult, OmittedOplogEntry, PublicDurableFunctionType,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, IdempotencyKey, InvocationId, InvocationRequestKey, OplogIndex,
@@ -1414,7 +1412,7 @@ fn agent_ids_in_clear() {
     assert_eq!(params.target_agent_id, keyed);
     let invoke = start(
         5,
-        fqfn::<host_functions::GolemRpcWasmRpcInvoke>(),
+        fqfn::<host_functions::GolemRpcWasmRpcTrigger>(),
         request(rpc_invoke(SchemaValue::String("x".into()))),
     );
     let cases = [
@@ -1574,7 +1572,7 @@ fn agent_type_only_on_own_reference() {
                 root.clone(),
                 &start(
                     5,
-                    fqfn::<host_functions::GolemRpcWasmRpcInvoke>(),
+                    fqfn::<host_functions::GolemRpcWasmRpcTrigger>(),
                     request(invoke),
                 ),
                 None,
@@ -1769,32 +1767,6 @@ fn end_only_generic_rpc_with_and_without_start_function() {
     assert!(!out.provenance_unknown);
     assert_eq!(out.schema_less_rpc_values.len(), 1);
     assert_eq!(out.schema_less_rpc_values[0].path, "response.result.ok");
-
-    let get = end(
-        9,
-        response(HostResponse::GolemRpcInvokeGet(
-            HostResponseGolemRpcInvokeGet {
-                result: SerializableInvokeResult::Completed(Ok(SchemaValue::String(
-                    "MARKER".into(),
-                ))),
-            },
-        )),
-    );
-    let out = rendered(KeepFlags::default(), &get, None);
-    assert_no_marker(&json(&out.entry), "MARKER");
-    assert!(out.provenance_unknown);
-    assert!(out.schema_less_rpc_values.is_empty());
-    let out = rendered(
-        KeepFlags::default(),
-        &get,
-        Some(fqfn::<host_functions::GolemRpcFutureInvokeResultGet>()),
-    );
-    assert!(!out.provenance_unknown);
-    assert_eq!(out.schema_less_rpc_values.len(), 1);
-    assert_eq!(
-        out.schema_less_rpc_values[0].path,
-        "response.result.completed.ok"
-    );
 }
 
 #[test]
@@ -1804,7 +1776,7 @@ fn rpc_generic_agent_id_stays_record() {
         KeepFlags::default(),
         &start(
             5,
-            fqfn::<host_functions::GolemRpcWasmRpcInvoke>(),
+            fqfn::<host_functions::GolemRpcWasmRpcTrigger>(),
             request(rpc_invoke(id.to_value())),
         ),
         None,
@@ -1829,7 +1801,7 @@ fn allowlist_stops_at_rpc_values() {
         KeepFlags::default(),
         &start(
             5,
-            fqfn::<host_functions::GolemRpcWasmRpcInvoke>(),
+            fqfn::<host_functions::GolemRpcWasmRpcTrigger>(),
             request(rpc_invoke(input)),
         ),
         None,
@@ -2074,73 +2046,6 @@ fn forged_host_graph_is_customer() {
         None,
     );
     assert!(!json(&out.entry).contains("4711"));
-}
-
-#[test]
-fn invoke_get_cases() {
-    let get = fqfn::<host_functions::GolemRpcFutureInvokeResultGet>();
-    let case_of = |result: SerializableInvokeResult, keep: KeepFlags| {
-        let out = rendered(
-            keep,
-            &end(
-                9,
-                response(HostResponse::GolemRpcInvokeGet(
-                    HostResponseGolemRpcInvokeGet { result },
-                )),
-            ),
-            Some(get),
-        );
-        (
-            json(&out.entry),
-            as_case(record_field(field(&out.entry, "response"), "result")).clone(),
-            out.schema_less_rpc_values,
-        )
-    };
-    let keep = KeepFlags::default();
-    let (text, case, rpc) = case_of(
-        SerializableInvokeResult::Completed(Ok(SchemaValue::String("MARKER".into()))),
-        keep,
-    );
-    assert_eq!(
-        super::value::normalized(case.case.as_deref().unwrap()),
-        "completed"
-    );
-    assert_no_marker(&text, "MARKER");
-    assert_eq!(rpc[0].path, "response.result.completed.ok");
-    let (text, _, _) = case_of(
-        SerializableInvokeResult::Completed(Err(SerializableRpcError::Denied {
-            details: "MARKER".into(),
-        })),
-        keep,
-    );
-    assert_no_marker(&text, "MARKER");
-    assert!(text.to_lowercase().contains("denied"));
-    for result in [
-        SerializableInvokeResult::Failed("MARKER".into()),
-        SerializableInvokeResult::FailedClassified {
-            kind: SerializableHostFailureKind::Transient,
-            message: "MARKER".into(),
-        },
-    ] {
-        let (text, _, _) = case_of(result.clone(), keep);
-        assert_no_marker(&text, "MARKER");
-        let (text, _, _) = case_of(
-            result,
-            KeepFlags {
-                error_text: true,
-                ..keep
-            },
-        );
-        assert!(text.contains("MARKER"));
-    }
-    let (text, _, _) = case_of(
-        SerializableInvokeResult::Completed(Ok(SchemaValue::String("MARKER".into()))),
-        KeepFlags {
-            error_text: true,
-            ..keep
-        },
-    );
-    assert_no_marker(&text, "MARKER");
 }
 
 fn http_error(code: SerializableHttpErrorCode, keep: KeepFlags) -> String {
@@ -2523,7 +2428,7 @@ fn rpc_typed_and_generic_give_same_tokens() {
     let generic = typed.value().clone();
     let caller_start = start(
         5,
-        fqfn::<host_functions::GolemRpcWasmRpcInvoke>(),
+        fqfn::<host_functions::GolemRpcWasmRpcTrigger>(),
         request(rpc_invoke(generic.clone())),
     );
     let caller_end = end(
@@ -2982,7 +2887,7 @@ fn rpc_method_and_config_names_kept() {
         KeepFlags::default(),
         &start(
             5,
-            fqfn::<host_functions::GolemRpcWasmRpcScheduleInvocation>(),
+            fqfn::<host_functions::GolemRpcWasmRpcSchedule>(),
             request(HostRequest::GolemRpcScheduledInvocation(
                 golem_common::model::oplog::HostRequestGolemRpcScheduledInvocation {
                     remote_agent_id: agent_id("x"),
@@ -4263,7 +4168,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
         PublicOplogEntry::Start(StartParams {
             timestamp: ts(),
             parent_start_index: Some(OplogIndex::from_u64(1)),
-            function_name: fqfn::<host_functions::GolemRpcWasmRpcInvoke>().to_string(),
+            function_name: fqfn::<host_functions::GolemRpcWasmRpcTrigger>().to_string(),
             invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(1), 3)),
             observational_owner: Some(OplogIndex::from_u64(1)),
             driver: None,
@@ -4816,7 +4721,7 @@ fn every_entry_kind_keeps_metadata() {
     );
     assert_eq!(
         field(&start.entry, "functionName"),
-        &super::value::text(fqfn::<host_functions::GolemRpcWasmRpcInvoke>())
+        &super::value::text(fqfn::<host_functions::GolemRpcWasmRpcTrigger>())
     );
     assert!(json(&start.entry).contains("\"do-it\""));
     assert_eq!(

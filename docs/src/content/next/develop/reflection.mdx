@@ -297,7 +297,7 @@ let methods = CounterMethodsClient::get_by_id(&existing_id)?;
 let other = methods.add(5).await?;
 ```
 
-`existing_id` is a `golem_rust::AgentId`, for example from `full.agent_id().await?`. A full client also has `create` and `get_by_id`. The macro also generates trigger, pending, and scheduled methods.
+`existing_id` is a `golem_rust::AgentId`, for example from `full.agent_id().await?`. A full client also has `create` and `get_by_id`. The macro also generates async `trigger_<method>` and `schedule_<method>` methods, which return a `golem_rust::Invocation<R>` handle.
   </Tabs.Tab>
   <Tabs.Tab>
 
@@ -346,12 +346,12 @@ let full = @reflection.FullAgentClient::upsert(
   "CounterAgent", CounterId::{ name: "main" },
 )
 defer full.drop()
-let total : @reflection.Invocation[Int] = full.invoke("add", AddInput::{ by: 5 })
+let total : @reflection.InvocationOutput[Int] = full.invoke("add", AddInput::{ by: 5 })
 
 let id = full.agent_id()
 let methods = @reflection.MethodOnlyAgentClient::bind(id)
 defer methods.drop()
-let other : @reflection.Invocation[Int] = methods.invoke("add", AddInput::{ by: 5 })
+let other : @reflection.InvocationOutput[Int] = methods.invoke("add", AddInput::{ by: 5 })
 ```
 
 The result annotation selects the output codec. Method names remain strings; input and output codecs belong to the caller.
@@ -694,18 +694,20 @@ Use `WithConfigValue` for a native value. `Create` also takes `reflection.Keyed(
 
 ## Trigger, schedule, and cancel calls
 
-Awaited calls return results and invocation metadata. Triggered calls return metadata without waiting for a result. Scheduled calls return a cancellation handle as well as metadata. Metadata contains the target agent ID and the invocation ID.
+Awaited calls return results and invocation metadata. Metadata contains the target agent ID and the invocation ID. Triggered and scheduled calls return an invocation handle once the target has durably accepted the invocation, without waiting for its result. The handle's ID identifies the invocation; its status, await-result and cancel operations observe or withdraw it, as described in [Invocation handles](/next/develop/rpc#invocation-handles). Cancel returns `true` when it withdrew an invocation that had not started, `false` when it already finished or was already cancelled, and fails with `cannot-cancel-running` while it runs. Only the caller that started the invocation, or a manager, can use the handle; dropping it only detaches.
 
-These examples use an application-supplied absolute time `at`. Cancelling observation of a running call does not undo remote side effects or prove that the invocation never ran.
+These examples use an application-supplied absolute time `at`. Abandoning a running call does not undo remote side effects or prove that the invocation never ran.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 
 ```typescript
 const method = client.method("add")
-const triggered = method.trigger({ by: 5 })
-const scheduled = method.schedule(at, { by: 5 })
-scheduled.cancellationToken.cancel()
+const triggered = await method.trigger({ by: 5 })
+const total = await triggered.awaitResult()
+const scheduled = await method.schedule(at, { by: 5 })
+const withdrawn = await scheduled.cancel()
+const again = method.invocation(scheduled.id) // rebuilds the handle; no remote call
 
 const abort = new AbortController()
 const pending = method.invoke({ by: 5 }, abort.signal)
@@ -717,33 +719,32 @@ try {
 }
 ```
 
-`at` has `seconds: bigint` and `nanoseconds: number`. An `AbortSignal` cancels an awaited call's observation. Inspect structured remote errors with `isRemoteCallError`, not by parsing messages.
+`at` has `seconds: bigint` and `nanoseconds: number`. Aborting an awaited call's `AbortSignal` withdraws the invocation on a best-effort basis while it has not started, and otherwise only stops waiting. `triggerValue` and `scheduleValue` take schema values. Inspect structured remote errors with `isRemoteCallError`, not by parsing messages.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```typescript
 const method = yield* client.method("add")
 const triggered = yield* method.trigger({ by: 5 })
+const total = yield* triggered.awaitResult
 const scheduled = yield* method.schedule(at, { by: 5 })
-yield* scheduled.cancel
+const withdrawn = yield* scheduled.cancel
 ```
 
-`at` has `seconds: bigint` and `nanoseconds: number`. Keep the schedule's scope open while its cancellation handle is needed. Fiber interruption cancels observation of an awaited call; failures remain typed Effect errors.
+`at` has `seconds: bigint` and `nanoseconds: number`. The current scope owns each handle; closing it only detaches. Interrupting an awaited call withdraws the invocation on a best-effort basis while it has not started, and otherwise only stops waiting; failures remain typed Effect errors.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```rust
 let method = client.method("add")?;
-let triggered = method.trigger_value(add.input().pack_json(&args)?)?;
-let scheduled = method.schedule_value(at, add.input().pack_json(&args)?)?;
-scheduled.cancellation_token.cancel();
-
-let pending = method.pending_value(add.input().pack_json(&args)?)?;
-pending.cancel();
-let completion = pending.await;
+let triggered = method.trigger_value(add.input().pack_json(&args)?).await?;
+let total = triggered.await_result().await?;
+let scheduled = method.schedule_value(at, add.input().pack_json(&args)?).await?;
+let withdrawn = scheduled.cancel().await?;
+let again = method.invocation(scheduled.id()); // rebuilds the handle; no remote call
 ```
 
-`at` is `golem_rust::ScheduledTime`. Pending calls allow explicit cancellation; cancellation and completion can race. Trigger and schedule use native input values.
+`at` is `golem_rust::ScheduledTime`. Trigger and schedule use native input values. Dropping an unfinished awaited `invoke_value` future withdraws the invocation on a best-effort basis while it has not started.
   </Tabs.Tab>
   <Tabs.Tab>
 
@@ -754,23 +755,26 @@ val method = for {
   add <- client.method("add")
 } yield add
 
-val triggered = method.flatMap(_.triggerJson(args))
-val scheduled = method.flatMap(_.scheduleJson(at, args))
-scheduled.foreach(_.cancellationToken.cancel())
+val triggered = method.map(_.triggerJson(args))
+val withdrawn = method.map(_.scheduleJson(at, args).flatMap {
+  case Right(scheduled) => scheduled.cancel()
+  case Left(error)      => Future.failed(new RuntimeException(error.message))
+})
 ```
 
-`at` is `golem.Datetime`. Awaited reflected agent calls return a `Future`, with no public pending-call cancellation handle. Scheduled calls expose a cancellation token.
+`at` is `golem.Datetime`. Awaited reflected agent calls return a `Future`, with no public pending-call cancellation handle. Trigger and schedule complete with a `golem.runtime.rpc.Invocation` handle once the target has durably accepted the invocation; `cancel()` withdraws an invocation that has not started.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```moonbit
 let triggered = client.trigger_json("add", args)
+defer triggered.drop()
 let scheduled = client.schedule_json(at, "add", args)
 defer scheduled.drop()
-scheduled.cancel()
+let withdrawn = scheduled.cancel()
 ```
 
-Use the datetime supplied by your application's clock integration for `at`. Dropping a schedule releases its handle; cancelling is separate. Awaited agent calls have no public pending-call cancellation handle.
+Use the datetime supplied by your application's clock integration for `at`. Dropping a handle releases it and does not cancel the invocation; always drop the handles you receive.
   </Tabs.Tab>
   <Tabs.Tab>
 
@@ -779,15 +783,12 @@ triggered, err := client.Trigger("add", args)
 if err != nil {
     panic(err)
 }
+total, err := triggered.AwaitResult()
 scheduled := golem.Must(client.Schedule(at, "add", args))
-scheduled.Cancel()
-
-pending := golem.Must(client.CallAsync("add", args))
-pending.Cancel()
-_, err = pending.Get()
+withdrawn, err := scheduled.Cancel()
 ```
 
-`at` is a `time.Time`. A pending call exposes its invocation `ID` immediately. Repeated `Get()` calls return the stored result; cancellation reports `golem.ErrCallCancelled` when it wins the race. Use `errors.As` to inspect `*golem.RemoteCallError` and its structured cause.
+`at` is a `time.Time`. Both return a `*golem.Invocation[any]`, whose `AwaitResult` reads canonical JSON as `Call` does. An awaited `Call` cannot be withdrawn by abandoning it; run several calls at once in separate goroutines. Use `errors.As` to inspect `*golem.RemoteCallError` and its structured cause, such as kind `golem.RemoteCannotCancelRunning`.
   </Tabs.Tab>
 </Tabs>
 
@@ -870,7 +871,7 @@ if (!checked.success) throw new Error(JSON.stringify(checked.issues))
 const total = add.output.unpackJson(result.value)
 ```
 
-Dynamic methods also expose `triggerValue` and `scheduleValue`.
+Dynamic methods also expose `triggerValue` and `scheduleValue`, which resolve to an `Invocation` handle.
   </Tabs.Tab>
   <Tabs.Tab>
 
@@ -908,7 +909,7 @@ output.validate_value(&value)?;
 let total = output.unpack_json(&value)?;
 ```
 
-Dynamic methods also expose native trigger, pending, and schedule operations.
+Dynamic methods also expose `trigger_value` and `schedule_value`, which return an invocation handle, and `DynamicAgentMethod::invocation(&id)` rebuilds one from its ID.
   </Tabs.Tab>
   <Tabs.Tab>
 
@@ -982,7 +983,7 @@ if err := output.Validate(value); err != nil {
 total := golem.Must(output.UnpackJSON(value))
 ```
 
-Dynamic clients also expose `CallAsync`, `Trigger`, and `Schedule` with native inputs.
+Dynamic clients also expose `Trigger` and `Schedule` with native inputs; both return a `*golem.Invocation`.
   </Tabs.Tab>
 </Tabs>
 

@@ -171,6 +171,7 @@ impl CallAgentHandler {
                 proto_caller,
                 None,
                 None,
+                false,
             )
             .await;
         let agent_response = match agent_response {

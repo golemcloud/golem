@@ -152,7 +152,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     /// Authorizes a local call to `target` against the component and agent type of the agent's
     /// Create entry, or, when the agent does not exist yet, of the owner the call creates. A call
     /// that neither finds nor creates the agent fails with not found only after it is authorized.
-    async fn authorize(
+    pub async fn authorize(
         &self,
         caller_account_id: AccountId,
         target: &ResolvedTarget,
@@ -378,35 +378,35 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
-    async fn cancel_scheduled_invocation(
+    async fn invocation_handle(
         &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &Principal,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &Principal,
+        operation: InvocationHandleOperation,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<InvocationHandleSuccess, WorkerExecutorError> {
         if !matches!(auth, AuthCtx::System | AuthCtx::Agent(_)) {
             return Err(WorkerExecutorError::invalid_request(
-                "schedule cancellation requires an authenticated internal caller",
-            )
-            .into());
+                "invocation handles require an authenticated internal caller",
+            ));
         }
+        if operation == InvocationHandleOperation::Unspecified {
+            return Err(WorkerExecutorError::invalid_request(
+                "missing handle operation",
+            ));
+        }
+        let target = OwnedAgentId::new(
+            super::invocation_handle_environment(caller)?,
+            super::invocation_handle_owner(invocation_id)?,
+        );
         if self.shard_service().check_worker(&target.agent_id).is_err() {
-            return self
-                .remote_rpc
-                .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-                .await;
+            self.remote_rpc
+                .invocation_handle(invocation_id, caller, operation, auth)
+                .await
+        } else {
+            self.local_invocation_handle(&target, invocation_id, caller, operation, auth)
+                .await
         }
-        let worker = match Worker::get_exact_existing_suspended(self, target).await {
-            Ok(worker) => worker,
-            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
-            Err(error) => return Err(error.into()),
-        };
-        worker
-            .cancel_scheduled_invocation(key, receipt, canceller)
-            .await
-            .map_err(Into::into)
     }
 
     async fn schedule_invocation(
@@ -418,7 +418,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)
@@ -472,17 +472,19 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         }
         // This caller holds no task-scope bind, so a deletion may already have stopped the
         // cached generation's state actor.
-        worker
+        let status = worker
             .deleted_incarnation_as_not_found(
                 Some(expected_fingerprint),
                 worker.try_get_last_known_status().await,
             )
-            .await?;
+            .await;
+        worker.failed_deletion_as_retryable(status).await?;
         let scheduled = worker.schedule_invocation(invocation, scheduled_at).await;
-        worker
+        let scheduled = worker
             .deleted_incarnation_as_not_found(Some(expected_fingerprint), scheduled)
-            .await
-            .map_err(Into::into)
+            .await;
+        worker.failed_deletion_as_retryable(scheduled).await?;
+        Ok(())
     }
 
     async fn create_and_initialize(
@@ -853,6 +855,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         worker.ensure_owns_key(target.new_owner.as_ref())?;
 
         let start = InvocationStart {
+            requires_own_record: false,
             target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
                 target: Some(
                     golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
@@ -1234,13 +1237,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 scope_card: None,
             };
 
-            let started = worker.clone().invoke_and_start(invocation).await;
+            let started = worker.clone().invoke_and_start(invocation, true).await;
             match worker
                 .deleted_incarnation_as_not_found(expected_callee_fingerprint, started)
                 .await?
             {
-                crate::worker::ResultOrSubscription::Finished(Err(err)) => Err(err.into()),
-                crate::worker::ResultOrSubscription::Finished(Ok(_)) => Ok(()),
+                // Only a committed invocation with this key and request finishes here: the target
+                // accepted it, and the handle reports how it ended.
+                crate::worker::ResultOrSubscription::Finished(_) => Ok(()),
                 crate::worker::ResultOrSubscription::Pending(_) => Ok(()),
             }
         } else {

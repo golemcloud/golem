@@ -50,7 +50,12 @@ import { schemaValueMatches } from "../src/internal/reflection/schemaValidation.
 import { t, v } from "../src/internal/schema-model/model.js"
 import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
-import { agentIdFor, hostAgentIdFor, hostInvocationMetadata } from "./invocation-metadata.js"
+import {
+  agentIdFor,
+  fakeRpcInvocation,
+  hostAgentIdFor,
+  hostInvocationMetadata,
+} from "./invocation-metadata.js"
 
 interface FakeCard {
   readonly serial: number
@@ -850,27 +855,16 @@ const rpcLayer = (
     input.valueNodes.flatMap((node) => (node.tag === "permission-card-handle" ? [node.val] : []))
   const connection: RpcConnection = {
     agentId: () => Promise.resolve(hostAgentIdFor("reader")),
-    invokeAndAwait: () => {
-      throw new Error("unused")
-    },
-    invoke: (_name, input) => {
-      calls.push({ kind: "trigger", scopeCard: undefined, cards: cardsOf(input) })
-      return metadata
-    },
-    asyncInvokeAndAwait: (_name, input, scopeCard) => {
+    invokeAndAwait: (_name, input, scopeCard) => {
       calls.push({ kind: "await", scopeCard, cards: cardsOf(input) })
       if (options.throwOnAwait) throw new Error("host rejected the call")
-      return {
-        metadata,
-        get: () => Promise.resolve(undefined),
-        cancel: () => {},
-        drop: () => {},
-      }
+      return Promise.resolve({ metadata, result: undefined })
     },
-    scheduleInvocation: () => {
-      throw new Error("unused")
+    trigger: async (_name, input) => {
+      calls.push({ kind: "trigger", scopeCard: undefined, cards: cardsOf(input) })
+      return fakeRpcInvocation("reader")
     },
-    scheduleCancelableInvocation: () => {
+    schedule: () => {
       throw new Error("unused")
     },
     drop: () => {},
@@ -883,6 +877,7 @@ const rpcLayer = (
         upsert: () => Effect.succeed(connection),
         getById: () => Effect.succeed(connection),
         create: () => Effect.die("unexpected create"),
+        getInvocation: () => Effect.die("unexpected getInvocation"),
       }),
     ),
     Layer.succeed(
@@ -1047,7 +1042,7 @@ describe("scope cards on awaited calls", () => {
       yield* handle.invokeAndAwaitWithMetadata("read", emptyRecord, () => undefined, {
         scopeCard: scope,
       })
-      yield* handle.invoke("read", emptyRecord)
+      yield* handle.trigger("read", emptyRecord, () => undefined)
       const dynamic = yield* DynamicClient.bind(agentIdFor("reader"))
       yield* dynamic.method("read").invoke({ root: 0, valueNodes: [] }, { scopeCard: scope })
       yield* dynamic.method("read").invoke({ root: 0, valueNodes: [] })

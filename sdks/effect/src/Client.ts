@@ -12,14 +12,14 @@ import {
   type NonSecretOverride,
 } from "./Config.js"
 import * as Datetime from "./Datetime.js"
-import type { InvocationId } from "./InvocationId.js"
+import type { Invocation, InvocationId } from "./InvocationId.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
 import { agentIdFromWit, agentIdToWit } from "./internal/agentId.js"
 import {
   awaitInvocation,
-  invocationMetadataFromHost,
-  scheduleCancelableInvocation,
+  scheduleInvocation,
+  triggerInvocation,
   wrapHostThrow,
 } from "./internal/rpc.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
@@ -34,18 +34,26 @@ import {
   type MethodSuccess,
   type MethodSuccessType,
 } from "./Method.js"
-import type { SchemaGraph, SchemaType } from "./internal/schema-model/model.js"
+import { graphUsesStreams } from "./internal/schema-model/model.js"
 import { decodeFromWire, type UnsupportedSchemaError } from "./WitCodec.js"
 
 type AnyMethodSpec = MethodSpec<any, any, any>
-export type RpcError = AgentHost.RpcError
+export type RpcError = Exclude<
+  AgentHost.RpcError,
+  { readonly tag: "cancelled" } | { readonly tag: "cannot-cancel-running" }
+>
 /**
  * Failures of remote calls and client construction. `RpcCallError` carries the host
- * `rpc-error`: `not-found` for an unknown agent ID or an ID of another agent type, and
- * `conflict` for a keyed create whose key is current.
+ * `rpc-error`: `not-found` for an unknown agent ID, an ID of another agent type, or an unknown
+ * invocation; `denied` for a caller that is neither the starter of an invocation nor a manager;
+ * and `conflict` for a keyed create whose key is current. `RpcCancelled` means the awaited
+ * invocation was cancelled before it started, and `RpcCannotCancelRunning` that a cancellation
+ * found the invocation already running.
  */
 export type RemoteCallError =
   | { readonly _tag: "RpcCallError"; readonly cause: RpcError }
+  | { readonly _tag: "RpcCancelled"; readonly reason: string }
+  | { readonly _tag: "RpcCannotCancelRunning"; readonly reason: string }
   | { readonly _tag: "InvalidUuidError"; readonly value: string; readonly reason: string }
   | { readonly _tag: "RemoteResponseError"; readonly reason: string }
   | { readonly _tag: "ScopeCardUnavailableError"; readonly reason: string }
@@ -53,8 +61,8 @@ export type RemoteCallError =
 const responseError = (reason: string): RemoteCallError => ({ _tag: "RemoteResponseError", reason })
 
 /**
- * Host metadata of one invocation: the ID of the agent that ran it and the typed invocation ID.
- * For an ephemeral target, the agent ID is the ID of the one-shot instance.
+ * Host metadata of one awaited invocation: the ID of the agent that ran it and the typed
+ * invocation ID. For an ephemeral target, the agent ID is the ID of the one-shot instance.
  *
  * @since 1.6.0
  * @category models
@@ -66,12 +74,6 @@ export interface InvocationMetadata {
 export interface EphemeralInvocationResult<T> {
   readonly metadata: InvocationMetadata
   readonly value: T
-}
-export interface ScheduledInvocation {
-  readonly cancel: () => Effect.Effect<void>
-}
-export interface EphemeralScheduledInvocation extends ScheduledInvocation {
-  readonly metadata: InvocationMetadata
 }
 
 export interface RemoteMethod<
@@ -88,12 +90,24 @@ export interface RemoteMethod<
   readonly withScopeCard: (
     card: GuestScopeCard,
   ) => (input: MethodInput<P>) => Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
-  readonly trigger: (input: MethodInput<P>) => Effect.Effect<void, RemoteCallError>
+  /**
+   * Start the invocation without awaiting its result. Succeeds with the handle once the target
+   * has durably accepted the invocation; the current scope owns the handle, and closing it only
+   * detaches. Never sends a scope card; a method with streams fails.
+   */
+  readonly trigger: (
+    input: MethodInput<P>,
+  ) => Effect.Effect<Invocation<MethodSuccessType<S>, E["Type"]>, RemoteCallError, Scope.Scope>
+  /**
+   * Enqueue the invocation for `at`. Succeeds with the handle once the target has durably
+   * accepted the invocation; the current scope owns the handle, and closing it only detaches.
+   * Never sends a scope card; a method with streams fails.
+   */
   readonly schedule: (
     at: Datetime.Input,
     input: MethodInput<P>,
   ) => Effect.Effect<
-    ScheduledInvocation,
+    Invocation<MethodSuccessType<S>, E["Type"]>,
     RemoteCallError | Datetime.DatetimeConversionError,
     Scope.Scope
   >
@@ -116,12 +130,24 @@ export interface EphemeralRemoteMethod<
   ) => (
     input: MethodInput<P>,
   ) => Effect.Effect<EphemeralInvocationResult<MethodSuccessType<S>>, RemoteCallError | E["Type"]>
-  readonly trigger: (input: MethodInput<P>) => Effect.Effect<InvocationMetadata, RemoteCallError>
+  /**
+   * Start the invocation without awaiting its result. Succeeds with the handle once the target
+   * has durably accepted the invocation; the current scope owns the handle, and closing it only
+   * detaches. Never sends a scope card; a method with streams fails.
+   */
+  readonly trigger: (
+    input: MethodInput<P>,
+  ) => Effect.Effect<Invocation<MethodSuccessType<S>, E["Type"]>, RemoteCallError, Scope.Scope>
+  /**
+   * Enqueue the invocation for `at`. Succeeds with the handle once the target has durably
+   * accepted the invocation; the current scope owns the handle, and closing it only detaches.
+   * Never sends a scope card; a method with streams fails.
+   */
   readonly schedule: (
     at: Datetime.Input,
     input: MethodInput<P>,
   ) => Effect.Effect<
-    EphemeralScheduledInvocation,
+    Invocation<MethodSuccessType<S>, E["Type"]>,
     RemoteCallError | Datetime.DatetimeConversionError,
     Scope.Scope
   >
@@ -254,7 +280,8 @@ export type AgentClient<
   F extends ConfigFields = never,
 > = "ephemeral" extends Mode ? EphemeralClient<C, Methods> : DurableClient<C, Methods, F>
 
-interface WireMethod {
+/** The wire codecs of one remote method. */
+export interface WireMethod {
   readonly name: string
   readonly inputCodec: Pick<CompiledInputCodec, "encodeAsync">
   readonly decodeOutput?: (tree: CoreTypes.SchemaValueTree) => Effect.Effect<unknown, unknown, any>
@@ -386,45 +413,15 @@ const finishOutput = (mc: WireMethod, value: unknown) => {
     : Effect.fail(result.failure)
 }
 
-const graphUsesStreams = (graph: SchemaGraph): boolean => {
-  const visited = new Set<string>()
-  const visit = (type: SchemaType): boolean => {
-    const body = type.body
-    switch (body.tag) {
-      case "stream":
-        return true
-      case "ref": {
-        if (visited.has(body.id)) return false
-        visited.add(body.id)
-        const definition = graph.defs.get(body.id)
-        return definition !== undefined && visit(definition.body)
-      }
-      case "record":
-        return body.fields.some((field) => visit(field.body))
-      case "variant":
-        return body.cases.some((item) => item.payload !== undefined && visit(item.payload))
-      case "tuple":
-        return body.elements.some(visit)
-      case "list":
-      case "fixed-list":
-      case "option":
-        return visit(body.element)
-      case "map":
-        return visit(body.key) || visit(body.value)
-      case "result":
-        return (
-          (body.ok !== undefined && visit(body.ok)) || (body.err !== undefined && visit(body.err))
-        )
-      case "union":
-        return body.branches.some((branch) => visit(branch.body))
-      case "secret":
-        return visit(body.inner)
-      default:
-        return false
-    }
-  }
-  return visit(graph.root)
-}
+/** Decode the wire result of a method: its success value, or its typed error as a failure. */
+export const decodeMethodOutput = (
+  mc: WireMethod,
+  tree: CoreTypes.SchemaValueTree | undefined,
+): Effect.Effect<any, any> =>
+  decodeOutput(mc, tree).pipe(Effect.flatMap((value) => finishOutput(mc, value))) as Effect.Effect<
+    any,
+    any
+  >
 
 const buildRemote = (
   rpc: RpcConnection,
@@ -441,38 +438,24 @@ const buildRemote = (
       Effect.mapError(mc.inputCodec.encodeAsync(input), (e) =>
         responseError(`${name}: failed to encode input: ${String(e)}`),
       )
+    const decode = (tree: CoreTypes.SchemaValueTree | undefined) => decodeMethodOutput(mc, tree)
     const awaited = (input: Record<string, unknown>, scopeCard: GuestScopeCard | undefined) =>
       awaitInvocation(rpc, name, encode(input), scopeCard).pipe(
         Effect.flatMap(({ metadata, result }) =>
-          decodeOutput(mc, result).pipe(
-            Effect.flatMap((value) => finishOutput(mc, value)),
-            Effect.map((value) => (ephemeral ? { metadata, value } : value)),
-          ),
+          decode(result).pipe(Effect.map((value) => (ephemeral ? { metadata, value } : value))),
         ),
       )
     const trigger = (input: Record<string, unknown>) => {
       if (streaming) return rejectNonAwaitedStream()
       return encode(input).pipe(
-        Effect.flatMap((tree) =>
-          Effect.try({
-            try: () => invocationMetadataFromHost(rpc.invoke(name, tree)),
-            catch: wrapHostThrow,
-          }),
-        ),
-        Effect.map((metadata) => (ephemeral ? metadata : undefined)),
+        Effect.flatMap((tree) => triggerInvocation(rpc, name, tree, decode)),
       )
     }
     const schedule = (at: Datetime.Input, input: Record<string, unknown>) => {
       if (streaming) return rejectNonAwaitedStream()
       return Datetime.fromInput(at).pipe(
         Effect.flatMap((time) => encode(input).pipe(Effect.map((tree) => [time, tree] as const))),
-        Effect.flatMap(([time, tree]) => scheduleCancelableInvocation(rpc, time, name, tree)),
-        Effect.map(({ metadata, cancel }) => {
-          const scheduled = {
-            cancel: () => cancel,
-          }
-          return ephemeral ? { ...scheduled, metadata } : scheduled
-        }),
+        Effect.flatMap(([time, tree]) => scheduleInvocation(rpc, time, name, tree, decode)),
       )
     }
     const call = (input: Record<string, unknown>) => awaited(input, defaultScopeCard)
@@ -484,26 +467,31 @@ const buildRemote = (
   return remote
 }
 
+/** Compile the wire codecs of one method. `name` names the method in error messages. */
+export const wireMethodOf = (
+  name: string,
+  spec: AnyMethodSpec,
+): Effect.Effect<WireMethod, UnsupportedSchemaError> =>
+  Effect.map(compileMethodSpec(name, spec), (compiled) => {
+    const mc = compiled as MethodCodec<MethodParams, MethodSuccess, Schema.Top>
+    const output = mc.outputCodec
+    return {
+      name,
+      inputCodec: mc.inputCodec,
+      decodeOutput: output ? (tree) => decodeFromWire(output.codec, tree) : undefined,
+      streaming:
+        graphUsesStreams(mc.inputCodec.graph) ||
+        (output !== undefined && graphUsesStreams(output.graph)),
+      errorWrapped: mc.errorWrapped,
+      successVoid: mc.successVoid,
+    }
+  })
+
 const compileMethods = (methods: Record<string, AnyMethodSpec>) =>
   Effect.gen(function* () {
     const compiled = new Map<string, WireMethod>()
     for (const [name, spec] of Object.entries(methods)) {
-      const mc = (yield* compileMethodSpec(name, spec)) as MethodCodec<
-        MethodParams,
-        MethodSuccess,
-        Schema.Top
-      >
-      const output = mc.outputCodec
-      compiled.set(name, {
-        name,
-        inputCodec: mc.inputCodec,
-        decodeOutput: output ? (tree) => decodeFromWire(output.codec, tree) : undefined,
-        streaming:
-          graphUsesStreams(mc.inputCodec.graph) ||
-          (output !== undefined && graphUsesStreams(output.graph)),
-        errorWrapped: mc.errorWrapped,
-        successVoid: mc.successVoid,
-      })
+      compiled.set(name, yield* wireMethodOf(name, spec))
     }
     return compiled as ReadonlyMap<string, WireMethod>
   })

@@ -1176,21 +1176,7 @@ impl TypeScriptBridgeGenerator {
             "});
             return Ok(());
         }
-        let trigger_result = if ephemeral {
-            "base.RemoteInvocationResult['metadata']"
-        } else {
-            "void"
-        };
-        let cancel_result = if ephemeral {
-            "ReturnType<base.RemoteAgentHandle['scheduleCancelableWithMetadata']>"
-        } else {
-            "ReturnType<base.RemoteAgentHandle['scheduleCancelable']>"
-        };
-        let schedule_result = if ephemeral {
-            "ReturnType<base.RemoteAgentHandle['scheduleCancelableWithMetadata']>"
-        } else {
-            "ReturnType<base.RemoteAgentHandle['scheduleCancelable']>"
-        };
+        let handle_result = format!("Promise<base.Invocation<{result}>>");
         let await_call = if ephemeral {
             format!(
                 "const __result = await {remote}.invokeAndAwaitWithMetadata({method_name}, __encode(__args), signal, scopeCard); return {{ metadata: __result.metadata, value: __decode(__result.value) }};"
@@ -1200,27 +1186,14 @@ impl TypeScriptBridgeGenerator {
                 "const __result = await {remote}.invokeAndAwait({method_name}, __encode(__args), signal, scopeCard); return __decode(__result);"
             )
         };
-        let trigger_call = if ephemeral {
-            format!("return {remote}.invokeWithMetadata({method_name}, __encode(__args));")
-        } else {
-            format!("{remote}.invoke({method_name}, __encode(__args));")
-        };
-        let cancel_call = if ephemeral {
-            format!(
-                "return {remote}.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
-            )
-        } else {
-            format!("return {remote}.scheduleCancelable(at, {method_name}, __encode(__args));")
-        };
-        let schedule_call = if ephemeral {
-            format!(
-                "return {remote}.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
-            )
-        } else {
-            format!("return {remote}.scheduleCancelable(at, {method_name}, __encode(__args));")
-        };
+        let trigger_call = format!(
+            "return base.mapInvocation(await {remote}.trigger({method_name}, __encode(__args)), __decode);"
+        );
+        let schedule_call = format!(
+            "return base.mapInvocation(await {remote}.schedule(at, {method_name}, __encode(__args)), __decode);"
+        );
         writer.write_doc(&format!(
-            "{}\n\nUse withScopeCard(scopeCard, ...) to borrow a scope card for one awaited call; null sends no scope card. Trigger and schedule never send a scope card.",
+            "{}\n\nUse withScopeCard(scopeCard, ...) to borrow a scope card for one awaited call; null sends no scope card. Trigger and schedule never send a scope card, and resolve to the invocation's handle once the target has durably accepted it. Its ID only locates the invocation and is not authority: only the starter or a manager may read its status, await it or cancel it. Dropping the handle or aborting its await only detaches; cancelling a running invocation fails with cannot-cancel-running.",
             method.description
         ));
         writer.write_line(formatdoc! {"
@@ -1228,9 +1201,8 @@ impl TypeScriptBridgeGenerator {
               (...args: [{args}]): Promise<{await_result}>;
               abortable(signal: AbortSignal, ...args: [{args}]): Promise<{await_result}>;
               withScopeCard(scopeCard: base.ScopeCard | null, ...args: [{args}]): Promise<{await_result}>;
-              trigger(...args: [{args}]): {trigger_result};
-              schedule(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{args}]): {schedule_result};
-              scheduleCancelable(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{args}]): {cancel_result};
+              trigger(...args: [{args}]): {handle_result};
+              schedule(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{args}]): {handle_result};
             }} = (() => {{
               const __encode = {encode};
               const __decode = {decode};
@@ -1239,9 +1211,8 @@ impl TypeScriptBridgeGenerator {
               return Object.assign(__call, {{
                 abortable: (signal: AbortSignal, ...__args: [{args}]) => __await(signal, this.scopeCard, ...__args),
                 withScopeCard: (scopeCard: base.ScopeCard | null, ...__args: [{args}]) => __await(undefined, scopeCard ?? undefined, ...__args),
-                trigger: (...__args: [{args}]): {trigger_result} => {{ {trigger_call} }},
-                schedule: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{args}]): {schedule_result} => {{ {schedule_call} }},
-                scheduleCancelable: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{args}]): {cancel_result} => {{ {cancel_call} }},
+                trigger: async (...__args: [{args}]): {handle_result} => {{ {trigger_call} }},
+                schedule: async (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{args}]): {handle_result} => {{ {schedule_call} }},
               }});
             }})();
         "});

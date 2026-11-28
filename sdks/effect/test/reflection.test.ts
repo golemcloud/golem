@@ -14,6 +14,7 @@ import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 import { createScopeCard } from "../src/internal/scopeCard.js"
 import {
   agentIdFor,
+  fakeRpcInvocation,
   hostAgentIdFor,
   hostInvocationMetadata,
   sdkInvocationMetadata,
@@ -330,35 +331,15 @@ describe("reflection", () => {
         const invocationMetadata = hostInvocationMetadata("actual-id")
         const connection: RpcConnection = {
           agentId: () => Promise.resolve(hostAgentIdFor("actual-id")),
-          invokeAndAwait: () => {
-            throw new Error("must use interruptible async call")
+          invokeAndAwait: (_method, _input, _scopeCard, signal) => {
+            events.push("call")
+            signal.addEventListener("abort", () => events.push("abort"), { once: true })
+            return pending
+              ? new Promise(() => {})
+              : Promise.resolve({ metadata: invocationMetadata, result: output })
           },
-          asyncInvokeAndAwait: () => ({
-            metadata: invocationMetadata,
-            get: () => {
-              events.push("get")
-              return pending ? new Promise(() => {}) : Promise.resolve(output)
-            },
-            cancel: () => {
-              events.push("cancel")
-            },
-            drop: () => {
-              events.push("future-drop")
-            },
-          }),
-          invoke: () => invocationMetadata,
-          scheduleInvocation: () => ({ metadata: invocationMetadata }),
-          scheduleCancelableInvocation: () => ({
-            metadata: invocationMetadata,
-            token: {
-              cancel: () => {
-                events.push("token-cancel")
-              },
-              drop: () => {
-                events.push("token-drop")
-              },
-            },
-          }),
+          trigger: async () => fakeRpcInvocation("actual-id", output, events),
+          schedule: async () => fakeRpcInvocation("actual-id", output, events),
           drop: () => {
             events.push("connection-drop")
           },
@@ -391,10 +372,23 @@ describe("reflection", () => {
               { seconds: 123n, nanoseconds: 4 },
               { node: { label: "first", next: null } },
             )
-            yield* scheduled.cancel
+            expect(scheduled.id).toEqual(sdkInvocationMetadata("actual-id").invocationId)
+            expect(yield* Effect.result(scheduled.awaitResult)).toMatchObject({
+              _tag: "Failure",
+              failure: { _tag: "RemoteOutputError" },
+            })
+            output = { root: 0, valueNodes: [{ tag: "string-value", val: "later" }] }
+            const triggered = yield* method.trigger({ node: { label: "first", next: null } })
+            expect(yield* triggered.awaitResult).toBe("later")
+            expect(yield* scheduled.cancel).toBe(true)
           }).pipe(Effect.provide(Layer.mergeAll(host, rpc))),
         )
-        expect(events.slice(-3)).toEqual(["token-cancel", "token-drop", "connection-drop"])
+        expect(events.slice(-4)).toEqual([
+          "handle-cancel",
+          "handle-drop",
+          "handle-drop",
+          "connection-drop",
+        ])
         events.length = 0
         pending = true
         const fiber = yield* Effect.scoped(
@@ -403,9 +397,9 @@ describe("reflection", () => {
             return yield* client.method("walk").invoke({ root: 0, valueNodes: [] })
           }),
         ).pipe(Effect.provide(Layer.mergeAll(host, rpc)), Effect.forkChild)
-        while (!events.includes("get")) yield* Effect.yieldNow
+        while (!events.includes("call")) yield* Effect.yieldNow
         yield* Fiber.interrupt(fiber)
-        expect(events).toEqual(["get", "cancel", "future-drop", "connection-drop"])
+        expect(events).toEqual(["call", "abort", "connection-drop"])
       }),
   )
 
@@ -416,17 +410,17 @@ describe("reflection", () => {
       const scope = createScopeCard(raw)
       const invocationMetadata = hostInvocationMetadata("actual-id")
       const connection = {
-        asyncInvokeAndAwait: (_name: string, _input: unknown, scopeCard: unknown) => {
+        invokeAndAwait: (_name: string, _input: unknown, scopeCard: unknown) => {
           scopeCards.push(scopeCard)
-          return {
+          return Promise.resolve({
             metadata: invocationMetadata,
-            get: () =>
-              Promise.resolve({ root: 0, valueNodes: [{ tag: "string-value", val: "answer" }] }),
-            cancel: () => {},
-            drop: () => {},
-          }
+            result: { root: 0, valueNodes: [{ tag: "string-value", val: "answer" }] },
+          })
         },
-        invoke: () => invocationMetadata,
+        trigger: (_name: string, _input: unknown, ...rest: unknown[]) => {
+          expect(rest).toEqual([])
+          return Promise.resolve(fakeRpcInvocation("actual-id"))
+        },
         drop: () => {},
       } as unknown as RpcConnection
       const rpc = rpcLayer({ upsert: () => Effect.succeed(connection) })

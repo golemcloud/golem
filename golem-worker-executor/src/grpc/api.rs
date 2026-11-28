@@ -871,6 +871,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn invocation_handle(
+        &self,
+        request: Request<golem::workerexecutor::v1::InvocationHandleRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::InvocationHandleResponse>, Status> {
+        use golem::workerexecutor::v1::{InvocationHandleResponse, invocation_handle_response};
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invocation_handle",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+        match self
+            .invocation_handle_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(success) => record.succeed(Ok(Response::new(InvocationHandleResponse {
+                result: Some(invocation_handle_response::Result::Success(success)),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(InvocationHandleResponse {
+                    result: Some(invocation_handle_response::Result::Failure(
+                        err.clone().into(),
+                    )),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
     async fn list_invocations(
         &self,
         request: Request<golem::workerexecutor::v1::ListInvocationsRequest>,

@@ -77,7 +77,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// session runs its drop policy. A replayed session is dropped at the point the guest
     /// dropped the call in the recorded run, which is expected.
     pub(super) fn discard_after_guest_drop(mut self) {
-        self.state.discard_after_guest_drop();
+        if self.take_executing_call().is_err() {
+            self.state.discard_after_guest_drop();
+        }
     }
 
     /// Snapshots everything a cancellation recorder / terminal guard needs from this live
@@ -90,7 +92,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Snapshot of the two teardown signals (process-equivalent executor shutdown and the
     /// owning runtime's store teardown) for guards and delivery tokens that may outlive the
     /// session.
-    pub(super) fn teardown_probe(&self) -> TeardownProbe {
+    pub fn teardown_probe(&self) -> TeardownProbe {
         TeardownProbe::new(
             self.executor_shutdown.clone(),
             self.runtime_teardown.clone(),
@@ -106,6 +108,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             function_type: self.retry.function_type().clone(),
             request_upload: self.state.request_upload(),
             entity_admission: self.entity_admission,
+            close_start_span: false,
             trap_context: self.trap_context(),
             live_call_permit,
             span_observer: self.span_observer.clone(),

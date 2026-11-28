@@ -338,20 +338,11 @@ fn expand(
         }
 
         let trigger_ident = format_ident!("trigger_{}", method_ident);
-        let pending_ident = format_ident!("pending_{}", method_ident);
         let schedule_ident = format_ident!("schedule_{}", method_ident);
         let scheduled_time_ident = fresh_param_ident(&params, "at");
         let scope_card_ident = fresh_param_ident(&params, "__golem_scope_card");
         let scoped_method_ident = format_ident!("__golem_{}_with_scope_card", method_ident);
-        let scoped_pending_ident =
-            format_ident!("__golem_pending_{}_with_scope_card", method_ident);
-        for generated in [
-            &trigger_ident,
-            &pending_ident,
-            &schedule_ident,
-            &scoped_method_ident,
-            &scoped_pending_ident,
-        ] {
+        for generated in [&trigger_ident, &schedule_ident, &scoped_method_ident] {
             if method_names.contains(&generated.to_string()) {
                 return Err(syn::Error::new_spanned(
                     method_ident,
@@ -364,40 +355,36 @@ fn expand(
             .map(|(ident, ty)| quote!(#ident: #ty))
             .collect::<Vec<_>>();
         let input = quote!(#input_ident { #(#field_idents),* });
-        let awaited_value = if is_unit {
+        // Turns the `Option` result of the typed method into the declared output.
+        let output_of = if is_unit {
             quote! {
-                if invocation.value.is_some() {
-                    return Err(#golem_rust::GolemReflectError::MalformedRemoteOutput(
-                        format!("method `{}` returned a value instead of unit", #method_name),
-                    ));
+                |value: Option<()>| {
+                    if value.is_some() {
+                        return Err(#golem_rust::GolemReflectError::MalformedRemoteOutput(
+                            format!("method `{}` returned a value instead of unit", #method_name),
+                        ));
+                    }
+                    Ok(())
                 }
-                #golem_rust::Invocation { metadata: invocation.metadata, value: () }
             }
         } else {
             quote! {
-                let value = invocation.value.ok_or_else(|| #golem_rust::GolemReflectError::MalformedRemoteOutput(
+                |value: Option<#output_type>| value.ok_or_else(|| #golem_rust::GolemReflectError::MalformedRemoteOutput(
                     format!("method `{}` returned unit instead of a value", #method_name),
-                ))?;
-                #golem_rust::Invocation { metadata: invocation.metadata, value }
+                ))
             }
         };
         let param_idents = field_idents.clone();
         scoped_methods.push(quote! {
             pub async fn #method_ident(&self, #(#params),*)
-                -> Result<#golem_rust::Invocation<#output_type>, #golem_rust::GolemReflectError>
+                -> Result<#golem_rust::InvocationOutput<#output_type>, #golem_rust::GolemReflectError>
             {
                 self.client.#scoped_method_ident(#(#param_idents,)* Some(self.scope_card)).await
-            }
-
-            pub fn #pending_ident(&self, #(#params),*)
-                -> Result<#golem_rust::TypedPendingInvocation<#output_type>, #golem_rust::GolemReflectError>
-            {
-                self.client.#scoped_pending_ident(#(#param_idents,)* Some(self.scope_card))
             }
         });
         client_methods.push(quote! {
             pub async fn #method_ident(&self, #(#params),*)
-                -> Result<#golem_rust::Invocation<#output_type>, #golem_rust::GolemReflectError>
+                -> Result<#golem_rust::InvocationOutput<#output_type>, #golem_rust::GolemReflectError>
             {
                 self.#scoped_method_ident(#(#param_idents,)* None).await
             }
@@ -407,7 +394,7 @@ fn expand(
                 &self,
                 #(#params,)*
                 #scope_card_ident: Option<&#golem_rust::permissions::ScopeCard>,
-            ) -> Result<#golem_rust::Invocation<#output_type>, #golem_rust::GolemReflectError>
+            ) -> Result<#golem_rust::InvocationOutput<#output_type>, #golem_rust::GolemReflectError>
             {
                 let #scope_card_ident = self.__golem_default_scope_card.resolve(#scope_card_ident);
                 let input = #input;
@@ -415,41 +402,32 @@ fn expand(
                     .method::<#input_ident, #output_type>(#method_name)?
                     .invoke_scoped(&input, #scope_card_ident.as_ref())
                     .await?;
-                Ok({ #awaited_value })
+                Ok(#golem_rust::InvocationOutput {
+                    metadata: invocation.metadata,
+                    value: (#output_of)(invocation.value)?,
+                })
             }
 
-            pub fn #trigger_ident(&self, #(#params),*)
-                -> Result<#golem_rust::InvocationMetadata, #golem_rust::GolemReflectError>
+            pub async fn #trigger_ident(&self, #(#params),*)
+                -> Result<#golem_rust::Invocation<#output_type>, #golem_rust::GolemReflectError>
             {
                 let input = #input;
-                self.inner.method::<#input_ident, #output_type>(#method_name)?.trigger(&input)
-            }
-
-            pub fn #pending_ident(&self, #(#params),*)
-                -> Result<#golem_rust::TypedPendingInvocation<#output_type>, #golem_rust::GolemReflectError>
-            {
-                self.#scoped_pending_ident(#(#param_idents,)* None)
-            }
-
-            #[doc(hidden)]
-            pub fn #scoped_pending_ident(
-                &self,
-                #(#params,)*
-                #scope_card_ident: Option<&#golem_rust::permissions::ScopeCard>,
-            ) -> Result<#golem_rust::TypedPendingInvocation<#output_type>, #golem_rust::GolemReflectError>
-            {
-                let #scope_card_ident = self.__golem_default_scope_card.resolve(#scope_card_ident);
-                let input = #input;
-                self.inner
+                let handle = self.inner
                     .method::<#input_ident, #output_type>(#method_name)?
-                    .pending_scoped(&input, #scope_card_ident.as_ref())
+                    .trigger(&input)
+                    .await?;
+                Ok(handle.__map_output(#output_of))
             }
 
-            pub fn #schedule_ident(&self, #scheduled_time_ident: #golem_rust::ScheduledTime, #(#params),*)
-                -> Result<#golem_rust::ScheduledInvocation, #golem_rust::GolemReflectError>
+            pub async fn #schedule_ident(&self, #scheduled_time_ident: #golem_rust::ScheduledTime, #(#params),*)
+                -> Result<#golem_rust::Invocation<#output_type>, #golem_rust::GolemReflectError>
             {
                 let input = #input;
-                self.inner.method::<#input_ident, #output_type>(#method_name)?.schedule(#scheduled_time_ident, &input)
+                let handle = self.inner
+                    .method::<#input_ident, #output_type>(#method_name)?
+                    .schedule(#scheduled_time_ident, &input)
+                    .await?;
+                Ok(handle.__map_output(#output_of))
             }
         });
     }

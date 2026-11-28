@@ -94,7 +94,7 @@ out, err = Lookup.Call(scoped, LookupIn{Key: "k"})
 ```
 
 - A scope card is valid only during the invocation that derived it. Do not keep it, or a client that carries it, in the agent's state for a later invocation: when the invocation ends the host retires it, denies the awaited calls that carry it with a `*golem.RemoteCallError` of kind `golem.RemoteDenied`, and refuses it as a `DeriveScope` parent with `golem.PermissionNotPermitted`. `Release()` on a retired scope card is safe.
-- Only `Call`, `MustCall` and `CallAsync` carry a scope card; `Trigger` and `Schedule` never do. A card attached to the call takes precedence over the client's default.
+- Only `Call` and `MustCall` carry a scope card; `Trigger` and `Schedule` never do. A card attached to the call takes precedence over the client's default.
 - Only a `golem.ScopeCard` attaches: passing a `PermissionCard` or a `WalletCard` does not compile. A `ScopeCard` has `ID`, `Parents`, `ExpiresAt`, `Inspect` and `Release`. `ExpiresAt` returns the earliest expiry of the scope card's root cards, or `None` when no root card expires; the scope card stops authorizing then. A callee that lists the lent scope card in its wallet sees the same expiry. It cannot be sent, installed, revoked or derived from with `Derive`; a method or tool input that holds one is a definition error. It can be a parent of another `DeriveScope`.
 - Attaching a card lends it: the caller keeps it. A released scope card panics with `golem.ErrPermissionCardMoved` before the call encodes its input, so no input card moves.
 - A generated guest client has the same `WithScopeCard` method. The `reflection` clients have `WithScopeCard` too, and take a per-call card as `reflection.CallScopeCard(scope)`.

@@ -40,7 +40,8 @@ pub async fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[S
     promise_ids.push(@api.create_promise())
   }
 
-  // Fire-and-forget: trigger each child with its promise ID
+  // Fire-and-forget: trigger each child with its promise ID. `trigger_` returns
+  // once the child accepted the invocation; dropping the handle only detaches.
   for i, item in items {
     WorkerClient::scoped_upsert(i.to_uint64(), async fn(child) {
       let pid = promise_ids[i]
@@ -52,7 +53,7 @@ pub async fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[S
         pid.fingerprint.high_bits,
         pid.fingerprint.low_bits,
         pid.oplog_idx,
-      )
+      ).drop()
     })
   }
 
@@ -123,7 +124,7 @@ pub async fn Coordinator::fan_out_chunked(
           pid.fingerprint.high_bits,
           pid.fingerprint.low_bits,
           pid.oplog_idx,
-        )
+        ).drop()
       })
     }
     for pid in promise_ids {

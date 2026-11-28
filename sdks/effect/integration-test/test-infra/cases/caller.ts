@@ -6,10 +6,9 @@
  *   - greetWithOverride proves the `config` option of the typed
  *     `create` actually replaces the `golem.yaml` default
  *   - abortInFlight forks `counter.slowValue(60s)`, sleeps 100ms, then
- *     interrupts the fiber. The SDK's
- *     `Effect.acquireUseRelease(asyncInvokeAndAwait, …, fut.cancel)`
- *     chain must propagate the interrupt to the host as
- *     `future-invoke-result.cancel()`.
+ *     interrupts the fiber. The interrupt aborts the signal that the SDK
+ *     passes to the awaited `invoke-and-await` import, so the runtime
+ *     drops the import and the host cancels its call.
  */
 import { Effect } from "effect"
 import { GolemCli } from "../harness/golem-cli.ts"
@@ -68,20 +67,29 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
 
   // abortInFlight: forks a slow remote invocation and interrupts it.
   // Returns true when the fiber's exit cause carried an interrupt
-  // (i.e. host fut.cancel() propagated).
+  // (i.e. the awaited import was dropped).
   const abort = yield* liftCliError(cli.invoke(callerRef, "abortInFlight", ["10"]))
   yield* expectMatch(
     abort.stdout,
     /true/,
-    "Caller.abortInFlight Fiber.interrupt → future-invoke-result.cancel",
+    "Caller.abortInFlight Fiber.interrupt → dropped invoke-and-await",
   )
 
-  // Oplog should contain a future-invoke-result.cancel entry.
+  // Oplog should record the cancelled invoke-and-await call.
   const oplog = yield* liftCliError(cli.oplog(callerRef))
   yield* expectMatch(
     oplog.stdout,
     /cancel|interrupted/i,
-    "Caller oplog records the cancelled future-invoke-result",
+    "Caller oplog records the cancelled invoke-and-await call",
+  )
+
+  // invocationHandles: trigger/schedule handles on a fresh Counter.
+  const handlesCallerRef = `Caller("caller-handles-${session.stamp}")`
+  const handles = yield* liftCliError(cli.invoke(handlesCallerRef, "invocationHandles"))
+  yield* expectMatch(
+    handles.stdout,
+    /completed:false:1:1:scheduled:true:cancelled:RpcCancelled:(running|waiting):RpcCannotCancelRunning:1/,
+    "Caller.invocationHandles: status, await, cancel, InvocationId.get and typed cancel failures",
   )
 })
 

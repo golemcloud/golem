@@ -801,63 +801,64 @@ Once we have a _client_ for a remote agent, it is possible to call its methods j
 </Tabs>
 
 ## Triggering execution of an agent method
-It is possible to trigger the remote execution of an agent method without awaiting it. This is useful for spawning background tasks, for example.
+It is possible to trigger the remote execution of an agent method without awaiting its result. This is useful for spawning background tasks, for example. A trigger returns once the target has durably accepted the invocation, and gives the caller an **invocation handle**; see [Invocation handles](#invocation-handles).
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-    To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the client:
+    To trigger an agent method without waiting for its result, use the `trigger` method exposed on each remote method in the client. It resolves to an `Invocation<T>` handle:
 
     ```typescript
     const remoteAgent = BackgroundTaskAgent.client.upsert({ jobId: backgroundJobId });
-    remoteAgent.runTask.trigger({ message: "hello", count: 1234 });
+    const invocation = await remoteAgent.runTask.trigger({ message: "hello", count: 1234 });
     ```
     </Tabs.Tab>
 
     <Tabs.Tab>
-    Each remote method exposes a typed `trigger` Effect:
+    Each remote method exposes a typed `trigger` Effect. It succeeds with an `InvocationId.Invocation` handle owned by the current `Scope`:
 
     ```typescript
     const remoteAgent = yield* BackgroundTaskAgent.client.upsert({ jobId: backgroundJobId })
-    yield* remoteAgent.runTask.trigger({ message: "hello", count: 1234 })
+    const invocation = yield* remoteAgent.runTask.trigger({ message: "hello", count: 1234 })
     ```
     </Tabs.Tab>
 
     <Tabs.Tab>
-    To trigger an agent method and return immediately, use the `trigger_` variant exposed on the generated client.
+    To trigger an agent method without waiting for its result, use the async `trigger_` variant exposed on the generated client. It returns `Result<golem_rust::Invocation<R>, GolemReflectError>`.
     Example: If there is a `run_task`, its trigger variant is `trigger_run_task`:
 
     ```rust
     let remote_agent = BackgroundTaskAgentClient::upsert(background_job_id);
-    remote_agent.trigger_run_task("hello".to_string(), 1234);
+    let invocation = remote_agent.trigger_run_task("hello".to_string(), 1234).await?;
     ```
     </Tabs.Tab>
 
     <Tabs.Tab>
-    To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the generated client:
+    To trigger an agent method without waiting for its result, use the `trigger` method exposed on each remote method in the generated client. It returns a `Future[golem.runtime.rpc.Invocation[Out]]` that completes with the handle once the target has durably accepted the invocation, and fails with `golem.runtime.rpc.AgentRpcException` when the target rejects it:
 
     ```scala
     val remoteAgent = BackgroundTaskAgentClient.upsert(backgroundJobId)
-    remoteAgent.runTask.trigger("hello", 1234)
+    val invocation = remoteAgent.runTask.trigger("hello", 1234)
     ```
     </Tabs.Tab>
 
     <Tabs.Tab>
-    To trigger an agent method and return immediately, use the `trigger_` variant exposed on the generated client.
+    To trigger an agent method without waiting for its result, use the async `trigger_` variant exposed on the generated client. It returns an `@rpc.Invocation[T]` handle, which you must drop.
     Example: If there is a `run_task`, its trigger variant is `trigger_run_task`:
 
     ```moonbit
     let remote_agent = BackgroundTaskAgentClient::upsert(background_job_id)
     defer remote_agent.drop()
-    remote_agent.trigger_run_task("hello", 1234)
+    let invocation = remote_agent.trigger_run_task("hello", 1234)
+    defer invocation.drop()
     ```
     </Tabs.Tab>
 
     <Tabs.Tab>
-    To trigger an agent method and return immediately, use the `Trigger` method of the method descriptor. It returns the `golem.InvocationID` of the enqueued invocation, and an error if the invocation could not be enqueued (`MustTrigger` panics instead):
+    To trigger an agent method without waiting for its result, use the `Trigger` method of the method descriptor. It returns a `*golem.Invocation[Out]` handle, and an error if the target did not accept the invocation (`MustTrigger` panics instead):
 
     ```go
     remoteAgent := backgroundtask.Agent.Upsert(backgroundtask.ID{JobID: backgroundJobID})
-    backgroundtask.RunTask.MustTrigger(remoteAgent, backgroundtask.RunTaskIn{Message: "hello", Count: 1234})
+    invocation := backgroundtask.RunTask.MustTrigger(remoteAgent, backgroundtask.RunTaskIn{Message: "hello", Count: 1234})
     ```
     </Tabs.Tab>
 </Tabs>
@@ -871,7 +872,10 @@ An advanced case of triggering the execution of an agent method is to **schedule
 
     ```typescript
     const remoteAgent = BackgroundTaskAgent.client.upsert({ jobId: backgroundJobId });
-    remoteAgent.runTask.schedule({ seconds: 60n, nanoseconds: 0 }, { message: "hello", count: 1234 });
+    const scheduled = await remoteAgent.runTask.schedule(
+      { seconds: 60n, nanoseconds: 0 },
+      { message: "hello", count: 1234 },
+    );
     ```
 
     Here the first parameter is a `Datetime` object, with seconds and nanoseconds fields representing the UNIX Epoch time when the method should be executed. In TypeScript, `seconds` is a `bigint`. The rest of the parameters are the same as for the original method.
@@ -883,7 +887,7 @@ An advanced case of triggering the execution of an agent method is to **schedule
 
     ```typescript
     const remoteAgent = yield* BackgroundTaskAgent.client.upsert({ jobId: backgroundJobId })
-    yield* remoteAgent.runTask.schedule(new Date(Date.now() + 10 * 60 * 1000), {
+    const scheduled = yield* remoteAgent.runTask.schedule(new Date(Date.now() + 10 * 60 * 1000), {
       message: "hello",
       count: 1234,
     })
@@ -897,16 +901,16 @@ An advanced case of triggering the execution of an agent method is to **schedule
         ```rust
         use golem_rust::ScheduledTime;
 
-        let mut remote_agent = BackgroundTaskAgentClient::upsert(background_job_id);
+        let remote_agent = BackgroundTaskAgentClient::upsert(background_job_id);
 
-        remote_agent.schedule_run_task(
+        let scheduled = remote_agent.schedule_run_task(
           "hello".to_string(),
           1234,
           ScheduledTime {
             seconds: 60,
             nanoseconds: 0,
           },
-        ).expect("failed to schedule background task");
+        ).await?;
         ```
 
         Here the last parameter is a `ScheduledTime`, with seconds and nanoseconds fields representing the UNIX Epoch time when the method should be executed. The rest of the parameters are the same as for the original method.
@@ -935,11 +939,12 @@ An advanced case of triggering the execution of an agent method is to **schedule
 
         let remote_agent = BackgroundTaskAgentClient::upsert(background_job_id)
         defer remote_agent.drop()
-        remote_agent.schedule_run_task(
+        let scheduled = remote_agent.schedule_run_task(
           @systemClock.Instant::{ seconds: 60, nanoseconds: 0 },
           "hello",
           1234,
         )
+        defer scheduled.drop()
         ```
 
         Here the first parameter is a system-clock `Instant`, with `seconds` and `nanoseconds` fields representing the UNIX Epoch time when the method should be executed. The rest of the parameters are the same as for the original method.
@@ -959,7 +964,20 @@ An advanced case of triggering the execution of an agent method is to **schedule
         )
         ```
 
-        Here the second parameter is a `time.Time` representing when the method should be executed, and the last one is the method's input. The returned `*golem.ScheduledInvocation` can be canceled with `scheduled.Cancel()` until the invocation starts. `Schedule` returns the same value with an error instead of panicking.
+        Here the second parameter is a `time.Time` representing when the method should be executed, and the last one is the method's input. The returned `*golem.Invocation[Out]` can cancel the invocation with `scheduled.Cancel()` until it starts. `Schedule` returns the same value with an error instead of panicking.
 
      </Tabs.Tab>
 </Tabs>
+
+### Invocation handles
+
+Trigger and schedule both return a handle of the accepted invocation. The handle has:
+
+- an **ID**, which identifies the invocation. Store it in agent state to reach the invocation from a later invocation of the same agent, and rebuild the handle from it: `Invocation.get(id, Def.methods.m)` in TypeScript, `InvocationId.get(id, Def.methods.m)` in Effect, `golem_rust::Invocation::<R>::get(&id)` in Rust, `golem.runtime.rpc.Invocation.get[Out](id)` in Scala, the generated `get_<m>_invocation(id)` in MoonBit, and `MethodDef.Invocation(id)` in Go. Rebuilding makes no remote call.
+- **status**, which reads the lifecycle state of the invocation: pending, scheduled, running, waiting, retrying, interrupted, completed, failed, cancelled or background-failed.
+- **await result**, which waits for the result without starting, resuming or resubmitting the invocation. It fails with a `cancelled` error when the invocation was cancelled before it started.
+- **cancel**, which withdraws the invocation if it has not started yet and returns `true`. It returns `false` when the invocation already finished or was already cancelled, and fails with a `cannot-cancel-running` error when the invocation is running.
+
+The ID only locates the invocation; it is not authority. Only the agent that started the invocation, or a caller with the applicable management permission, can observe or cancel it; any other caller gets a `denied` error. Dropping a handle, or abandoning a wait on its result, only detaches the caller: the invocation keeps running. Trigger and schedule never lend a scope card and reject methods that take or return streams.
+
+An awaited call is a single call: there is no form that starts a call now and awaits it later. To run several awaited calls at once, start them concurrently (for example `Promise.all` in TypeScript, `Effect.all` in Effect, joined futures in Rust, or one goroutine per `Call` in Go). In TypeScript, Effect and Rust, abandoning an awaited call before the invocation starts withdraws it on a best-effort basis, and so does cancelling the MoonBit task that makes the call. A Scala `Future` cannot be cancelled, and in Go a goroutine that makes a `Call` waits for its result, so neither can withdraw an awaited call. Use trigger and the handle's cancel for work that may need to be withdrawn.

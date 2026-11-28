@@ -7,9 +7,10 @@ import type { AgentId } from "../src/AgentId.js"
 import { defineAgent } from "../src/Agent.js"
 import { defineAgentClient } from "../src/index.js"
 import * as Client from "../src/Client.js"
+import * as InvocationId from "../src/InvocationId.js"
 import { defineConfig } from "../src/Config.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
-import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
+import { RpcHostError, type RpcConnection, type RpcInvocation } from "../src/host/RpcClient.js"
 import { compileMethodSpec, invokeMethod, method } from "../src/Method.js"
 import { PrincipalRef, PrincipalRefSchema } from "../src/InvocationContext.js"
 import {
@@ -23,6 +24,7 @@ import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
 import {
   agentIdFor,
+  fakeRpcInvocation,
   hostAgentIdFor,
   hostInvocationMetadata,
   sdkInvocationMetadata,
@@ -70,7 +72,6 @@ const makeRuntime = (
     readonly response?: CoreTypes.SchemaValueTree | undefined
     readonly error?: unknown
     readonly pending?: boolean
-    readonly rejected?: boolean
     /** Fails every client open with this host `rpc-error`. */
     readonly openError?: AgentHost.RpcError
     /** The deployed agent type that `getAgentTypeByAgentId` reports. */
@@ -82,13 +83,22 @@ const makeRuntime = (
   const lifecycle = {
     connectionOpen: 0,
     connectionDrop: 0,
-    futureCancel: 0,
-    futureDrop: 0,
-    tokenCancel: 0,
-    tokenDrop: 0,
+    awaitAbort: 0,
+    handleCancel: 0,
+    handleDrop: 0,
   }
   const awaitedMetadata = metadata("await")
   let resolvePending: ((value: CoreTypes.SchemaValueTree | undefined) => void) | undefined
+  const handle = (suffix: string): RpcInvocation => ({
+    id: metadata(suffix).invocationId,
+    status: async () => "pending",
+    await: async () => options.response,
+    cancel: async () => {
+      lifecycle.handleCancel++
+      return lifecycle.handleCancel === 1
+    },
+    drop: () => lifecycle.handleDrop++,
+  })
   const connect = (agentType: string, target: Target): RpcConnection => {
     lifecycle.connectionOpen++
     opens.push({ agentType, target })
@@ -115,37 +125,25 @@ const makeRuntime = (
               ? createdAgentId
               : upsertedAgentId,
         ),
-      invokeAndAwait: () => ({ metadata: metadata("sync"), result: options.response }),
-      invoke: (methodName, input) => {
+      invokeAndAwait: (methodName, input, _scopeCard, signal) => {
+        record("await", methodName, input)
+        signal.addEventListener("abort", () => lifecycle.awaitAbort++, { once: true })
+        if (options.error !== undefined) return Promise.reject(options.error)
+        if (!options.pending)
+          return Promise.resolve({ metadata: awaitedMetadata, result: options.response })
+        return new Promise((resolve) => {
+          resolvePending = (result) => resolve({ metadata: awaitedMetadata, result })
+        })
+      },
+      trigger: async (methodName, input) => {
         record("trigger", methodName, input)
         if (options.error !== undefined) throw options.error
-        return metadata("trigger")
+        return handle("trigger")
       },
-      asyncInvokeAndAwait: (methodName, input) => {
-        record("await", methodName, input)
-        return {
-          metadata: options.rejected ? undefined : awaitedMetadata,
-          get: () => {
-            if (options.error !== undefined) return Promise.reject(options.error)
-            if (!options.pending) return Promise.resolve(options.response)
-            return new Promise((resolve) => {
-              resolvePending = resolve
-            })
-          },
-          cancel: () => lifecycle.futureCancel++,
-          drop: () => lifecycle.futureDrop++,
-        }
-      },
-      scheduleInvocation: () => ({ metadata: metadata("scheduled") }),
-      scheduleCancelableInvocation: (time, methodName, input) => {
+      schedule: async (time, methodName, input) => {
         record("schedule", methodName, input, time)
-        return {
-          metadata: metadata("scheduled"),
-          token: {
-            cancel: () => lifecycle.tokenCancel++,
-            drop: () => lifecycle.tokenDrop++,
-          },
-        }
+        if (options.error !== undefined) throw options.error
+        return handle("scheduled")
       },
       drop: () => lifecycle.connectionDrop++,
     }
@@ -245,19 +243,19 @@ describe("Client 1.6 durable lifecycle", () => {
                         invokeAndAwait: () => {
                           throw new Error("unexpected awaited invocation")
                         },
-                        asyncInvokeAndAwait: () => {
-                          throw new Error("unexpected async invocation")
-                        },
-                        scheduleInvocation: () => {
+                        schedule: () => {
                           throw new Error("unexpected scheduled invocation")
                         },
-                        scheduleCancelableInvocation: () => {
-                          throw new Error("unexpected cancelable invocation")
-                        },
-                        invoke: (name: string) => {
+                        trigger: async (name: string) => {
                           expect(name).toBe("add")
                           invoked = true
-                          return metadata("self")
+                          return {
+                            id: metadata("self").invocationId,
+                            status: async () => "pending" as const,
+                            await: async () => undefined,
+                            cancel: async () => true,
+                            drop: () => {},
+                          }
                         },
                         drop: () => {
                           drops++
@@ -273,7 +271,12 @@ describe("Client 1.6 durable lifecycle", () => {
             } as never),
           )
           const result = yield* Counter.client.bindSelf().pipe(
-            Effect.flatMap((client) => Effect.zip(client.add.trigger({ by: 7 }), client.agentId)),
+            Effect.flatMap((client) =>
+              Effect.zip(
+                Effect.map(client.add.trigger({ by: 7 }), (invocation) => invocation.id),
+                client.agentId,
+              ),
+            ),
             Effect.scoped,
             Effect.provide(layer),
             Effect.result,
@@ -282,7 +285,7 @@ describe("Client 1.6 durable lifecycle", () => {
           if (typeName === "Counter") {
             expect(result).toMatchObject({
               _tag: "Success",
-              success: [undefined, agentIdFor("self")],
+              success: [expectedMetadata("self").invocationId, agentIdFor("self")],
             })
             expect(drops).toBe(1)
           } else {
@@ -406,25 +409,77 @@ describe("Client 1.6 durable lifecycle", () => {
       expect(runtime.lifecycle).toMatchObject({
         connectionOpen: 1,
         connectionDrop: 1,
-        futureCancel: 1,
-        futureDrop: 1,
+        awaitAbort: 0,
       })
     }),
   )
 
-  it.effect("trigger returns void while schedule returns an idempotent cancel handle", () =>
+  it.effect("trigger and schedule return typed invocation handles", () =>
     Effect.gen(function* () {
-      const runtime = makeRuntime()
+      const runtime = makeRuntime({ response: yield* encode(Schema.Number, 5) })
       yield* Effect.gen(function* () {
         const remote = yield* Counter.client.upsert({ initial: 0 })
-        expect(yield* remote.add.trigger({ by: 1 })).toBeUndefined()
+        const triggered = yield* remote.value.trigger({})
+        expect(triggered.id).toEqual(expectedMetadata("trigger").invocationId)
+        expect(String(triggered.id)).toBe(
+          `${agentIdFor("agent-trigger")}.00000000-0000-0001-0000-000000000002`,
+        )
+        expect(yield* triggered.status).toBe("pending")
+        expect(yield* triggered.awaitResult).toBe(5)
         const scheduled = yield* remote.add.schedule({ seconds: 1n, nanoseconds: 2 }, { by: 2 })
         expect("metadata" in scheduled).toBe(false)
-        yield* scheduled.cancel()
-        yield* scheduled.cancel()
+        expect(yield* scheduled.cancel).toBe(true)
+        expect(yield* scheduled.cancel).toBe(false)
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.calls.map((call) => call.kind)).toEqual(["trigger", "schedule"])
-      expect(runtime.lifecycle).toMatchObject({ tokenCancel: 1, tokenDrop: 1 })
+      expect(runtime.lifecycle).toMatchObject({ handleCancel: 2, handleDrop: 2 })
+    }),
+  )
+
+  it.effect("InvocationId.get rebuilds a handle that decodes with the method spec", () =>
+    Effect.gen(function* () {
+      const result = yield* encode(Schema.Number, 9)
+      const requested: CoreTypes.InvocationId[] = []
+      const events: string[] = []
+      const id = expectedMetadata("rebuilt").invocationId
+      const status = yield* Effect.gen(function* () {
+        const rebuilt = yield* InvocationId.get(id, Counter.methods.value)
+        expect(rebuilt.id).toEqual(id)
+        expect(yield* rebuilt.awaitResult).toBe(9)
+        return yield* rebuilt.status
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          rpcLayer({
+            getInvocation: (raw) =>
+              Effect.sync(() => {
+                requested.push(raw)
+                return fakeRpcInvocation("agent-rebuilt", result, events)
+              }),
+          }),
+        ),
+      )
+      expect(status).toBe("pending")
+      expect(requested).toEqual([metadata("rebuilt").invocationId])
+      expect(events).toEqual(["handle-drop"])
+    }),
+  )
+
+  it.effect("maps cancelled and cannot-cancel-running to tagged failures", () =>
+    Effect.gen(function* () {
+      for (const [error, tag] of [
+        [{ tag: "cancelled", val: "withdrawn" }, "RpcCancelled"],
+        [{ tag: "cannot-cancel-running", val: "running" }, "RpcCannotCancelRunning"],
+      ] as const) {
+        const runtime = makeRuntime({ error })
+        const failure = yield* Counter.client.upsert({ initial: 0 }).pipe(
+          Effect.flatMap((remote) => remote.value({})),
+          Effect.scoped,
+          Effect.provide(runtime.layer),
+          Effect.flip,
+        )
+        expect(failure).toEqual({ _tag: tag, reason: error.val })
+      }
     }),
   )
 
@@ -449,7 +504,7 @@ describe("Client 1.6 durable lifecycle", () => {
     }),
   )
 
-  it.effect("drops an accepted schedule token without cancelling its work", () =>
+  it.effect("drops an accepted schedule handle without cancelling its work", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime()
       yield* Counter.client.upsert({ initial: 0 }).pipe(
@@ -459,8 +514,8 @@ describe("Client 1.6 durable lifecycle", () => {
       )
       expect(runtime.lifecycle).toMatchObject({
         connectionDrop: 1,
-        tokenCancel: 0,
-        tokenDrop: 1,
+        handleCancel: 0,
+        handleDrop: 1,
       })
     }),
   )
@@ -628,7 +683,7 @@ describe("Client 1.6 durable lifecycle", () => {
     }),
   )
 
-  it.live("interrupts and drops an in-flight future", () =>
+  it.live("interrupting an awaited call aborts the host call", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime({ pending: true })
       const exit = yield* Effect.gen(function* () {
@@ -639,7 +694,7 @@ describe("Client 1.6 durable lifecycle", () => {
         return yield* Fiber.await(fiber)
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true)
-      expect(runtime.lifecycle).toMatchObject({ connectionDrop: 1, futureCancel: 1, futureDrop: 1 })
+      expect(runtime.lifecycle).toMatchObject({ connectionDrop: 1, awaitAbort: 1 })
       runtime.resolve()
     }),
   )
@@ -659,14 +714,14 @@ describe("Client 1.6 durable lifecycle", () => {
         Effect.result,
       )
       expect(result).toEqual(Result.fail("timeout"))
-      expect(runtime.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
+      expect(runtime.lifecycle).toMatchObject({ awaitAbort: 1 })
       runtime.resolve(yield* encode(Schema.Number, 7))
       yield* Effect.sleep("1 millis")
-      expect(runtime.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
+      expect(runtime.lifecycle).toMatchObject({ awaitAbort: 1 })
     }),
   )
 
-  it.effect("snapshots invocation metadata before awaiting completion", () =>
+  it.effect("copies the invocation metadata of an awaited result into a frozen value", () =>
     Effect.gen(function* () {
       const response = yield* encode(Schema.String, "done")
       const runtime = makeRuntime({ pending: true })
@@ -674,9 +729,10 @@ describe("Client 1.6 durable lifecycle", () => {
         const remote = yield* Worker.client.upsert({ job: "snapshot" })
         const fiber = yield* Effect.forkChild(remote.run({ times: 1 }))
         while (!runtime.hasPending()) yield* Effect.yieldNow
-        runtime.awaitedMetadata.agentId = hostAgentIdFor("mutated-after-start")
         runtime.resolve(response)
-        return yield* Fiber.join(fiber)
+        const joined = yield* Fiber.join(fiber)
+        runtime.awaitedMetadata.agentId = hostAgentIdFor("mutated-after-completion")
+        return joined
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(result.metadata).toEqual(expectedMetadata("await"))
       expect(Object.isFrozen(result.metadata)).toBe(true)
@@ -724,34 +780,25 @@ describe("Client 1.6 durable lifecycle", () => {
             : "protocol-error"
           expect(failure.cause.tag).toBe(expectedTag)
           if (expectedTag === "remote-agent-error") expect(failure.cause.val).toEqual(nested.val)
-          expect(runtime.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
+          expect(runtime.lifecycle).toMatchObject({ awaitAbort: 0 })
         }
       }
     }),
   )
 
-  it.effect("fails a rejected invocation with the error from its future", () =>
+  it.effect("fails a rejected invocation with the host error", () =>
     Effect.gen(function* () {
-      const response = yield* encode(Schema.String, "done")
-      const failureOf = (options: Parameters<typeof makeRuntime>[0]) => {
-        const runtime = makeRuntime({ ...options, rejected: true })
-        return Worker.client.upsert({ job: "rejected" }).pipe(
-          Effect.flatMap((remote) => remote.run({ times: 1 })),
-          Effect.scoped,
-          Effect.provide(runtime.layer),
-          Effect.flip,
-          Effect.map((failure) => ({ failure: failure as any, lifecycle: runtime.lifecycle })),
-        )
-      }
-      const denied = yield* failureOf({ error: { tag: "denied", val: "no permission" } })
-      expect(denied.failure).toEqual({
+      const runtime = makeRuntime({ error: { tag: "denied", val: "no permission" } })
+      const failure = yield* Worker.client.upsert({ job: "rejected" }).pipe(
+        Effect.flatMap((remote) => remote.run({ times: 1 })),
+        Effect.scoped,
+        Effect.provide(runtime.layer),
+        Effect.flip,
+      )
+      expect(failure).toEqual({
         _tag: "RpcCallError",
         cause: { tag: "denied", val: "no permission" },
       })
-      expect(denied.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
-      const completed = yield* failureOf({ response })
-      expect(completed.failure._tag).toBe("RpcCallError")
-      expect(completed.failure.cause.tag).toBe("protocol-error")
     }),
   )
 
@@ -883,7 +930,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
     }),
   )
 
-  it.effect("uses one ephemeral client and returns final identity on every operation", () =>
+  it.effect("uses one ephemeral client; metadata only on awaited results, IDs on handles", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime({ response: yield* encode(Schema.String, "done") })
       yield* Effect.gen(function* () {
@@ -894,10 +941,12 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         expect("agentId" in remote).toBe(false)
         const awaited = yield* remote.run({ times: 1 })
         expect(awaited).toEqual({ metadata: expectedMetadata("await"), value: "done" })
-        expect(yield* remote.run.trigger({ times: 2 })).toEqual(expectedMetadata("trigger"))
-        const receipt = yield* remote.run.schedule({ seconds: 1n, nanoseconds: 0 }, { times: 3 })
-        expect(receipt.metadata).toEqual(expectedMetadata("scheduled"))
-        yield* receipt.cancel()
+        const triggered = yield* remote.run.trigger({ times: 2 })
+        expect(triggered.id).toEqual(expectedMetadata("trigger").invocationId)
+        expect(yield* triggered.awaitResult).toBe("done")
+        const scheduled = yield* remote.run.schedule({ seconds: 1n, nanoseconds: 0 }, { times: 3 })
+        expect(scheduled.id).toEqual(expectedMetadata("scheduled").invocationId)
+        expect(yield* scheduled.cancel).toBe(true)
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.opens.map(({ target }) => target.kind)).toEqual(["upsert"])
     }),

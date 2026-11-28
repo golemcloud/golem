@@ -413,12 +413,13 @@ async fn scheduled_invocation_survives_a_restart_before_its_wake_fires(
     assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }
 
-/// The receipt the guest gets names the invocation the target commits, which is the invocation
-/// the wake starts. After the target is deleted, the caller still replays the completed schedule
-/// from its own oplog: the replayed receipt is the same and the target is not created again.
+/// The invocation ID the guest gets names the invocation the target commits, which is the
+/// invocation the wake starts. After the target is deleted, the caller still replays the
+/// completed schedule from its own oplog: the replayed ID is the same and the target is not
+/// created again.
 #[test]
 #[timeout("4m")]
-async fn schedule_receipt_names_the_scheduled_invocation_and_replays_without_the_target(
+async fn schedule_id_names_the_scheduled_invocation_and_replays_without_the_target(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
@@ -431,10 +432,10 @@ async fn schedule_receipt_names_the_scheduled_invocation_and_replays_without_the
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let server_name = "receipt";
+    let server_name = "scheduled-id";
     let target = start_agents(&executor, &component, server_name).await?;
     let client = agent_key!("ScheduledInvocationClient", CLIENT);
-    let receipt = |executor: &TestWorkerExecutor| {
+    let scheduled_id = |executor: &TestWorkerExecutor| {
         let executor = executor.clone();
         let component = component.clone();
         let client = client.clone();
@@ -457,21 +458,21 @@ async fn schedule_receipt_names_the_scheduled_invocation_and_replays_without_the
         jiff::Timestamp::now() + jiff::SignedDuration::from_secs(2),
     )
     .await?;
-    let receipt_before_restart = receipt(&executor).await?;
+    let id_before_restart = scheduled_id(&executor).await?;
 
     wait_for_scheduled_start(&executor, &target).await?;
     assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await?;
     let committed = scheduled(&executor.get_oplog(&target, OplogIndex::INITIAL).await?);
     assert_eq!(
-        receipt_before_restart,
+        id_before_restart,
         Some(format!("{}.{}", target.agent_id, committed.keys[0])),
-        "the receipt must name the committed invocation, which is the one that started"
+        "the ID must name the committed invocation, which is the one that started"
     );
 
     executor.delete_worker(&target).await?;
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    assert_eq!(receipt(&executor).await?, receipt_before_restart);
+    assert_eq!(scheduled_id(&executor).await?, id_before_restart);
     assert_eq!(executor.get_worker_metadata_opt(&target).await?, None);
     Ok(())
 }

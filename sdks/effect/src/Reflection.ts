@@ -16,11 +16,18 @@ import {
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, type RpcConnection, type RpcHostError } from "./host/RpcClient.js"
 import type { InvocationMetadata } from "./Client.js"
+import type { Invocation } from "./InvocationId.js"
 import type { InvokeOptions } from "./DynamicClient.js"
 import { agentIdToWit } from "./internal/agentId.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
-import { wrapHostThrow } from "./internal/rpc.js"
-import { field, t, type SchemaGraph, type SchemaType } from "./internal/schema-model/model.js"
+import { mapInvocation, wrapHostThrow } from "./internal/rpc.js"
+import {
+  field,
+  graphUsesStreams,
+  t,
+  type SchemaGraph,
+  type SchemaType,
+} from "./internal/schema-model/model.js"
 import { schemaGraphFromWit, schemaGraphToWit } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, SchemaRenderError, type JsonValue } from "./SchemaRef.js"
 
@@ -84,25 +91,39 @@ export interface ReflectedMethod {
     input: CoreTypes.SchemaValueTree,
     options?: InvokeOptions,
   ) => Effect.Effect<ReflectedInvocation<CoreTypes.SchemaValueTree>, ReflectionError>
-  readonly trigger: (input: JsonValue) => Effect.Effect<InvocationMetadata, ReflectionError>
+  /**
+   * Start the invocation without awaiting its result, and succeed with its handle once the
+   * target has durably accepted it. The handle checks the result against the deployed output
+   * schema. The current scope owns the handle. Never sends a scope card.
+   */
+  readonly trigger: (
+    input: JsonValue,
+  ) => Effect.Effect<ReflectedHandle<JsonValue>, ReflectionError, Scope.Scope>
   readonly triggerValue: (
     input: CoreTypes.SchemaValueTree,
-  ) => Effect.Effect<InvocationMetadata, ReflectionError>
+  ) => Effect.Effect<ReflectedHandle<CoreTypes.SchemaValueTree>, ReflectionError, Scope.Scope>
+  /**
+   * Enqueue the invocation for `at`, and succeed with its handle once the target has durably
+   * accepted it. The handle checks the result against the deployed output schema. The current
+   * scope owns the handle. Never sends a scope card.
+   */
   readonly schedule: (
     at: AgentHost.Datetime,
     input: JsonValue,
-  ) => Effect.Effect<ReflectedScheduledInvocation, ReflectionError, Scope.Scope>
+  ) => Effect.Effect<ReflectedHandle<JsonValue>, ReflectionError, Scope.Scope>
   readonly scheduleValue: (
     at: AgentHost.Datetime,
     input: CoreTypes.SchemaValueTree,
-  ) => Effect.Effect<ReflectedScheduledInvocation, ReflectionError, Scope.Scope>
+  ) => Effect.Effect<ReflectedHandle<CoreTypes.SchemaValueTree>, ReflectionError, Scope.Scope>
 }
 
-/** A cancelable reflected scheduled invocation. @since 1.6.0 @category models */
-export interface ReflectedScheduledInvocation {
-  readonly metadata: InvocationMetadata
-  readonly cancel: Effect.Effect<void>
-}
+/**
+ * The handle of a reflected invocation. Its result is absent for a unit output.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export type ReflectedHandle<T> = Invocation<T | undefined, RemoteOutputError | SchemaRenderError>
 
 /** Reflected client; ephemeral identities arrive in invocation metadata. @since 1.6.0 @category models */
 export interface ReflectedAgentClient {
@@ -458,25 +479,48 @@ const reflectedClient = (type: AgentType, rpc: RpcConnection): ReflectedAgentCli
       const definition = type.method(name)
       if (definition === undefined) return Effect.fail(new UnknownMethodError(type.name, name))
       const method = dynamicMethod(rpc, name)
+      const streaming =
+        graphUsesStreams(definition.input.graph, definition.input.root) ||
+        (definition.output !== undefined &&
+          graphUsesStreams(definition.output.graph, definition.output.root))
+      const notStreaming: Effect.Effect<void, RemoteCallError> = streaming
+        ? Effect.fail({
+            _tag: "RemoteResponseError",
+            reason: `${name}: live streams require invoke-and-await`,
+          })
+        : Effect.void
+      const checkOutput = (
+        value: CoreTypes.SchemaValueTree | undefined,
+      ): Effect.Effect<CoreTypes.SchemaValueTree | undefined, RemoteOutputError> => {
+        if (definition.output === undefined)
+          return value === undefined
+            ? Effect.succeed(value)
+            : Effect.fail(new RemoteOutputError(`${name}: expected unit output`))
+        if (value === undefined)
+          return Effect.fail(new RemoteOutputError(`${name}: expected an output value`))
+        const checked = definition.output.validateValue(value)
+        return checked.success
+          ? Effect.succeed(value)
+          : Effect.fail(
+              new RemoteOutputError(
+                `${name}: ${checked.issues.map((issue) => issue.message).join("; ")}`,
+              ),
+            )
+      }
+      const unpackOutput = (value: CoreTypes.SchemaValueTree | undefined) =>
+        value === undefined
+          ? Effect.succeed(undefined)
+          : Effect.try({ try: () => definition.output!.unpackJson(value), catch: schemaError })
+      const checkedHandle = (
+        invocation: Invocation<CoreTypes.SchemaValueTree | undefined>,
+      ): ReflectedHandle<CoreTypes.SchemaValueTree> => mapInvocation(invocation, checkOutput)
+      const jsonHandle = (
+        invocation: ReflectedHandle<CoreTypes.SchemaValueTree>,
+      ): ReflectedHandle<JsonValue> => mapInvocation(invocation, unpackOutput)
       const invokeValue = (input: CoreTypes.SchemaValueTree, options?: InvokeOptions) =>
         validate(definition.input, input).pipe(
           Effect.flatMap(() => method.invoke(input, options)),
-          Effect.flatMap((invocation) => {
-            if (definition.output === undefined)
-              return invocation.value === undefined
-                ? Effect.succeed(invocation)
-                : Effect.fail(new RemoteOutputError(`${name}: expected unit output`))
-            if (invocation.value === undefined)
-              return Effect.fail(new RemoteOutputError(`${name}: expected an output value`))
-            const checked = definition.output.validateValue(invocation.value)
-            return checked.success
-              ? Effect.succeed(invocation)
-              : Effect.fail(
-                  new RemoteOutputError(
-                    `${name}: ${checked.issues.map((issue) => issue.message).join("; ")}`,
-                  ),
-                )
-          }),
+          Effect.tap((invocation) => checkOutput(invocation.value)),
         )
       const reflected: ReflectedMethod = Object.freeze({
         definition,
@@ -497,13 +541,29 @@ const reflectedClient = (type: AgentType, rpc: RpcConnection): ReflectedAgentCli
             ),
           ),
         triggerValue: (input: CoreTypes.SchemaValueTree) =>
-          validate(definition.input, input).pipe(Effect.flatMap(() => method.trigger(input))),
+          notStreaming.pipe(
+            Effect.flatMap(() => validate(definition.input, input)),
+            Effect.flatMap(() => method.trigger(input)),
+            Effect.map(checkedHandle),
+          ),
         trigger: (input: JsonValue) =>
-          pack(definition.input, input).pipe(Effect.flatMap((value) => method.trigger(value))),
+          notStreaming.pipe(
+            Effect.flatMap(() => pack(definition.input, input)),
+            Effect.flatMap((value) => method.trigger(value)),
+            Effect.map((invocation) => jsonHandle(checkedHandle(invocation))),
+          ),
         scheduleValue: (at: AgentHost.Datetime, input: CoreTypes.SchemaValueTree) =>
-          validate(definition.input, input).pipe(Effect.flatMap(() => method.schedule(at, input))),
+          notStreaming.pipe(
+            Effect.flatMap(() => validate(definition.input, input)),
+            Effect.flatMap(() => method.schedule(at, input)),
+            Effect.map(checkedHandle),
+          ),
         schedule: (at: AgentHost.Datetime, input: JsonValue) =>
-          pack(definition.input, input).pipe(Effect.flatMap((value) => method.schedule(at, value))),
+          notStreaming.pipe(
+            Effect.flatMap(() => pack(definition.input, input)),
+            Effect.flatMap((value) => method.schedule(at, value)),
+            Effect.map((invocation) => jsonHandle(checkedHandle(invocation))),
+          ),
       })
       return Effect.succeed(reflected)
     },

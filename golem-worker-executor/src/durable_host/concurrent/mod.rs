@@ -75,12 +75,10 @@ pub(crate) mod initiation;
 pub(crate) mod initiation_owner;
 mod replay;
 
+pub(crate) use super::call_coordinator::authorize_live_permissions_at_serialized_access;
 pub(super) use super::call_coordinator::{
     DurableCallAdmission, DurableCallCoordinator, lock_synchronized_card_event_boundary_access,
     process_pending_replay_events_access,
-};
-pub(crate) use super::call_coordinator::{
-    authorize_live_permissions_at_serialized_access, try_agent_auth_ctx_at_serialized_access,
 };
 pub(in crate::durable_host) use access::prepare_access_terminal_effect;
 use access::*;

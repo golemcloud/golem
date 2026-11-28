@@ -216,7 +216,7 @@ impl TeardownProbe {
         (self.runtime_teardown)()
     }
 
-    pub(super) fn is_tearing_down(&self) -> bool {
+    pub fn is_tearing_down(&self) -> bool {
         self.is_executor_shutting_down() || self.is_runtime_tearing_down()
     }
 }

@@ -28,7 +28,6 @@ use golem_common::model::oplog::{
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::pin::Pin;
-use tracing::debug;
 use wasmtime::component::{Accessor, Linker, Resource, ResourceType};
 use wasmtime_wasi::IoView as _;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
@@ -203,9 +202,6 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         self.observe_function_call("io::poll:pollable", "drop");
         let child_rep = rep.rep();
 
-        // Check if this pollable is a child of a FutureInvokeResult
-        let parent_rep = self.state.rpc_pollable_to_parent.get(&child_rep).copied();
-
         {
             let mut view = self.as_wasi_view();
             HostPollable::drop(&mut view.io_data(), rep)?;
@@ -215,32 +211,6 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // resource table, and a failed drop leaves the pollable live.
         self.state.file_stream_pollables.remove(&child_rep);
         self.state.p2_timer_deadlines.remove(&child_rep);
-
-        // If this child belonged to a FutureInvokeResult whose drop was deferred,
-        // finalize the parent deletion now that this child is gone.
-        if let Some(parent_rep) = parent_rep {
-            self.state.rpc_pollable_to_parent.remove(&child_rep);
-            let parent: Resource<crate::durable_host::rpc::FutureInvokeResultEntry> =
-                Resource::new_borrow(parent_rep);
-            let should_delete = if let Ok(entry) = self.table().get_mut(&parent) {
-                entry.child_pollables.retain(|r| *r != child_rep);
-                entry.drop_pending && entry.child_pollables.is_empty()
-            } else {
-                false
-            };
-
-            if should_delete {
-                let parent_owned: Resource<crate::durable_host::rpc::FutureInvokeResultEntry> =
-                    Resource::new_own(parent_rep);
-                if let Err(err) = self.table().delete(parent_owned) {
-                    debug!(
-                        parent_rep,
-                        error = %err,
-                        "Deferred future invoke result delete failed"
-                    );
-                }
-            }
-        }
 
         Ok(())
     }

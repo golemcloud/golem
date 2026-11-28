@@ -1,3 +1,4 @@
+use golem_rust::SchemaValue;
 use golem_rust::agentic::{
     AgentInitiator, AgentInvocationResult, AgentStream, AgentTypeName, BaseAgent, DirectAgentInput,
     EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor, ExtendedAgentType,
@@ -7,6 +8,7 @@ use golem_rust::agentic::{
 use golem_rust::golem_agentic::golem::agent::common::{
     AgentError, AgentMode, AgentType, AgentTypeKind, Snapshotting,
 };
+use golem_rust::golem_agentic::golem::agent::host::WasmRpc;
 use golem_rust::schema::wit::{direct, wire::SchemaValueTree};
 
 struct MethodFailure {
@@ -81,6 +83,26 @@ impl BaseAgent for MethodFailure {
             return Err(custom_error("method gave up"));
         }
         input.finish().map_err(custom_error)?;
+        if method_name == "fail_stream_after_dropping_rpc" {
+            let rpc = WasmRpc::upsert(
+                self.type_name,
+                golem_rust::encode_schema_value(&SchemaValue::Record {
+                    fields: vec![SchemaValue::String("rpc-target".into())],
+                })
+                .map_err(custom_error)?,
+            )
+            .map_err(|error| custom_error(format!("{error:?}")))?;
+            let input = golem_rust::encode_schema_value(&SchemaValue::Record { fields: vec![] })
+                .map_err(custom_error)?;
+            let mut call = Box::pin(rpc.invoke_and_await("value".into(), input, None));
+            let pending = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(call.as_mut().poll(cx).is_pending())
+            })
+            .await;
+            return Err(custom_error(format!(
+                "method gave up after dropping a call (pending: {pending})"
+            )));
+        }
         let value = match method_name.as_str() {
             "fail" => {
                 self.fail();
@@ -162,6 +184,7 @@ golem_rust::ctor::__support::ctor_parse!(
                         "fail",
                         "fail_after_http",
                         "fail_stream_after_http",
+                        "fail_stream_after_dropping_rpc",
                         "value",
                         "increment",
                         "declared_error",
@@ -191,7 +214,9 @@ golem_rust::ctor::__support::ctor_parse!(
                                 <Result<i64, String>>::get_type()
                                     .get_schema_graph()
                                     .unwrap()
-                            } else if name == "fail_stream_after_http" {
+                            } else if name == "fail_stream_after_http"
+                                || name == "fail_stream_after_dropping_rpc"
+                            {
                                 <AgentStream<String>>::get_type()
                                     .get_schema_graph()
                                     .unwrap()

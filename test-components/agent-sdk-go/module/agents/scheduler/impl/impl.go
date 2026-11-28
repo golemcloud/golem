@@ -17,7 +17,7 @@ type state struct{}
 
 var agent = scheduler.Agent.Implement(func(scheduler.Id) *state { return &state{} })
 
-func scheduleBump(in scheduler.ScheduleIn) *golem.ScheduledInvocation {
+func scheduleBump(in scheduler.ScheduleIn) *golem.Invocation[int64] {
 	c := counter.Agent.Upsert(counter.CounterID{Name: in.Target})
 	at := time.Now().Add(time.Duration(in.DelayMillis) * time.Millisecond)
 	return counter.Increment.MustSchedule(c, at, golem.Unit{})
@@ -28,8 +28,8 @@ func init() {
 		scheduleBump(in)
 		return golem.Unit{}
 	})
-	agent.Handle(scheduler.BumpCancelled, func(_ *golem.Context[state], in scheduler.ScheduleIn) golem.Unit {
-		scheduleBump(in).Cancel()
-		return golem.Unit{}
+	agent.Handle(scheduler.BumpCancelled, func(_ *golem.Context[state], in scheduler.ScheduleIn) []bool {
+		inv := scheduleBump(in)
+		return []bool{golem.Must(inv.Cancel()), golem.Must(inv.Cancel())}
 	})
 }

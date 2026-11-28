@@ -1589,9 +1589,8 @@ fn guest_recursive_stream_matrix_compiles() {
         // Only the stream-free status method retains fire-and-forget forms.
         assert_eq!(source.matches("def trigger(").count(), 1);
         assert_eq!(source.matches("def scheduleAt(").count(), 1);
-        assert_eq!(source.matches("def scheduleCancelableAt(").count(), 1);
-        // Each method has a cancelable call and a scoped cancelable call.
-        assert_eq!(source.matches("def cancelable(").count(), 16);
+        assert!(!source.contains("def scheduleCancelableAt("));
+        assert!(!source.contains("def cancelable("));
         compile_guest_if_enabled(dir.as_path());
     }
 }
@@ -1623,7 +1622,7 @@ fn guest_untyped_stream_is_rejected() {
 
 /// Guest agent bridges expose the Scala SDK RPC surface: constructors resolve
 /// remote agents through `RemoteAgentClient`, methods invoke Wasm RPC via
-/// `asyncInvokeAndAwait`, and the generated Scala.js build is ready for a real
+/// `invokeAndAwait`, `trigger` and `schedule`, and the generated Scala.js build is ready for a real
 /// compile once the in-tree Scala SDK has been published locally.
 #[test]
 fn guest_agent_client_surface_targets_scala_sdk_rpc() {
@@ -1666,9 +1665,28 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains(
         "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()"
     ));
-    assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
-    assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
-    assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
+    assert!(client_source.contains("resolved.invokeAndAwait(\"increment\""));
+    assert!(client_source.contains(
+        "def trigger(amount: _root_.golem.UInt): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.Invocation[_root_.golem.UInt]]"
+    ));
+    assert!(client_source.contains(
+        "def scheduleAt(amount: _root_.golem.UInt, when: _root_.java.time.Instant): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.Invocation[_root_.golem.UInt]]"
+    ));
+    assert!(
+        client_source.contains("resolved.trigger[_root_.golem.UInt](\"increment\", parameters)")
+    );
+    for removed in [
+        "def cancelable(",
+        "def scheduleCancelableAt(",
+        "CancellationToken",
+        "asyncInvokeAndAwait",
+        "InvocationReceipt",
+    ] {
+        assert!(
+            !client_source.contains(removed),
+            "removed API {removed} is generated:\n{client_source}"
+        );
+    }
     assert!(client_source.contains("_root_.golem.host.SchemaWireInterop.valueTreeToJs"));
     assert!(client_source.contains("_root_.golem.host.SchemaWireInterop.valueTreeFromJs"));
     assert!(client_source.contains("ConcreteCodec.derived[_root_.golem.UInt]"));
@@ -1704,7 +1722,7 @@ fn guest_awaited_calls_take_a_scope_card_and_reserve_its_member_names() {
                             field("card", SchemaType::permission_card(Default::default())),
                             field("__scopeCard", SchemaType::u32()),
                             field("__await", SchemaType::u32()),
-                            field("__cancelable", SchemaType::u32()),
+                            field("__invocation", SchemaType::u32()),
                         ],
                         Some(ref_to("golem-scope-card-call")),
                     ),
@@ -1746,7 +1764,7 @@ fn guest_awaited_calls_take_a_scope_card_and_reserve_its_member_names() {
         assert!(source.contains("AgentClientRuntime.awaitedValueInput(__scopeCard)"));
         assert!(source.contains("__input.call(resolved."));
         // User parameters named like internal parameters are renamed.
-        for param in ["__scopeCard", "__await", "__cancelable"] {
+        for param in ["__scopeCard", "__await", "__invocation"] {
             assert!(
                 source.contains(&format!("{param}_2: _root_.golem.UInt")),
                 "{param} is not renamed"
@@ -1778,11 +1796,10 @@ fn guest_awaited_calls_take_a_scope_card_and_reserve_its_member_names() {
         let unscoped: Vec<&str> = source
             .lines()
             .filter(|line| {
-                line.contains("resolved.invoke")
+                line.contains("resolved.trigger")
                     || line.contains("resolved.schedule")
                     || line.contains("def trigger(")
                     || line.contains("def scheduleAt(")
-                    || line.contains("def scheduleCancelableAt(")
             })
             .collect();
         // One trigger per agent method.
@@ -1850,14 +1867,23 @@ fn guest_ephemeral_agent_uses_per_invocation_identity() {
     }
     assert!(!client_source.contains("Future[EphemeralAgentRemote]"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.InvocationResult[_root_.scala.Unit]"));
-    assert!(
-        client_source
-            .contains("_root_.golem.runtime.rpc.CancelableAsyncInvocation[_root_.scala.Unit]")
-    );
-    assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwaitWithMetadata("));
-    assert!(client_source.contains("resolved.invokeWithMetadata("));
-    assert!(client_source.contains("resolved.scheduleInvocationWithMetadata("));
-    assert!(client_source.contains("resolved.scheduleCancelableInvocationWithMetadata("));
+    assert!(client_source.contains("InvocationResult(__invocation.metadata, __decoded)"));
+    assert!(client_source.contains(
+        "_root_.scala.concurrent.Future[_root_.golem.runtime.rpc.Invocation[_root_.scala.Unit]]"
+    ));
+    assert!(client_source.contains("resolved.invokeAndAwait("));
+    assert!(client_source.contains("resolved.trigger[_root_.scala.Unit]("));
+    assert!(client_source.contains("resolved.schedule[_root_.scala.Unit]("));
+    for removed in [
+        "CancelableAsyncInvocation",
+        "InvocationReceipt",
+        "CancellationToken",
+    ] {
+        assert!(
+            !client_source.contains(removed),
+            "unexpected {removed}:\n{client_source}"
+        );
+    }
     assert!(client_source.contains("EphemeralAgentRemote"));
 
     compile_guest_if_enabled(dir.as_path());

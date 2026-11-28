@@ -86,42 +86,41 @@ async fn Transport::invoke_value(
   method_name : String,
   input : @model.SchemaValue,
   scope_card : @permissions.ScopeCard?,
-) -> Invocation[@model.SchemaValue?] {
+) -> InvocationOutput[@model.SchemaValue?] {
   // Check the scope card first: a dropped scope card aborts before the input
   // encoding moves any argument card. The encoding can suspend, so the raw
   // handle is resolved again after it.
   ignore(@scope_card.resolve(scope_card, self.default_scope_card))
   let wire = encode_awaited_input(input)
-  let pending = self.raw.async_invoke_and_await(
+  let result = self.raw.invoke_and_await(
     method_name,
     wire,
     @scope_card.resolve(scope_card, self.default_scope_card),
   )
-  defer pending.future.drop()
-  let result = {
-    errdefer pending.future.cancel()
-    pending.future.get()
-  }
   match result {
-    Ok(output) => {
-      guard pending.metadata is Some(metadata) else {
-        raise rpc_error(
-          ProtocolError("completed invocation has no invocation metadata"),
-        )
+    Ok(completed) =>
+      {
+        metadata: invocation_metadata(completed.metadata),
+        value: decode_output_value(completed.result),
       }
-      let value = match output {
-        Some(output) => {
-          let decoded = @model_host.schema_value_from_wit(output) catch {
-            error =>
-              raise Schema("failed to decode invocation output: \{repr(error)}")
-          }
-          Some(decoded)
-        }
-        None => None
-      }
-      { metadata: invocation_metadata(metadata), value, }
-    }
     Err(error) => raise rpc_error(error)
+  }
+}
+
+///|
+/// Reads an invocation result into the schema model.
+fn decode_output_value(
+  output : @types.SchemaValueTree?,
+) -> @model.SchemaValue? raise ReflectError {
+  match output {
+    Some(output) => {
+      let decoded = @model_host.schema_value_from_wit(output) catch {
+        error =>
+          raise Schema("failed to decode invocation output: \{repr(error)}")
+      }
+      Some(decoded)
+    }
+    None => None
   }
 }
 
@@ -137,42 +136,44 @@ async fn encode_awaited_input(
 }
 
 ///|
-fn Transport::trigger_value(
+/// Triggers a method and returns the handle of the invocation, whose result
+/// `decode` reads from the schema model.
+async fn[T] Transport::trigger_value(
   self : Transport,
   method_name : String,
   input : @model.SchemaValue,
-) -> InvocationMetadata raise ReflectError {
+  decode : (@model.SchemaValue?) -> T raise,
+) -> @rpc.Invocation[T] {
   let wire = @model.schema_value_to_wit(input) catch {
     error => raise Schema("failed to encode invocation input: \{repr(error)}")
   }
-  match self.raw.invoke(method_name, wire, None) {
-    Ok(metadata) => invocation_metadata(metadata)
+  match self.raw.trigger(method_name, wire) {
+    Ok(raw) =>
+      @rpc.Invocation::from_raw(raw, output => {
+        decode(decode_output_value(output))
+      })
     Err(error) => raise rpc_error(error)
   }
 }
 
 ///|
-fn Transport::schedule_value(
+/// Schedules a method and returns the handle of the invocation, whose result
+/// `decode` reads from the schema model.
+async fn[T] Transport::schedule_value(
   self : Transport,
   scheduled_at : @systemClock.Instant,
   method_name : String,
   input : @model.SchemaValue,
-) -> ScheduledInvocation raise ReflectError {
+  decode : (@model.SchemaValue?) -> T raise,
+) -> @rpc.Invocation[T] {
   let wire = @model.schema_value_to_wit(input) catch {
     error => raise Schema("failed to encode invocation input: \{repr(error)}")
   }
-  match
-    self.raw.schedule_cancelable_invocation(
-      scheduled_at,
-      method_name,
-      wire,
-      None,
-    ) {
-    Ok(receipt) =>
-      {
-        metadata: invocation_metadata(receipt.metadata),
-        cancellation_token: receipt.cancellation_token,
-      }
+  match self.raw.schedule(scheduled_at, method_name, wire) {
+    Ok(raw) =>
+      @rpc.Invocation::from_raw(raw, output => {
+        decode(decode_output_value(output))
+      })
     Err(error) => raise rpc_error(error)
   }
 }

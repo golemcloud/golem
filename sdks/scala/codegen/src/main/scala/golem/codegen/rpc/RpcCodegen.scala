@@ -33,8 +33,10 @@ import scala.meta.parsers._
  *
  * Call syntax on the returned `XRemote`:
  *   - `remote.process(1, "hello")` — await the result via `apply`
- *   - `remote.process.trigger(1, "hello")` — fire-and-forget
- *   - `remote.process.scheduleAt(1, "hello", when)` — schedule at a time
+ *   - `remote.process.trigger(1, "hello")` — trigger; returns an `Invocation`
+ *     handle once the target accepted the invocation
+ *   - `remote.process.scheduleAt(1, "hello", when)` — schedule at a time;
+ *     returns an `Invocation` handle
  *   - `remote.process.withScopeCard(card)(1, "hello")` — await with a scope
  *     card; the scoped view is the nested
  *     `ProcessRemoteMethod#GolemScopeCardCall` class
@@ -363,38 +365,15 @@ object RpcCodegen {
     sb.append(s"    def apply($paramDecls): _root_.scala.concurrent.Future[$awaitResultType] =\n")
     sb.append(s"      ${if (ephemeral) "awaitWithMetadata" else "awaitWith"}($packExpr)\n\n")
 
-    if (ephemeral) {
-      sb.append(
-        s"    def cancelable($paramDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancelableAsyncInvocation[$outputType]] =\n"
-      )
-      sb.append(s"      cancelableAwaitWithMetadata($packExpr)\n\n")
-    } else {
-      sb.append(
-        s"    def cancelable($paramDecls): (_root_.scala.concurrent.Future[$outputType], _root_.golem.runtime.rpc.CancellationToken) =\n"
-      )
-      sb.append(s"      cancelableAwaitWith($packExpr)\n\n")
-    }
-
-    val receiptType = if (ephemeral) "_root_.golem.runtime.rpc.InvocationReceipt" else "_root_.scala.Unit"
-    sb.append(s"    def trigger($paramDecls): _root_.scala.concurrent.Future[$receiptType] =\n")
-    sb.append(s"      ${if (ephemeral) "triggerWithMetadata" else "triggerWith"}($packExpr)\n\n")
+    val handleType = s"_root_.golem.runtime.rpc.Invocation[$outputType]"
+    sb.append(s"    def trigger($paramDecls): _root_.scala.concurrent.Future[$handleType] =\n")
+    sb.append(s"      triggerWith($packExpr)\n\n")
 
     val scheduleParamDecls =
       if (paramDecls.isEmpty) "when: _root_.golem.Datetime"
       else s"$paramDecls, when: _root_.golem.Datetime"
-    sb.append(s"    def scheduleAt($scheduleParamDecls): _root_.scala.concurrent.Future[$receiptType] =\n")
-    sb.append(s"      ${if (ephemeral) "scheduleWithMetadata" else "scheduleWith"}($packExpr, when)\n\n")
-
-    val scheduleCancelableParamDecls = scheduleParamDecls
-    sb.append(
-      s"    def scheduleCancelableAt($scheduleCancelableParamDecls): _root_.scala.concurrent.Future[${
-          if (ephemeral) "_root_.golem.runtime.rpc.CancelableInvocationReceipt"
-          else "_root_.golem.runtime.rpc.CancellationToken"
-        }] =\n"
-    )
-    sb.append(
-      s"      ${if (ephemeral) "scheduleCancelableWithMetadata" else "scheduleCancelableWith"}($packExpr, when)\n\n"
-    )
+    sb.append(s"    def scheduleAt($scheduleParamDecls): _root_.scala.concurrent.Future[$handleType] =\n")
+    sb.append(s"      scheduleWith($packExpr, when)\n\n")
 
     sb.append("    /** The awaited calls of this method, borrowing `card` as the scope card. */\n")
     sb.append(s"    def withScopeCard(card: $ScopeCardType): $ScopedCallClassName =\n")
@@ -406,18 +385,7 @@ object RpcCodegen {
       s"    ) extends _root_.golem.runtime.rpc.AbstractWireRemoteMethod[$traitRef, $packedInputType, $outputType](scoped, $methodNameLit) {\n"
     )
     sb.append(s"      def apply($paramDecls): _root_.scala.concurrent.Future[$awaitResultType] =\n")
-    sb.append(s"        ${if (ephemeral) "awaitWithMetadata" else "awaitWith"}($packExpr)\n\n")
-    if (ephemeral) {
-      sb.append(
-        s"      def cancelable($paramDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancelableAsyncInvocation[$outputType]] =\n"
-      )
-      sb.append(s"        cancelableAwaitWithMetadata($packExpr)\n")
-    } else {
-      sb.append(
-        s"      def cancelable($paramDecls): (_root_.scala.concurrent.Future[$outputType], _root_.golem.runtime.rpc.CancellationToken) =\n"
-      )
-      sb.append(s"        cancelableAwaitWith($packExpr)\n")
-    }
+    sb.append(s"        ${if (ephemeral) "awaitWithMetadata" else "awaitWith"}($packExpr)\n")
     sb.append("    }\n")
     sb.append(s"  }\n\n")
   }

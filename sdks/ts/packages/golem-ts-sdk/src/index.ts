@@ -47,11 +47,9 @@ import './schema/effect';
 
 export { Uuid } from './uuid';
 export { InvocationId } from './invocationId';
-export type {
-  InvocationMetadata,
-  ScheduledInvocationReceipt,
-  CancelableScheduledInvocationReceipt,
-} from './invocationId';
+export type { InvocationMetadata } from './invocationId';
+export { Invocation } from './bridge/agent';
+export type { InvocationAwaitOptions, InvocationStatus } from './bridge/agent';
 export { Datetime } from './datetime';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { AgentId } from './agentId';
@@ -71,7 +69,6 @@ export {
 } from './caller';
 export type { AccountAuthentication, InvocationContext, Principal, PrincipalKind } from './caller';
 export { AgentClassName } from './agentClassName';
-export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 export * from './durableStreams';
 export * from './webhook';

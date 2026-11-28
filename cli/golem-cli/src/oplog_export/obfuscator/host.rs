@@ -191,23 +191,23 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::RandomGetRandomU64 => {
             pair::<host_functions::RandomGetRandomU64>(Bare::Neither)
         }
-        HostFunctionName::GolemRpcFutureInvokeResultGet => {
-            pair::<host_functions::GolemRpcFutureInvokeResultGet>(Bare::Neither)
-        }
         HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => {
             pair::<host_functions::GolemRpcWasmRpcInvokeAndAwaitResult>(Bare::Neither)
         }
-        HostFunctionName::GolemRpcWasmRpcInvoke => {
-            pair::<host_functions::GolemRpcWasmRpcInvoke>(Bare::Neither)
+        HostFunctionName::GolemRpcWasmRpcTrigger => {
+            pair::<host_functions::GolemRpcWasmRpcTrigger>(Bare::Neither)
         }
-        HostFunctionName::GolemRpcWasmRpcScheduleInvocation => {
-            pair::<host_functions::GolemRpcWasmRpcScheduleInvocation>(Bare::Neither)
+        HostFunctionName::GolemRpcWasmRpcSchedule => {
+            pair::<host_functions::GolemRpcWasmRpcSchedule>(Bare::Neither)
         }
-        HostFunctionName::GolemRpcCancellationTokenCancel => {
-            pair::<host_functions::GolemRpcCancellationTokenCancel>(Bare::Neither)
+        HostFunctionName::GolemRpcInvocationStatus => {
+            pair::<host_functions::GolemRpcInvocationStatus>(Bare::Neither)
         }
-        HostFunctionName::GolemRpcFutureInvokeResultCancel => {
-            pair::<host_functions::GolemRpcFutureInvokeResultCancel>(Bare::Neither)
+        HostFunctionName::GolemRpcInvocationAwait => {
+            pair::<host_functions::GolemRpcInvocationAwait>(Bare::Neither)
+        }
+        HostFunctionName::GolemRpcInvocationCancel => {
+            pair::<host_functions::GolemRpcInvocationCancel>(Bare::Neither)
         }
         HostFunctionName::IoPollReady => pair::<host_functions::IoPollReady>(Bare::Neither),
         HostFunctionName::IoPollPoll => pair::<host_functions::IoPollPoll>(Bare::Neither),
@@ -383,9 +383,6 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         }
         HostFunctionName::GolemRpcWasmRpcCreate => {
             pair::<host_functions::GolemRpcWasmRpcCreate>(Bare::Neither)
-        }
-        HostFunctionName::GolemRpcWasmRpcAsyncInvokeRejection => {
-            pair::<host_functions::GolemRpcWasmRpcAsyncInvokeRejection>(Bare::Neither)
         }
         HostFunctionName::GolemContextStartSpan => {
             pair::<host_functions::GolemContextStartSpan>(Bare::Neither)

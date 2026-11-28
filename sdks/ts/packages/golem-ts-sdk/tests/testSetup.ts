@@ -25,10 +25,8 @@ function makeWasmRpc() {
   return {
     agentId: vi.fn(async () => MOCK_REMOTE_AGENT_ID),
     invokeAndAwait: vi.fn(),
-    invoke: vi.fn(),
-    asyncInvokeAndAwait: vi.fn(),
-    scheduleInvocation: vi.fn(),
-    scheduleCancelableInvocation: vi.fn(),
+    trigger: vi.fn(),
+    schedule: vi.fn(),
   };
 }
 
@@ -63,6 +61,7 @@ vi.mock('golem:agent/host@2.0.0', () => ({
   }),
   createWebhook: () => 'https://example.com/webhook',
   WasmRpc: MockWasmRpc,
+  Invocation: { get: vi.fn() },
 }));
 
 // Entry points read the caller from the invocation context. Tests that need a

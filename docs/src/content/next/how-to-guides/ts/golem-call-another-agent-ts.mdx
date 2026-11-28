@@ -102,13 +102,14 @@ import { CounterAgent } from 'counter-agent-guest-client';
 const counter = CounterAgent.upsert('my-counter');
 const count = await counter.increment();
 
-counter.increment.trigger();
-counter.increment.schedule(runAt);
-const cancellation = counter.increment.scheduleCancelable(runAt);
+const triggered = await counter.increment.trigger();
+const scheduled = await counter.increment.schedule(runAt);
+await scheduled.cancel();
 ```
 
-Every stream-free generated method supports an awaited call plus `.trigger`,
-`.schedule`, and `.scheduleCancelable`. A method whose input or output schema
+Every stream-free generated method supports an awaited call plus `.trigger` and
+`.schedule`, which resolve to an `Invocation` handle once the target has accepted
+the invocation (see the [`golem-fire-and-forget-ts`](/next/how-to-guides/ts/golem-fire-and-forget-ts) guide). A method whose input or output schema
 recursively contains a stream is awaited only; use `AgentStream` values as
 described by the [`golem-streaming-agent-ts`](/next/how-to-guides/ts/golem-streaming-agent-ts) guide.
 
@@ -125,5 +126,6 @@ is needed: `golem build` regenerates the bridge before the consumer compiles.
 ## Avoiding Deadlocks
 
 **Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both
-agents. Use `.trigger()` (fire-and-forget) to break cycles. See the
+agents. Use `.trigger()` (fire-and-forget), which waits only until the target
+accepts the invocation, to break cycles. See the
 [`golem-fire-and-forget-ts`](/next/how-to-guides/ts/golem-fire-and-forget-ts) guide.

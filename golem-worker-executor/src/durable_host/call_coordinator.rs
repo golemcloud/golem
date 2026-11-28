@@ -349,25 +349,6 @@ pub(crate) async fn authorize_live_permissions_at_serialized_initiation<Ctx: Wor
     }
 }
 
-pub(crate) async fn try_agent_auth_ctx_at_serialized_access<T, D, Ctx>(
-    store: &(impl DurableAccess<T, D> + ?Sized),
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<Option<AuthCtx>, WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    let mut context = AccessorContext::new(store, get_ctx);
-    let mut access = InlineInitiationAccess::new(&mut context);
-    let Some(_boundary_guard) =
-        lock_synchronized_card_event_boundary_initiation_inner(&mut access, true, false).await?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(access.window(|ctx| ctx.agent_auth_ctx()).await?))
-}
-
 pub(crate) async fn agent_auth_ctx_at_serialized_access<T, D, Ctx>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,

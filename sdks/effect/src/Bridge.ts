@@ -14,10 +14,11 @@ import {
   agentStreamFromHandle as fromStreamHandle,
   agentStreamToHandle as toStreamHandle,
 } from "./internal/agentStream.js"
+import type { Invocation } from "./InvocationId.js"
 import {
   awaitInvocation,
-  invocationMetadataFromHost,
-  scheduleCancelableInvocation,
+  scheduleInvocation,
+  triggerInvocation,
   wrapHostThrow,
 } from "./internal/rpc.js"
 import { withCapabilityAdoptionTransaction } from "./internal/schema-model/capabilityTransaction.js"
@@ -379,29 +380,27 @@ export interface RemoteAgentHandle {
     decode: (value: SchemaValue | undefined) => A,
     options?: ScopeCardOptions,
   ) => Effect.Effect<RemoteInvocationResult<A>, RemoteCallError>
-  readonly invoke: (name: string, input: SchemaValue) => Effect.Effect<void, RemoteCallError>
-  readonly invokeWithMetadata: (
+  /**
+   * Start `name` without awaiting its result, and succeed with the handle once the target has
+   * durably accepted the invocation. `decode` decodes the awaited result. The current scope owns
+   * the handle, and closing it only detaches. Never sends a scope card.
+   */
+  readonly trigger: <A>(
     name: string,
     input: SchemaValue,
-  ) => Effect.Effect<InvocationMetadata, RemoteCallError>
-  readonly scheduleCancelable: (
+    decode: (value: SchemaValue | undefined) => A,
+  ) => Effect.Effect<Invocation<A>, RemoteCallError, Scope.Scope>
+  /**
+   * Enqueue `name` for `at`, and succeed with the handle once the target has durably accepted
+   * the invocation. `decode` decodes the awaited result. The current scope owns the handle, and
+   * closing it only detaches. Never sends a scope card.
+   */
+  readonly schedule: <A>(
     at: Datetime.Input,
     name: string,
     input: SchemaValue,
-  ) => Effect.Effect<
-    { readonly cancel: Effect.Effect<void> },
-    RemoteCallError | Datetime.DatetimeConversionError,
-    Scope.Scope
-  >
-  readonly scheduleCancelableWithMetadata: (
-    at: Datetime.Input,
-    name: string,
-    input: SchemaValue,
-  ) => Effect.Effect<
-    { readonly metadata: InvocationMetadata; readonly cancel: Effect.Effect<void> },
-    RemoteCallError | Datetime.DatetimeConversionError,
-    Scope.Scope
-  >
+    decode: (value: SchemaValue | undefined) => A,
+  ) => Effect.Effect<Invocation<A>, RemoteCallError | Datetime.DatetimeConversionError, Scope.Scope>
 }
 
 /** Host services and scope needed by generated constructors. @since 1.6.0 @category models */
@@ -452,30 +451,33 @@ const remote = (rpc: RpcConnection): RemoteAgentHandle => {
         }),
       ),
     )
-  const invokeWithMetadata = (name: string, input: SchemaValue) =>
-    encode(input).pipe(
-      Effect.flatMap((tree) =>
-        Effect.try({
-          try: () => invocationMetadataFromHost(rpc.invoke(name, tree)),
-          catch: wrapHostThrow,
-        }),
-      ),
-    )
-  const scheduleWithMetadata = (at: Datetime.Input, name: string, input: SchemaValue) =>
-    Datetime.fromInput(at).pipe(
-      Effect.flatMap((time) => encode(input).pipe(Effect.map((tree) => [time, tree] as const))),
-      Effect.flatMap(([time, tree]) => scheduleCancelableInvocation(rpc, time, name, tree)),
-    )
+  const decodeHandle =
+    <A>(decode: (value: SchemaValue | undefined) => A) =>
+    (tree: CoreTypes.SchemaValueTree | undefined) =>
+      Effect.try({ try: () => decodeWire(tree, decode), catch: wrapHostThrow })
   return {
     agentId: connectionAgentId(rpc),
     invokeAndAwait: (name, input, decode, options) =>
       Effect.map(awaitWithMetadata(name, input, decode, options), ({ value }) => value),
     invokeAndAwaitWithMetadata: awaitWithMetadata,
-    invoke: (name, input) => Effect.asVoid(invokeWithMetadata(name, input)),
-    invokeWithMetadata,
-    scheduleCancelable: (at, name, input) =>
-      Effect.map(scheduleWithMetadata(at, name, input), ({ cancel }) => ({ cancel })),
-    scheduleCancelableWithMetadata: scheduleWithMetadata,
+    trigger: <A>(name: string, input: SchemaValue, decode: (value: SchemaValue | undefined) => A) =>
+      encode(input).pipe(
+        Effect.flatMap((tree) =>
+          triggerInvocation<A, never>(rpc, name, tree, decodeHandle(decode)),
+        ),
+      ),
+    schedule: <A>(
+      at: Datetime.Input,
+      name: string,
+      input: SchemaValue,
+      decode: (value: SchemaValue | undefined) => A,
+    ) =>
+      Datetime.fromInput(at).pipe(
+        Effect.flatMap((time) => encode(input).pipe(Effect.map((tree) => [time, tree] as const))),
+        Effect.flatMap(([time, tree]) =>
+          scheduleInvocation<A, never>(rpc, time, name, tree, decodeHandle(decode)),
+        ),
+      ),
   }
 }
 

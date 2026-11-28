@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { InvocationMetadata as HostInvocationMetadata } from 'golem:agent/host@2.0.0';
+import type {
+  InvocationMetadata as HostInvocationMetadata,
+  InvocationStatus,
+} from 'golem:agent/host@2.0.0';
+import type { SchemaValueTree } from 'golem:core/types@2.0.0';
+import { vi } from 'vitest';
 import { AgentId } from '../src/agentId';
 import { InvocationId } from '../src/invocationId';
 import { Uuid } from '../src/uuid';
@@ -44,4 +49,24 @@ export function hostInvocationMetadata(
 export function sdkInvocationMetadata(agentId: string = TEST_INVOKED_AGENT_ID) {
   const id = AgentId.parse(agentId);
   return { agentId: id, invocationId: new InvocationId(id, testInvocationUuid) };
+}
+
+/** A completed `invoke-and-await` as `golem:agent/host` returns it. */
+export function hostInvocationResult(result?: SchemaValueTree, agentId?: string) {
+  return { metadata: hostInvocationMetadata(agentId), result };
+}
+
+/** The host invocation ID that {@link hostInvocationMetadata} names. */
+export function hostInvocationId(agentId: string = TEST_INVOKED_AGENT_ID) {
+  return hostInvocationMetadata(agentId).invocationId;
+}
+
+/** A fake host `invocation` resource whose async methods are mocks. */
+export function fakeHostInvocation(agentId: string = TEST_INVOKED_AGENT_ID) {
+  return {
+    id: vi.fn(() => hostInvocationId(agentId)),
+    status: vi.fn(async (): Promise<InvocationStatus> => 'pending'),
+    await_: vi.fn(async (): Promise<SchemaValueTree | undefined> => undefined),
+    cancel: vi.fn(async () => true),
+  };
 }

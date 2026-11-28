@@ -53,52 +53,47 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         )
       }
     },
-    test("ResolvedAgent metadata calls surface a rejected call's error and expose its metadata as absent") {
+    test("ResolvedAgent metadata calls surface a rejected call's typed error and pair a result with its metadata") {
       val agentType = rpcAgentType
       val invoker   = new RecordingRpcInvoker
       val resolved  = resolvedAgent(invoker, agentType)
       val method    = findMethod[RpcParityAgent, SampleInput, SampleOutput](agentType, "rpcCall")
-      val agentId   = golem.AgentId(java.util.UUID.fromString("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
-      val started   = InvocationMetadata(
-        agentId,
-        golem.InvocationId(agentId, java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
-      )
 
-      invoker.enqueueInvokeResult(Left("denied: missing permission"))
-      invoker.enqueueInvokeResult(Left("denied: missing permission"))
-      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("ok"))))
+      invoker.enqueueInvokeResult(Left(AgentRpcError.Denied("missing permission")))
       invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("ok"))))
 
-      ZIO.fromFuture { _ =>
+      ZIO.fromFuture { implicit ec =>
         for {
-          awaited    <- errorOf(resolved.awaitWithMetadata(method, SampleInput("a", 1)))
-          cancelable <- resolved.cancelableAwaitWithMetadata(method, SampleInput("b", 2))
-          rejection  <- errorOf(cancelable.result)
-          unstarted  <- errorOf(resolved.awaitWithMetadata(method, SampleInput("d", 4)))
-          _           = invoker.asyncMetadata = Some(started)
-          accepted   <- resolved.awaitWithMetadata(method, SampleInput("c", 3))
+          awaited  <- resolved.awaitWithMetadata(method, SampleInput("a", 1)).failed
+          accepted <- resolved.awaitWithMetadata(method, SampleInput("c", 3))
         } yield assertTrue(
-          awaited == "denied: missing permission",
-          cancelable.metadata.isEmpty,
-          rejection == "denied: missing permission",
-          unstarted == "protocol-error: completed invocation has no metadata",
+          awaited == AgentRpcException(AgentRpcError.Denied("missing permission")),
           accepted == InvocationResult(started, SampleOutput("ok"))
         )
       }
     },
-    test("ResolvedAgent routes fire-and-forget calls through trigger and schedule") {
+    test("ResolvedAgent trigger and schedule return handles that decode the method output") {
       val agentType = rpcAgentType
       val invoker   = new RecordingRpcInvoker
       val resolved  = resolvedAgent(invoker, agentType)
-      val method    = findMethod[RpcParityAgent, String, Unit](agentType, "fireAndForget")
+      val method    = findMethod[RpcParityAgent, SampleInput, SampleOutput](agentType, "rpcCall")
+      invoker.handleResult = encodeResult(SampleOutput("later"))
 
-      val triggerF  = resolved.trigger(method, "event")
-      val scheduleF = resolved.schedule(method, golem.Datetime.fromEpochMillis(42), "event")
-
-      ZIO.fromFuture(implicit ec => triggerF.flatMap(_ => scheduleF)).map { _ =>
-        assertTrue(
-          invoker.triggerCalls.headOption.exists(_._1 == method.functionName),
-          invoker.scheduleCalls.nonEmpty
+      ZIO.fromFuture { implicit ec =>
+        for {
+          triggered <- resolved.trigger(method, SampleInput("a", 1))
+          scheduled <- resolved.schedule(method, golem.Datetime.fromEpochMillis(42), SampleInput("b", 2))
+          result    <- triggered.awaitResult()
+          status    <- scheduled.status()
+          cancelled <- scheduled.cancel()
+        } yield assertTrue(
+          triggered.id == started.invocationId,
+          scheduled.id == started.invocationId,
+          result == SampleOutput("later"),
+          status == InvocationStatus.Pending,
+          cancelled,
+          invoker.triggerCalls.map(_._1) == List(method.functionName),
+          invoker.scheduleCalls.map(_._2) == List(method.functionName)
         )
       }
     },
@@ -118,7 +113,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
           _ <- defaulted.await(method, SampleInput("x", 1))
           _ <- defaulted.withScopeCard(perCall).await(method, SampleInput("x", 2))
           _ <- defaulted.withoutScopeCard.await(method, SampleInput("x", 3))
-          _ <- defaulted.cancelableAwait(method, SampleInput("x", 4))._1
+          _ <- defaulted.awaitWithMetadata(method, SampleInput("x", 4))
         } yield assertTrue(
           invoker.scopeCardsSeen.toList.map(_.map(_.toString)) ==
             List(Some(default.toString), Some(perCall.toString), None, Some(default.toString)),
@@ -217,12 +212,12 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     },
     test("Awaitable calls reject when RPC invoker returns an error") {
       val invoker = new RecordingRpcInvoker
-      invoker.enqueueInvokeResult(Left("rpc failed"))
+      invoker.enqueueInvokeResult(Left(AgentRpcError.RemoteInternal("rpc failed")))
       val resolved = resolvedAgent(invoker)
       val method   = findMethod[RpcParityAgent, SampleInput, SampleOutput](rpcAgentType, "rpcCall")
 
       ZIO.fromFuture(_ => resolved.await(method, SampleInput("oops", 1))).flip.map { ex =>
-        assertTrue(ex.getMessage.contains("rpc failed"))
+        assertTrue(ex == AgentRpcException(AgentRpcError.RemoteInternal("rpc failed")))
       }
     },
     test("Trigger works for any method") {
@@ -259,14 +254,67 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
       val stream    = AgentStream.fromPull(() => Future.successful(Some("still-owned")))
 
       ZIO.fromFuture { implicit ec =>
-        resolved.trigger(method, stream).failed.flatMap { _ =>
+        resolved.trigger(method, stream).failed.flatMap { error =>
           stream.pull().map { remaining =>
             assertTrue(
+              error match {
+                case error: IllegalArgumentException => error.getMessage.contains("live streams")
+                case _                               => false
+              },
               remaining.contains("still-owned"),
               invoker.triggerCalls.isEmpty
             )
           }
         }
+      }
+    },
+    test("trigger and schedule reject a method whose output is a stream before calling the host") {
+      val agentType = rpcAgentType
+      val invoker   = new RecordingRpcInvoker
+      val resolved  = resolvedAgent(invoker, agentType)
+      val method    = findMethod[RpcParityAgent, Unit, AgentStream[String]](agentType, "produceStream")
+
+      def rejected(error: Throwable): Boolean =
+        error match {
+          case error: IllegalArgumentException => error.getMessage.contains("live streams")
+          case _                               => false
+        }
+
+      ZIO.fromFuture { implicit ec =>
+        for {
+          triggered <- resolved.trigger(method, ()).failed
+          scheduled <- resolved.schedule(method, golem.Datetime.fromEpochMillis(1.0), ()).failed
+        } yield assertTrue(
+          rejected(triggered),
+          rejected(scheduled),
+          invoker.triggerCalls.isEmpty,
+          invoker.scheduleCalls.isEmpty
+        )
+      }
+    },
+    test("wire trigger and schedule reject a method whose output is a stream before calling the host") {
+      val invoker = new RecordingRpcInvoker
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", invoker))
+      val method  = wire.methodByName[Unit, AgentStream[String]]("produceStream")
+
+      def rejected(error: Throwable): Boolean =
+        error match {
+          case error: IllegalArgumentException => error.getMessage.contains("live streams")
+          case _                               => false
+        }
+
+      ZIO.fromFuture { implicit ec =>
+        for {
+          triggered <- wire.trigger(method, ()).failed
+          scheduled <- wire.schedule(method, golem.Datetime.fromEpochMillis(1.0), ()).failed
+        } yield assertTrue(
+          method.outputContainsStream,
+          !method.inputContainsStream,
+          rejected(triggered),
+          rejected(scheduled),
+          invoker.triggerCalls.isEmpty,
+          invoker.scheduleCalls.isEmpty
+        )
       }
     },
     test("wire immediate encoding rejects a live stream before transferring ownership") {
@@ -334,85 +382,66 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         candidate.asInstanceOf[AgentMethod[Trait, In, Out]]
     }.getOrElse(throw new IllegalArgumentException(s"Method definition for $name not found"))
 
+  private val started: InvocationMetadata = {
+    val agentId = golem.AgentId(java.util.UUID.fromString("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
+    InvocationMetadata(
+      agentId,
+      golem.InvocationId(agentId, java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
+    )
+  }
+
   private final class RecordingRpcInvoker extends RpcInvoker {
     val invokeCalls    = mutable.ListBuffer.empty[(String, JsSchemaValueTree)]
     val scopeCardsSeen = mutable.ListBuffer.empty[Option[ScopeCard]]
     val triggerCalls   = mutable.ListBuffer.empty[(String, JsSchemaValueTree)]
     val scheduleCalls  = mutable.ListBuffer.empty[(golem.Datetime, String, JsSchemaValueTree)]
 
-    private val invokeResults = mutable.Queue.empty[Either[String, Option[JsSchemaValueTree]]]
+    private val invokeResults = mutable.Queue.empty[Either[AgentRpcError, Option[JsSchemaValueTree]]]
 
-    var asyncMetadata: Option[InvocationMetadata] = None
+    var handleResult: Option[JsSchemaValueTree] = None
 
-    def enqueueInvokeResult(result: Either[String, Option[JsSchemaValueTree]]): Unit =
+    def enqueueInvokeResult(result: Either[AgentRpcError, Option[JsSchemaValueTree]]): Unit =
       invokeResults.enqueue(result)
 
     override def invokeAndAwait(
       functionName: String,
       input: JsSchemaValueTree,
       scopeCard: Option[ScopeCard]
-    ): Either[String, Option[JsSchemaValueTree]] = {
+    ): Future[InvocationResult[Option[JsSchemaValueTree]]] = {
       invokeCalls += ((functionName, input))
       scopeCardsSeen += scopeCard
-      if (invokeResults.nonEmpty) invokeResults.dequeue()
-      else Right(None)
+      (if (invokeResults.nonEmpty) invokeResults.dequeue() else Right(None)) match {
+        case Right(value) => Future.successful(InvocationResult(started, value))
+        case Left(error)  => Future.failed(AgentRpcException(error))
+      }
     }
 
-    override def asyncInvokeAndAwait(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: Option[ScopeCard]
-    ): Future[Option[JsSchemaValueTree]] = {
-      invokeCalls += ((functionName, input))
-      scopeCardsSeen += scopeCard
-      if (invokeResults.nonEmpty) {
-        invokeResults.dequeue() match {
-          case Right(v)  => Future.successful(v)
-          case Left(err) => Future.failed(js.JavaScriptException(err))
+    private def handle(): Invocation[Option[JsSchemaValueTree]] =
+      Invocation(
+        started.invocationId,
+        new Invocation.Backend {
+          def status(): Future[InvocationStatus]            = Future.successful(InvocationStatus.Pending)
+          def awaitRaw(): Future[Option[JsSchemaValueTree]] = Future.successful(handleResult)
+          def cancel(): Future[Boolean]                     = Future.successful(true)
         }
-      } else Future.successful(None)
-    }
-
-    override def asyncInvokeAndAwaitWithMetadata(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: Option[ScopeCard]
-    ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] =
-      Right(
-        AsyncInvocation(
-          asyncMetadata,
-          asyncInvokeAndAwait(functionName, input, scopeCard),
-          CancellationToken.fromFunction(() => ())
-        )
       )
 
-    override def cancelableAsyncInvokeAndAwait(
+    override def trigger(
       functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: Option[ScopeCard]
-    ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
-      (asyncInvokeAndAwait(functionName, input, scopeCard), CancellationToken.fromFunction(() => ()))
-
-    override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] = {
+      input: JsSchemaValueTree
+    ): Future[Invocation[Option[JsSchemaValueTree]]] = {
       triggerCalls += ((functionName, input))
-      Right(())
+      Future.successful(handle())
     }
 
-    override def scheduleInvocation(
+    override def schedule(
       datetime: golem.Datetime,
       functionName: String,
       input: JsSchemaValueTree
-    ): Either[String, Unit] = {
+    ): Future[Invocation[Option[JsSchemaValueTree]]] = {
       scheduleCalls += ((datetime, functionName, input))
-      Right(())
+      Future.successful(handle())
     }
-
-    override def scheduleCancelableInvocation(
-      datetime: golem.Datetime,
-      functionName: String,
-      input: JsSchemaValueTree
-    ): Either[String, CancellationToken] =
-      Left("not used")
   }
 }
 
@@ -433,6 +462,8 @@ private object AgentClientRuntimeSpecFixtures {
     def fireAndForget(event: String): Unit
 
     def consumeStream(stream: AgentStream[String]): Unit
+
+    def produceStream(): Future[AgentStream[String]]
   }
 
   @agentDefinition(mode = DurabilityMode.Durable)
@@ -446,6 +477,8 @@ private object AgentClientRuntimeSpecFixtures {
     def sendCard(card: PermissionCard): Future[Boolean]
 
     def sendTemplate(card: PolymorphicPermissionCard): Future[PolymorphicPermissionCard]
+
+    def produceStream(): Future[AgentStream[String]]
   }
 
   final case class RpcCtor(token: String)

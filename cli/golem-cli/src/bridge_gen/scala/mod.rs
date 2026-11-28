@@ -299,7 +299,6 @@ const GUEST_RESERVED_PARAM_NAMES: &[&str] = &[
     "__defaultScopeCard",
     "__attachedScopeCard",
     "__await",
-    "__cancelable",
 ];
 
 /// Member names a generated named type cannot use for a case-class field or a
@@ -380,7 +379,7 @@ const RESERVED_GUEST_RUNTIME_TYPE_NAMES: &[&str] = &[
     "SchemaResult",
     "Datetime",
     "ClientError",
-    "CancellationToken",
+    "Invocation",
     "ConfigOverride",
     "RemoteAgentClient",
     "AgentIdentity",
@@ -1014,20 +1013,20 @@ impl ScalaBridgeGenerator {
         } else {
             format!("{FUTURE}[{ret_ty}]")
         };
+        let queue = "_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue";
+        writer.line(format!(
+            "private def __await({scoped_decls}): {apply_ret_ty} = {{"
+        ));
+        writer.indent();
+        writer.line(format!(
+            "{awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
+        ));
+        writer.line(format!(
+            "__input.call(resolved.invokeAndAwait({method_name_lit}, _, __scopeCard)).{result_map} {{ __invocation =>"
+        ));
+        writer.indent();
+        writer.line("val __result = __invocation.value");
         if ephemeral {
-            writer.line(format!(
-                "private def __await({scoped_decls}): {apply_ret_ty} = {{"
-            ));
-            writer.indent();
-            writer.line(format!(
-                "{awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
-            ));
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(__input.call(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, _, __scopeCard))).flatMap {{ __invocation =>"
-            ));
-            writer.indent();
-            writer.line(format!("__invocation.result.{result_map} {{ __result =>"));
-            writer.indent();
             writer.line("val __decoded = {");
             writer.indent();
             writer.line(decode_block.clone());
@@ -1035,101 +1034,26 @@ impl ScalaBridgeGenerator {
             writer.line("}");
             if uses_streams {
                 writer.line(format!(
-                    "__decoded.map(value => {GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult(__invocation.metadata, value))(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)"
+                    "__decoded.map(value => {GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult(__invocation.metadata, value))({queue})"
                 ));
             } else {
                 writer.line(format!(
                     "{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult(__invocation.metadata, __decoded)"
                 ));
             }
-            writer.dedent();
-            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
-            writer.dedent();
-            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
-            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
-            writer.dedent();
-            writer.line("}");
         } else {
-            writer.line(format!(
-                "private def __await({scoped_decls}): {apply_ret_ty} = {{"
-            ));
-            writer.indent();
-            writer.line(format!(
-                "{awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
-            ));
-            writer.line(format!(
-                "__input.call(resolved.asyncInvokeAndAwait({method_name_lit}, _, __scopeCard)).{result_map} {{ __result =>"
-            ));
-            writer.indent();
             writer.line(decode_block.clone());
-            writer.dedent();
-            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
-            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
-            writer.dedent();
-            writer.line("}");
         }
-        writer.blank();
-
-        let cancelable_ret_ty = if ephemeral {
-            format!("{FUTURE}[{GUEST_RUNTIME_PKG}.runtime.rpc.CancelableAsyncInvocation[{ret_ty}]]")
-        } else {
-            format!("({FUTURE}[{ret_ty}], {GUEST_RUNTIME_PKG}.runtime.rpc.CancellationToken)")
-        };
-        if ephemeral {
-            writer.line(format!(
-                "private def __cancelable({scoped_decls}): {cancelable_ret_ty} = {{"
-            ));
-            writer.indent();
-            writer.line(format!(
-                "{awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
-            ));
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(__input.call(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, _, __scopeCard))).map {{ __invocation =>"
-            ));
-            writer.indent();
-            writer.line(format!(
-                "val __future = __invocation.result.{result_map} {{ __result =>"
-            ));
-            writer.indent();
-            writer.line(decode_block.clone());
-            writer.dedent();
-            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.runtime.rpc.CancelableAsyncInvocation(__invocation.metadata, __future, __invocation.cancellationToken)"
-            ));
-            writer.dedent();
-            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
-            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
-            writer.dedent();
-            writer.line("}");
-        } else {
-            writer.line(format!(
-                "private def __cancelable({scoped_decls}): {cancelable_ret_ty} = {{"
-            ));
-            writer.indent();
-            writer.line(format!(
-                "var __underlying = _root_.scala.Option.empty[_root_.golem.runtime.rpc.CancellationToken]\nvar __cancelled = false\nval __token = _root_.golem.runtime.rpc.CancellationToken.fromFunction(() => {{ __cancelled = true; __underlying.foreach(_.cancel()) }})\nval __future = {awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
-            ));
-            writer.line(format!(
-                "val (__rawFuture, __rawToken) = __input.call(resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, _, __scopeCard))\n__underlying = _root_.scala.Some(__rawToken)\nif (__cancelled) __rawToken.cancel()\n__rawFuture.{result_map} {{ __result =>"
-            ));
-            writer.indent();
-            writer.line(decode_block.clone());
-            writer.dedent();
-            writer.line(
-                "}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)\n}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)\n(__future, __token)",
-            );
-            writer.dedent();
-            writer.line("}");
-        }
+        writer.dedent();
+        writer.line(format!("}}({queue})"));
+        writer.line(format!("}}({queue})"));
+        writer.dedent();
+        writer.line("}");
         writer.blank();
 
         let default_args = scoped_args("__defaultScopeCard");
         writer.line(format!(
             "def apply({param_decls}): {apply_ret_ty} = __await({default_args})"
-        ));
-        writer.line(format!(
-            "def cancelable({param_decls}): {cancelable_ret_ty} = __cancelable({default_args})"
         ));
         writer.blank();
         writer.line("/** The awaited calls of this method, borrowing `card` as the scope card. */");
@@ -1145,9 +1069,6 @@ impl ScalaBridgeGenerator {
         writer.line(format!(
             "def apply({param_decls}): {apply_ret_ty} = __await({attached_args})"
         ));
-        writer.line(format!(
-            "def cancelable({param_decls}): {cancelable_ret_ty} = __cancelable({attached_args})"
-        ));
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1158,29 +1079,28 @@ impl ScalaBridgeGenerator {
             return Ok(());
         }
 
-        let trigger_result = if ephemeral {
-            format!("{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationReceipt")
-        } else {
-            UNIT.to_string()
+        // Triggered and scheduled invocations return the invocation handle,
+        // whose awaited result decodes like the result of `apply`.
+        let handle_ty = format!("{FUTURE}[{GUEST_RUNTIME_PKG}.runtime.rpc.Invocation[{ret_ty}]]");
+        let write_started = |writer: &mut ScalaWriter, start: String| {
+            writer.indent();
+            writer.line(format!(
+                "val parameters = {sync_encoder}(methodParameters({invoke_args}))"
+            ));
+            writer.line(format!("{start} {{ __result =>"));
+            writer.indent();
+            writer.line(decode_block.clone());
+            writer.dedent();
+            writer.line("}");
+            writer.dedent();
+            writer.line("}");
         };
-        writer.line(format!(
-            "def trigger({param_decls}): {FUTURE}[{trigger_result}] = {{"
-        ));
-        writer.indent();
-        writer.line(format!(
-            "val parameters = {sync_encoder}(methodParameters({invoke_args}))"
-        ));
-        if ephemeral {
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.invokeWithMetadata({method_name_lit}, parameters).map({GUEST_RUNTIME_PKG}.runtime.rpc.InvocationReceipt.apply))"
-            ));
-        } else {
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.invoke({method_name_lit}, parameters))"
-            ));
-        }
-        writer.dedent();
-        writer.line("}");
+
+        writer.line(format!("def trigger({param_decls}): {handle_ty} = {{"));
+        write_started(
+            writer,
+            format!("resolved.trigger[{ret_ty}]({method_name_lit}, parameters)"),
+        );
         writer.blank();
 
         let schedule_decls = if param_decls.is_empty() {
@@ -1189,54 +1109,13 @@ impl ScalaBridgeGenerator {
             format!("{param_decls}, when: {SCHEDULE_TIME}")
         };
         let when = format!("{GUEST_RUNTIME_PKG}.Datetime.fromInstant(when)");
-        let schedule_result = if ephemeral {
-            format!("{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationReceipt")
-        } else {
-            UNIT.to_string()
-        };
         writer.line(format!(
-            "def scheduleAt({schedule_decls}): {FUTURE}[{schedule_result}] = {{"
+            "def scheduleAt({schedule_decls}): {handle_ty} = {{"
         ));
-        writer.indent();
-        writer.line(format!(
-            "val parameters = {sync_encoder}(methodParameters({invoke_args}))"
-        ));
-        if ephemeral {
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocationWithMetadata({when}, {method_name_lit}, parameters))"
-            ));
-        } else {
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocation({when}, {method_name_lit}, parameters))"
-            ));
-        }
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
-
-        let schedule_cancelable_result = if ephemeral {
-            format!("{GUEST_RUNTIME_PKG}.runtime.rpc.CancelableInvocationReceipt")
-        } else {
-            format!("{GUEST_RUNTIME_PKG}.runtime.rpc.CancellationToken")
-        };
-        writer.line(format!(
-            "def scheduleCancelableAt({schedule_decls}): {FUTURE}[{schedule_cancelable_result}] = {{"
-        ));
-        writer.indent();
-        writer.line(format!(
-            "val parameters = {sync_encoder}(methodParameters({invoke_args}))"
-        ));
-        if ephemeral {
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocationWithMetadata({when}, {method_name_lit}, parameters))"
-            ));
-        } else {
-            writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocation({when}, {method_name_lit}, parameters))"
-            ));
-        }
-        writer.dedent();
-        writer.line("}");
+        write_started(
+            writer,
+            format!("resolved.schedule[{ret_ty}]({when}, {method_name_lit}, parameters)"),
+        );
 
         writer.dedent();
         writer.line("}");
@@ -3993,12 +3872,22 @@ mod tests {
         assert!(client_source.contains(
             "_root_.golem.runtime.rpc.AgentIdentity.upsert(agentTypeName, constructorPayload)"
         ));
-        assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
-        assert!(client_source.contains("def cancelable("));
-        assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
-        assert!(client_source.contains("def scheduleCancelableAt("));
-        assert!(client_source.contains("resolved.scheduleCancelableInvocation"));
-        assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
+        assert!(client_source.contains("resolved.invokeAndAwait("));
+        assert!(client_source.contains("resolved.trigger["));
+        assert!(client_source.contains("resolved.schedule["));
+        assert!(client_source.contains("_root_.golem.runtime.rpc.Invocation["));
+        for removed in [
+            "def cancelable(",
+            "def scheduleCancelableAt(",
+            "CancellationToken",
+            "asyncInvokeAndAwait",
+            "InvocationReceipt",
+        ] {
+            assert!(
+                !client_source.contains(removed),
+                "removed API {removed} is generated:\n{client_source}"
+            );
+        }
         assert!(client_source.contains(
             "__outputCodec.decode(_root_.golem.host.SchemaWireInterop.valueTreeFromJs(__tree))"
         ));
@@ -4075,14 +3964,18 @@ mod tests {
         )
         .unwrap();
         assert!(
-            client_source.contains("resolved.cancelableAsyncInvokeAndAwaitWithMetadata("),
-            "ephemeral await must use asynchronous metadata-aware RPC:\n{client_source}"
+            client_source.contains("resolved.invokeAndAwait(")
+                && client_source.contains("InvocationResult(__invocation.metadata, __decoded)"),
+            "ephemeral await must pair the result with its metadata:\n{client_source}"
         );
-        assert!(!client_source.contains("resolved.invokeAndAwaitWithMetadata("));
+        assert!(
+            client_source.contains("_root_.golem.runtime.rpc.Invocation[_root_.scala.Unit]"),
+            "ephemeral trigger must return an invocation handle:\n{client_source}"
+        );
     }
 
     #[test]
-    fn guest_generation_renames_parameters_that_collide_with_cancelable_locals() {
+    fn guest_generation_renames_parameters_that_collide_with_generated_locals() {
         let dir = TempDir::new().unwrap();
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
@@ -4094,8 +3987,8 @@ mod tests {
             description: String::new(),
             prompt_hint: None,
             input_schema: InputSchema::parameters(vec![
-                NamedField::user_supplied("__future", SchemaType::string()),
-                NamedField::user_supplied("__token", SchemaType::string()),
+                NamedField::user_supplied("__result", SchemaType::string()),
+                NamedField::user_supplied("__invocation", SchemaType::string()),
             ]),
             output_schema: OutputSchema::Unit,
             http_endpoint: vec![],
@@ -4116,10 +4009,10 @@ mod tests {
                 .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
         )
         .unwrap();
-        assert!(client_source.contains("def cancelable(__future_2:"));
-        assert!(client_source.contains("__token_2:"));
-        assert!(client_source.contains("val (__rawFuture, __rawToken) ="));
-        assert!(!client_source.contains("def cancelable(__future:"));
+        assert!(client_source.contains("def apply(__result_2:"));
+        assert!(client_source.contains("def trigger(__result_2:"));
+        assert!(client_source.contains("__invocation_2:"));
+        assert!(!client_source.contains("def apply(__result:"));
     }
 
     #[test]

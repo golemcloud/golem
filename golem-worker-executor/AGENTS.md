@@ -27,7 +27,9 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
    the target persists one invocation and one
    result. Attempts are not executions. This persistence rule applies to RPCs that execute: a
    settled read-only cache hit or coalesced follower returns the shared cached result without a
-   separate target invocation, result, or alias.
+   separate target invocation, result, or alias. A trigger admits with `requires_own_record`
+   and skips the cache hit: its handle observes the target invocation by its ID, so the target
+   must record it.
 
 ## Durable versus resident state
 

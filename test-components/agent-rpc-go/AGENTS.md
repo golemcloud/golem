@@ -100,7 +100,7 @@ Key concepts:
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see the `golem-call-another-agent-go` skill)
 - A keyed agent is created implicitly by `upsert` or by the first invocation by key — no separate creation step needed
-- **Async handles cannot outlive invocations** — every async host resource (e.g. an outgoing-HTTP response or an RPC `*golem.Future`) must be consumed within the same invocation; do not store an unresolved response or future in agent state to consume it from a later invocation
+- **Async handles cannot outlive invocations** — every async host resource (e.g. an outgoing-HTTP response or an RPC `*golem.Invocation` handle) must be used within the same invocation; do not store an unresolved response or a handle in agent state. To reach a triggered or scheduled invocation from a later invocation, store its `ID()` and rebuild the handle with the method descriptor's `Invocation(id)`
 
 ## Durability & Automatic Retries
 

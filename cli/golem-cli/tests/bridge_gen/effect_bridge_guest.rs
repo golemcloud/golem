@@ -53,9 +53,20 @@ fn effect_guest_ephemeral_upsert_only_and_metadata_compile() {
         "ephemeral-effect-agent-guest-client.ts",
         r#"
 import { Effect } from "effect"
+import { InvocationId } from "@golemcloud/effect-golem"
 import { EphemeralEffectAgent } from "./ephemeral-effect-agent-guest-client.js"
 const result = Effect.flatMap(EphemeralEffectAgent.upsert("name"), client => client.run(1))
 const checked: Effect.Effect<{ readonly metadata: unknown; readonly value: string }, unknown, unknown> = result
+const triggered = Effect.flatMap(EphemeralEffectAgent.upsert("name"), client => client.run.trigger(1))
+const handle: Effect.Effect<InvocationId.Invocation<string>, unknown, unknown> = triggered
+const awaited = Effect.flatMap(triggered, invocation => invocation.awaitResult)
+const awaitedChecked: Effect.Effect<string, unknown, unknown> = awaited
+// @ts-expect-error a handle carries no invocation metadata
+void Effect.map(triggered, invocation => invocation.metadata)
+// @ts-expect-error schedule returns a handle; there is no cancelable variant
+void Effect.flatMap(EphemeralEffectAgent.upsert("name"), client => client.run.scheduleCancelable)
+void handle
+void awaitedChecked
 // @ts-expect-error an ephemeral agent has no create
 void EphemeralEffectAgent.create("name")
 // @ts-expect-error an ephemeral agent has no getById

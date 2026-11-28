@@ -208,7 +208,6 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
       before        <- remote.inspectAllowed()
       perCall       <- remote.inspectAllowed.withScopeCard(scope)()
       byDefault     <- remote.withDefaultScopeCard(scope).inspectAllowed()
-      cancelable    <- remote.inspectAllowed.withScopeCard(scope).cancelable()._1
       after         <- remote.inspectAllowed()
       scopeUsable    = scope.isPresent && scope.inspect().isRight
       deniedDerive  <- remote.deriveFromWalletError()
@@ -287,7 +286,6 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
         s"before=$before",
         s"per-call=$perCall",
         s"default=$byDefault",
-        s"cancelable=$cancelable",
         s"after=$after",
         s"scope-usable=$scopeUsable",
         s"denied-derive=$deniedDerive",

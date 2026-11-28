@@ -13,10 +13,7 @@
 // limitations under the License.
 
 import type { AgentId as RawAgentId, Uuid as RawUuid } from 'golem:core/types@2.0.0';
-import type {
-  CancellationToken,
-  InvocationMetadata as HostInvocationMetadata,
-} from 'golem:agent/host@2.0.0';
+import type { InvocationMetadata as HostInvocationMetadata } from 'golem:agent/host@2.0.0';
 import { AgentId } from './agentId';
 import { Uuid } from './uuid';
 
@@ -62,23 +59,12 @@ export class InvocationId {
 }
 
 /**
- * Final identity allocated for one remote invocation. For an ephemeral target, `agentId` is the
- * ID of the one-shot instance that ran it.
+ * Final identity allocated for one awaited remote invocation. For an ephemeral target, `agentId`
+ * is the ID of the one-shot instance that ran it.
  */
 export interface InvocationMetadata {
   readonly agentId: AgentId;
   readonly invocationId: InvocationId;
-}
-
-/** Receipt returned when an invocation has been scheduled. */
-export interface ScheduledInvocationReceipt {
-  readonly metadata: InvocationMetadata;
-}
-
-/** Receipt for a scheduled invocation that can still be cancelled. */
-export interface CancelableScheduledInvocationReceipt {
-  readonly metadata: InvocationMetadata;
-  readonly cancellationToken: CancellationToken;
 }
 
 /** @internal Converts the host invocation metadata into the frozen SDK form. */

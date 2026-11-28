@@ -118,7 +118,6 @@ card; it stays usable after the call.
 val target = TargetClient.upsert("b")
 
 target.work.withScopeCard(scope)(input)           // one call
-target.work.withScopeCard(scope).cancelable(input)
 
 val scoped = target.withDefaultScopeCard(scope)   // every awaited call of this client
 scoped.work(input)
@@ -139,8 +138,8 @@ is sent: argument cards, quota tokens and secrets stay with the caller (a card r
 dropped), and stream arguments are closed. The reflection clients report this case as
 `Left(GolemReflectError.Validation(...))`.
 
-Only the awaited calls (`apply` and `cancelable`) carry a scope card. `trigger`, `scheduleAt` and
-`scheduleCancelableAt` never carry one. The reflection clients take an optional `scopeCard` on
+Only the awaited call (`apply`) carries a scope card. `trigger` and `scheduleAt`, which return an
+`Invocation` handle, never carry one. The reflection clients take an optional `scopeCard` on
 their awaited `invoke`, `invokeJson` and `invokeValue`. Bridge clients that `golem` generates for
 Scala guests offer the same `withScopeCard` and `withDefaultScopeCard` members. They map a
 `permission-card { polymorphic: true }` parameter or result to `PolymorphicPermissionCard` and a

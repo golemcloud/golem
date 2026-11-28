@@ -3,8 +3,13 @@
 // Licensed under the Golem Source License v1.1
 
 import { getAgentTypeByAgentId, type Datetime } from 'golem:agent/host@2.0.0';
-import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
-import { getRemoteAgentById, RemoteCallError, type RemoteAgentHandle } from './bridge/agent';
+import type { InvocationMetadata } from './invocationId';
+import {
+  getRemoteAgentById,
+  RemoteCallError,
+  type Invocation,
+  type RemoteAgentHandle,
+} from './bridge/agent';
 import { type SchemaValue } from './internal/schema-model';
 import { AgentId } from './agentId';
 import type { ScopeCard } from './host/permissions';
@@ -27,8 +32,16 @@ export interface DynamicAgentMethodSurface {
     signal?: AbortSignal,
     scopeCard?: ScopeCard,
   ): Promise<DynamicInvocation<SchemaValue>>;
-  triggerValue(input: SchemaValue): InvocationMetadata;
-  scheduleValue(at: Datetime, input: SchemaValue): CancelableScheduledInvocationReceipt;
+  /**
+   * Triggers the method without awaiting its result, and resolves to the invocation's handle
+   * once the target has durably accepted it. Never sends a scope card.
+   */
+  triggerValue(input: SchemaValue): Promise<Invocation<SchemaValue | undefined>>;
+  /**
+   * Schedules the method for `at`, and resolves to the invocation's handle once the target has
+   * durably accepted it. Never sends a scope card.
+   */
+  scheduleValue(at: Datetime, input: SchemaValue): Promise<Invocation<SchemaValue | undefined>>;
 }
 
 /** Invokes an existing durable agent with schema values and no typed client definition. */
@@ -76,11 +89,11 @@ export class DynamicAgentMethod implements DynamicAgentMethodSurface {
     return this.remote.invokeAndAwaitWithMetadata(this.name, input, signal, scopeCard);
   }
 
-  triggerValue(input: SchemaValue): InvocationMetadata {
-    return this.remote.invokeWithMetadata(this.name, input);
+  triggerValue(input: SchemaValue): Promise<Invocation<SchemaValue | undefined>> {
+    return this.remote.trigger(this.name, input);
   }
 
-  scheduleValue(at: Datetime, input: SchemaValue): CancelableScheduledInvocationReceipt {
-    return this.remote.scheduleCancelableWithMetadata(at, this.name, input);
+  scheduleValue(at: Datetime, input: SchemaValue): Promise<Invocation<SchemaValue | undefined>> {
+    return this.remote.schedule(at, this.name, input);
   }
 }

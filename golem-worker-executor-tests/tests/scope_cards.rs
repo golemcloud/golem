@@ -644,7 +644,7 @@ async fn assert_scope_absent(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
-async fn scope_cards_are_delivered_by_both_await_variants_and_removed_at_end(
+async fn scope_cards_are_delivered_by_awaited_rpc_and_removed_at_end(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -676,21 +676,6 @@ async fn scope_cards_are_delivered_by_both_await_variants_and_removed_at_end(
             &component,
             &caller,
             "invoke_and_await_scope",
-            data_value!(target_name),
-        )
-        .await?
-        .into_typed::<(bool, bool, bool, SchemaCardId)>()?;
-    assert_eq!(
-        (present, parent_matches, inspect_matches),
-        (true, true, true)
-    );
-    assert_scope_absent(&executor, &component, &target, scope_card_id).await?;
-
-    let (present, parent_matches, inspect_matches, scope_card_id) = executor
-        .invoke_and_await_agent(
-            &component,
-            &caller,
-            "async_invoke_and_await_scope",
             data_value!(target_name),
         )
         .await?
@@ -2249,7 +2234,7 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
-async fn scope_cards_reject_non_await_and_persistent_arguments(
+async fn scope_cards_reject_persistent_arguments(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -2273,17 +2258,6 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
     configure_scope_card_root(&authority, &component, &caller)?;
     executor.start_agent(&component.id, caller.clone()).await?;
 
-    let invoke_denied = executor
-        .invoke_and_await_agent(
-            &component,
-            &caller,
-            "invoke_scope_is_denied",
-            data_value!("rejection-target"),
-        )
-        .await?
-        .into_typed::<bool>()?;
-    assert!(invoke_denied, "fire-and-forget scope card should be denied");
-
     let persistent_denied = executor
         .invoke_and_await_agent(
             &component,
@@ -2298,20 +2272,6 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
         "a persistent card must not be accepted as the scope-card argument"
     );
 
-    let persistent_async_denied = executor
-        .invoke_and_await_agent(
-            &component,
-            &caller,
-            "persistent_async_scope_is_denied",
-            data_value!("rejection-target"),
-        )
-        .await?
-        .into_typed::<bool>()?;
-    assert!(
-        persistent_async_denied,
-        "async-invoke-and-await must deny a persistent scope-card argument without trapping"
-    );
-
     drop(executor);
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
     let wallet_cards = executor
@@ -2320,31 +2280,8 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
         .into_typed::<u32>()?;
     assert!(
         wallet_cards > 0,
-        "the caller must recover by replaying the recorded async scope-card denial"
+        "the caller must recover by replaying the recorded scope-card denial"
     );
-
-    for (method, caller_name) in [
-        ("schedule_scope", "schedule-caller"),
-        ("schedule_cancelable_scope", "cancelable-schedule-caller"),
-    ] {
-        let schedule_caller = agent_key!("ScopeCardAgent", caller_name);
-        executor
-            .start_agent(&component.id, schedule_caller.clone())
-            .await?;
-        let error = executor
-            .invoke_and_await_agent(
-                &component,
-                &schedule_caller,
-                method,
-                data_value!("rejection-target"),
-            )
-            .await
-            .expect_err("scheduled scope-card invocation should fail");
-        assert!(
-            error.to_string().contains("does not accept scope cards"),
-            "unexpected {method} error: {error:#}"
-        );
-    }
 
     Ok(())
 }
@@ -6671,11 +6608,8 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
     assert!(denied_webhook.is_err(), "webhook creation must be denied");
 
     for method in [
-        "outbound_agent_rpc_invoke_result",
-        "outbound_agent_rpc_async_invoke_and_await_result",
+        "outbound_agent_rpc_trigger_result",
         "outbound_agent_rpc_invoke_and_await_result",
-        "outbound_agent_rpc_schedule_result",
-        "outbound_agent_rpc_schedule_cancelable_result",
     ] {
         let denied = executor
             .invoke_and_await_agent(
@@ -6691,6 +6625,19 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
             "agent RPC {method} must return RpcError::Denied, got {denied:?}"
         );
     }
+    let denied = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "outbound_agent_rpc_schedule_result",
+            data_value!("GolemHostApi", "protected-target", "get_self_uri"),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(
+        denied.as_ref().is_err_and(|error| error.contains("Denied")),
+        "agent RPC outbound_agent_rpc_schedule_result must return RpcError::Denied, got {denied:?}"
+    );
 
     let tool_component_id = ComponentId::new();
     let tool_name = "every-protected-tool";
@@ -8175,7 +8122,7 @@ async fn protected_host_families_return_typed_default_denials(
         .invoke_and_await_agent(
             &component,
             &rpc,
-            "outbound_agent_rpc_invoke_result",
+            "outbound_agent_rpc_trigger_result",
             data_value!("ScopeCardAgent", "never-started", "wallet_card_count"),
         )
         .await?

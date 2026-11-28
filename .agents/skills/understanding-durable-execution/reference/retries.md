@@ -38,8 +38,8 @@ agent outside snapshotting mode. Such a call waits out a backoff of any length i
 Sibling tasks keep running, and the suspension coordinator sees the wait as passive, so it can
 suspend the agent and schedule its wakeup at the deadline instead of holding an idle Store. The
 direct `&mut ctx` path, ephemeral agents and snapshot mode keep the threshold and the trap
-fallback. P3 HTTP sends, response-body resumption, accessor host calls and asynchronous agent
-RPC (`rpc/future.rs::get`, which re-sends with the same idempotency key) wait durably; streaming
+fallback. P3 HTTP sends, response-body resumption, accessor host calls and awaited agent RPC
+(`rpc/invoke_and_await.rs`, which re-sends with the same idempotency key) wait durably; streaming
 RPC and DNS lookups do not. A P3 HTTP send waits durably while its request body can become
 resendable (`may_replay_after_send_failure`): nothing was pulled yet, or every pulled frame is
 recorded. Before it waits, the send drains a body that is still streaming to its terminal. A

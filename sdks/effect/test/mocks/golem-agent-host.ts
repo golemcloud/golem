@@ -91,34 +91,25 @@ export interface RecordedRpcOpen {
 export interface RecordedRpcCall {
   readonly agentTypeName: string
   readonly target: RpcTarget
-  readonly kind: "invokeAndAwait" | "invoke" | "asyncInvokeAndAwait" | "schedule"
+  readonly kind: "invokeAndAwait" | "trigger" | "schedule"
   readonly methodName: string
   readonly input: any
   readonly scheduledTime?: any
 }
 
 /**
- * A response handler decides what each `*invoke*` call returns. Tests
- * register one with `__setRpcResponder`.
- *
- * Returning `{ tag: "pending" }` parks the future without resolving
- * `produce`; the test then drives completion explicitly via
- * {@link __resolveRpcPending}. This is the canonical way to drive the
- * "fiber-interrupt cancels an in-flight invoke" path without relying
- * on `setTimeout` races.
+ * A response handler decides what each call returns. Tests register one with
+ * `__setRpcResponder`. For `trigger` and `schedule`, the response is the result that the
+ * returned invocation handle awaits.
  */
 export type RpcResponse =
   | { tag: "ok"; val: any }
   | { tag: "err"; val: any }
   | { tag: "throw"; error: any }
-  | { tag: "pending" }
 
 export type RpcResponder = (
   call: Pick<RecordedRpcCall, "agentTypeName" | "methodName" | "input">,
 ) => RpcResponse
-
-/** Eager (non-pending) shape returned to a `FutureInvokeResult`'s `produce`. */
-export type ResolvedRpcResponse = Exclude<RpcResponse, { tag: "pending" }>
 
 const recordedCalls: Array<RecordedRpcCall> = []
 const recordedOpens: Array<RecordedRpcOpen> = []
@@ -128,44 +119,6 @@ let responder: RpcResponder = () => ({
 })
 let constructorThrow: ((agentTypeName: string) => unknown | undefined) | null = null
 let nextAgentId: any = { uuid: { highBits: 0x1n, lowBits: 0x8000000000000001n } }
-
-const pendingFutures: Array<{
-  methodName: string
-  resolve: (response: ResolvedRpcResponse) => void
-}> = []
-
-/**
- * Resolve the oldest still-pending `FutureInvokeResult` for a method.
- * Mirrors what the host would do when the remote side eventually
- * responds. Tests use this together with a responder that returns
- * `{ tag: "pending" }`.
- */
-export const __resolveRpcPending = (methodName: string, response: ResolvedRpcResponse): void => {
-  const idx = pendingFutures.findIndex((f) => f.methodName === methodName)
-  if (idx < 0) {
-    throw new Error(
-      `__resolveRpcPending: no pending future for '${methodName}' (pending: ${pendingFutures.map((p) => p.methodName).join(", ") || "<none>"})`,
-    )
-  }
-  const [entry] = pendingFutures.splice(idx, 1)
-  entry!.resolve(response)
-}
-
-export const __getPendingFutureCount = (): number => pendingFutures.length
-
-/**
- * One-shot hook to make the next `FutureInvokeResult.subscribe()`
- * call throw synchronously. Lets tests exercise the SDK's
- * register-function-level try/catch guard inside `asyncInvoke`
- * (around `fut.subscribe()` / `pollable.abortablePromise(...)`).
- */
-let subscribeThrow: ((methodName: string) => unknown | undefined) | null = null
-
-export const __failSubscribeOnce = (
-  predicate: (methodName: string) => unknown | undefined,
-): void => {
-  subscribeThrow = predicate
-}
 
 export const __resetRpc = (): void => {
   recordedCalls.length = 0
@@ -177,10 +130,6 @@ export const __resetRpc = (): void => {
     error: { tag: "remote-internal-error", val: "no responder configured" },
   })
   constructorThrow = null
-  cancellationsObserved.length = 0
-  pendingFutures.length = 0
-  produceCallCounts.clear()
-  subscribeThrow = null
 }
 
 export const __getRecordedRpcCalls = (): ReadonlyArray<RecordedRpcCall> => recordedCalls
@@ -205,152 +154,42 @@ export const __failConstructorOnce = (
   constructorThrow = predicate
 }
 
-const cancellationsObserved: Array<{ kind: string; methodName?: string }> = []
-export const __getCancellations = (): ReadonlyArray<{
-  kind: string
-  methodName?: string
-}> => cancellationsObserved
-
-export class CancellationToken {
-  constructor(private readonly methodName: string) {}
-  cancel(): void {
-    cancellationsObserved.push({ kind: "scheduled", methodName: this.methodName })
-  }
+const settle = (out: RpcResponse): any => {
+  if (out.tag === "throw") throw out.error
+  if (out.tag === "err") throw out.val
+  return out.val
 }
 
-/**
- * Per-method counter for how many times a `FutureInvokeResult`'s
- * `produce` callback has been invoked. Reset together with the rest
- * of the RPC mock state. Tests use this to assert "after fiber
- * interrupt + late `__resolveRpcPending`, the producer ran exactly
- * once" — i.e. the post-interrupt resolution didn't sneak through and
- * fire a second `Effect.succeed` into the resumed effect.
- */
-const produceCallCounts = new Map<string, number>()
+const invocationIdOf = (serial: number) => ({
+  owner: { tag: "agent", val: nextAgentId },
+  id: { highBits: 0n, lowBits: BigInt(serial) },
+})
 
-export const __getProduceCallCount = (methodName: string): number =>
-  produceCallCounts.get(methodName) ?? 0
-
-export class FutureInvokeResult {
-  private resolved = false
-  private result: { tag: "ok"; val: any } | { tag: "err"; val: any } | undefined
-  private throwError: unknown = null
-  private cancelled = false
-  private readonly readyPromise: Promise<void>
-  private resolveReady: () => void = () => {}
-
+/** A handle of an accepted invocation whose await settles with `response`. */
+export class Invocation {
   constructor(
-    private readonly methodName: string,
-    private readonly produce: () => RpcResponse,
-  ) {
-    this.readyPromise = new Promise<void>((res) => {
-      this.resolveReady = res
-    })
+    private readonly invocationId: any,
+    private readonly response: RpcResponse = { tag: "ok", val: undefined },
+  ) {}
+
+  static get(id: any): Invocation {
+    return new Invocation(id)
   }
 
-  subscribe(): MockPollable {
-    if (subscribeThrow !== null) {
-      const e = subscribeThrow(this.methodName)
-      subscribeThrow = null
-      if (e !== undefined) throw e
-    }
-    return new MockPollable(this)
+  id(): any {
+    return this.invocationId
   }
 
-  async get(): Promise<any> {
-    this.ensureResolved()
-    await this.readyPromise
-    if (this.throwError) {
-      const e = this.throwError
-      this.throwError = null
-      throw e
-    }
-    if (this.result?.tag === "err") throw this.result.val
-    return this.result?.val
+  async status(): Promise<string> {
+    return "pending"
   }
 
-  cancel(): void {
-    this.cancelled = true
-    cancellationsObserved.push({ kind: "async", methodName: this.methodName })
-    // Unblock anyone parked on `readyPromise` (e.g. an
-    // `abortablePromise` that hasn't seen its signal abort yet) so
-    // tests don't leak microtasks. The post-cancel `get()` returns
-    // undefined which the SDK reports as a `RemoteResponseError`.
-    this.resolveReady()
+  async await_(): Promise<any> {
+    return settle(this.response)
   }
 
-  /** @internal called by `MockPollable` to drive the producer lazily. */
-  ensureResolved(): boolean {
-    if (this.resolved || this.cancelled) return this.resolved
-    produceCallCounts.set(this.methodName, (produceCallCounts.get(this.methodName) ?? 0) + 1)
-    const out = this.produce()
-    if (out.tag === "pending") {
-      pendingFutures.push({
-        methodName: this.methodName,
-        resolve: (final) => {
-          if (this.resolved || this.cancelled) return
-          if (final.tag === "throw") this.throwError = final.error
-          else this.result = final
-          this.resolved = true
-          this.resolveReady()
-        },
-      })
-      return false
-    }
-    if (out.tag === "throw") this.throwError = out.error
-    else this.result = out
-    this.resolved = true
-    this.resolveReady()
+  async cancel(): Promise<boolean> {
     return true
-  }
-
-  /** @internal */
-  isReady(): boolean {
-    return this.resolved || this.cancelled
-  }
-
-  /** @internal */
-  awaitReady(): Promise<void> {
-    return this.readyPromise
-  }
-}
-
-class MockPollable {
-  constructor(private readonly fut: FutureInvokeResult) {}
-  ready(): boolean {
-    this.fut.ensureResolved()
-    return this.fut.isReady()
-  }
-  block(): void {
-    this.fut.ensureResolved()
-  }
-  promise(): Promise<void> {
-    this.fut.ensureResolved()
-    if (this.fut.isReady()) return Promise.resolve()
-    return this.fut.awaitReady()
-  }
-  /**
-   * Honours the AbortSignal: rejects with an `AbortError`-shaped
-   * DOMException if the signal aborts before the future resolves.
-   * Mirrors the wasm-rquickjs extension that the real host exposes.
-   */
-  abortablePromise(signal: AbortSignal): Promise<void> {
-    if (signal.aborted) {
-      return Promise.reject(new DOMException("aborted", "AbortError"))
-    }
-    this.fut.ensureResolved()
-    if (this.fut.isReady()) return Promise.resolve()
-    return new Promise<void>((resolve, reject) => {
-      const onAbort = (): void => {
-        signal.removeEventListener("abort", onAbort)
-        reject(new DOMException("aborted", "AbortError"))
-      }
-      signal.addEventListener("abort", onAbort, { once: true })
-      this.fut.awaitReady().then(() => {
-        signal.removeEventListener("abort", onAbort)
-        resolve()
-      })
-    })
   }
 }
 
@@ -405,61 +244,25 @@ export class WasmRpc {
     return call
   }
 
-  invokeAndAwait(methodName: string, input: any): any {
+  async invokeAndAwait(methodName: string, input: any): Promise<any> {
     const call = this.record("invokeAndAwait", methodName, input)
-    const out = responder({
-      agentTypeName: call.agentTypeName,
-      methodName,
-      input,
-    })
-    if (out.tag === "throw") throw out.error
-    if (out.tag === "err") throw out.val
-    if (out.tag === "pending") {
-      throw new Error(
-        `${methodName}: synchronous invokeAndAwait cannot honour a 'pending' responder; use asyncInvokeAndAwait`,
-      )
-    }
-    return out.val
-  }
-
-  invoke(methodName: string, input: any): void {
-    const call = this.record("invoke", methodName, input)
-    const out = responder({
-      agentTypeName: call.agentTypeName,
-      methodName,
-      input,
-    })
-    if (out.tag === "throw") throw out.error
-    // fire-and-forget: `err`, `ok`, `pending` results are dropped
-  }
-
-  asyncInvokeAndAwait(methodName: string, input: any) {
-    const call = this.record("asyncInvokeAndAwait", methodName, input)
+    const result = settle(responder({ agentTypeName: call.agentTypeName, methodName, input }))
     return {
-      metadata: {
-        agentId: nextAgentId,
-        invocationId: {
-          owner: { tag: "agent", val: nextAgentId },
-          id: { highBits: 0n, lowBits: BigInt(recordedCalls.length) },
-        },
-      },
-      future: new FutureInvokeResult(methodName, () =>
-        responder({ agentTypeName: call.agentTypeName, methodName, input }),
-      ),
+      metadata: { agentId: nextAgentId, invocationId: invocationIdOf(recordedCalls.length) },
+      result,
     }
   }
 
-  scheduleInvocation(scheduledTime: any, methodName: string, input: any): void {
-    this.record("schedule", methodName, input, scheduledTime)
+  async trigger(methodName: string, input: any): Promise<Invocation> {
+    const call = this.record("trigger", methodName, input)
+    const response = responder({ agentTypeName: call.agentTypeName, methodName, input })
+    return new Invocation(invocationIdOf(recordedCalls.length), response)
   }
 
-  scheduleCancelableInvocation(
-    scheduledTime: any,
-    methodName: string,
-    input: any,
-  ): CancellationToken {
-    this.record("schedule", methodName, input, scheduledTime)
-    return new CancellationToken(methodName)
+  async schedule(scheduledTime: any, methodName: string, input: any): Promise<Invocation> {
+    const call = this.record("schedule", methodName, input, scheduledTime)
+    const response = responder({ agentTypeName: call.agentTypeName, methodName, input })
+    return new Invocation(invocationIdOf(recordedCalls.length), response)
   }
 }
 

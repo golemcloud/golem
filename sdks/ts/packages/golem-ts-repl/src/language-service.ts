@@ -625,12 +625,7 @@ function getAccessEndingAt(
   return best;
 }
 
-const REMOTE_METHOD_OPERATIONS = new Set([
-  'abortable',
-  'trigger',
-  'schedule',
-  'scheduleCancelable',
-]);
+const REMOTE_METHOD_OPERATIONS = new Set(['abortable', 'trigger', 'schedule']);
 
 function getRemoteMethodAccessFromTarget(
   target: tsm.Node,
@@ -1574,15 +1569,12 @@ function getRemoteMethodExpansion(
   );
   const scheduleArgs = joinParameterTexts(scheduleAtText, argsText);
   const abortableArgs = joinParameterTexts(abortSignalText, argsText);
-  const cancellationTokenText =
-    getRemoteMethodFunctionReturn(type, 'scheduleCancelable', checker, node) ?? 'CancellationToken';
 
   const lines = [
     `(${argsText}): Promise<${returnText}>;`,
     `abortable: (${abortableArgs}) => Promise<${returnText}>;`,
     `trigger: (${argsText}) => void;`,
     `schedule: (${scheduleArgs}) => void;`,
-    `scheduleCancelable: (${scheduleArgs}) => ${cancellationTokenText};`,
   ];
 
   return lines.map((line) => line.replace(/\(\)/g, '()')).join('\n');
@@ -1690,21 +1682,6 @@ function getRemoteMethodFunctionParam(
       )
     : fallbackType;
   return `${parameterName}: ${paramType}`;
-}
-
-function getRemoteMethodFunctionReturn(
-  type: tsm.Type,
-  propertyName: string,
-  checker: tsm.TypeChecker,
-  location: tsm.Node,
-): string | undefined {
-  const signature = getRemoteMethodFunctionSignature(type, propertyName, checker, location);
-  const returnType = signature?.getReturnType();
-  if (!returnType) return;
-
-  return stripImportTypePrefix(
-    checker.getTypeText(returnType, location, ts.TypeFormatFlags.NoTruncation),
-  );
 }
 
 function getRemoteMethodFunctionSignature(

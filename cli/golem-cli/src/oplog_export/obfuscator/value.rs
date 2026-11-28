@@ -28,13 +28,12 @@ use crate::oplog_export::model::{
 use golem_common::model::AgentId;
 use golem_common::model::oplog::types::{
     FileSystemError, PermissionCardDeriveError, PermissionCardRevokeError, SecretRevealError,
-    SerializableDnsError, SerializableHostFailureKind, SerializableHttpErrorCode,
-    SerializableHttpMethod, SerializableInvokeResult, SerializableP3FileSystemError,
-    SerializableP3HttpClientSendResult, SerializableP3IpNameLookupError,
-    SerializableP3SocketErrorCode, SerializablePermissionError, SerializableRdbmsError,
-    SerializableResponseHeaders, SerializableRpcError, SerializableSocketError,
-    SerializableStreamError, SerializableTcpStreamError, SerializableToolRpcError,
-    SerializableWebsocketError,
+    SerializableDnsError, SerializableHttpErrorCode, SerializableHttpMethod,
+    SerializableP3FileSystemError, SerializableP3HttpClientSendResult,
+    SerializableP3IpNameLookupError, SerializableP3SocketErrorCode, SerializablePermissionError,
+    SerializableRdbmsError, SerializableResponseHeaders, SerializableRpcError,
+    SerializableSocketError, SerializableStreamError, SerializableTcpStreamError,
+    SerializableToolRpcError, SerializableWebsocketError,
 };
 use golem_common::schema::{
     FromSchema, IntoSchema, NamedFieldType, RegisteredAgentTypeSchema, ResultSpec,
@@ -70,7 +69,6 @@ pub(super) struct KnownIds {
     pub schema_graph: TypeId,
     pub schema_type: TypeId,
     pub registered_agent_type: TypeId,
-    pub invoke_result: TypeId,
     pub http_method: TypeId,
     pub response_headers: TypeId,
     pub error_types: HashSet<TypeId>,
@@ -83,7 +81,6 @@ pub(super) static KNOWN_IDS: LazyLock<KnownIds> = LazyLock::new(|| KnownIds {
     schema_graph: <SchemaGraph as IntoSchema>::type_id(),
     schema_type: <SchemaType as IntoSchema>::type_id(),
     registered_agent_type: <RegisteredAgentTypeSchema as IntoSchema>::type_id(),
-    invoke_result: <SerializableInvokeResult as IntoSchema>::type_id(),
     http_method: <SerializableHttpMethod as IntoSchema>::type_id(),
     response_headers: <SerializableResponseHeaders as IntoSchema>::type_id(),
     error_types: HashSet::from([
@@ -105,7 +102,6 @@ pub(super) static KNOWN_IDS: LazyLock<KnownIds> = LazyLock::new(|| KnownIds {
         <SerializablePermissionError as IntoSchema>::type_id(),
         <SerializableToolRpcError as IntoSchema>::type_id(),
         <SerializableP3HttpClientSendResult as IntoSchema>::type_id(),
-        <SerializableHostFailureKind as IntoSchema>::type_id(),
         <golem_common::model::agent::AgentError as IntoSchema>::type_id(),
     ]),
 });
@@ -210,9 +206,6 @@ impl<'r, 'a> Walker<'r, 'a> {
                     Ok(agent_type) => describe_agent_type(&agent_type),
                     Err(_) => self.schemaless(value, Region::Customer),
                 };
-            }
-            if has_id(&ids.invoke_result) {
-                return self.invoke_result(graph, resolved.body, value, resolved.type_name);
             }
             if has_id(&ids.http_method) {
                 return self.http_method(graph, resolved.body, value, resolved.type_name);
@@ -464,42 +457,6 @@ impl<'r, 'a> Walker<'r, 'a> {
             }
             Err(_) => self.schemaless(value, Region::Customer),
         }
-    }
-
-    /// `SerializableInvokeResult`: the case is kept; `failed` and `failedClassified.message`
-    /// are error text; `completed` keeps its branch, its `ok` value is an RPC value position.
-    fn invoke_result(
-        &mut self,
-        graph: &SchemaGraph,
-        ty: &SchemaType,
-        value: &SchemaValue,
-        type_name: Option<String>,
-    ) -> ReportNode {
-        let (SchemaType::Variant { cases, .. }, SchemaValue::Variant(payload)) = (ty, value) else {
-            return self.schemaless(value, Region::Customer);
-        };
-        let Some(case) = cases.get(payload.case as usize) else {
-            return self.schemaless(value, Region::Customer);
-        };
-        let rendered = match (&case.payload, payload.payload.as_deref()) {
-            (Some(case_ty), Some(case_value)) => Some(match normalized(&case.name).as_str() {
-                "completed" => self.kept_result(graph, case_ty, case_value, |walker, _, _, ok| {
-                    walker.rpc_value("response.result.completed.ok", ok)
-                }),
-                "failed" | "failedclassified" => {
-                    self.typed(graph, case_ty, case_value, Region::Error)
-                }
-                _ => self.typed(graph, case_ty, case_value, Region::Trusted),
-            }),
-            _ => None,
-        };
-        kept_case(
-            CaseKind::Variant,
-            type_name,
-            &case.name,
-            Some(payload.case),
-            rendered,
-        )
     }
 
     /// `SerializableHttpMethod`: the case is kept; the text of `Other` is a `str` token.

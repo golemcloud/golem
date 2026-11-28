@@ -15,7 +15,7 @@ import golem.host.SchemaWireInterop
 import golem.host.js.{JsAgentId, JsComponentId, JsUuid}
 import golem.host.js.schema.{JsInputSchema, JsNamedField, JsOutputSchema, JsSchemaValueTree}
 import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
-import golem.runtime.rpc.{AgentRpcError, CancellationToken, CreateOptions}
+import golem.runtime.rpc.{AgentRpcError, CreateOptions, Invocation}
 import golem.runtime.tool.host.ToolHostApi
 import golem.schema._
 import golem.schema.SchemaTypeBody.RecordType
@@ -23,7 +23,7 @@ import golem.schema.validation.ValueValidation
 import golem.schema.wire.{SchemaWire, WitSchemaValueTree}
 import golem.config.{ConfigOverride, ConfigOverrideEncoder}
 import golem.tool.{ToolGraphs, ToolRpcFailure}
-import golem.{AgentId, Datetime, FutureInterop, InvocationId}
+import golem.{AgentId, Datetime, InvocationId}
 import zio.blocks.schema.json.Json
 
 import java.util.UUID
@@ -319,24 +319,27 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
    * The awaited invocation variants take an optional `scopeCard`, which the
    * call borrows; see [[golem.host.PermissionsApi.ScopeCard]].
    */
-  def invoke(input: Json, scopeCard: Option[ScopeCard] = None): Future[Either[GolemReflectError, Invocation[Json]]] =
+  def invoke(
+    input: Json,
+    scopeCard: Option[ScopeCard] = None
+  ): Future[Either[GolemReflectError, InvocationOutput[Json]]] =
     invokeJson(input, scopeCard)
 
   def invokeJson(
     input: Json,
     scopeCard: Option[ScopeCard] = None
-  ): Future[Either[GolemReflectError, Invocation[Json]]] =
+  ): Future[Either[GolemReflectError, InvocationOutput[Json]]] =
     definition.input.packJson(input) match {
       case Left(error)  => Future.successful(Left(GolemReflectError.Validation(error.message)))
       case Right(value) =>
         invokeValue(value, scopeCard).map(_.flatMap { invocation =>
           invocation.value match {
-            case None         => Right(Invocation(invocation.metadata, None))
+            case None         => Right(InvocationOutput(invocation.metadata, None))
             case Some(result) =>
               definition.output
                 .toRight(GolemReflectError.SchemaDecode("unit method returned a value"))
                 .flatMap(_.unpackJson(result).left.map(error => GolemReflectError.SchemaDecode(error.message)))
-                .map(json => Invocation(invocation.metadata, Some(json)))
+                .map(json => InvocationOutput(invocation.metadata, Some(json)))
           }
         })
     }
@@ -344,7 +347,7 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
   def invokeValue(
     input: SchemaValue,
     scopeCard: Option[ScopeCard] = None
-  ): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
+  ): Future[Either[GolemReflectError, InvocationOutput[SchemaValue]]] =
     validate(definition.input, input) match {
       case Left(error) => Future.successful(Left(error))
       case Right(_)    =>
@@ -353,29 +356,65 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
           .map(_.flatMap(validateInvocationOutput(definition, _)))
     }
 
-  def triggerValue(input: SchemaValue): Either[GolemReflectError, InvocationMetadata] =
-    rejectNonAwaitedStreams("trigger")
-      .flatMap(_ => validate(definition.input, input))
-      .flatMap(_ => transport.trigger(definition.name, input))
+  /**
+   * Triggers the method without awaiting its result, and returns the
+   * invocation's handle once the target has durably accepted it. Never lends a
+   * scope card, and rejects streaming methods. See [[Invocation]].
+   */
+  def triggerValue(input: SchemaValue): Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]] =
+    started(
+      rejectNonAwaitedStreams("trigger").flatMap(_ => validate(definition.input, input)),
+      transport.trigger(definition.name, input)
+    )
 
-  def triggerJson(input: Json): Either[GolemReflectError, InvocationMetadata] =
-    definition.input
-      .packJson(input)
-      .left
-      .map(error => GolemReflectError.Validation(error.message))
-      .flatMap(triggerValue)
+  def triggerJson(input: Json): Future[Either[GolemReflectError, Invocation[Option[Json]]]] =
+    packInput(input) match {
+      case Left(error)  => Future.successful(Left(error))
+      case Right(value) => triggerValue(value).map(_.map(jsonInvocation))
+    }
 
-  def scheduleValue(at: Datetime, input: SchemaValue): Either[GolemReflectError, ScheduledInvocation] =
-    rejectNonAwaitedStreams("schedule")
-      .flatMap(_ => validate(definition.input, input))
-      .flatMap(_ => transport.schedule(at, definition.name, input))
+  /**
+   * Schedules the method for `at`, and returns the invocation's handle once the
+   * target has durably accepted it. Never lends a scope card, and rejects
+   * streaming methods. See [[Invocation]].
+   */
+  def scheduleValue(
+    at: Datetime,
+    input: SchemaValue
+  ): Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]] =
+    started(
+      rejectNonAwaitedStreams("schedule").flatMap(_ => validate(definition.input, input)),
+      transport.schedule(at, definition.name, input)
+    )
 
-  def scheduleJson(at: Datetime, input: Json): Either[GolemReflectError, ScheduledInvocation] =
-    definition.input
-      .packJson(input)
-      .left
-      .map(error => GolemReflectError.Validation(error.message))
-      .flatMap(scheduleValue(at, _))
+  def scheduleJson(at: Datetime, input: Json): Future[Either[GolemReflectError, Invocation[Option[Json]]]] =
+    packInput(input) match {
+      case Left(error)  => Future.successful(Left(error))
+      case Right(value) => scheduleValue(at, value).map(_.map(jsonInvocation))
+    }
+
+  private def packInput(input: Json): Either[GolemReflectError, SchemaValue] =
+    definition.input.packJson(input).left.map(error => GolemReflectError.Validation(error.message))
+
+  private def started(
+    checked: Either[GolemReflectError, Unit],
+    start: => Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]]
+  ): Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]] =
+    checked match {
+      case Left(error) => Future.successful(Left(error))
+      case Right(_)    => start.map(_.map(_.mapResult(checkedOutput)))
+    }
+
+  private def checkedOutput(value: Option[SchemaValue]): Option[SchemaValue] =
+    validateOutput(definition, value).fold(error => throw new IllegalArgumentException(error.message), identity)
+
+  private def jsonInvocation(invocation: Invocation[Option[SchemaValue]]): Invocation[Option[Json]] =
+    invocation.mapResult(_.map { value =>
+      definition.output
+        .toRight(GolemReflectError.SchemaDecode("unit method returned a value"))
+        .flatMap(_.unpackJson(value).left.map(error => GolemReflectError.SchemaDecode(error.message)))
+        .fold(error => throw new IllegalArgumentException(error.message), identity)
+    })
 
   private def rejectNonAwaitedStreams(operation: String): Either[GolemReflectError, Unit] =
     Either.cond(
@@ -386,8 +425,12 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
 }
 
 final case class InvocationMetadata(agentId: AgentId, invocationId: InvocationId)
-final case class Invocation[+A](metadata: InvocationMetadata, value: Option[A])
-final case class ScheduledInvocation(metadata: InvocationMetadata, cancellationToken: CancellationToken)
+
+/**
+ * The result of an awaited reflected invocation together with its final
+ * identity.
+ */
+final case class InvocationOutput[+A](metadata: InvocationMetadata, value: Option[A])
 
 final class DynamicAgentClient private (transport: Transport) {
   def method(name: String): DynamicAgentMethod = new DynamicAgentMethod(name, transport)
@@ -425,10 +468,24 @@ final class DynamicAgentMethod private[reflection] (val name: String, transport:
   def invokeValue(
     input: SchemaValue,
     scopeCard: Option[ScopeCard] = None
-  ): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
+  ): Future[Either[GolemReflectError, InvocationOutput[SchemaValue]]] =
     transport.invokeAndAwait(name, input, scopeCard)
-  def triggerValue(input: SchemaValue): Either[GolemReflectError, InvocationMetadata]                 = transport.trigger(name, input)
-  def scheduleValue(at: Datetime, input: SchemaValue): Either[GolemReflectError, ScheduledInvocation] =
+
+  /**
+   * Triggers the method, and returns the invocation's handle once the target
+   * has durably accepted it; see [[Invocation]].
+   */
+  def triggerValue(input: SchemaValue): Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]] =
+    transport.trigger(name, input)
+
+  /**
+   * Schedules the method for `at`, and returns the invocation's handle once the
+   * target has durably accepted it; see [[Invocation]].
+   */
+  def scheduleValue(
+    at: Datetime,
+    input: SchemaValue
+  ): Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]] =
     transport.schedule(at, name, input)
 }
 
@@ -452,7 +509,7 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
     method: String,
     input: SchemaValue,
     scopeCard: Option[ScopeCard]
-  ): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
+  ): Future[Either[GolemReflectError, InvocationOutput[SchemaValue]]] =
     if (scopeCard.exists(!_.isPresent)) Future.successful(Left(GolemReflectError.Validation(ScopeCardMoved)))
     else
       encodeWithWireAsync(input).transformWith {
@@ -478,49 +535,47 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
     method: String,
     payload: JsSchemaValueTree,
     scopeCard: Option[ScopeCard]
-  ): Future[Either[GolemReflectError, Invocation[SchemaValue]]] = {
+  ): Future[Either[GolemReflectError, InvocationOutput[SchemaValue]]] = {
     val call = scopeCard match {
-      case Some(card) => card.borrowRaw(raw.asyncInvokeAndAwaitWithMetadata(method, payload, _))
-      case None       => raw.asyncInvokeAndAwaitWithMetadata(method, payload, js.undefined)
+      case Some(card) => card.borrowRaw(raw.invokeAndAwait(method, payload, _))
+      case None       => raw.invokeAndAwait(method, payload, js.undefined)
     }
-    call match {
-      case Left(error)                => Future.successful(Left(remoteError(error)))
-      case Right((metadata, pending)) =>
-        FutureInterop
-          .fromPromise(pending.get())
-          .map { result =>
-            metadata match {
-              case Some(started) =>
-                decodeOptional(result.toOption).map(value => Invocation(toMetadata(started), value))
-              case None =>
-                Left(GolemReflectError.Remote(AgentRpcError.Protocol("completed invocation has no metadata")))
-            }
-          }
-          .recover {
-            case js.JavaScriptException(error) => Left(remoteError(WasmRpcApi.decodeRpcError(error)))
-            case NonFatal(error)               =>
-              Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
-          }
+    call.map {
+      case Left(error)      => Left(remoteError(error))
+      case Right(completed) =>
+        decodeOptional(completed.value.toOption).map(value => InvocationOutput(toMetadata(completed.metadata), value))
+    }.recover { case NonFatal(error) =>
+      Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
     }
   }
 
-  def trigger(method: String, input: SchemaValue): Either[GolemReflectError, InvocationMetadata] =
-    encode(input).flatMap(payload =>
-      raw
-        .invokeWithMetadata(method, payload)
-        .left
-        .map(remoteError)
-        .map(toMetadata)
-    )
+  def trigger(method: String, input: SchemaValue): Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]] =
+    start(input)(raw.trigger(method, _))
 
-  def schedule(at: Datetime, method: String, input: SchemaValue): Either[GolemReflectError, ScheduledInvocation] =
-    encode(input).flatMap(payload =>
-      raw
-        .scheduleCancelableInvocationWithMetadata(at, method, payload)
-        .left
-        .map(remoteError)
-        .map(receipt => ScheduledInvocation(toMetadata(receipt.metadata), receipt.cancellationToken))
-    )
+  def schedule(
+    at: Datetime,
+    method: String,
+    input: SchemaValue
+  ): Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]] =
+    start(input)(raw.schedule(at, method, _))
+
+  private def start(input: SchemaValue)(
+    call: JsSchemaValueTree => Future[Either[WasmRpcApi.RpcError, WasmRpcApi.RawInvocation]]
+  ): Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]] =
+    encode(input) match {
+      case Left(error)    => Future.successful(Left(error))
+      case Right(payload) =>
+        (try call(payload)
+        catch { case NonFatal(error) => Future.failed(error) }).map {
+          case Left(error)   => Left(remoteError(error))
+          case Right(handle) =>
+            Right(Invocation.fromHost(handle).mapResult { result =>
+              decodeOptional(result).fold(error => throw new IllegalArgumentException(error.message), identity)
+            })
+        }.recover { case NonFatal(error) =>
+          Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
+        }
+    }
 
   private def toMetadata(value: golem.runtime.rpc.InvocationMetadata): InvocationMetadata =
     InvocationMetadata(value.agentId, value.invocationId)
@@ -604,11 +659,17 @@ private[reflection] object ReflectionInternals {
 
   def validateInvocationOutput(
     definition: AgentMethod,
-    invocation: Invocation[SchemaValue]
-  ): Either[GolemReflectError, Invocation[SchemaValue]] =
-    (definition.output, invocation.value) match {
-      case (None, None)                => Right(invocation)
-      case (Some(schema), Some(value)) => validate(schema, value).map(_ => invocation)
+    invocation: InvocationOutput[SchemaValue]
+  ): Either[GolemReflectError, InvocationOutput[SchemaValue]] =
+    validateOutput(definition, invocation.value).map(_ => invocation)
+
+  def validateOutput(
+    definition: AgentMethod,
+    output: Option[SchemaValue]
+  ): Either[GolemReflectError, Option[SchemaValue]] =
+    (definition.output, output) match {
+      case (None, None)                => Right(output)
+      case (Some(schema), Some(value)) => validate(schema, value).map(_ => output)
       case (None, Some(_))             => Left(GolemReflectError.SchemaDecode("unit method returned a value"))
       case (Some(_), None)             => Left(GolemReflectError.SchemaDecode("single-output method returned no value"))
     }

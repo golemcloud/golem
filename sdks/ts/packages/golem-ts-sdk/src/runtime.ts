@@ -37,6 +37,7 @@ import {
   resolveShapeType,
   SchemaGraph,
   SchemaType,
+  schemaContainsStream,
   schemaShapesMatch,
   schemaValueFromWit,
   schemaValueToWit,
@@ -95,48 +96,6 @@ import {
 } from 'golem:agent/common@2.0.0';
 
 const reservedStateFields = new Set(['config', 'getId']);
-
-function containsStream(graph: SchemaGraph): boolean {
-  const seen = new Set<SchemaType>();
-  const visit = (type: SchemaType): boolean => {
-    if (seen.has(type)) return false;
-    seen.add(type);
-    const body = type.body;
-    switch (body.tag) {
-      case 'stream':
-        return true;
-      case 'ref': {
-        const definition = graph.defs.get(body.id);
-        return definition !== undefined && visit(definition.body);
-      }
-      case 'record':
-        return body.fields.some((field) => visit(field.body));
-      case 'variant':
-        return body.cases.some((entry) => entry.payload !== undefined && visit(entry.payload));
-      case 'tuple':
-        return body.elements.some(visit);
-      case 'list':
-      case 'fixed-list':
-      case 'option':
-        return visit(body.element);
-      case 'map':
-        return visit(body.key) || visit(body.value);
-      case 'result':
-        return (
-          (body.ok !== undefined && visit(body.ok)) || (body.err !== undefined && visit(body.err))
-        );
-      case 'union':
-        return body.branches.some((branch) => visit(branch.body));
-      case 'secret':
-        return visit(body.inner);
-      case 'future':
-        return body.element !== undefined && visit(body.element);
-      default:
-        return false;
-    }
-  };
-  return visit(graph.root);
-}
 
 /**
  * Resolve a method's `readOnly` option to the WIT `read-only-config`, or
@@ -524,8 +483,8 @@ function validateHttpConsistency(
               ep.queryVars.some((q) => q.queryParamName === selectorName)) ||
             (selector.tag === 'path' && pathVariableNames(ep.pathSuffix).has(selectorName)) ||
             ((ep.mode ??
-              (mc.inputCodecs.some((input) => containsStream(input.codec.graph)) ||
-              (mc.output.tag === 'single' && containsStream(mc.output.codec.graph))
+              (mc.inputCodecs.some((input) => schemaContainsStream(input.codec.graph)) ||
+              (mc.output.tag === 'single' && schemaContainsStream(mc.output.codec.graph))
                 ? 'durable-streams'
                 : 'plain')) === 'durable-streams' &&
               selector.tag === 'query' &&

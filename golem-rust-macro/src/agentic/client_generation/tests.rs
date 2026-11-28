@@ -137,10 +137,19 @@ fn ephemeral_agents_generate_only_upsert() {
     ] {
         assert!(!rendered.contains(absent), "{absent}:\n{rendered}");
     }
-    assert!(rendered.contains("async_invoke_and_await"));
-    assert!(rendered.contains("wasm_rpc . invoke"));
-    assert!(rendered.contains("schedule_invocation"));
-    assert!(!rendered.contains("_with_metadata"));
+    assert!(rendered.contains("permissions :: __invoke_and_await"));
+    assert!(rendered.contains("wasm_rpc . trigger ("));
+    assert!(rendered.contains("wasm_rpc . schedule ("));
+    for removed in [
+        "async_invoke_and_await",
+        "schedule_invocation",
+        "schedule_cancelable",
+        "pending_",
+        "CancellationToken",
+        "_with_metadata",
+    ] {
+        assert!(!rendered.contains(removed), "{removed}:\n{rendered}");
+    }
 }
 
 #[test]
@@ -236,7 +245,7 @@ fn awaited_streaming_methods_use_async_value_encoding_only() {
                     "live streams cannot cross remote or scheduled agent invocation boundaries"
                 )
                 .count(),
-            3
+            2
         );
     }
 }
@@ -253,7 +262,12 @@ fn ephemeral_clients_use_shared_non_colliding_result_type() {
     let second = get_remote_client(&second_trait, &[], &[], &[], &[], &[], false).to_string();
     let rendered = format!("{first} {second}");
 
-    assert_eq!(rendered.matches("EphemeralInvocationResult").count(), 8);
+    for output in [
+        "-> golem_rust :: InvocationOutput < () >",
+        "-> golem_rust :: InvocationOutput < String >",
+    ] {
+        assert!(rendered.contains(output), "{output}:\n{rendered}");
+    }
     assert!(!rendered.contains("struct ExampleAgentInvocationResult"));
     assert!(!rendered.contains("struct OtherAgentInvocationResult"));
     assert!(!rendered.contains("struct Invocation <"));
@@ -261,12 +275,12 @@ fn ephemeral_clients_use_shared_non_colliding_result_type() {
 }
 
 #[test]
-fn cancelable_schedule_wrapper_does_not_duplicate_user_method_name() {
+fn schedule_wrapper_does_not_duplicate_user_method_name() {
     let item_trait = parse_quote! {
         trait ExampleAgent {
             fn new() -> Self;
             fn run(&self);
-            fn schedule_cancelable_run(&self);
+            fn schedule_run(&self);
         }
     };
 
@@ -274,12 +288,12 @@ fn cancelable_schedule_wrapper_does_not_duplicate_user_method_name() {
     let rendered = client_part(&rendered);
 
     assert_eq!(
-        rendered.matches("fn schedule_cancelable_run (").count(),
+        rendered.matches("fn schedule_run (").count(),
         1,
-        "generated client must not emit duplicate schedule_cancelable_run methods:\n{rendered}"
+        "generated client must not emit duplicate schedule_run methods:\n{rendered}"
     );
     assert!(
-        rendered.contains("fn schedule_cancelable_run1 ("),
+        rendered.contains("fn schedule_run1 ("),
         "generated client should deconflict the generated wrapper name:\n{rendered}"
     );
 }
@@ -362,40 +376,39 @@ fn schedule_wrappers_deconflict_generated_scheduled_time_parameter() {
     let rendered = tokens.to_string();
     let generated = syn::parse2::<syn::File>(tokens).unwrap();
 
-    for wrapper_name in ["schedule_run", "schedule_cancelable_run"] {
-        let params = generated
-            .items
-            .iter()
-            .find_map(|item| match item {
-                syn::Item::Impl(item_impl) => item_impl.items.iter().find_map(|item| {
-                    let syn::ImplItem::Fn(method) = item else {
-                        return None;
-                    };
-                    (method.sig.ident == wrapper_name).then(|| {
-                        method
-                            .sig
-                            .inputs
-                            .iter()
-                            .filter_map(|arg| match arg {
-                                syn::FnArg::Receiver(_) => None,
-                                syn::FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
-                                    syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
-                                    _ => None,
-                                },
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                }),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("missing generated wrapper {wrapper_name}:\n{rendered}"));
-        let unique_params = params.iter().collect::<std::collections::HashSet<_>>();
-        assert_eq!(
-            unique_params.len(),
-            params.len(),
-            "{wrapper_name} should deconflict its generated scheduled_time parameter from user parameters; params were {params:?}:\n{rendered}"
-        );
-    }
+    let wrapper_name = "schedule_run";
+    let params = generated
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Impl(item_impl) => item_impl.items.iter().find_map(|item| {
+                let syn::ImplItem::Fn(method) = item else {
+                    return None;
+                };
+                (method.sig.ident == wrapper_name).then(|| {
+                    method
+                        .sig
+                        .inputs
+                        .iter()
+                        .filter_map(|arg| match arg {
+                            syn::FnArg::Receiver(_) => None,
+                            syn::FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
+                                syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
+                                _ => None,
+                            },
+                        })
+                        .collect::<Vec<_>>()
+                })
+            }),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing generated wrapper {wrapper_name}:\n{rendered}"));
+    let unique_params = params.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        unique_params.len(),
+        params.len(),
+        "{wrapper_name} should deconflict its generated scheduled_time parameter from user parameters; params were {params:?}:\n{rendered}"
+    );
 }
 
 #[test]
@@ -532,10 +545,10 @@ fn scope_cards_are_attached_only_to_awaited_calls() {
 
         // Every awaited call goes through the scope-card helper; no other
         // invocation passes a scope card.
-        assert!(!rendered.contains("wasm_rpc . async_invoke_and_await"));
+        assert!(!rendered.contains("wasm_rpc . invoke_and_await"));
         assert_eq!(
             client
-                .matches("golem_rust :: permissions :: __async_invoke_and_await")
+                .matches("golem_rust :: permissions :: __invoke_and_await")
                 .count(),
             4,
             "{rendered}"
@@ -595,28 +608,23 @@ fn scope_cards_are_attached_only_to_awaited_calls() {
         assert_eq!(view.matches("pub async fn").count(), 4, "{view}");
         assert!(!view.contains("trigger_"));
         assert!(!view.contains("schedule_"));
-        if fallible {
-            // `pending_*` is an awaited invocation too, so the view lends its
-            // card there as well, after resolving it before the input.
-            assert!(
-                view.contains("pub fn pending_run (& self , value : u32)"),
-                "{view}"
-            );
-            assert!(view.contains(
-                "self . client . __golem_pending_run_with_scope_card (value , Some (self . scope_card))"
-            ));
-            let pending = client
-                .split("fn __golem_pending_run_with_scope_card")
-                .nth(1)
-                .unwrap_or_else(|| panic!("missing pending implementation:\n{rendered}"));
-            let resolve = pending
-                .find("self . __golem_default_scope_card . resolve (__golem_scope_card)")
-                .unwrap();
-            let start = pending.find("start_caller_pending").unwrap();
-            assert!(resolve < start, "{pending}");
-            assert!(pending.contains("input_value , __golem_scope_card . as_ref ()"));
-        } else {
-            assert!(!view.contains("pending_"));
-        }
+        assert!(!rendered.contains("pending_"), "{rendered}");
+
+        // Trigger and schedule wait for the target to accept the invocation, and return its
+        // handle typed with the method's result.
+        let handle =
+            "Result < golem_rust :: Invocation < u32 > , golem_rust :: GolemReflectError >";
+        assert!(
+            client.contains(&format!(
+                "pub async fn trigger_run (& self , value : u32) -> {handle}"
+            )),
+            "{rendered}"
+        );
+        assert!(
+            client.contains(&format!(
+                "pub async fn schedule_run (& self , value : u32 , scheduled_time : golem_rust :: ScheduledTime ,) -> {handle}"
+            )),
+            "{rendered}"
+        );
     }
 }

@@ -285,6 +285,21 @@ struct StreamingRemoteRpc {
 
 #[async_trait]
 impl Rpc for StreamingRemoteRpc {
+    async fn invocation_handle(
+        &self,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .invocation_handle(invocation_id, caller, operation, auth)
+            .await
+    }
+
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
@@ -315,19 +330,6 @@ impl Rpc for StreamingRemoteRpc {
             .await
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -337,7 +339,7 @@ impl Rpc for StreamingRemoteRpc {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         self.inner
             .schedule_invocation(
                 owned_agent_id,
@@ -556,6 +558,16 @@ pub(crate) fn remote_rpc_preparing_on(
 
 #[async_trait]
 impl WorkerProxy for LocalResumeProxy {
+    async fn invocation_handle(
+        &self,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerProxyError,
+    > {
+        self.inner.invocation_handle(request).await
+    }
+
     async fn prepare(
         &self,
         agent: &ResolvedTarget,
@@ -753,6 +765,7 @@ impl WorkerProxy for LocalResumeProxy {
         environment: EnvironmentId,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
+        requires_own_record: bool,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         self.inner
             .invoke_agent(
@@ -772,6 +785,7 @@ impl WorkerProxy for LocalResumeProxy {
                 environment,
                 auth,
                 card,
+                requires_own_record,
             )
             .await
     }
@@ -972,19 +986,6 @@ impl WorkerProxy for LocalResumeProxy {
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner.cancel_invocation(agent, key, auth).await
-    }
-
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::agent::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
     }
 
     async fn lookup_invocation_status(

@@ -134,7 +134,7 @@ pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::in
   method_name : String,
   input : I,
   scope_card? : @permissions.ScopeCard,
-) -> Invocation[O] {
+) -> InvocationOutput[O] {
   let invocation = self.transport.invoke_value(
     method_name,
     @schema.to_value_as(input),
@@ -155,7 +155,7 @@ pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(
   method_name : String,
   input : I,
   scope_card? : @permissions.ScopeCard,
-) -> Invocation[Unit] {
+) -> InvocationOutput[Unit] {
   let invocation = self.transport.invoke_value(
     method_name,
     @schema.to_value_as(input),
@@ -190,29 +190,46 @@ fn require_unit_output(value : @model.SchemaValue?) -> Unit raise ReflectError {
 }
 
 ///|
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::trigger(
+/// Starts a method without waiting for its result, and returns the handle of
+/// the invocation once the target has durably accepted it. The handle decodes
+/// the result as `O`; a unit method has the output `Unit`. A trigger never
+/// attaches a scope card, and is unavailable for a streaming method. The
+/// handle's methods raise `@agentHost.RpcError`.
+pub async fn[
+  I : @schema.IntoSchema,
+  O : @schema.IntoSchema + @schema.FromSchema,
+] FullAgentClient::trigger(
   self : FullAgentClient,
   method_name : String,
   input : I,
   output : @schema.TypeTag[O],
-) -> InvocationMetadata raise ReflectError {
+) -> @rpc.Invocation[O] {
   reject_caller_codec_non_awaited_streams(
     method_name,
     "trigger",
     (@schema.type_tag() : @schema.TypeTag[I]),
     output,
   )
-  self.transport.trigger_value(method_name, @schema.to_value_as(input))
+  self.transport.trigger_value(method_name, @schema.to_value_as(input), value => {
+    decode_typed_payload(value)
+  })
 }
 
 ///|
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::schedule(
+/// Schedules a method for `scheduled_at`, and returns the handle of the
+/// invocation once the target has durably accepted it; the handle can cancel
+/// it until it starts and decodes the result as `O`. A schedule never attaches
+/// a scope card, and is unavailable for a streaming method.
+pub async fn[
+  I : @schema.IntoSchema,
+  O : @schema.IntoSchema + @schema.FromSchema,
+] FullAgentClient::schedule(
   self : FullAgentClient,
   scheduled_at : @systemClock.Instant,
   method_name : String,
   input : I,
   output : @schema.TypeTag[O],
-) -> ScheduledInvocation raise ReflectError {
+) -> @rpc.Invocation[O] {
   reject_caller_codec_non_awaited_streams(
     method_name,
     "schedule",
@@ -223,7 +240,25 @@ pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::schedule
     scheduled_at,
     method_name,
     @schema.to_value_as(input),
+    value => decode_typed_payload(value),
   )
+}
+
+///|
+/// Decodes the optional result of a handle as `O`: none is the output of a
+/// unit method.
+fn[O : @schema.FromSchema] decode_typed_payload(
+  value : @model.SchemaValue?,
+) -> O raise ReflectError {
+  errdefer (if value is Some(value) {
+    value.release_resources(@model_host.resource_drops())
+  })
+  (@schema.FromSchema::from_result_payload(value) : O) catch {
+    error =>
+      raise ReflectError::Schema(
+        "failed to decode typed output: \{repr(error)}",
+      )
+  }
 }
 
 ///|
@@ -271,7 +306,7 @@ pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] MethodOnlyAgentClie
   method_name : String,
   input : I,
   scope_card? : @permissions.ScopeCard,
-) -> Invocation[O] {
+) -> InvocationOutput[O] {
   self.inner.invoke(method_name, input, scope_card?)
 }
 
@@ -283,28 +318,36 @@ pub async fn[I : @schema.IntoSchema] MethodOnlyAgentClient::invoke_unit(
   method_name : String,
   input : I,
   scope_card? : @permissions.ScopeCard,
-) -> Invocation[Unit] {
+) -> InvocationOutput[Unit] {
   self.inner.invoke_unit(method_name, input, scope_card?)
 }
 
 ///|
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::trigger(
+/// `FullAgentClient::trigger` of the method-only client.
+pub async fn[
+  I : @schema.IntoSchema,
+  O : @schema.IntoSchema + @schema.FromSchema,
+] MethodOnlyAgentClient::trigger(
   self : MethodOnlyAgentClient,
   method_name : String,
   input : I,
   output : @schema.TypeTag[O],
-) -> InvocationMetadata raise ReflectError {
+) -> @rpc.Invocation[O] {
   self.inner.trigger(method_name, input, output)
 }
 
 ///|
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::schedule(
+/// `FullAgentClient::schedule` of the method-only client.
+pub async fn[
+  I : @schema.IntoSchema,
+  O : @schema.IntoSchema + @schema.FromSchema,
+] MethodOnlyAgentClient::schedule(
   self : MethodOnlyAgentClient,
   scheduled_at : @systemClock.Instant,
   method_name : String,
   input : I,
   output : @schema.TypeTag[O],
-) -> ScheduledInvocation raise ReflectError {
+) -> @rpc.Invocation[O] {
   self.inner.schedule(scheduled_at, method_name, input, output)
 }
 

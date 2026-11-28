@@ -1618,6 +1618,7 @@ async fn invoke_owner_method_with_scope(
     let result = fixture
         .executor
         .invoke_agent_session(InvocationStart {
+            requires_own_record: false,
             target: Some(crate::agent::id_target(&fixture.owner_id)),
             constructor: None,
             component_id: Some(fixture.owner_component.id.into()),

@@ -19,19 +19,16 @@
 // symmetric by construction. Reuses the host `WasmRpc` resource (no decorator
 // `Type.Type`/metadata).
 
-import {
-  getAgentTypeByAgentId,
-  type Datetime,
-  type CancellationToken,
-} from 'golem:agent/host@2.0.0';
-import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
+import { getAgentTypeByAgentId, type Datetime } from 'golem:agent/host@2.0.0';
+import type { InvocationMetadata } from './invocationId';
 import {
   encodeChild,
+  schemaContainsStream,
   v,
   withIsolatedCapabilityAdoptionTransaction,
   schemaValueFromWit,
 } from './internal/schema-model';
-import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
+import type { SchemaValue } from './internal/schema-model';
 import { compileConfig, ConfigDeclaration } from './config';
 import { AgentId } from './agentId';
 import { compileSchema } from './schema/adapter';
@@ -55,10 +52,16 @@ import {
   getRemoteAgentById,
   bindSelfRemoteAgent,
   wireRemoteAgent,
+  decodeRemoteOutput,
+  mapInvocation,
+  remoteOutputCodec,
+  streamingMethodNotAwaitedError,
   RemoteCallError,
   RemoteOutputError,
   type AgentConfigEntry,
+  type Invocation,
   type RemoteAgentHandle,
+  type RemoteOutputCodec,
 } from './bridge/agent';
 export type { AgentConfigEntry } from './bridge/agent';
 
@@ -80,20 +83,21 @@ type DurableRemoteMethodFor<M> =
     ? keyof Input extends never
       ? {
           (options?: RemoteCallOptions): Promise<Output>;
-          /** Fire-and-forget; no result is awaited. */
-          trigger(): void;
-          /** Enqueue at `at`, returning a token to cancel it before it runs. */
-          schedule(at: Datetime): CancellationToken;
+          /** Starts the invocation without awaiting its result, and resolves to its handle. */
+          trigger(): Promise<Invocation<Output>>;
+          /** Enqueues the invocation at `at`, and resolves to its handle. */
+          schedule(at: Datetime): Promise<Invocation<Output>>;
         }
       : {
           (input: InferRecord<Input>, options?: RemoteCallOptions): Promise<Output>;
-          trigger(input: InferRecord<Input>): void;
-          /** Enqueue at `at`, returning a token to cancel it before it runs. */
-          schedule(at: Datetime, input: InferRecord<Input>): CancellationToken;
+          /** Starts the invocation without awaiting its result, and resolves to its handle. */
+          trigger(input: InferRecord<Input>): Promise<Invocation<Output>>;
+          /** Enqueues the invocation at `at`, and resolves to its handle. */
+          schedule(at: Datetime, input: InferRecord<Input>): Promise<Invocation<Output>>;
         }
     : never;
 
-/** Result of invoking an ephemeral agent, including its per-invocation identity. */
+/** Result of an awaited call of an ephemeral agent, including its per-invocation identity. */
 export interface EphemeralInvocationResult<T> {
   metadata: InvocationMetadata;
   value: T;
@@ -105,21 +109,26 @@ type EphemeralRemoteMethodFor<M> =
     ? keyof Input extends never
       ? {
           (options?: RemoteCallOptions): Promise<EphemeralInvocationResult<Output>>;
-          trigger(): InvocationMetadata;
-          schedule(at: Datetime): CancelableScheduledInvocationReceipt;
+          trigger(): Promise<Invocation<Output>>;
+          schedule(at: Datetime): Promise<Invocation<Output>>;
         }
       : {
           (
             input: InferRecord<Input>,
             options?: RemoteCallOptions,
           ): Promise<EphemeralInvocationResult<Output>>;
-          trigger(input: InferRecord<Input>): InvocationMetadata;
-          schedule(at: Datetime, input: InferRecord<Input>): CancelableScheduledInvocationReceipt;
+          trigger(input: InferRecord<Input>): Promise<Invocation<Output>>;
+          schedule(at: Datetime, input: InferRecord<Input>): Promise<Invocation<Output>>;
         }
     : never;
 
 /** Options for an awaited remote call. */
 export interface RemoteCallOptions {
+  /**
+   * Stops the call when the signal aborts: the returned promise rejects with the signal's reason.
+   * A signal that is already aborted starts no invocation. An abort after the call started drops
+   * the call, which withdraws the invocation on a best-effort basis while it has not started.
+   */
   signal?: AbortSignal;
   /**
    * A scope card for this call. It replaces the client's default scope card;
@@ -373,7 +382,8 @@ interface NamedCodec {
 interface CompiledRemoteMethod {
   name: string;
   inputCodecs: NamedCodec[];
-  output: { tag: 'unit' } | { tag: 'single'; codec: SchemaCodec };
+  output: RemoteOutputCodec;
+  streaming: boolean;
 }
 
 /** Encode a method/constructor input record (positional, declaration order). */
@@ -381,22 +391,6 @@ function encodeRecord(codecs: NamedCodec[], input: Record<string, unknown>) {
   return withIsolatedCapabilityAdoptionTransaction(() =>
     v.record(codecs.map((c) => encodeChild(c.codec, input[c.name]))),
   );
-}
-
-function assertValueMatchesType(value: SchemaValue, type: SchemaType, graph: SchemaGraph): void {
-  let body = type.body;
-  const seenRefs = new Set<string>();
-  while (body.tag === 'ref') {
-    if (seenRefs.has(body.id)) throw new Error(`Cyclic schema reference ${body.id}`);
-    seenRefs.add(body.id);
-    const def = graph.defs.get(body.id);
-    if (!def) throw new Error(`Missing schema definition ${body.id}`);
-    body = def.body.body;
-  }
-
-  if (value.tag !== body.tag) {
-    throw new Error(`Expected schema value ${body.tag}, got ${value.tag}`);
-  }
 }
 
 /** Walk a nested object by path; `present` is false if any segment is missing. */
@@ -477,13 +471,14 @@ function compileRemoteMethods(methods: MethodsRecord): CompiledRemoteMethod[] {
       name: key,
       codec: compileSchema(spec.input[key]),
     }));
-    const returnCodec = compileSchema(spec.returns);
+    const output = remoteOutputCodec(compileSchema(spec.returns));
     return {
       name,
       inputCodecs,
-      output: returnCodec.isUnit
-        ? ({ tag: 'unit' } as const)
-        : ({ tag: 'single', codec: returnCodec } as const),
+      output,
+      streaming:
+        inputCodecs.some((entry) => schemaContainsStream(entry.codec.graph)) ||
+        (output.tag === 'single' && schemaContainsStream(output.codec.graph)),
     };
   });
 }
@@ -496,31 +491,12 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
 ): RemoteClient<Methods, Mode> {
   const wire = wireRemoteAgent(remote);
   const defaultScopeCard = clientOptions.scopeCard;
-  const decodeOutput = (method: CompiledRemoteMethod, value: unknown): unknown => {
-    if (method.output.tag === 'unit') {
-      if (value !== undefined) {
-        throw new RemoteOutputError(
-          `Remote agent ${remote.target}.${method.name} returned a value for a unit output`,
-        );
-      }
-      return undefined;
-    }
-    if (value === undefined) {
-      throw new RemoteOutputError(
-        `Remote agent ${remote.target}.${method.name} returned no value for a non-unit output`,
-      );
-    }
-    try {
-      const decoded = value as SchemaValue;
-      assertValueMatchesType(decoded, method.output.codec.graph.root, method.output.codec.graph);
-      return method.output.codec.fromValue(decoded);
-    } catch (error) {
-      throw new RemoteOutputError(
-        `Remote agent ${remote.target}.${method.name} returned an invalid output: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
-      );
-    }
-  };
+  const decodeOutput = (method: CompiledRemoteMethod, value: unknown): unknown =>
+    decodeRemoteOutput(
+      `Remote agent ${remote.target}.${method.name}`,
+      method.output,
+      value as SchemaValue | undefined,
+    );
 
   const client: Record<string, unknown> = {};
   for (const method of methodCodecs) {
@@ -590,22 +566,29 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
       method.inputCodecs.length === 0
         ? (options?: RemoteCallOptions) => invoke({}, options)
         : (input: Record<string, unknown>, options?: RemoteCallOptions) => invoke(input, options);
+    const rejectStreaming = () => {
+      if (method.streaming) {
+        throw streamingMethodNotAwaitedError(`Remote agent ${remote.target}.${method.name}`);
+      }
+    };
     client[method.name] = Object.assign(methodFn, {
-      trigger: (input: Record<string, unknown> = {}) => {
-        const metadata = direct
-          ? wire!.invokeWithMetadata(method.name, encodeWire(input))
-          : remote.invokeWithMetadata(method.name, encodeRecord(method.inputCodecs, input));
-        return mode === 'ephemeral' ? metadata : undefined;
-      },
-      schedule: (at: Datetime, input: Record<string, unknown> = {}) => {
-        const receipt = direct
-          ? wire!.scheduleCancelableWithMetadata(at, method.name, encodeWire(input))
-          : remote.scheduleCancelableWithMetadata(
-              at,
-              method.name,
-              encodeRecord(method.inputCodecs, input),
+      trigger: async (input: Record<string, unknown> = {}) => {
+        rejectStreaming();
+        return direct
+          ? mapInvocation(await wire!.trigger(method.name, encodeWire(input)), decodeWire)
+          : mapInvocation(
+              await remote.trigger(method.name, encodeRecord(method.inputCodecs, input)),
+              (value) => decodeOutput(method, value),
             );
-        return mode === 'ephemeral' ? receipt : receipt.cancellationToken;
+      },
+      schedule: async (at: Datetime, input: Record<string, unknown> = {}) => {
+        rejectStreaming();
+        return direct
+          ? mapInvocation(await wire!.schedule(at, method.name, encodeWire(input)), decodeWire)
+          : mapInvocation(
+              await remote.schedule(at, method.name, encodeRecord(method.inputCodecs, input)),
+              (value) => decodeOutput(method, value),
+            );
       },
     });
   }

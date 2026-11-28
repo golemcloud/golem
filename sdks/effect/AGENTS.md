@@ -16,7 +16,10 @@ QuickJS-backed WASI Preview 3 components.
   with a typed `conflict` when the key is current. `getById(id)` never creates: an unknown or
   wrong-type ID is a typed `not-found`. Every durable remote client has an `agentId` Effect that
   calls the WIT `agent-id` method, so a method named `agentId` is not part of a typed client. RPC
-  call/trigger/schedule input is one object. Awaited calls are fiber-interruptible.
+  call/trigger/schedule input is one object. Awaited calls are fiber-interruptible: the interrupt
+  aborts the signal that `invokeAndAwait` passes to `withSignal` from `wasm-rquickjs:import-abort`,
+  so the runtime drops the import. `trigger`/`schedule` return scoped `Invocation` handles; closing
+  the scope or interrupting `awaitResult` only detaches.
 - `defineAgentClient({ name, id, methods, mode?, config? })` is the recommended full caller-owned
   client with lifecycle factories. Its method-only `{ methods }` form has no factory; bind it with
   `Client.bind(id, definition)`, which reads the agent type from `getAgentTypeByAgentId` and

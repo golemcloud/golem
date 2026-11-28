@@ -113,7 +113,7 @@ with `@schema.AgentStream::produce`. External bridge clients may instead generat
 identify the method, direction, and recursive occurrence; nested occurrences append child indices.
 Use those bridge factories when a MoonBit type cannot identify the exact wire schema (for example
 `Int` could represent several integer widths). Stream-bearing methods do not generate `trigger_*`,
-`schedule_*`, or `schedule_cancelable_*`, and constructors cannot contain streams.
+`schedule_*`, or `get_*_invocation`, and constructors cannot contain streams.
 
 For a native external application, declare `bridge.moonbit.external` and follow
 `golem-call-from-external-moonbit`. Generated clients expose their runtime `AgentStream`, producer

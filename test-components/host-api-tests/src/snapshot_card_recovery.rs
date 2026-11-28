@@ -1,5 +1,5 @@
 use golem_rust::agentic::spawn_local;
-use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
+use golem_rust::bindings::golem::agent::host::{RpcError, WasmRpc};
 use golem_rust::golem_schema::CardId;
 use golem_rust::permissions::{
     self, Bounds, Holder, Lifespan, PatternGrant, PermissionCard, PermissionError,
@@ -329,8 +329,6 @@ pub trait ScopeCardAgent {
 
     async fn invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId);
 
-    async fn async_invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId);
-
     async fn invoke_scope_after_promise(
         &self,
         target: String,
@@ -343,15 +341,7 @@ pub trait ScopeCardAgent {
         repetitions: u32,
     ) -> bool;
 
-    fn invoke_scope_is_denied(&self, target: String) -> bool;
-
-    fn persistent_scope_is_denied(&self, target: String) -> bool;
-
-    async fn persistent_async_scope_is_denied(&self, target: String) -> bool;
-
-    fn schedule_scope(&self, target: String);
-
-    fn schedule_cancelable_scope(&self, target: String);
+    async fn persistent_scope_is_denied(&self, target: String) -> bool;
 
     fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool);
 
@@ -536,7 +526,7 @@ pub trait ScopeCardAgent {
     /// Returns a promise that background work, which becomes ready only when
     /// the method returns, awaits: the invocation's lent scope card stays
     /// installed, hidden by the return, until the drain ends. After the
-    /// promise, the background work waits in a synchronous call of the
+    /// promise, the background work waits in an awaited call of the
     /// `ScopeCardAgent` `witness`'s `await_release` of `witness_release`, then
     /// inspects the initial card that the method listed.
     async fn hold_lent_scope_through_drain(
@@ -663,7 +653,7 @@ struct KeptScopeCard {
     scope_card: ScopeCard,
     client: ScopeCardInspectorClient,
     /// A scope card derived through the raw bindings in the same invocation,
-    /// for the raw synchronous call.
+    /// for the raw awaited call.
     raw_scope_card: raw::Card,
     root_card_id: CardId,
     id: permissions::CardId,
@@ -684,15 +674,16 @@ pub struct ScopeCardAgentImpl {
 /// Named checks of scope-card handle uses, each with whether it held.
 type HandleChecks = Vec<(String, bool)>;
 
-/// Lends `card` to the `ScopeCardAgent` `witness` on a raw synchronous call.
-fn lend_to_witness(witness: &str, card: &raw::Card) -> Result<(), RpcError> {
+/// Lends `card` to the `ScopeCardAgent` `witness` on a raw awaited call.
+async fn lend_to_witness(witness: &str, card: &raw::Card) -> Result<(), RpcError> {
     let card_id = raw::id(card);
     scope_card_rpc(witness.to_string())
         .invoke_and_await(
-            "inspect_scope",
+            "inspect_scope".to_string(),
             encode_parameters(vec![card_id.to_value(), card_id.to_value()]),
             Some(card),
         )
+        .await
         .map(|_| ())
 }
 
@@ -752,34 +743,15 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         let root_card_id = raw::id(&raw::template());
         let invocation = scope_card_rpc(target)
             .invoke_and_await(
-                "inspect_scope",
+                "inspect_scope".to_string(),
                 encode_parameters(vec![scope_card_id.to_value(), root_card_id.to_value()]),
                 Some(&scope_card),
             )
+            .await
             .expect("scope-card invoke-and-await failed");
         let (present, parent_matches, inspect_matches) = decode_scope_observation(
             invocation
                 .result
-                .expect("scope-card observation result is missing"),
-        );
-        (present, parent_matches, inspect_matches, scope_card_id)
-    }
-
-    async fn async_invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId) {
-        let scope_card = raw::derive_scope_card();
-        let scope_card_id = raw::id(&scope_card);
-        let root_card_id = raw::id(&raw::template());
-        let invocation = scope_card_rpc(target).async_invoke_and_await(
-            "inspect_scope",
-            encode_parameters(vec![scope_card_id.to_value(), root_card_id.to_value()]),
-            Some(&scope_card),
-        );
-        let (present, parent_matches, inspect_matches) = decode_scope_observation(
-            invocation
-                .future
-                .get()
-                .await
-                .expect("scope-card async invoke-and-await failed")
                 .expect("scope-card observation result is missing"),
         );
         (present, parent_matches, inspect_matches, scope_card_id)
@@ -795,7 +767,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         let root_card_id = raw::id(&raw::template());
         let invocation = scope_card_rpc(target)
             .invoke_and_await(
-                "inspect_scope_after_promise",
+                "inspect_scope_after_promise".to_string(),
                 encode_parameters(vec![
                     scope_card_id.to_value(),
                     root_card_id.to_value(),
@@ -803,6 +775,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
                 ]),
                 Some(&scope_card),
             )
+            .await
             .expect("replay scope-card invocation failed");
         let value = decode_schema_value(
             invocation
@@ -826,68 +799,18 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         client.inspect_repeatedly(repetitions).await
     }
 
-    fn invoke_scope_is_denied(&self, target: String) -> bool {
-        let scope_card = raw::derive_scope_card();
-        matches!(
-            scope_card_rpc(target).invoke(
-                "inspect_scope",
-                encode_parameters(vec![]),
-                Some(&scope_card)
-            ),
-            Err(RpcError::Denied(_))
-        )
-    }
-
-    fn persistent_scope_is_denied(&self, target: String) -> bool {
+    async fn persistent_scope_is_denied(&self, target: String) -> bool {
         let parent = raw::template();
         matches!(
-            scope_card_rpc(target).invoke_and_await(
-                "inspect_scope",
-                encode_parameters(vec![]),
-                Some(&parent),
-            ),
+            scope_card_rpc(target)
+                .invoke_and_await(
+                    "inspect_scope".to_string(),
+                    encode_parameters(vec![]),
+                    Some(&parent),
+                )
+                .await,
             Err(RpcError::Denied(_))
         )
-    }
-
-    async fn persistent_async_scope_is_denied(&self, target: String) -> bool {
-        let parent = raw::template();
-        let invocation = scope_card_rpc(target).async_invoke_and_await(
-            "inspect_scope",
-            encode_parameters(vec![]),
-            Some(&parent),
-        );
-        matches!(invocation.future.get().await, Err(RpcError::Denied(_)))
-    }
-
-    fn schedule_scope(&self, target: String) {
-        let scope_card = raw::derive_scope_card();
-        scope_card_rpc(target)
-            .schedule_invocation(
-                Datetime {
-                    seconds: 0,
-                    nanoseconds: 0,
-                },
-                "inspect_scope",
-                encode_parameters(vec![]),
-                Some(&scope_card),
-            )
-            .unwrap();
-    }
-
-    fn schedule_cancelable_scope(&self, target: String) {
-        let scope_card = raw::derive_scope_card();
-        scope_card_rpc(target)
-            .schedule_cancelable_invocation(
-                Datetime {
-                    seconds: 0,
-                    nanoseconds: 0,
-                },
-                "inspect_scope",
-                encode_parameters(vec![]),
-                Some(&scope_card),
-            )
-            .unwrap();
     }
 
     fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool) {
@@ -1422,14 +1345,16 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         checks.push((
             "a stale scope card on a raw synchronous call is denied".to_string(),
             matches!(
-                scope_card_rpc(target).invoke_and_await(
-                    "inspect_scope",
-                    encode_parameters(vec![
-                        raw::id(&raw_scope_card).to_value(),
-                        root_card_id.to_value()
-                    ]),
-                    Some(&raw_scope_card),
-                ),
+                scope_card_rpc(target)
+                    .invoke_and_await(
+                        "inspect_scope".to_string(),
+                        encode_parameters(vec![
+                            raw::id(&raw_scope_card).to_value(),
+                            root_card_id.to_value()
+                        ]),
+                        Some(&raw_scope_card),
+                    )
+                    .await,
                 Err(RpcError::Denied(_))
             ),
         ));
@@ -1558,10 +1483,15 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             .find_map(|(kind, card)| (kind == "scope").then_some(card))
             .expect("the lent scope card is not listed");
         let derived = raw::derive_scope(&[&lent]);
+        let lent_lendable = lend_to_witness(&witness, &lent).await.is_ok();
+        let derived_lendable = match &derived {
+            Ok(derived) => lend_to_witness(&witness, derived).await.is_ok(),
+            Err(_) => false,
+        };
         let before = vec![
             (
                 "lending the lent card is permitted".to_string(),
-                lend_to_witness(&witness, &lent).is_ok(),
+                lent_lendable,
             ),
             (
                 "deriving from the lent card is permitted".to_string(),
@@ -1569,9 +1499,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             ),
             (
                 "lending a card derived from the lent card is permitted".to_string(),
-                derived
-                    .as_ref()
-                    .is_ok_and(|derived| lend_to_witness(&witness, derived).is_ok()),
+                derived_lendable,
             ),
         ];
         let derived = derived.expect("deriving from the lent scope card failed");
@@ -1581,28 +1509,32 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         spawn_local(async move {
             background_returned.opened().await;
             let own = raw::derive_scope_card();
+            let lent_denied = matches!(
+                lend_to_witness(&witness, &lent).await,
+                Err(RpcError::Denied(_))
+            );
+            let derive_refused = matches!(
+                raw::derive_scope(&[&lent]),
+                Err(raw::PermissionError::NotPermitted(_))
+            );
+            let derived_denied = matches!(
+                lend_to_witness(&witness, &derived).await,
+                Err(RpcError::Denied(_))
+            );
+            let own_lendable = lend_to_witness(&witness, &own).await.is_ok();
             let checks = vec![
-                (
-                    "lending the lent card is denied".to_string(),
-                    matches!(lend_to_witness(&witness, &lent), Err(RpcError::Denied(_))),
-                ),
+                ("lending the lent card is denied".to_string(), lent_denied),
                 (
                     "deriving from the lent card is not permitted".to_string(),
-                    matches!(
-                        raw::derive_scope(&[&lent]),
-                        Err(raw::PermissionError::NotPermitted(_))
-                    ),
+                    derive_refused,
                 ),
                 (
                     "lending a card derived from the lent card is denied".to_string(),
-                    matches!(
-                        lend_to_witness(&witness, &derived),
-                        Err(RpcError::Denied(_))
-                    ),
+                    derived_denied,
                 ),
                 (
                     "lending a card derived from the own wallet is permitted".to_string(),
-                    lend_to_witness(&witness, &own).is_ok(),
+                    own_lendable,
                 ),
             ];
             after_return.borrow_mut().push(checks);
@@ -1661,10 +1593,11 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             await_promise(&background_release).await;
             scope_card_rpc(witness)
                 .invoke_and_await(
-                    "await_release",
+                    "await_release".to_string(),
                     encode_parameters(vec![witness_release.to_value()]),
                     None,
                 )
+                .await
                 .expect("waiting for the witness release failed");
             raw::view(&template).expect("inspecting the initial card failed");
         });

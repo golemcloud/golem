@@ -6,7 +6,7 @@ inputs:
     default: 'false'
   wasm-rquickjs-version:
     description: 'wasm-rquickjs version used to build JavaScript components'
-    default: '0.5.2'
+    default: '0.5.6'
   moonbit-version:
     description: 'MoonBit compiler and core version'
     default: '0.10.18+6c83a7f62'

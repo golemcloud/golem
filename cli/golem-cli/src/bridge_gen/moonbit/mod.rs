@@ -1575,7 +1575,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredB
         // argument card.
         writer.line("self.client.check_scope_card(scope_card?)");
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        match decode {
+        match &decode {
             None if ephemeral => {
                 writer.line(format!(
                     "let response = self.client.invoke_and_await({method_name}, input, scope_card?)"
@@ -1642,72 +1642,89 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredB
         if method.uses_streams(&self.agent_type.schema) {
             return Ok(());
         }
-        let trigger_ret_ty = if ephemeral {
-            "@rpc.InvocationMetadata"
-        } else {
-            "Unit"
+        let handle_ty = format!("@rpc.Invocation[{ret_ty}]");
+        let decode_output = |writer: &mut MoonBitWriter| match &decode {
+            None => writer.line("_ => (),"),
+            Some(decode) => {
+                writer.line("fn(output) raise {");
+                writer.indent();
+                writer.line("match output {");
+                writer.indent();
+                writer.line("Some(tree) => {");
+                writer.indent();
+                writer.line("let value = @model_host.schema_value_from_wit(tree) catch {");
+                writer.indent();
+                writer.line(format!(
+                    "error => raise @common.AgentError::InvalidType({} + repr(error))",
+                    moonbit_string_literal(&format!("{context}: "))
+                ));
+                writer.dedent();
+                writer.line("}");
+                writer.line(format!("{decode} catch {{"));
+                writer.indent();
+                writer.line(format!(
+                    "error => raise @common.AgentError::InvalidType({} + repr(error))",
+                    moonbit_string_literal(&format!("{context}: "))
+                ));
+                writer.dedent();
+                writer.line("}");
+                writer.dedent();
+                writer.line("}");
+                writer.line(format!(
+                    "None => raise @common.AgentError::InvalidType({})",
+                    moonbit_string_literal(&format!("{context}: expected a value"))
+                ));
+                writer.dedent();
+                writer.line("}");
+                writer.dedent();
+                writer.line("},");
+            }
         };
+
         writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub fn {client}::trigger_{base}(self : {self_decls}) -> {trigger_ret_ty} raise @common.AgentError {{"
+            "pub async fn {client}::trigger_{base}(self : {self_decls}) -> {handle_ty} {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        if ephemeral {
-            writer.line(format!("self.client.invoke({method_name}, input)"));
-        } else {
-            writer.line(format!("let _ = self.client.invoke({method_name}, input)"));
-        }
+        writer.line(format!("self.client.trigger({method_name}, input,"));
+        writer.indent();
+        decode_output(writer);
+        writer.dedent();
+        writer.line(")");
         writer.dedent();
         writer.line("}");
         writer.blank();
 
         let schedule_decls = prepend_param("scheduled_at : @systemClock.Instant", &param_decls);
         let schedule_self_decls = prepend_self_decl(client, &schedule_decls);
-        let schedule_ret_ty = if ephemeral {
-            "@rpc.ScheduledInvocationReceipt"
-        } else {
-            "Unit"
-        };
         writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub fn {client}::schedule_{base}(self : {schedule_self_decls}) -> {schedule_ret_ty} raise @common.AgentError {{"
+            "pub async fn {client}::schedule_{base}(self : {schedule_self_decls}) -> {handle_ty} {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        if ephemeral {
-            writer.line(format!(
-                "self.client.schedule_invocation(scheduled_at, {method_name}, input)"
-            ));
-        } else {
-            writer.line(format!(
-                "let _ = self.client.schedule_invocation(scheduled_at, {method_name}, input)"
-            ));
-        }
+        writer.line(format!(
+            "self.client.schedule(scheduled_at, {method_name}, input,"
+        ));
+        writer.indent();
+        decode_output(writer);
+        writer.dedent();
+        writer.line(")");
         writer.dedent();
         writer.line("}");
         writer.blank();
 
-        let schedule_cancelable_ret_ty = if ephemeral {
-            "@rpc.CancelableScheduledInvocationReceipt"
-        } else {
-            "@agentHost.CancellationToken"
-        };
         writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub fn {client}::schedule_cancelable_{base}(self : {schedule_self_decls}) -> {schedule_cancelable_ret_ty} raise @common.AgentError {{"
+            "pub fn {client}::get_{base}_invocation(id : @rpc.InvocationId) -> {handle_ty} {{"
         ));
         writer.indent();
-        self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        if ephemeral {
-            writer.line(format!(
-                "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input)"
-            ));
-        } else {
-            writer.line(format!(
-                "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input).cancellation_token"
-            ));
-        }
+        writer.line("@rpc.Invocation::get(id,");
+        writer.indent();
+        decode_output(writer);
+        writer.dedent();
+        writer.line(")");
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -2276,10 +2293,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredB
     /// Computes the base identifier for every method's wrappers in one pass.
     ///
     /// Each method emits three associated functions: `<base>` (await),
-    /// `trigger_<base>`, and `schedule_<base>`. A base is chosen so that all
-    /// three names are free of the reserved associated-function names and of
-    /// every name already claimed by an earlier method (its base and its
-    /// `trigger_`/`schedule_` forms), so distinct methods whose names normalize
+    /// `trigger_<base>`, and `schedule_<base>`; the guest bridge also emits
+    /// `get_<base>_invocation`. A base is chosen so that all these names are
+    /// free of the reserved associated-function names and of every name
+    /// already claimed by an earlier method (its base and its derived
+    /// forms), so distinct methods whose names normalize
     /// to the same identifier — or whose names collide with another method's
     /// generated `trigger_`/`schedule_` wrapper — never produce duplicate
     /// definitions. Wire encoding uses the original method name, so renaming a
@@ -2311,7 +2329,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredB
                 || used.contains(&format!("trigger_{candidate}"))
                 || used.contains(&format!("schedule_{candidate}"))
                 || (self.mode == MoonBitBridgeMode::GuestWasmRpc
-                    && used.contains(&format!("schedule_cancelable_{candidate}")))
+                    && used.contains(&format!("get_{candidate}_invocation")))
             {
                 candidate = format!("{ident}_{n}");
                 n += 1;
@@ -2320,7 +2338,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredB
             used.insert(format!("trigger_{candidate}"));
             used.insert(format!("schedule_{candidate}"));
             if self.mode == MoonBitBridgeMode::GuestWasmRpc {
-                used.insert(format!("schedule_cancelable_{candidate}"));
+                used.insert(format!("get_{candidate}_invocation"));
             }
             bases.push(candidate);
         }

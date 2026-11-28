@@ -243,11 +243,19 @@ Module._load = function (request) {
         async agentId(...args) {
           return missingHostImport("wasmRpcAgentId")(this, ...args);
         }
-        invokeAndAwait(...args) {
+        async invokeAndAwait(...args) {
           return missingHostImport("wasmRpcInvokeAndAwait")(...args);
         }
-        asyncInvokeAndAwait(...args) {
-          return missingHostImport("wasmRpcAsyncInvokeAndAwait")(...args);
+        async trigger(...args) {
+          return missingHostImport("wasmRpcTrigger")(...args);
+        }
+        async schedule(...args) {
+          return missingHostImport("wasmRpcSchedule")(...args);
+        }
+      },
+      Invocation: class {
+        static get(...args) {
+          return missingHostImport("invocationGet")(...args);
         }
       },
     };

@@ -14,9 +14,14 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { getAgentTypeByAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
-import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
+import {
+  getAgentTypeByAgentId,
+  Invocation as HostInvocation,
+  WasmRpc,
+} from 'golem:agent/host@2.0.0';
+import type { Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/defineAgent';
+import { Invocation } from '../src/bridge/agent';
 import type { AgentSpec } from '../src/defineAgent';
 import { method } from '../src/method';
 import {
@@ -51,7 +56,9 @@ import {
   scopeCardFromRaw,
 } from './permissionCardTestSupport';
 import {
+  fakeHostInvocation,
   hostInvocationMetadata,
+  hostInvocationResult,
   sdkInvocationMetadata,
   testInvocationUuid,
 } from './invocationMetadataTestSupport';
@@ -74,9 +81,11 @@ async function remoteClientTypeChecks(): Promise<void> {
   // @ts-expect-error cancellation is an option on the normal call, not a separate operation
   void client.ping.abortable(controller.signal);
   const at: Datetime = { seconds: 1n, nanoseconds: 0 };
-  const pingToken: CancellationToken = client.ping.schedule(at);
-  const addToken: CancellationToken = client.add.schedule(at, { by: 1 });
-  // @ts-expect-error schedule now always returns a token; there is no separate variant
+  const pingInvocation: Invocation<string> = await client.ping.schedule(at);
+  const addInvocation: Invocation<number> = await client.add.trigger({ by: 1 });
+  const added: number = await addInvocation.awaitResult({ signal: controller.signal });
+  const cancelled: boolean = await pingInvocation.cancel();
+  // @ts-expect-error schedule returns the handle; there is no cancelable variant
   void client.ping.scheduleCancelable(at);
   const created = await factory.create({ name: 'counter' });
   void created.ping();
@@ -106,19 +115,20 @@ async function remoteClientTypeChecks(): Promise<void> {
   const ephemeralFactory = ephemeralDef.client;
   const ephemeral = ephemeralFactory.upsert({ name: 'counter' });
   void ephemeral.ping().then(({ metadata, value }) => ({ metadata, value }));
-  const ephemeralMetadata = ephemeral.ping.trigger();
-  const ephemeralReceipt = ephemeral.ping.schedule(at);
-  const ephemeralAgentId: AgentId = ephemeralMetadata.agentId;
+  const ephemeralTriggered: Invocation<string> = await ephemeral.ping.trigger();
+  const ephemeralScheduled: Invocation<string> = await ephemeral.ping.schedule(at);
+  const ephemeralAgentId: AgentId = ephemeralTriggered.id.agentId;
+  // @ts-expect-error invocation metadata is only part of awaited results
+  void ephemeralScheduled.metadata;
   // @ts-expect-error ephemeral factories cannot create a durable agent
   void ephemeralFactory.create({ name: 'counter' });
   // @ts-expect-error ephemeral factories cannot address a stable agent
   void ephemeralFactory.getById(agentId);
   // @ts-expect-error ephemeral clients have no stable agent ID
   void ephemeral.agentId();
-  void pingToken;
-  void addToken;
+  void added;
+  void cancelled;
   void ephemeralAgentId;
-  void ephemeralReceipt;
 
   const fullEphemeralDefinition = defineAgentClient({
     name: 'FullEphemeralClientTypeChecks',
@@ -652,10 +662,9 @@ describe('RPC client', () => {
 
   const latestRpc = () =>
     vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      invoke: ReturnType<typeof vi.fn>;
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
-      scheduleInvocation: ReturnType<typeof vi.fn>;
-      scheduleCancelableInvocation: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
+      trigger: ReturnType<typeof vi.fn>;
+      schedule: ReturnType<typeof vi.fn>;
     };
 
   const remoteAgentId = AgentId.parse('00000007-0000-8000-8000-000000000004');
@@ -828,37 +837,28 @@ describe('RPC client', () => {
     const callCard = scopeCardFromRaw({ id: 'call-scope' });
     const client = def.client.upsert({ name: 'scoped' }, { scopeCard: defaultCard });
     const rpc = latestRpc();
-    const scopeOfLastAwait = () => rpc.asyncInvokeAndAwait.mock.calls.at(-1)![2];
-    rpc.invoke.mockReturnValue(hostInvocationMetadata());
-    rpc.asyncInvokeAndAwait.mockImplementation(() => ({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi
-          .fn()
-          .mockResolvedValue({ valueNodes: [{ tag: 'string-value', val: 'hi' }], root: 0 }),
-        cancel: vi.fn(),
-      },
-    }));
+    const scopeOfLastAwait = () => rpc.invokeAndAwait.mock.calls.at(-1)![2];
+    rpc.trigger.mockResolvedValue(fakeHostInvocation());
+    rpc.invokeAndAwait.mockResolvedValue(
+      hostInvocationResult({ valueNodes: [{ tag: 'string-value', val: 'hi' }], root: 0 }),
+    );
 
     await expect(client.echo({ text: 'a' })).resolves.toBe('hi');
     expect(scopeOfLastAwait()).toBe(rawOfScopeCard(defaultCard));
     await expect(client.echo({ text: 'b' }, { scopeCard: callCard })).resolves.toBe('hi');
     expect(scopeOfLastAwait()).toBe(rawOfScopeCard(callCard));
-    rpc.asyncInvokeAndAwait.mockImplementation(() => ({
-      metadata: hostInvocationMetadata(),
-      future: { get: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() },
-    }));
+    rpc.invokeAndAwait.mockResolvedValue(hostInvocationResult());
     await client.touch({ scopeCard: null });
     expect(scopeOfLastAwait()).toBeUndefined();
-    client.touch.trigger();
-    expect(rpc.invoke.mock.calls.at(-1)![2]).toBeUndefined();
+    await client.touch.trigger();
+    expect(rpc.trigger.mock.calls.at(-1)).toHaveLength(2);
     expect(defaultCard.isMoved()).toBe(false);
     expect(callCard.isMoved()).toBe(false);
 
-    const awaited = rpc.asyncInvokeAndAwait.mock.calls.length;
+    const awaited = rpc.invokeAndAwait.mock.calls.length;
     defaultCard.release();
     await expect(client.touch()).rejects.toThrow(/already been released/);
-    expect(rpc.asyncInvokeAndAwait.mock.calls.length).toBe(awaited);
+    expect(rpc.invokeAndAwait.mock.calls.length).toBe(awaited);
   });
 
   it('builds a client-only definition from Standard Schema libraries without registration', () => {
@@ -948,15 +948,9 @@ describe('RPC client', () => {
     } as never);
     const client = definition.getById(remoteAgentId);
     const rpc = vi.mocked(WasmRpc.getById).mock.results.at(-1)!.value;
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(remoteAgentId.toString()),
-      future: {
-        get: vi.fn().mockRejectedValue({
-          tag: 'remote-agent-error',
-          val: { tag: 'invalid-method', val: 'analyze is not defined' },
-        }),
-        cancel: vi.fn(),
-      },
+    rpc.invokeAndAwait.mockRejectedValue({
+      tag: 'remote-agent-error',
+      val: { tag: 'invalid-method', val: 'analyze is not defined' },
     });
 
     await expect(client.analyze({ topic: 'demand' })).rejects.toMatchObject({
@@ -967,25 +961,64 @@ describe('RPC client', () => {
     });
   });
 
-  it('returns cancellation tokens from schedule and removes the old operations', () => {
+  it('returns typed invocation handles from trigger and schedule', async () => {
     const client = clientDef.client.upsert({ name: 'counter' });
     const rpc = latestRpc();
-    const token = { cancel: vi.fn() };
-    rpc.scheduleCancelableInvocation.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      cancellationToken: token,
-    });
+    const triggered = fakeHostInvocation();
+    triggered.status.mockResolvedValue('running');
+    triggered.await_.mockResolvedValue({ valueNodes: [{ tag: 'f64-value', val: 3 }], root: 0 });
+    triggered.cancel.mockRejectedValue({ tag: 'cannot-cancel-running', val: 'running' });
+    const scheduled = fakeHostInvocation();
+    scheduled.cancel.mockResolvedValue(true);
+    rpc.trigger.mockResolvedValue(triggered);
+    rpc.schedule.mockResolvedValue(scheduled);
     const at: Datetime = { seconds: 1n, nanoseconds: 0 };
 
-    expect(client.ping.schedule(at)).toBe(token);
-    expect(client.add.schedule(at, { by: 2 })).toBe(token);
-    expect(rpc.scheduleCancelableInvocation).toHaveBeenCalledTimes(2);
-    expect(rpc.scheduleInvocation).not.toHaveBeenCalled();
+    const added = await client.add.trigger({ by: 2 });
+    expect(rpc.trigger).toHaveBeenCalledWith('add', expect.anything());
+    expect(added).toBeInstanceOf(Invocation);
+    expect(added.id).toEqual(sdkInvocationMetadata().invocationId);
+    await expect(added.status()).resolves.toBe('running');
+    await expect(added.awaitResult()).resolves.toBe(3);
+    await expect(added.cancel()).rejects.toMatchObject({
+      name: 'RemoteCallError',
+      cause: { tag: 'cannot-cancel-running', details: 'running' },
+    });
+
+    const pinged = await client.ping.schedule(at);
+    expect(rpc.schedule).toHaveBeenCalledWith(at, 'ping', expect.anything());
+    await expect(pinged.cancel()).resolves.toBe(true);
+    expect(rpc.invokeAndAwait).not.toHaveBeenCalled();
     expect('abortable' in client.ping).toBe(false);
     expect('scheduleCancelable' in client.ping).toBe(false);
   });
 
-  it('rolls back client input record capability adoption when a later field fails', () => {
+  it('rebuilds a handle from its ID with the output codec of the method spec', async () => {
+    const raw = fakeHostInvocation();
+    raw.await_.mockResolvedValue(schemaValueToWit(v.string('done')));
+    vi.mocked(HostInvocation.get).mockReturnValue(raw as never);
+    const id = sdkInvocationMetadata().invocationId;
+
+    const invocation = Invocation.get(id, clientDef.methods.ping);
+    expect(HostInvocation.get).toHaveBeenLastCalledWith({
+      owner: { tag: 'agent', val: AgentId.toWit(id.agentId) },
+      id: id.uuid,
+    });
+    expect(invocation.id).toBe(id);
+    await expect(invocation.awaitResult()).resolves.toBe('done');
+
+    raw.await_.mockResolvedValue(schemaValueToWit(v.u32(1)));
+    await expect(Invocation.get(id, clientDef.methods.ping).awaitResult()).rejects.toBeInstanceOf(
+      RemoteOutputError,
+    );
+    raw.await_.mockRejectedValue({ tag: 'cancelled', val: 'withdrawn before start' });
+    await expect(Invocation.get(id, clientDef.methods.ping).awaitResult()).rejects.toMatchObject({
+      name: 'RemoteCallError',
+      cause: { tag: 'cancelled', details: 'withdrawn before start' },
+    });
+  });
+
+  it('rolls back client input record capability adoption when a later field fails', async () => {
     const def = defineAgent({
       name: 'CapabilityInputAgent',
       id: {},
@@ -1000,14 +1033,14 @@ describe('RPC client', () => {
     const capability = compileSchema(s.secret(z.string()));
     const client = def.client.upsert({});
 
-    expect(() =>
+    await expect(
       client.send.trigger({
         capability: raw,
         get later() {
           throw new Error('client record failed');
         },
       }),
-    ).toThrow('client record failed');
+    ).rejects.toThrow('client record failed');
     expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
   });
 
@@ -1021,43 +1054,29 @@ describe('RPC client', () => {
     const client = ephemeralDef.client.upsert({ name: 'counter' });
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
     const metadata = hostInvocationMetadata();
-    let completeInvocation!: (value: undefined) => void;
-    const future = {
-      subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-      get: vi.fn().mockImplementation(
-        () =>
-          new Promise<undefined>((resolve) => {
-            completeInvocation = resolve;
-          }),
-      ),
-      cancel: vi.fn(),
-    };
-    rpc.asyncInvokeAndAwait.mockReturnValue({ metadata, future });
-    rpc.invoke.mockReturnValue(metadata);
-    const receipt = { metadata, cancellationToken: { cancel: vi.fn() } };
-    rpc.scheduleCancelableInvocation.mockReturnValue(receipt);
+    let completeInvocation!: (value: ReturnType<typeof hostInvocationResult>) => void;
+    rpc.invokeAndAwait.mockReturnValue(
+      new Promise((resolve) => {
+        completeInvocation = resolve;
+      }),
+    );
 
     const awaited = client.ping();
-    await vi.waitFor(() => expect(rpc.asyncInvokeAndAwait).toHaveBeenCalled());
-    metadata.agentId = { uuid: { highBits: 1n, lowBits: 1n } };
-    completeInvocation(undefined);
+    await vi.waitFor(() => expect(rpc.invokeAndAwait).toHaveBeenCalled());
+    completeInvocation({ metadata, result: undefined });
     await expect(awaited).resolves.toEqual({
       metadata: sdkInvocationMetadata(),
       value: undefined,
     });
     const finalAgentId = '00000007-0000-8000-8000-0000000000ff';
-    Object.assign(metadata, hostInvocationMetadata(finalAgentId));
-    const triggered = client.ping.trigger();
-    expect(triggered).toEqual(sdkInvocationMetadata(finalAgentId));
-    expect(triggered.invocationId.toString()).toBe(`${finalAgentId}.${testInvocationUuid}`);
-    expect(Object.isFrozen(triggered)).toBe(true);
-    const scheduled = client.ping.schedule({ seconds: 1n, nanoseconds: 0 });
-    expect(scheduled).toEqual({
-      metadata: sdkInvocationMetadata(finalAgentId),
-      cancellationToken: receipt.cancellationToken,
-    });
-    expect(scheduled).not.toBe(receipt);
-    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
+    rpc.trigger.mockResolvedValue(fakeHostInvocation(finalAgentId));
+    const triggered = await client.ping.trigger();
+    expect(triggered.id).toEqual(sdkInvocationMetadata(finalAgentId).invocationId);
+    expect(triggered.id.toString()).toBe(`${finalAgentId}.${testInvocationUuid}`);
+    expect('metadata' in triggered).toBe(false);
+    rpc.schedule.mockResolvedValue(fakeHostInvocation(finalAgentId));
+    const scheduled = await client.ping.schedule({ seconds: 1n, nanoseconds: 0 });
+    expect(scheduled.id.agentId.toString()).toBe(finalAgentId);
   });
 
   it('rejects a missing wire value for a declared single output', async () => {
@@ -1068,14 +1087,7 @@ describe('RPC client', () => {
     });
     const client = def.client.getById(remoteAgentId);
     const rpc = vi.mocked(WasmRpc.getById).mock.results.at(-1)!.value;
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockResolvedValue(undefined),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValue(hostInvocationResult());
 
     await expect(client.ping()).rejects.toThrow(
       `Remote agent MissingSingleOutputAgent[${remoteAgentId}].ping returned no value for a non-unit output`,
@@ -1090,14 +1102,9 @@ describe('RPC client', () => {
     });
     const client = def.client.upsert({});
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
-    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
-      metadata: hostInvocationMetadata(),
-      future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('unexpected'))),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValueOnce(
+      hostInvocationResult(schemaValueToWit(v.string('unexpected'))),
+    );
     await expect(client.ping()).rejects.toBeInstanceOf(RemoteOutputError);
   });
 
@@ -1109,14 +1116,9 @@ describe('RPC client', () => {
     });
     const client = def.client.upsert({});
     const rpc = latestRpc();
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockResolvedValue(schemaValueToWit(compileSchema(z.number()).toValue(42))),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValue(
+      hostInvocationResult(schemaValueToWit(compileSchema(z.number()).toValue(42))),
+    );
 
     await expect(client.ping()).rejects.toBeInstanceOf(RemoteOutputError);
   });
@@ -1130,21 +1132,14 @@ describe('RPC client', () => {
     const client = def.client.upsert({});
     const rpc = latestRpc();
     const errorCodec = compileSchema(s.u64());
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockRejectedValue({
-          tag: 'remote-agent-error',
-          val: {
-            tag: 'custom-error',
-            val: typedSchemaValueToWit({
-              graph: errorCodec.graph,
-              value: errorCodec.toValue(1n),
-            }),
-          },
+    rpc.invokeAndAwait.mockRejectedValue({
+      tag: 'remote-agent-error',
+      val: {
+        tag: 'custom-error',
+        val: typedSchemaValueToWit({
+          graph: errorCodec.graph,
+          value: errorCodec.toValue(1n),
         }),
-        cancel: vi.fn(),
       },
     });
 
@@ -1164,7 +1159,7 @@ describe('RPC client', () => {
     }
   });
 
-  it('surfaces the future error of a rejected call without invocation metadata', async () => {
+  it('surfaces the error of a rejected call', async () => {
     const def = defineAgent({
       name: 'RejectedCallAgent',
       id: {},
@@ -1172,14 +1167,7 @@ describe('RPC client', () => {
     });
     const client = def.client.upsert({});
     const rpc = latestRpc();
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: undefined,
-      future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockRejectedValue({ tag: 'denied', val: 'scope card rejected' }),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockRejectedValue({ tag: 'denied', val: 'scope card rejected' });
 
     const error = await client.ping().then(
       () => undefined,
@@ -1187,22 +1175,6 @@ describe('RPC client', () => {
     );
     expect(isRemoteCallError(error)).toBe(true);
     expect(error).toMatchObject({ cause: { tag: 'denied', details: 'scope card rejected' } });
-
-    // Only a rejected call lacks metadata, so one that completes without it is a protocol error.
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: undefined,
-      future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockResolvedValue({ valueNodes: [] }),
-        cancel: vi.fn(),
-      },
-    });
-    const completed = await client.ping().then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(isRemoteCallError(completed)).toBe(true);
-    expect(completed).toMatchObject({ cause: { tag: 'protocol-error' } });
   });
 
   it('narrows RemoteCallError structurally across package entry identities', () => {
@@ -1288,7 +1260,7 @@ describe('RPC client', () => {
 
     await expect(client.add({ by: 1 }, { signal: controller.signal })).rejects.toBe('cancelled');
     await expect(client.ping({ signal: controller.signal })).rejects.toBe('cancelled');
-    expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
+    expect(rpc.invokeAndAwait).not.toHaveBeenCalled();
   });
 });
 

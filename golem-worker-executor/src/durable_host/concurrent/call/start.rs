@@ -155,7 +155,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             store,
             get_ctx,
             prepared,
-            async |context, _| Ok(build_request(context).await?),
+            async |context, _| Ok(StartRequest::Ready(build_request(context).await?)),
             None,
             None,
             None::<fn(&mut DurableWorkerCtx<Ctx>)>,
@@ -178,7 +178,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
         R: Send + 'static,
-        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<StartRequest<Pair::Req>, E>,
         E: DurableCallTrapError,
     {
         let PreparedContextStart { prepared } = prepared;
@@ -379,7 +379,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
         R: Send + 'static,
-        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<StartRequest<Pair::Req>, E>,
         E: From<WorkerExecutorError>,
     {
         let mut context = AccessorContext::new(store, get_ctx);
@@ -407,7 +407,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
         R: Send + 'static,
-        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<StartRequest<Pair::Req>, E>,
         E: From<WorkerExecutorError>,
     {
         // Match borrowed admission: capture live authority before appending the Start.
@@ -575,13 +575,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     )
                     .into());
                 }
-                let request: HostRequest = request.into();
                 let function_type = retry.function_type().clone();
                 let parent_start_index = execution_scope.parent_start_index;
                 let observational_owner = execution_scope.observational_owner;
                 let invocation_id = execution_scope.invocation_id;
                 let driver = execution_scope.driver;
                 let denial = prepared.claim_options.denial.clone();
+                let request_denied = denial.is_some();
                 let span_activity = if span_observer.is_some() {
                     Some(
                         access
@@ -649,6 +649,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let cleanup_sink = prepared.cleanup_sink.clone();
                 let (send, receive) = tokio::sync::oneshot::channel();
                 let (settled, settlement) = tokio::sync::oneshot::channel();
+                // A span observer closes its own span.
+                let close_start_span = span_observer.is_none();
                 let initiation = tasks.spawn_metadata(async move {
                     let result = async {
                         let (mut generation, mut wallet) = match first_attempt {
@@ -685,11 +687,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 durable_function_type: function_type,
                                 denial,
                             },
-                            move |start_index| {
-                                let started = build_span
-                                    .map(|builder| builder(start_index))
-                                    .transpose()?;
-                                Ok((request, started))
+                            move |start_index| match request {
+                                StartRequest::Ready(request) => {
+                                    let started = build_span
+                                        .map(|builder| builder(start_index))
+                                        .transpose()?;
+                                    Ok((request.into(), started))
+                                }
+                                StartRequest::Indexed(build) => {
+                                    let (request, started) = build(start_index, request_denied)?;
+                                    Ok((request.into(), started))
+                                }
                             },
                             move |start_index, entry| {
                                 // All fallible preparation is complete. The actor pushes this
@@ -720,6 +728,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 request_upload: request_upload.clone(),
                                 entity_admission: Pair::HOST_FUNCTION_NAME
                                     == golem_common::model::oplog::host_functions::GolemEntityInvoke::HOST_FUNCTION_NAME,
+                                close_start_span,
                                 span_finished: None,
                                 span_observer: None,
                                 trap_context: DurableCallTrapContext {
@@ -1075,30 +1084,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
         let request: HostRequest = request.into();
         self.start_live_with_host_request_index(ctx, None, move |_| {
             Ok((request, Some(span_started)))
-        })
-        .await
-    }
-
-    /// Second phase on the live path for requests whose durable identity depends on the exact
-    /// host-call `Start` index. The builder runs inside the oplog's serialized writer step after
-    /// that index is assigned and before the `Start` is appended, and records the call's span
-    /// metadata on the appended `Start`.
-    pub(crate) async fn start_live_with_index_and_span(
-        self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
-        build: impl FnOnce(
-            OplogIndex,
-        ) -> Result<
-            (Pair::Req, golem_common::model::oplog::SpanStarted),
-            WorkerExecutorError,
-        > + Send
-        + 'static,
-    ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError>
-    where
-        Pair::Req: Send + 'static,
-    {
-        self.start_live_with_host_request_index(ctx, None, move |start_index| {
-            build(start_index).map(|(request, span)| (request.into(), Some(span)))
         })
         .await
     }

@@ -190,8 +190,11 @@ abandoned.
 Both reflected and direct clients support awaited, trigger, and scheduled
 calls through `invoke_value`, `trigger_value`, and `schedule_value`. Awaited
 calls use the asynchronous host invocation path and can carry live streams.
-Reflected trigger and scheduled calls reject methods whose input or output
-schema contains a stream.
+`trigger_value` and `schedule_value` return an `@rpc.Invocation[@model.SchemaValue?]`
+handle once the target accepted the invocation; drop it when done (dropping only
+detaches), and use its async `status`, `await_result` and `cancel` to observe or
+withdraw it. Reflected trigger and scheduled calls reject methods whose input or
+output schema contains a stream and never lend a scope card.
 
 ## Define caller-defined static clients
 
@@ -222,7 +225,7 @@ standalone name to this form. An unknown ID raises `Remote(NotFound(_))`:
 
 ```moonbit
 let counter = @reflection.MethodOnlyAgentClient::bind(existing_id)
-let result : @reflection.Invocation[AddOutput] = counter.invoke(
+let result : @reflection.InvocationOutput[AddOutput] = counter.invoke(
   "add",
   AddInput::{ by: 5U },
 )

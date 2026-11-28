@@ -207,7 +207,7 @@ fn guest_streams_compile_and_run_occurrence_codecs() {
     ] {
         assert!(!source.contains(&format!("::trigger_{name}(")));
         assert!(!source.contains(&format!("::schedule_{name}(")));
-        assert!(!source.contains(&format!("::schedule_cancelable_{name}(")));
+        assert!(!source.contains(&format!("::get_{name}_invocation(")));
     }
     assert!(source.contains("::trigger_status("));
     assert!(source.contains("@agents.encode_invocation_input_async"));
@@ -997,15 +997,21 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     let encode = read_body.find("@agents.encode_invocation_input").unwrap();
     assert!(check < encode);
     assert!(!source.contains("self.client.invoke(\"read\", input, scope_card"));
-    assert!(source.contains("let _ = self.client.invoke(\"read\", input)"));
-    assert!(
-        source.contains("let _ = self.client.schedule_invocation(scheduled_at, \"read\", input)")
-    );
-    assert!(
-        source.contains(
-            "self.client.schedule_cancelable_invocation(scheduled_at, \"read\", input).cancellation_token"
-        )
-    );
+    assert!(source.contains(
+        "pub async fn ConfiguredCounterClient::trigger_read(self : ConfiguredCounterClient, delta : Int) -> @rpc.Invocation[Int64] {"
+    ));
+    assert!(source.contains(
+        "pub async fn ConfiguredCounterClient::schedule_read(self : ConfiguredCounterClient, scheduled_at : @systemClock.Instant, delta : Int) -> @rpc.Invocation[Int64] {"
+    ));
+    assert!(source.contains(
+        "pub fn ConfiguredCounterClient::get_read_invocation(id : @rpc.InvocationId) -> @rpc.Invocation[Int64] {"
+    ));
+    assert!(source.contains("self.client.trigger(\"read\", input,"));
+    assert!(source.contains("self.client.schedule(scheduled_at, \"read\", input,"));
+    assert!(source.contains("@rpc.Invocation::get(id,"));
+    assert!(!source.contains("self.client.invoke("));
+    assert!(!source.contains("schedule_invocation"));
+    assert!(!source.contains("schedule_cancelable"));
     assert!(source.contains("@types.Signed(1L)"));
     assert!(source.contains("@types.Signed(9L)"));
     assert!(source.contains("Some(\"attempts\")"));
@@ -1428,7 +1434,7 @@ fn guest_mode_handles_helper_wrapper_and_local_name_collisions() {
                 ],
                 None,
             ),
-            method("schedule-cancelable-drop", vec![], None),
+            method("get-drop-2-invocation", vec![], None),
             method("agent-id", vec![], Some(SchemaType::string())),
             method("get-by-id", vec![], None),
         ],
@@ -1441,7 +1447,11 @@ fn guest_mode_handles_helper_wrapper_and_local_name_collisions() {
     assert!(source.contains("pub async fn CollisionAgentClient::drop_2("));
     assert!(source.contains("pub async fn CollisionAgentClient::agent_id_2("));
     assert!(source.contains("pub async fn CollisionAgentClient::get_by_id_2("));
-    assert!(source.contains("pub fn CollisionAgentClient::schedule_cancelable_drop_2("));
+    assert!(
+        source
+            .contains("pub fn CollisionAgentClient::get_drop_2_invocation(id : @rpc.InvocationId)")
+    );
+    assert!(source.contains("pub async fn CollisionAgentClient::get_drop_2_invocation_2("));
     assert!(source.contains("client_2 : String"));
     assert!(source.contains("constructor_input_2 : String"));
     assert!(source.contains("input_2 : String"));
@@ -1570,9 +1580,10 @@ fn ephemeral_guest_client_offers_only_upsert() {
     assert!(!source.contains("@rpc.AgentClient::get_by_id("));
     assert!(source.contains("-> @rpc.InvocationResult[Unit]"));
     assert!(source.contains("-> @rpc.InvocationResult[String]"));
-    assert!(source.contains("-> @rpc.InvocationMetadata"));
-    assert!(source.contains("-> @rpc.ScheduledInvocationReceipt"));
-    assert!(source.contains("-> @rpc.CancelableScheduledInvocationReceipt"));
+    assert!(source.contains("-> @rpc.Invocation[Unit]"));
+    assert!(source.contains("-> @rpc.Invocation[String]"));
+    assert!(!source.contains("@rpc.InvocationMetadata"));
+    assert!(!source.contains("Receipt"));
     assert!(source.contains("{ metadata: response.metadata, value: () }"));
     assert!(source.contains("let decoded ="));
     assert!(source.contains("{ metadata: response.metadata, value: decoded }"));

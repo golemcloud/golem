@@ -234,13 +234,14 @@ async function exercise() {
   await client.recursive({ tag: 'branch', val: [{ tag: 'leaf', val: await client.produce() }] });
   for await (const item of await client.produce()) { const label: string = item.label; void label; }
   await client.consume.abortable(new AbortController().signal, base.AgentStream.from(['x']));
-  client.status.trigger();
+  const status = await client.status.trigger();
+  void status.id;
   // @ts-expect-error native streams only support awaited RPC
   client.consume.trigger(base.AgentStream.from(['x']));
   // @ts-expect-error native stream outputs cannot be scheduled
   client.produce.schedule({ seconds: 0n, nanoseconds: 0 });
   // @ts-expect-error recursive stream methods cannot be scheduled
-  client.recursive.scheduleCancelable({ seconds: 0n, nanoseconds: 0 }, { tag: 'branch', val: [] });
+  client.recursive.schedule({ seconds: 0n, nanoseconds: 0 }, { tag: 'branch', val: [] });
 }
 void exercise;
 "#,
@@ -992,10 +993,11 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(!source.contains("WithConfig"));
     assert!(source.contains("invokeAndAwait("));
     assert!(source.contains("abortable(signal: AbortSignal"));
-    assert!(source.contains("this.resolved.invoke("));
-    assert!(!source.contains("this.resolved.schedule("));
-    assert!(source.contains("return this.resolved.scheduleCancelable("));
-    assert!(source.contains("this.resolved.scheduleCancelable("));
+    assert!(source.contains("base.mapInvocation(await this.resolved.trigger("));
+    assert!(source.contains("base.mapInvocation(await this.resolved.schedule(at, "));
+    assert!(source.contains("Promise<base.Invocation<"));
+    assert!(!source.contains("this.resolved.invoke("));
+    assert!(!source.contains("scheduleCancelable"));
     assert!(source.contains("const __golemSchemaGraphs = {"));
     assert!(source.contains("graph: __golemSchemaGraphs.graph0()"));
     assert!(source.contains("reachable-config"));
@@ -1457,9 +1459,11 @@ fn guest_ephemeral_generation_uses_metadata_runtime_calls() {
     assert!(!source.contains("static async getById("));
     assert!(!source.contains("agentId("));
     assert!(source.contains("invokeAndAwaitWithMetadata("));
-    assert!(source.contains("invokeWithMetadata("));
+    assert!(source.contains(".trigger(\"run\", __encode(__args))"));
+    assert!(source.contains(".schedule(at, \"run\", __encode(__args))"));
+    assert!(!source.contains("invokeWithMetadata("));
     assert!(!source.contains("scheduleWithMetadata("));
-    assert!(source.contains("scheduleCancelableWithMetadata("));
+    assert!(!source.contains("scheduleCancelable"));
     assert!(source.contains(
         "const resolved = base.upsertRemoteAgent(\"EphemeralGuest\", constructorPayload);"
     ));

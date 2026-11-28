@@ -7,14 +7,16 @@ description: "Scheduling a future agent invocation in a TypeScript Golem project
 
 ## Overview
 
-A **scheduled invocation** enqueues a method call on the target agent to be executed at a specific future time. The call returns immediately; the target agent processes it when the scheduled time arrives.
+A **scheduled invocation** enqueues a method call on the target agent to be executed at a specific future time. The call resolves once the target has durably accepted the invocation; the target agent processes it when the scheduled time arrives.
 
 ## Usage
 
 Every method on a definition RPC client has a `.schedule()` variant that
 takes a `Datetime` as the first argument, followed by the method's input record
-(omit the input for methods declared with `input: {}`). It returns a
-`CancellationToken`; ignore the token when cancellation is not needed.
+(omit the input for methods declared with `input: {}`). It returns
+`Promise<Invocation<T>>`, the handle of the accepted invocation. Await it: a
+rejection means the invocation was not scheduled. Dropping the handle does not
+cancel the invocation.
 
 ```typescript
 import { Datetime } from '@golemcloud/golem-ts-sdk';
@@ -24,11 +26,11 @@ const counter = Counter.client.upsert({ name: 'my-counter' });
 
 // Schedule increment to run 60 seconds from now.
 const inOneMinute = Datetime.fromDate(new Date(Date.now() + 60_000));
-counter.increment.schedule(inOneMinute);
+await counter.increment.schedule(inOneMinute);
 
 // Schedule with arguments.
 const reporter = ReportAgent.client.upsert({ name: 'daily' });
-reporter.generateReport.schedule(
+await reporter.generateReport.schedule(
     Datetime.parse('2026-01-02T00:00:00Z'),
     { kind: 'summary' },
 );
@@ -53,15 +55,27 @@ Datetime.toDate(inline);        // a JavaScript Date (millisecond precision)
 
 ## Cancellation
 
-Keep the `CancellationToken` returned by `.schedule(at, input)` and call `.cancel()` any time before the scheduled time to cancel the invocation:
+Keep the `Invocation` returned by `.schedule(at, input)` and call `.cancel()` before the invocation starts:
 
 ```typescript
-const token = counter.increment.schedule(Datetime.fromDate(new Date(Date.now() + 60_000)));
+const run = await counter.increment.schedule(Datetime.fromDate(new Date(Date.now() + 60_000)));
 // …later, if the run is no longer wanted:
-token.cancel();
+const withdrawn = await run.cancel();
 ```
 
-(To cancel an in-flight — not scheduled — RPC call, pass `{ signal }` as the trailing option to the normal awaited call and abort the `AbortSignal`, for example `method(input, { signal })`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem invocation cancel` — see `golem-cancel-queued-invocation`.)
+`cancel()` resolves to `true` when it withdrew the invocation, `false` when it already finished or was already cancelled, and rejects with a `cannot-cancel-running` `RemoteCallError` when it is running. Awaiting a cancelled invocation with `run.awaitResult()` rejects with `cancelled`.
+
+To cancel from a later invocation of the same agent, keep `run.id.toString()` in agent state and rebuild the handle without a remote call:
+
+```typescript
+import { Invocation, InvocationId } from '@golemcloud/golem-ts-sdk';
+
+await Invocation.get(InvocationId.parse(this.pendingRun), Counter.methods.increment).cancel();
+```
+
+The ID only locates the invocation; it is not authority. Only the agent that scheduled the invocation, or a caller with management permission, can observe or cancel it. `.schedule()` never sends a scope card and rejects methods with streams.
+
+(To withdraw an awaited call, pass `{ signal }` as the trailing option, for example `method(input, { signal })`, and abort it: an abort before the invocation starts withdraws it on a best-effort basis, and an abort after it starts only stops waiting. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem invocation cancel` — see `golem-cancel-queued-invocation`.)
 
 ## Use Cases
 

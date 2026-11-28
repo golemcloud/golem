@@ -30,7 +30,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub(super) fn invocation_metadata(
+pub fn invocation_metadata(
     invocation_id: &OwnedInvocationId,
 ) -> Result<InvocationMetadata, WorkerExecutorError> {
     let agent_id = *invocation_id.agent_id().ok_or_else(|| {
@@ -45,7 +45,7 @@ pub(super) fn invocation_metadata(
     })
 }
 
-pub(super) fn rpc_span_finished<T>(
+pub fn rpc_span_finished<T>(
     span_id: &SpanId,
     result: &Result<T, InternalRpcError>,
 ) -> SpanFinished {
@@ -63,11 +63,14 @@ pub(super) fn rpc_span_finished<T>(
 
 /// Builds the span of an embedded RPC invocation from its idempotency key without the Store, so
 /// a call can build it in the oplog's writer step, once its `Start` index fixes the key.
-pub(super) fn embedded_invocation_span_builder<Ctx: WorkerCtx>(
+pub fn embedded_invocation_span_builder<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     connection_span_id: &SpanId,
     function_name: &str,
-) -> Result<impl Fn(&IdempotencyKey) -> SpanStarted + Send + Sync + 'static, WorkerExecutorError> {
+) -> Result<
+    impl Fn(&IdempotencyKey) -> SpanStarted + Send + Sync + 'static + use<Ctx>,
+    WorkerExecutorError,
+> {
     let connection_origin = ctx
         .state
         .invocation_state()
@@ -102,7 +105,7 @@ pub(super) fn embedded_invocation_span_builder<Ctx: WorkerCtx>(
     })
 }
 
-pub(super) fn embedded_invocation_span_started(
+pub fn embedded_invocation_span_started(
     trace_id: &golem_common::model::invocation_context::TraceId,
     trace_states: &[String],
     current_span_id: &SpanId,
@@ -153,7 +156,7 @@ pub(super) fn embedded_invocation_span_started(
     }
 }
 
-pub(super) fn restore_embedded_span<Ctx: WorkerCtx>(
+pub fn restore_embedded_span<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     started: &SpanStarted,
 ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
@@ -166,7 +169,7 @@ pub(super) fn restore_embedded_span<Ctx: WorkerCtx>(
     install_embedded_span(ctx, started, connection_span_id)
 }
 
-pub(super) fn install_embedded_span<Ctx: WorkerCtx>(
+pub fn install_embedded_span<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     started: &SpanStarted,
     connection_span_id: &SpanId,

@@ -55,7 +55,6 @@ pub(super) fn caller(
     entries: &[PublicOplogEntryWithIndex],
     key: &golem_common::model::InvocationId,
     target: &AgentId,
-    asynchronous: bool,
     completed: bool,
     finished: usize,
 ) -> anyhow::Result<Option<Call>> {
@@ -87,12 +86,10 @@ pub(super) fn caller(
     .map_err(anyhow::Error::msg)?;
     ensure!(&request.remote_agent_id == target && request.method_name == "inc_after_promise");
     // The invocation span is embedded in Start. The key derives from the call's own Start index.
-    if asynchronous {
-        ensure!(
-            call.span_started.is_some(),
-            "async RPC Start must carry its span"
-        );
-    }
+    ensure!(
+        call.span_started.is_some(),
+        "the RPC Start must carry its span"
+    );
     let golem_common::model::InvocationRequestKey::Internal(target_key) = &request.request_key
     else {
         bail!("RPC must carry an internal request key: {request:?}");
@@ -104,12 +101,7 @@ pub(super) fn caller(
     let target_key = target_key.clone();
     let invocation = invocation(entries, key, METHOD, finished)?;
     ensure!(invocation < start);
-    terminal(
-        entries,
-        start,
-        completed,
-        usize::from(asynchronous && completed),
-    )?;
+    terminal(entries, start, completed, usize::from(completed))?;
     ensure!(!entries.iter().any(|entry| matches!(
         entry.entry,
         PublicOplogEntry::Jump(_) | PublicOplogEntry::Revert(_)

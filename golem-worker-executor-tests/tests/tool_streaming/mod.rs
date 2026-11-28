@@ -12459,6 +12459,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
     let input = b"retained-before-store".to_vec();
     let (_, value) = data_value!(input.clone()).into_parts();
     let request = InvocationStart {
+        requires_own_record: false,
         target: Some(crate::agent::id_target(&worker)),
         constructor: None,
         component_id: Some(caller_component.id.into()),
@@ -24267,6 +24268,42 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
                 Some(WorkerExecutorError::NotAnAgent { .. })
             ),
             "{error:#}"
+        );
+    }
+    // The owner's address is agent-shaped, but an invocation handle refuses it once the
+    // loaded owner shows a standalone tool, and a cancel withdraws nothing.
+    let handle_caller = callers::tool_principal(owned.environment_id, "streaming");
+    for operation in [
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation::Status,
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation::Await,
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation::Cancel,
+    ] {
+        let result = executor
+            .client
+            .clone()
+            .invocation_handle(
+                golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest {
+                    agent_id: Some(owned.agent_id.into()),
+                    environment_id: Some(owned.environment_id.into()),
+                    invocation_id: Some(call.invocation_id.0.into()),
+                    caller: Some(handle_caller.clone().into()),
+                    auth_ctx: Some(golem_service_base::model::auth::AuthCtx::System.into()),
+                    operation: operation as i32,
+                },
+            )
+            .await?
+            .into_inner()
+            .result;
+        assert!(
+            matches!(
+                &result,
+                Some(golem_api_grpc::proto::golem::workerexecutor::v1::invocation_handle_response::Result::Failure(error))
+                    if matches!(
+                        error.error,
+                        Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InvalidRequest(_))
+                    )
+            ),
+            "{operation:?}: {result:?}"
         );
     }
     assert_eq!(

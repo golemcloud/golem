@@ -715,7 +715,7 @@ test "stream detection follows nested and recursive definitions" {
 ///|
 fn test_invocation(
   value : @model.SchemaValue?,
-) -> Invocation[@model.SchemaValue?] {
+) -> InvocationOutput[@model.SchemaValue?] {
   {
     metadata: {
       agent_id: @schema.AgentId::from_uuid(@schema.Uuid::from_bits(0, 2)),
@@ -742,7 +742,7 @@ test "reflected output validation rejects missing and unexpected values" {
     name: "value",
     output: Some(test_schema(String)),
   }
-  try validate_invocation_output(value_method, test_invocation(None)) catch {
+  try validate_output(value_method, test_invocation(None).value) catch {
     Schema(message) =>
       assert_eq(message, "single-output method returned no value")
     error => fail("unexpected error: \{repr(error)}")
@@ -750,9 +750,9 @@ test "reflected output validation rejects missing and unexpected values" {
     _ => fail("expected a missing output to be rejected")
   }
   try
-    validate_invocation_output(
+    validate_output(
       unit_method,
-      test_invocation(Some(@model.SchemaValue::String("unexpected"))),
+      test_invocation(Some(@model.SchemaValue::String("unexpected"))).value,
     )
   catch {
     Schema(message) => assert_eq(message, "unit method returned a value")
@@ -761,9 +761,9 @@ test "reflected output validation rejects missing and unexpected values" {
     _ => fail("expected an unexpected output to be rejected")
   }
   try
-    validate_invocation_output(
+    validate_output(
       value_method,
-      test_invocation(Some(@model.SchemaValue::U32(7U))),
+      test_invocation(Some(@model.SchemaValue::U32(7U))).value,
     )
   catch {
     Schema(_) => ()

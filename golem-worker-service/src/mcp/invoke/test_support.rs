@@ -515,6 +515,14 @@ struct RecordingWorkerClient {
 
 #[async_trait]
 impl WorkerClient for RecordingWorkerClient {
+    async fn invocation_handle(
+        &self,
+        _: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess>
+    {
+        unreachable!("this test does not observe invocation handles")
+    }
+
     async fn prepare(
         &self,
         target: &RoutedTarget,
@@ -836,7 +844,6 @@ impl WorkerClient for RecordingWorkerClient {
         _: &golem_common::model::InvocationId,
         _: EnvironmentId,
         _: AuthCtx,
-        _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
         _: Option<AgentFingerprint>,
     ) -> WorkerResult<bool> {
         unimplemented!()
@@ -894,6 +901,7 @@ impl WorkerClient for RecordingWorkerClient {
         caller: golem_api_grpc::proto::golem::component::Caller,
         _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         _: Option<AgentFingerprint>,
+        _requires_own_record: bool,
     ) -> WorkerResult<AgentInvocationOutput> {
         self.agent_ids.lock().unwrap().push(target.agent_id);
         self.targets.lock().unwrap().push(target.clone());

@@ -19,15 +19,7 @@ package golem.runtime.rpc.host
 import golem.{Datetime, FutureInterop, InvocationId}
 import golem.host.js.{JsAgentId, JsDatetime}
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
-import golem.runtime.rpc.{
-  AsyncInvocation,
-  CancelableInvocationReceipt,
-  CancellationToken,
-  InvocationMetadata,
-  InvocationReceipt,
-  InvocationResult,
-  RawCancellationToken
-}
+import golem.runtime.rpc.{InvocationMetadata, InvocationResult}
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
@@ -143,6 +135,10 @@ private[golem] object WasmRpcApi {
           RpcError("remote-agent-error", None, Some(value.asInstanceOf[JsRpcErrorRemoteAgent].value))
         case "conflict" =>
           RpcError("conflict", Some(value.asInstanceOf[JsRpcErrorString].value))
+        case "cancelled" =>
+          RpcError("cancelled", Some(value.asInstanceOf[JsRpcErrorString].value))
+        case "cannot-cancel-running" =>
+          RpcError("cannot-cancel-running", Some(value.asInstanceOf[JsRpcErrorString].value))
         case other =>
           RpcError(other, None)
       }
@@ -172,86 +168,33 @@ private[golem] object WasmRpcApi {
       rpcFuture(raw.agentId())
 
     /**
-     * `scopeCard` is a raw `permission-card` resource that the host borrows for
-     * the duration of this call, or `js.undefined`.
+     * Invokes the method and awaits its result. `scopeCard` is a raw
+     * `permission-card` resource that the host borrows for the duration of this
+     * call, or `js.undefined`.
      */
     def invokeAndAwait(
       functionName: String,
       input: JsSchemaValueTree,
       scopeCard: js.Any
-    ): Either[RpcError, js.UndefOr[JsSchemaValueTree]] =
-      invokeAndAwaitWithMetadata(functionName, input, scopeCard).map(_.value)
+    ): Future[Either[RpcError, InvocationResult[js.UndefOr[JsSchemaValueTree]]]] =
+      rpcFuture(raw.invokeAndAwait(functionName, input, scopeCard))
+        .map(_.map(value => InvocationResult(metadata(value.metadata), value.result)))
 
-    def invokeAndAwaitWithMetadata(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: js.Any
-    ): Either[RpcError, InvocationResult[js.UndefOr[JsSchemaValueTree]]] =
-      try {
-        val value = raw.invokeAndAwait(functionName, input, scopeCard)
-        Right(InvocationResult(metadata(value.metadata), value.result))
-      } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
+    /**
+     * Triggers the method and returns its handle once the target accepted it.
+     */
+    def trigger(functionName: String, input: JsSchemaValueTree): Future[Either[RpcError, RawInvocation]] =
+      rpcFuture(raw.trigger(functionName, input))
 
-    def invoke(functionName: String, input: JsSchemaValueTree): Either[RpcError, Unit] =
-      invokeWithMetadata(functionName, input).map(_ => ())
-
-    def invokeWithMetadata(functionName: String, input: JsSchemaValueTree): Either[RpcError, InvocationMetadata] =
-      try Right(metadata(raw.invoke(functionName, input, js.undefined)))
-      catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
-
-    def asyncInvokeAndAwait(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: js.Any
-    ): Either[RpcError, RawFutureInvokeResult] =
-      asyncInvokeAndAwaitWithMetadata(functionName, input, scopeCard).map(_._2)
-
-    def asyncInvokeAndAwaitWithMetadata(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: js.Any
-    ): Either[RpcError, (Option[InvocationMetadata], RawFutureInvokeResult)] =
-      try {
-        val value = raw.asyncInvokeAndAwait(functionName, input, scopeCard)
-        Right((value.metadata.toOption.map(metadata), value.future))
-      } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
-
-    def scheduleInvocation(
+    /**
+     * Schedules the method and returns its handle once the target accepted it.
+     */
+    def schedule(
       datetime: Datetime,
       functionName: String,
       input: JsSchemaValueTree
-    ): Either[RpcError, Unit] =
-      scheduleInvocationWithMetadata(datetime, functionName, input).map(_ => ())
-
-    def scheduleInvocationWithMetadata(
-      datetime: Datetime,
-      functionName: String,
-      input: JsSchemaValueTree
-    ): Either[RpcError, InvocationReceipt] =
-      try
-        Right(
-          InvocationReceipt(
-            metadata(raw.scheduleInvocation(datetimeToJs(datetime), functionName, input, js.undefined).metadata)
-          )
-        )
-      catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
-
-    def scheduleCancelableInvocation(
-      datetime: Datetime,
-      functionName: String,
-      input: JsSchemaValueTree
-    ): Either[RpcError, CancellationToken] =
-      scheduleCancelableInvocationWithMetadata(datetime, functionName, input).map(_.cancellationToken)
-
-    def scheduleCancelableInvocationWithMetadata(
-      datetime: Datetime,
-      functionName: String,
-      input: JsSchemaValueTree
-    ): Either[RpcError, CancelableInvocationReceipt] =
-      try {
-        val value = raw.scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input, js.undefined)
-        Right(CancelableInvocationReceipt(metadata(value.metadata), CancellationToken(value.cancellationToken)))
-      } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
+    ): Future[Either[RpcError, RawInvocation]] =
+      rpcFuture(raw.schedule(datetimeToJs(datetime), functionName, input))
 
     private def raw: RawWasmRpc =
       underlying.asInstanceOf[RawWasmRpc]
@@ -280,9 +223,33 @@ private[golem] object WasmRpcApi {
   }
 
   @js.native
-  private[rpc] trait RawInvocationIdRecord extends js.Object {
-    def id: JsUuid = js.native
+  private[golem] trait RawInvocationIdRecord extends js.Object {
+    def owner: RawInvocationOwner = js.native
+    def id: JsUuid                = js.native
   }
+
+  @js.native
+  private[golem] trait RawInvocationOwner extends js.Object {
+    def tag: String                  = js.native
+    @JSName("val") def value: js.Any = js.native
+  }
+
+  /** The invocation ID of a `golem:core` `invocation-id` record. */
+  private[golem] def invocationIdFromJs(raw: RawInvocationIdRecord): InvocationId =
+    raw.owner.tag match {
+      case "agent" =>
+        InvocationId(JsAgentId.toAgentId(raw.owner.value.asInstanceOf[JsAgentId]), JsUuid.toUuid(raw.id))
+      case other =>
+        throw new IllegalStateException(s"protocol-error: invocation $other owner is not an agent")
+    }
+
+  private def invocationIdToJs(id: InvocationId): RawInvocationIdRecord =
+    js.Dynamic
+      .literal(
+        "owner" -> js.Dynamic.literal("tag" -> "agent", "val" -> JsAgentId.fromAgentId(id.agentId)),
+        "id"    -> JsUuid.fromUuid(id.uuid)
+      )
+      .asInstanceOf[RawInvocationIdRecord]
 
   @js.native
   private[rpc] trait RawInvocationResultWithMetadata extends js.Object {
@@ -290,29 +257,35 @@ private[golem] object WasmRpcApi {
     def result: js.UndefOr[JsSchemaValueTree] = js.native
   }
 
+  /** The `invocation` resource of `golem:agent/host`. */
   @js.native
-  private[rpc] trait RawAsyncInvocationWithMetadata extends js.Object {
-    def metadata: js.UndefOr[RawInvocationMetadata] = js.native
-    def future: RawFutureInvokeResult               = js.native
+  @JSImport("golem:agent/host@2.0.0", "Invocation")
+  private[golem] class RawInvocation extends js.Object {
+    def id(): RawInvocationIdRecord                         = js.native
+    def status(): js.Promise[String]                        = js.native
+    def await_(): js.Promise[js.UndefOr[JsSchemaValueTree]] = js.native
+    def cancel(): js.Promise[Boolean]                       = js.native
   }
 
   @js.native
-  private[rpc] trait RawScheduledInvocationReceipt extends js.Object {
-    def metadata: RawInvocationMetadata = js.native
+  @JSImport("golem:agent/host@2.0.0", "Invocation")
+  private object RawInvocation extends js.Object {
+    def get(id: RawInvocationIdRecord): RawInvocation = js.native
   }
 
-  @js.native
-  private[rpc] trait RawCancelableScheduledInvocationReceipt extends js.Object {
-    def metadata: RawInvocationMetadata         = js.native
-    def cancellationToken: RawCancellationToken = js.native
-  }
+  /**
+   * Rebuilds the handle of the invocation with the given ID. Makes no remote
+   * call.
+   */
+  private[golem] def getInvocation(id: InvocationId): RawInvocation =
+    RawInvocation.get(invocationIdToJs(id))
 
-  @js.native
-  @JSImport("golem:agent/host@2.0.0", "FutureInvokeResult")
-  private[golem] class RawFutureInvokeResult extends js.Object {
-    def get(): js.Promise[js.UndefOr[JsSchemaValueTree]] = js.native
-    def cancel(): Unit                                   = js.native
-  }
+  /**
+   * Awaits a host call of an `invocation` resource whose rejection is an
+   * `rpc-error`.
+   */
+  private[golem] def invocationCall[A](promise: => js.Promise[A]): Future[Either[RpcError, A]] =
+    rpcFuture(promise)
 
   @js.native
   private[rpc] trait RawCreateOptions extends js.Object
@@ -331,25 +304,13 @@ private[golem] object WasmRpcApi {
       methodName: String,
       input: JsSchemaValueTree,
       scopeCard: js.Any
-    ): RawInvocationResultWithMetadata                                                                 = js.native
-    def invoke(methodName: String, input: JsSchemaValueTree, scopeCard: js.Any): RawInvocationMetadata = js.native
-    def asyncInvokeAndAwait(
-      methodName: String,
-      input: JsSchemaValueTree,
-      scopeCard: js.Any
-    ): RawAsyncInvocationWithMetadata = js.native
-    def scheduleInvocation(
+    ): js.Promise[RawInvocationResultWithMetadata]                                       = js.native
+    def trigger(methodName: String, input: JsSchemaValueTree): js.Promise[RawInvocation] = js.native
+    def schedule(
       scheduledTime: JsDatetime,
       methodName: String,
-      input: JsSchemaValueTree,
-      scopeCard: js.Any
-    ): RawScheduledInvocationReceipt = js.native
-    def scheduleCancelableInvocation(
-      scheduledTime: JsDatetime,
-      methodName: String,
-      input: JsSchemaValueTree,
-      scopeCard: js.Any
-    ): RawCancelableScheduledInvocationReceipt = js.native
+      input: JsSchemaValueTree
+    ): js.Promise[RawInvocation] = js.native
   }
 
   @js.native

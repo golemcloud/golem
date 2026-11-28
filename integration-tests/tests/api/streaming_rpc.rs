@@ -35,7 +35,7 @@ use golem_common::model::invocation_session_public::{
     decode_server_text, encode_client_text,
 };
 use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, RoutingTable};
-use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
+use golem_common::schema::{FromSchema, ResultValuePayload, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_schema::proto::golem::schema::{
     RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
@@ -56,6 +56,7 @@ use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -329,6 +330,7 @@ async fn invoke_agent_session(
     let (frames, receiver) = mpsc::channel(8);
     let request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            requires_own_record: false,
             target: Some(target),
             method_name: Some(method_name.to_string()),
             input: Some(input),
@@ -453,6 +455,30 @@ impl TrustedInvocationSession {
         input: ProtoSchemaValue,
         ephemeral: bool,
     ) -> anyhow::Result<Self> {
+        Self::start_with_schedule(
+            deps,
+            component,
+            agent_id,
+            method_name,
+            input,
+            ephemeral,
+            None,
+        )
+        .await
+    }
+
+    async fn start_with_schedule(
+        deps: &EnvBasedTestDependencies,
+        component: &ComponentDto,
+        agent_id: &ParsedAgentKey,
+        method_name: &str,
+        input: ProtoSchemaValue,
+        ephemeral: bool,
+        schedule: Option<(
+            golem_common::model::caller::Caller,
+            golem_common::model::Timestamp,
+        )>,
+    ) -> anyhow::Result<Self> {
         let idempotency_key = IdempotencyKey::fresh();
         let request_key = InvocationRequestKey::external(
             AuthCtx::System.idempotency_scope(),
@@ -472,9 +498,20 @@ impl TrustedInvocationSession {
         } else {
             (key_target(agent_id)?, None)
         };
+        let (caller, schedule_at) = match schedule {
+            Some((caller, deadline)) => (caller, Some(deadline.into())),
+            None => (golem_common::model::caller::Caller::anonymous(), None),
+        };
+        let scheduled = schedule_at.is_some();
+        let mode = if scheduled {
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule
+        } else {
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
+        };
         let (requests, receiver) = mpsc::channel(32);
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
+                requires_own_record: false,
                 target: Some(target),
                 method_name: Some(method_name.to_string()),
                 input: Some(input),
@@ -483,12 +520,12 @@ impl TrustedInvocationSession {
                 idempotency_key: Some(idempotency_key.into()),
                 context: None,
                 auth_ctx: Some(AuthCtx::System.into()),
-                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
+                caller: Some(caller.into()),
                 environment_id: Some(component.environment_id.into()),
                 config: Vec::new(),
                 component_owner_account_id: None,
-                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-                schedule_at: None,
+                mode: mode as i32,
+                schedule_at,
                 freshness_disposition: if ephemeral {
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
                         as i32
@@ -559,7 +596,9 @@ impl TrustedInvocationSession {
             }
             other => anyhow::bail!("trusted invocation was not accepted: {other:?}"),
         };
-        session.acceptance = if accepted.component_revision.is_some() {
+        // A scheduled invocation selects its component revision only when it runs, so its
+        // session ends with no result instead of reporting it ready.
+        session.acceptance = if accepted.component_revision.is_some() || scheduled {
             accepted
         } else {
             match session.receive().await?.response {
@@ -1509,6 +1548,411 @@ async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
             let target_history = user.get_oplog(&target, OplogIndex::INITIAL).await?;
             assert_eq!(producer_terminals(&target_history), before);
         }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("4 minutes")]
+#[tracing::instrument]
+async fn internal_invocation_handle_scheduled_rpc_cross_executor(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        InvocationHandleOperation as Operation, InvocationHandleRequest, InvocationLifecycleState,
+        invocation_handle_response as response, invocation_handle_success as success,
+    };
+    use golem_common::model::caller::{AgentPrincipal, Caller, Principal};
+    use std::time::Duration;
+
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let routing_table = deps.shard_manager().get_routing_table().await?;
+    let (name, caller_key) = cross_executor_caller(
+        &user,
+        &component,
+        &routing_table,
+        "StreamingRpcCaller",
+        "StreamingRpcTarget",
+        "internal-invocation-handle-cross",
+    )
+    .await?;
+    let target_key = agent_key!("StreamingRpcTarget", name.clone());
+    let caller = user.start_agent(&component.id, caller_key).await?;
+    let target = user.start_agent(&component.id, target_key.clone()).await?;
+    let other = user
+        .start_agent(
+            &component.id,
+            agent_key!("StreamingRpcCaller", format!("{name}-unrelated")),
+        )
+        .await?;
+    assert_eq!(caller.environment_id, environment.id);
+    assert_eq!(target.environment_id, environment.id);
+    assert_ne!(
+        routing_table.lookup(&caller.agent_id).unwrap(),
+        routing_table.lookup(&target.agent_id).unwrap(),
+        "the persisted starter and target must belong to distinct executor pods"
+    );
+    let agent_principal =
+        |agent: &golem_common::model::OwnedAgentId,
+         fingerprint: golem_common::model::AgentFingerprint| {
+            Principal::Agent(AgentPrincipal::of_agent(
+                "https://issuer.golem-test.example".to_string(),
+                agent.agent_id,
+                fingerprint,
+                AgentTypeName("StreamingRpcCaller".to_string()),
+                environment.id,
+            ))
+        };
+    let caller_principal = agent_principal(
+        &caller,
+        user.get_worker_metadata(&caller).await?.fingerprint,
+    );
+    let other_principal =
+        agent_principal(&other, user.get_worker_metadata(&other).await?.fingerprint);
+    let principal = Caller::entry(caller_principal.clone());
+    let (_, input) = data_value!().into_parts();
+    // The trusted ingress admits the work as system, with a real persisted immediate caller.
+    // Handle reads below have no management grants: only starter ownership can allow them.
+    let scheduled = TrustedInvocationSession::start_with_schedule(
+        deps,
+        &component,
+        &target_key,
+        "increment_scalar",
+        input.try_into().map_err(anyhow::Error::msg)?,
+        false,
+        Some((
+            principal,
+            golem_common::model::Timestamp::from(
+                golem_common::model::Timestamp::now_utc().to_millis()
+                    + Duration::from_secs(3600).as_millis() as u64,
+            ),
+        )),
+    )
+    .await?;
+    assert_eq!(scheduled.acceptance.agent_id, Some(target.agent_id.into()));
+    let auth = AuthCtx::agent_with_effective_surface(
+        user.account_id,
+        user.account_email.clone(),
+        Default::default(),
+    );
+    let request = InvocationHandleRequest {
+        agent_id: Some(target.agent_id.into()),
+        environment_id: Some(environment.id.into()),
+        invocation_id: scheduled.acceptance.idempotency_key,
+        caller: Some(caller_principal.into()),
+        auth_ctx: Some(auth.into()),
+        operation: Operation::Status as i32,
+    };
+    assert!(request.invocation_id.is_some());
+    let worker_service = deps.worker_service();
+    let mut client = WorkerServiceClient::connect(format!(
+        "http://{}:{}",
+        worker_service.grpc_host(),
+        worker_service.gprc_port()
+    ))
+    .await?;
+    let status = client
+        .invocation_handle(request.clone())
+        .await?
+        .into_inner();
+    assert!(
+        matches!(status.result, Some(response::Result::Success(value))
+        if value.result == Some(success::Result::Status(InvocationLifecycleState::Scheduled as i32)))
+    );
+    for operation in [Operation::Status, Operation::Await, Operation::Cancel] {
+        let denied = client
+            .invocation_handle(InvocationHandleRequest {
+                caller: Some(other_principal.clone().into()),
+                operation: operation as i32,
+                ..request.clone()
+            })
+            .await?
+            .into_inner();
+        assert!(
+            matches!(denied.result, Some(response::Result::Failure(error))
+            if matches!(error.error, Some(Error::PermissionDenied(_)))),
+            "an unrelated ID holder must not observe or cancel the schedule"
+        );
+    }
+    let mut observer_client = client.clone();
+    let observing = observer_client.invocation_handle(InvocationHandleRequest {
+        operation: Operation::Await as i32,
+        ..request.clone()
+    });
+    tokio::pin!(observing);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut observing)
+            .await
+            .is_err(),
+        "await must stay pending without executing future scheduled work"
+    );
+    assert_eq!(
+        user.invoke_and_await_agent(&component, &target_key, "scalar_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        0,
+        "observing a future schedule must not execute its method"
+    );
+    let cancel = InvocationHandleRequest {
+        operation: Operation::Cancel as i32,
+        ..request.clone()
+    };
+    let cancelled = client.invocation_handle(cancel.clone()).await?.into_inner();
+    assert!(
+        matches!(cancelled.result, Some(response::Result::Success(value))
+        if value.result == Some(success::Result::Cancelled(true)))
+    );
+    let terminal = tokio::time::timeout(Duration::from_secs(30), observing)
+        .await??
+        .into_inner();
+    assert!(
+        matches!(terminal.result, Some(response::Result::Success(value))
+        if matches!(&value.result, Some(success::Result::InvocationFailure(error))
+            if matches!(&error.error, Some(Error::InvocationCancelled(_))))),
+        "await must return the recorded cancellation, not a failed observation"
+    );
+    let repeated = client.invocation_handle(cancel).await?.into_inner();
+    assert!(
+        matches!(repeated.result, Some(response::Result::Success(value))
+        if value.result == Some(success::Result::Cancelled(false)))
+    );
+    let status = client.invocation_handle(request).await?.into_inner();
+    assert!(
+        matches!(status.result, Some(response::Result::Success(value))
+        if value.result == Some(success::Result::Status(InvocationLifecycleState::Cancelled as i32)))
+    );
+    assert_eq!(
+        user.invoke_and_await_agent(&component, &target_key, "scalar_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        0,
+        "withdrawn scheduled work must have no method effects"
+    );
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, FromSchema)]
+enum GuestRpcOutcome {
+    Ok,
+    Denied { details: String },
+    NotFound { details: String },
+    ProtocolError { details: String },
+    RemoteInternalError { details: String },
+    Conflict { details: String },
+    Cancelled { details: String },
+    CannotCancelRunning { details: String },
+}
+
+/// The answer of one handle operation of the `HandleProbe` fixture agent.
+#[derive(Debug, Clone, PartialEq, FromSchema)]
+enum HandleAnswer {
+    Status { status: String },
+    Value { value: u64 },
+    Unit,
+    Cancel { withdrawn: bool },
+    Error { error: GuestRpcOutcome },
+}
+
+const HANDLE_START_TIMEOUT: Duration = Duration::from_secs(30);
+const HANDLE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+async fn probe_answer(
+    user: &TestUserContext<EnvBasedTestDependencies>,
+    component: &ComponentDto,
+    probe: &ParsedAgentKey,
+    method: &str,
+    input: TypedSchemaValue,
+) -> anyhow::Result<HandleAnswer> {
+    user.invoke_and_await_agent(component, probe, method, input)
+        .await?
+        .into_typed::<HandleAnswer>()
+}
+
+/// A guest triggers invocations on a target that another executor owns and drives their
+/// handles there: the trigger returns while the target runs, a running invocation refuses
+/// cancellation, a pending one is withdrawn and awaits as cancelled, the running one delivers
+/// its result and completes, and after the target is deleted the handle is not found.
+#[test]
+#[timeout("4 minutes")]
+#[tracing::instrument]
+async fn guest_invocation_handles_reach_a_target_on_another_executor(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let routing_table = deps.shard_manager().get_routing_table().await?;
+    let (name, probe_key) = cross_executor_caller(
+        &user,
+        &component,
+        &routing_table,
+        "HandleProbe",
+        "RpcBlockingCounter",
+        "guest-handle-cross",
+    )
+    .await?;
+    let counter_key = agent_key!("RpcBlockingCounter", name.clone());
+    let probe = user.start_agent(&component.id, probe_key.clone()).await?;
+    let counter = user.start_agent(&component.id, counter_key.clone()).await?;
+    assert_ne!(
+        routing_table.lookup(&probe.agent_id).unwrap(),
+        routing_table.lookup(&counter.agent_id).unwrap(),
+        "the guest caller and its target must belong to distinct executor pods"
+    );
+    let promise = user
+        .invoke_and_await_agent(&component, &counter_key, "create_promise", data_value!())
+        .await?
+        .into_typed::<golem_common::model::PromiseId>()?;
+    let running = user
+        .invoke_and_await_agent(
+            &component,
+            &probe_key,
+            "trigger_blocked",
+            data_value!(name.clone(), promise.clone()),
+        )
+        .await?
+        .into_typed::<String>()?;
+    let pending = user
+        .invoke_and_await_agent(
+            &component,
+            &probe_key,
+            "trigger_inc_by",
+            data_value!(name.clone(), 1u64),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    // Lifecycle on the remote target
+    tokio::time::timeout(HANDLE_START_TIMEOUT, async {
+        loop {
+            let status =
+                probe_answer(&user, &component, &probe_key, "held_status", data_value!()).await?;
+            match &status {
+                HandleAnswer::Status { status } if status == "Running" || status == "Waiting" => {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                HandleAnswer::Status { status } if status == "Pending" => {
+                    tokio::time::sleep(HANDLE_POLL_INTERVAL).await;
+                }
+                other => panic!("the trigger answers before the target finishes: {other:?}"),
+            }
+        }
+    })
+    .await??;
+    let refused = probe_answer(&user, &component, &probe_key, "held_cancel", data_value!()).await?;
+    assert!(
+        matches!(
+            refused,
+            HandleAnswer::Error {
+                error: GuestRpcOutcome::CannotCancelRunning { .. }
+            }
+        ),
+        "{refused:?}"
+    );
+    let withdrawn = probe_answer(
+        &user,
+        &component,
+        &probe_key,
+        "cancel",
+        data_value!(pending.clone()),
+    )
+    .await?;
+    assert_eq!(withdrawn, HandleAnswer::Cancel { withdrawn: true });
+    let cancelled = probe_answer(
+        &user,
+        &component,
+        &probe_key,
+        "await_unit",
+        data_value!(pending.clone()),
+    )
+    .await?;
+    assert!(
+        matches!(
+            cancelled,
+            HandleAnswer::Error {
+                error: GuestRpcOutcome::Cancelled { .. }
+            }
+        ),
+        "{cancelled:?}"
+    );
+    let repeated = probe_answer(
+        &user,
+        &component,
+        &probe_key,
+        "cancel",
+        data_value!(pending.clone()),
+    )
+    .await?;
+    assert_eq!(repeated, HandleAnswer::Cancel { withdrawn: false });
+
+    user.complete_promise(&counter.environment_id, &promise, vec![])
+        .await?;
+    let awaited = probe_answer(&user, &component, &probe_key, "held_await", data_value!()).await?;
+    assert_eq!(awaited, HandleAnswer::Value { value: 7 });
+    let completed = probe_answer(
+        &user,
+        &component,
+        &probe_key,
+        "status",
+        data_value!(running.clone()),
+    )
+    .await?;
+    assert_eq!(
+        completed,
+        HandleAnswer::Status {
+            status: "Completed".to_string()
+        }
+    );
+    let after_completion = probe_answer(
+        &user,
+        &component,
+        &probe_key,
+        "cancel",
+        data_value!(running.clone()),
+    )
+    .await?;
+    assert_eq!(after_completion, HandleAnswer::Cancel { withdrawn: false });
+    assert_eq!(
+        user.invoke_and_await_agent(&component, &counter_key, "get_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        7,
+        "the withdrawn increment never runs"
+    );
+
+    // Failure control: a deleted remote target
+    user.delete_worker(&counter).await?;
+    for method in ["status", "await_value", "cancel"] {
+        let answer = probe_answer(
+            &user,
+            &component,
+            &probe_key,
+            method,
+            data_value!(running.clone()),
+        )
+        .await?;
+        assert!(
+            matches!(
+                answer,
+                HandleAnswer::Error {
+                    error: GuestRpcOutcome::NotFound { .. }
+                }
+            ),
+            "{method} after the remote target is deleted: {answer:?}"
+        );
     }
     Ok(())
 }

@@ -122,7 +122,8 @@ RPC preparation does not acquire target execution capacity. An execution-needing
 invocation durably enqueues its acceptance prefix before reporting acceptance, and caller
 cancellation must not split that prefix. Settled read-only cache hits and coalesced followers do
 not persist a separate invocation, result, or alias; only the miss owner follows normal durable
-admission. Ephemeral targets are fail-stop; do not build resumption for them.
+admission. A trigger returns a handle that observes its invocation by ID, so it admits with
+`requires_own_record`, which skips the cache hit and keeps the read-only classification. Ephemeral targets are fail-stop; do not build resumption for them.
 
 Owned asynchronous RPC operations register with the owner's suspension coordinator when the
 operation starts, including before the guest consumes the result. Their passive remote waits

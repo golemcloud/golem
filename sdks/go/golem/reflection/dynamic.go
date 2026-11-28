@@ -20,7 +20,10 @@ import (
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // Fully dynamic clients.
@@ -53,10 +56,10 @@ type DynamicAgentClient struct {
 	scopeCard any // a golem.ScopeCard, or nil
 }
 
-// WithScopeCard returns a copy of the client whose awaited calls — Call and
-// CallAsync — carry card as their scope card, unless the call passes its own
-// with [CallScopeCard], as [golem.Client.WithScopeCard] does for a typed
-// client. Trigger and Schedule never carry one. The card is lent, not moved,
+// WithScopeCard returns a copy of the client whose awaited calls carry card as
+// their scope card, unless the call passes its own with [CallScopeCard], as
+// [golem.Client.WithScopeCard] does for a typed client. Trigger and Schedule
+// never carry one. The card is lent, not moved,
 // and is valid only in the invocation that derived it. It panics on the zero
 // ScopeCard.
 func (c *DynamicAgentClient) WithScopeCard(card golem.ScopeCard) *DynamicAgentClient {
@@ -73,61 +76,73 @@ func (c *DynamicAgentClient) TypeName() string { return c.typeName }
 
 // Call invokes a method with an already-packed parameter record and waits for
 // its result, none for a method that returns nothing, together with the
-// invocation's identity, which is nil when the call was rejected before it
-// started.
-func (c *DynamicAgentClient) Call(method string, input core.SchemaValue, opts ...CallOpt) (golem.Option[core.SchemaValue], *golem.InvocationMetadata, error) {
-	p, err := c.CallAsync(method, input, opts...)
-	if err != nil {
-		return golem.None[core.SchemaValue](), nil, err
-	}
-	out, err := p.Get()
-	return out, p.Metadata, err
-}
-
-// CallAsync invokes a method with an already-packed parameter record and
-// returns at once; the result is read, as for Call, with the pending call's
-// Wait.
-func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue, opts ...CallOpt) (*PendingCall[golem.Option[core.SchemaValue]], error) {
+// invocation's identity. A call that the target withdrew before it started
+// fails with a [golem.RemoteCallError] of kind [golem.RemoteCancelled]. An
+// awaited call cannot be withdrawn by abandoning it.
+func (c *DynamicAgentClient) Call(method string, input core.SchemaValue, opts ...CallOpt) (golem.Option[core.SchemaValue], golem.InvocationMetadata, error) {
 	scope := scopeCardOf(c.scopeCard, opts)
 	tree, err := witschema.ValueToWit(input)
 	if err != nil {
+		return golem.None[core.SchemaValue](), golem.InvocationMetadata{}, fmt.Errorf("golem: %s: %w", method, err)
+	}
+	res, metadata, err := c.rpc.call(method, tree, scope)
+	if err != nil {
+		return golem.None[core.SchemaValue](), golem.InvocationMetadata{}, err
+	}
+	out, err := readDynamicResult(method, res)
+	if err != nil {
+		return golem.None[core.SchemaValue](), golem.InvocationMetadata{}, err
+	}
+	return out, metadata, nil
+}
+
+// Trigger starts a method with an already-packed parameter record without
+// waiting for its result, and returns the handle of the invocation once the
+// target has durably accepted it. A Trigger never carries a scope card.
+func (c *DynamicAgentClient) Trigger(method string, input core.SchemaValue) (*golem.Invocation[golem.Option[core.SchemaValue]], error) {
+	tree, err := witschema.ValueToWit(input)
+	if err != nil {
 		return nil, fmt.Errorf("golem: %s: %w", method, err)
 	}
-	p, err := c.rpc.start(method, tree, scope)
+	ops, err := c.rpc.trigger(method, tree)
 	if err != nil {
 		return nil, err
 	}
-	return &PendingCall[golem.Option[core.SchemaValue]]{Metadata: p.metadata, cancel: p.cancel, wait: func() (golem.Option[core.SchemaValue], error) {
-		res, err := p.await(c.agentID.String(), method)
-		if err != nil {
-			return golem.None[core.SchemaValue](), err
-		}
-		result, has := optionFromWit(res).Get()
-		if !has {
-			return golem.None[core.SchemaValue](), nil
-		}
-		value, err := witschema.ValueToCore(result)
-		if err != nil {
-			return golem.None[core.SchemaValue](), fmt.Errorf("golem: %s returned an unreadable result: %w", method, err)
-		}
-		return golem.Some(value), nil
-	}}, nil
+	return dynamicInvocation(method, ops), nil
 }
 
-// Trigger invokes a method without waiting for its result.
-func (c *DynamicAgentClient) Trigger(method string, input core.SchemaValue) (golem.InvocationMetadata, error) {
-	tree, err := witschema.ValueToWit(input)
-	if err != nil {
-		return golem.InvocationMetadata{}, fmt.Errorf("golem: %s: %w", method, err)
-	}
-	return c.rpc.trigger(method, tree)
-}
-
-// Schedule arranges for a method to be invoked at the given time.
-func (c *DynamicAgentClient) Schedule(at time.Time, method string, input core.SchemaValue) (*golem.ScheduledInvocation, error) {
+// Schedule arranges for a method to be invoked at the given time, and returns
+// the handle of the invocation once the target has durably accepted it. The
+// handle's Cancel withdraws the invocation until it starts. A Schedule never
+// carries a scope card.
+func (c *DynamicAgentClient) Schedule(at time.Time, method string, input core.SchemaValue) (*golem.Invocation[golem.Option[core.SchemaValue]], error) {
 	tree, err := witschema.ValueToWit(input)
 	if err != nil {
 		return nil, fmt.Errorf("golem: %s: %w", method, err)
 	}
-	return c.rpc.schedule(at, method, tree)
+	ops, err := c.rpc.schedule(at, method, tree)
+	if err != nil {
+		return nil, err
+	}
+	return dynamicInvocation(method, ops), nil
+}
+
+// dynamicInvocation is the handle of an invocation of a dynamic client.
+func dynamicInvocation(method string, ops link.InvocationOps) *golem.Invocation[golem.Option[core.SchemaValue]] {
+	return link.ValueInvocation(ops, method, func(res witTypes.Option[types.SchemaValueTree]) (golem.Option[core.SchemaValue], error) {
+		return readDynamicResult(method, res)
+	}).(*golem.Invocation[golem.Option[core.SchemaValue]])
+}
+
+// readDynamicResult reads a method's result into the schema model.
+func readDynamicResult(method string, res witTypes.Option[types.SchemaValueTree]) (golem.Option[core.SchemaValue], error) {
+	result, has := optionFromWit(res).Get()
+	if !has {
+		return golem.None[core.SchemaValue](), nil
+	}
+	value, err := witschema.ValueToCore(result)
+	if err != nil {
+		return golem.None[core.SchemaValue](), fmt.Errorf("golem: %s returned an unreadable result: %w", method, err)
+	}
+	return golem.Some(value), nil
 }

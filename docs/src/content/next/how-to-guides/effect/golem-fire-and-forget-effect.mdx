@@ -29,17 +29,44 @@ invent a separate client helper.
 
 ## Semantics
 
-For a durable target, `remote.method.trigger(input)` returns `Effect.Effect<void, RemoteCallError>`:
+`remote.method.trigger(input)` returns
+`Effect.Effect<InvocationId.Invocation<A, E>, RemoteCallError, Scope.Scope>`, for durable and
+ephemeral targets alike, where `A` is the method's success type and `E` its declared error:
 
-- success means the Golem host accepted the invocation;
+- success means the target durably accepted the invocation;
 - it does not wait for the remote method to finish or return its success value;
-- the remote method's declared domain error is not returned to the triggering caller;
 - request encoding or submission can still fail with `RemoteCallError`;
-- after acceptance, there is no caller-side cancellation handle.
+- the current scope owns the returned handle; closing the scope only detaches, and the invocation
+  keeps running;
+- the handle never sends a scope card.
 
-Ephemeral targets return invocation metadata from `trigger`, rather than `void`. Stream-bearing
-methods (streams in either inputs or outputs) are awaited-only: trigger and schedule reject them.
-Use the normal awaited call to consume or supply streams.
+Stream-bearing methods (streams in either inputs or outputs) are awaited-only: trigger and
+schedule reject them. Use the normal awaited call to consume or supply streams.
+
+The handle observes or withdraws the invocation while its scope is open:
+
+```typescript
+import { InvocationId } from "@golemcloud/effect-golem";
+
+const counter = yield* Counter.client.upsert({ name: "my-counter" });
+const invocation = yield* counter.increment.trigger({});
+const text = InvocationId.format(invocation.id); // `<agent-id>.<uuid>`; keep it in state
+
+const status = yield* invocation.status; // "pending", "running", "completed", ...
+const count = yield* invocation.awaitResult; // fails with the method's declared error too
+
+// In a later invocation of this agent, rebuild the handle from the ID (no remote call):
+const id = yield* InvocationId.parse(text);
+const again = yield* InvocationId.get(id, Counter.methods.increment);
+```
+
+- `awaitResult` waits without starting or resubmitting the invocation. It fails with
+  `RpcCancelled` when the invocation was cancelled; interrupting it only stops waiting.
+- `cancel` succeeds with `true` when it withdrew an invocation that had not started, `false` when
+  it already finished or was already cancelled, and fails with `RpcCannotCancelRunning` while it
+  runs.
+- The ID only locates the invocation. Only the agent that triggered it, or a caller with
+  management permission, can read its status, await it or cancel it.
 
 Handle the client and submission errors when the calling method exposes a matching typed error. If
 an unexpected infrastructure failure should fail a caller method whose contract has no error
@@ -57,7 +84,7 @@ runTest: () =>
 ```
 
 Do not use `Effect.fork` as a substitute for `.trigger()`: an awaited remote invocation forked into
-a fiber has different cancellation and completion semantics. Use the SDK's trigger form when the
+a fiber is withdrawn or detached when the fiber is interrupted, and it holds the call open. Use the SDK's trigger form when the
 result is intentionally not needed.
 
 ## Break an Awaited RPC Cycle
@@ -90,7 +117,8 @@ for (const region of ["us-east", "us-west", "eu-central"]) {
 }
 ```
 
-Each `yield*` waits only for that submission to be accepted. The target agents execute the reports
+Each `yield*` waits only for that submission to be accepted. Run the loop inside `Effect.scoped`
+(or a scoped handler) because each `trigger` allocates a handle in the current scope. The target agents execute the reports
 asynchronously.
 
 ## Agent Definitions and Imports

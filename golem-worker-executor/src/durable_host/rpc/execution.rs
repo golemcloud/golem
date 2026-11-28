@@ -12,43 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::dispatch_target;
 use super::{
-    DurableStreamingTaskParams, PreparedRpcInvocation, RpcTargetActivation, RpcTask, RpcTaskError,
-    TaskRetryParams, WasmRpcEntry, activate_rpc_target, ensure_rpc_target_activated,
-    prepare_rpc_invocation_identity, rpc_span_finished,
+    DurableStreamingTaskParams, RpcTargetActivation, RpcTask, RpcTaskError, RpcTaskResult,
+    TaskRetryParams, activate_rpc_target,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::InternalRetryResult;
-use crate::durable_host::concurrent::CallReplayOutcome;
+use crate::durable_host::concurrent::Cancellable;
 use crate::durable_host::concurrent::DurableCallSession;
-use crate::durable_host::concurrent::NotCancellable;
-use crate::durable_host::concurrent::finish_span_in_memory;
+use crate::durable_host::concurrent::authorize_live_permissions_at_serialized_access;
 use crate::durable_host::durability::ClassifiedHostError;
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::durability::InFunctionRetryHost;
+use crate::durable_host::durability::retry_backoff_waits_durably;
 use crate::durable_host::durable_session::StreamSession;
 use crate::durable_host::durable_session::durable_stream_mapping_from_proto;
 use crate::durable_host::durable_stream::SessionError;
-use crate::preview2::golem::agent::host::RpcError;
+use crate::durable_host::secrets::secret_hold_targets_for_value;
 use crate::services::HasOplog;
 use crate::services::HasWorker;
-use crate::services::oplog::CommitLevel;
 use crate::services::rpc::Rpc;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::worker::target::ResolvedTarget;
 use crate::workerctx::InvocationContextManagement;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
-use futures::FutureExt;
-use futures::future::Either;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::OwnedInvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
@@ -57,12 +51,9 @@ use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
 use golem_common::model::durable_stream::StreamRegistrationInvocation;
 use golem_common::model::durable_stream::StreamSessionKey;
-use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::oplog::HostResponseGolemRpcInvokeAndAwait;
-use golem_common::model::oplog::HostResponseGolemRpcUnitOrFailure;
-use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvoke;
+use golem_common::model::oplog::HostPayloadPair;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvokeAndAwaitResult;
 use golem_common::related_span;
 use golem_common::schema::schema_value::SchemaValue;
@@ -73,21 +64,38 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use tracing::Instrument;
 use tracing::Level;
-use tracing::error;
-use wasmtime::component::Resource;
+use wasmtime::component::Accessor;
+use wasmtime::component::HasSelf;
 
-pub(super) fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
+pub fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
     match err {
         InternalRpcError::ProtocolError { .. }
         | InternalRpcError::Denied { .. }
         | InternalRpcError::NotFound { .. }
         | InternalRpcError::RemoteAgentError { .. }
-        | InternalRpcError::Conflict { .. } => HostFailureKind::Permanent,
+        | InternalRpcError::Conflict { .. }
+        | InternalRpcError::Cancelled { .. }
+        | InternalRpcError::CannotCancelRunning { .. } => HostFailureKind::Permanent,
         InternalRpcError::RemoteInternalError { .. } => HostFailureKind::Transient,
     }
 }
 
-pub(super) fn current_streaming_origin<Ctx: WorkerCtx>(
+/// Splits the result of a remote step that does not retry in the call: a permanent refusal is
+/// the call's result, and a transient failure traps the call, which a repair retries.
+pub fn permanent_refusal<Pair: HostPayloadPair, T>(
+    handle: &mut DurableCallSession<Pair, Cancellable>,
+    result: Result<T, InternalRpcError>,
+) -> anyhow::Result<Result<T, InternalRpcError>> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) => match classify_rpc_error(&error) {
+            HostFailureKind::Permanent => Ok(Err(error)),
+            HostFailureKind::Transient => Err(handle.trap(anyhow::Error::from(error))),
+        },
+    }
+}
+
+pub fn current_streaming_origin<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     idempotency_key: golem_common::model::InvocationId,
 ) -> StreamInvocationId {
@@ -100,8 +108,30 @@ pub(super) fn current_streaming_origin<Ctx: WorkerCtx>(
     }
 }
 
-pub(super) async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
+/// What a caller's stream session of a streaming RPC needs from the calling Store, read
+/// synchronously so the session can be opened after an await.
+pub struct CallerStreamsContext<Ctx: WorkerCtx> {
+    worker: Arc<crate::worker::Worker<Ctx>>,
+    parent_key: golem_common::model::InvocationId,
+    entity_parent_start_index: Option<OplogIndex>,
+    rpc: Arc<dyn crate::services::rpc::Rpc>,
+}
+
+impl<Ctx: WorkerCtx> CallerStreamsContext<Ctx> {
+    pub fn capture(ctx: &DurableWorkerCtx<Ctx>) -> Result<Self, Error> {
+        Ok(Self {
+            worker: ctx.public_state.worker(),
+            parent_key: ctx.state.get_current_idempotency_key().ok_or_else(|| {
+                anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
+            })?,
+            entity_parent_start_index: ctx.entity_parent_start_index(),
+            rpc: ctx.rpc(),
+        })
+    }
+}
+
+pub async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
+    context: CallerStreamsContext<Ctx>,
     remote_agent_id: &OwnedAgentId,
     remote_fingerprint: AgentFingerprint,
     child_key: golem_common::model::InvocationId,
@@ -114,12 +144,13 @@ pub(super) async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     ),
     Error,
 > {
-    let worker = ctx.public_state.worker();
+    let CallerStreamsContext {
+        worker,
+        parent_key,
+        entity_parent_start_index,
+        rpc,
+    } = context;
     let caller = worker.get_initial_worker_metadata();
-    let parent_key = ctx
-        .state
-        .get_current_idempotency_key()
-        .ok_or_else(|| anyhow::anyhow!("durable streaming RPC requires a caller invocation key"))?;
     let producer = worker.durable_stream_producer().await?;
     let origin_invocation = golem_api_grpc::proto::golem::worker::StreamInvocationIdentity {
         callee_environment_id: Some(logical_streaming_origin.callee_environment_id.into()),
@@ -146,8 +177,8 @@ pub(super) async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
         [],
     )
     .with_consumer_invocation(consumer_invocation)
-    .with_entity_parent_start_index(ctx.entity_parent_start_index())
-    .with_rpc(ctx.rpc())
+    .with_entity_parent_start_index(entity_parent_start_index)
+    .with_rpc(rpc)
     .with_consumer_journal(worker.durable_stream_consumer_journal())
     .with_auth_ctx(Arc::new(auth_ctx))
     .require_root_attachment_before_production();
@@ -156,273 +187,6 @@ pub(super) async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
         .await
         .map_err(SessionError::into_trap)?;
     Ok((streams, origin_invocation))
-}
-
-pub(super) async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    resource: &Resource<WasmRpcEntry>,
-    start_index: OplogIndex,
-    prepared: &PreparedRpcInvocation,
-    remote_agent_id: &OwnedAgentId,
-    auth_ctx: Option<&AuthCtx>,
-    idempotency_key: IdempotencyKey,
-    freshness_disposition: InvocationFreshnessDisposition,
-) -> Result<Result<(OwnedInvocationId, AgentFingerprint), InternalRpcError>, Error> {
-    let auth_ctx = auth_ctx.cloned().unwrap_or_else(|| ctx.agent_auth_ctx());
-    let identity = prepare_rpc_invocation_identity(
-        ctx,
-        resource,
-        start_index,
-        remote_agent_id,
-        &idempotency_key,
-        &prepared.method_name,
-        &prepared.input_value,
-        prepared.streaming,
-        freshness_disposition,
-    )
-    .await?;
-    if identity.is_ok() && ctx.state.is_live() && !prepared.is_ephemeral() {
-        ensure_rpc_target_activated(ctx, resource, &auth_ctx, &prepared.method_name).await?;
-    }
-    Ok(identity)
-}
-
-pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    resource: Resource<WasmRpcEntry>,
-    prepared: PreparedRpcInvocation,
-    remote_agent_id: OwnedAgentId,
-    idempotency_key: IdempotencyKey,
-    span: Arc<InvocationContextSpan>,
-    mut handle: DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>,
-    scope_card: Option<ScopeCard>,
-) -> anyhow::Result<Result<SchemaValue, RpcError>> {
-    let mut freshness_disposition = InvocationFreshnessDisposition::MayExist;
-
-    let result: Result<SchemaValue, InternalRpcError> = 'result: {
-        if !handle.is_live() {
-            match handle.replay(ctx).await? {
-                CallReplayOutcome::Replayed(persisted) => {
-                    break 'result persisted.result.map_err(Into::into);
-                }
-                CallReplayOutcome::Incomplete(live) => handle = live,
-            }
-            freshness_disposition = InvocationFreshnessDisposition::MayExist;
-        }
-
-        let auth_ctx = handle.take_agent_auth_ctx();
-        let expected_callee_fingerprint = if prepared.is_ephemeral() {
-            None
-        } else {
-            match ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name)
-                .await
-            {
-                Ok(fingerprint) => Some(fingerprint),
-                Err(err) => return Err(handle.trap(err)),
-            }
-        };
-
-        let retry_properties = prepared.retry_properties("invoke-and-await", &remote_agent_id);
-        let result: Result<SchemaValue, InternalRpcError> = loop {
-            let stack = ctx.clone_as_inherited_stack(span.span_id());
-            let interrupt_signal = ctx
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
-            let rpc = ctx.rpc();
-            let created_by = ctx.created_by();
-            let agent_id = *ctx.agent_id();
-            let caller = ctx.outgoing_caller();
-            let dispatch_freshness = freshness_disposition;
-            freshness_disposition = InvocationFreshnessDisposition::MayExist;
-
-            if dispatch_freshness == InvocationFreshnessDisposition::KnownFresh {
-                ctx.public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await?;
-            }
-
-            let result = {
-                let interrupt_signal = interrupt_signal.map(Error::from);
-                let either_result = futures::future::select(
-                    rpc.invoke_and_await(
-                        dispatch_target(&remote_agent_id, prepared.ephemeral.as_ref()),
-                        Some(idempotency_key.clone()),
-                        dispatch_freshness,
-                        expected_callee_fingerprint,
-                        prepared.method_name.clone(),
-                        prepared.input_value.clone(),
-                        created_by,
-                        &agent_id,
-                        &prepared.env,
-                        stack,
-                        &caller,
-                        prepared.config.clone(),
-                        &auth_ctx,
-                        scope_card.clone(),
-                    ),
-                    interrupt_signal,
-                )
-                .await;
-                match either_result {
-                    Either::Left((result, _)) => result,
-                    Either::Right((error, _)) => {
-                        return Err(handle.trap(error));
-                    }
-                }
-            };
-            match handle
-                .try_trigger_retry_or_loop_with_properties(
-                    ctx,
-                    &result,
-                    classify_rpc_error,
-                    retry_properties.clone(),
-                )
-                .await?
-            {
-                InternalRetryResult::Persist => break result,
-                InternalRetryResult::RetryInternally => continue,
-            }
-        };
-        let result = match result {
-            Ok(value) if !ctx.secret_holds_allowed_for_value(&value).await? => {
-                Err(InternalRpcError::Denied {
-                    details: "permission denied".to_string(),
-                })
-            }
-            result => result,
-        };
-
-        let span_finished = rpc_span_finished(span.span_id(), &result);
-        handle
-            .complete_with_span(
-                ctx,
-                HostResponseGolemRpcInvokeAndAwait {
-                    result: result.clone().map_err(Into::into),
-                },
-                span_finished,
-            )
-            .await?;
-        result
-    };
-
-    finish_span_in_memory(ctx, span.span_id())?;
-
-    match result {
-        Ok(value) => Ok(Ok(value)),
-        Err(err) => {
-            error!("RPC error: {err}");
-            Ok(Err(err.into()))
-        }
-    }
-}
-
-pub(super) async fn run_invoke<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    resource: Resource<WasmRpcEntry>,
-    prepared: PreparedRpcInvocation,
-    remote_agent_id: OwnedAgentId,
-    idempotency_key: IdempotencyKey,
-    span: Arc<InvocationContextSpan>,
-    mut handle: DurableCallSession<GolemRpcWasmRpcInvoke, NotCancellable>,
-) -> anyhow::Result<Result<(), RpcError>> {
-    let mut freshness_disposition = InvocationFreshnessDisposition::MayExist;
-
-    let result = 'result: {
-        if !handle.is_live() {
-            match handle.replay(ctx).await {
-                Ok(CallReplayOutcome::Replayed(replayed)) => {
-                    break 'result Ok(replayed);
-                }
-                Ok(CallReplayOutcome::Incomplete(live)) => handle = live,
-                Err(err) => break 'result Err(err),
-            }
-            freshness_disposition = InvocationFreshnessDisposition::MayExist;
-        }
-
-        let auth_ctx = handle.take_agent_auth_ctx();
-        let expected_callee_fingerprint = if prepared.is_ephemeral() {
-            None
-        } else {
-            match ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name)
-                .await
-            {
-                Ok(fingerprint) => Some(fingerprint),
-                Err(err) => return Err(handle.trap(err)),
-            }
-        };
-
-        let retry_properties = prepared.retry_properties("invoke", &remote_agent_id);
-        let result = loop {
-            let stack = ctx.clone_as_inherited_stack(span.span_id());
-            let dispatch_freshness = freshness_disposition;
-            freshness_disposition = InvocationFreshnessDisposition::MayExist;
-
-            if dispatch_freshness == InvocationFreshnessDisposition::KnownFresh {
-                ctx.public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await?;
-            }
-
-            let result = ctx
-                .rpc()
-                .invoke(
-                    dispatch_target(&remote_agent_id, prepared.ephemeral.as_ref()),
-                    Some(idempotency_key.clone()),
-                    dispatch_freshness,
-                    expected_callee_fingerprint,
-                    prepared.method_name.clone(),
-                    prepared.input_value.clone(),
-                    ctx.created_by(),
-                    ctx.agent_id(),
-                    &prepared.env,
-                    stack,
-                    &ctx.outgoing_caller(),
-                    prepared.config.clone(),
-                    &auth_ctx,
-                )
-                .await;
-            match handle
-                .try_trigger_retry_or_loop_with_properties(
-                    ctx,
-                    &result,
-                    classify_rpc_error,
-                    retry_properties.clone(),
-                )
-                .await?
-            {
-                InternalRetryResult::Persist => break result,
-                InternalRetryResult::RetryInternally => continue,
-            }
-        };
-
-        let result: Result<(), InternalRpcError> = result;
-        let span_finished = rpc_span_finished(span.span_id(), &result);
-        handle
-            .complete_with_span(
-                ctx,
-                HostResponseGolemRpcUnitOrFailure {
-                    result: result.map_err(Into::into),
-                },
-                span_finished,
-            )
-            .await
-            .map_err(|err| WorkerExecutorError::runtime(err.to_string()))
-    };
-
-    finish_span_in_memory(ctx, span.span_id())?;
-
-    match result?.result {
-        Ok(_) => Ok(Ok(())),
-        Err(err) => {
-            let rpc_error: InternalRpcError = err.into();
-            error!("RPC error: {rpc_error}");
-            Ok(Err(rpc_error.into()))
-        }
-    }
 }
 
 impl std::fmt::Display for RpcTaskError {
@@ -444,11 +208,11 @@ fn classify_rpc_task_error(err: &RpcTaskError) -> HostFailureKind {
     }
 }
 
-pub(super) fn classified_host_error(kind: HostFailureKind, message: String) -> Error {
+pub fn classified_host_error(kind: HostFailureKind, message: String) -> Error {
     Error::new(ClassifiedHostError { kind, message })
 }
 
-pub(super) fn take_dispatch_freshness(
+pub fn take_dispatch_freshness(
     known_fresh_dispatch_available: &std::sync::atomic::AtomicBool,
 ) -> InvocationFreshnessDisposition {
     if known_fresh_dispatch_available.swap(false, std::sync::atomic::Ordering::SeqCst) {
@@ -458,11 +222,11 @@ pub(super) fn take_dispatch_freshness(
     }
 }
 
-pub(super) fn known_fresh_dispatch_allowed(is_live: bool, is_ephemeral: bool) -> bool {
+pub fn known_fresh_dispatch_allowed(is_live: bool, is_ephemeral: bool) -> bool {
     is_live && is_ephemeral
 }
 
-pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
+pub fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     activity: Option<crate::worker::suspension::RpcActivity>,
     rpc: Arc<dyn Rpc>,
     remote_target: ResolvedTarget,
@@ -486,9 +250,8 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         initial_freshness_disposition == InvocationFreshnessDisposition::KnownFresh,
     ));
 
-    // The returned handle is owned by a guest resource, so this task can outlive
-    // the invocation. It links back rather than running inside its span. See
-    // `TraceOrigin`.
+    // The task runs in its own trace and links back to the calling span rather
+    // than running inside it. See `TraceOrigin`.
     let origin = TraceOrigin::capture_current();
     let caller_agent_id = agent_id;
 
@@ -640,7 +403,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     RpcTask { task, revoker }
 }
 
-pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
+pub fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_target: &ResolvedTarget,
     idempotency_key: IdempotencyKey,
@@ -707,7 +470,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
 /// Awaits a streaming RPC and settles the inputs it did not bind. The outer error is this caller's
 /// own session write refused by the fence, or its own oplog unreadable, which traps rather than
 /// reaching the guest as an RPC failure; the inner result is the RPC's.
-pub(super) async fn await_streaming_rpc_acceptance(
+pub async fn await_streaming_rpc_acceptance(
     streams: &StreamSession,
     activity: Option<&crate::worker::suspension::RpcActivityRevoker>,
     mut acceptance: tokio::sync::oneshot::Receiver<
@@ -762,7 +525,7 @@ pub(super) async fn await_streaming_rpc_acceptance(
     })
 }
 
-pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
+pub fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_target: ResolvedTarget,
     idempotency_key: IdempotencyKey,
@@ -891,4 +654,89 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
         None => wasmtime_wasi::runtime::spawn(application),
     };
     RpcTask { task, revoker }
+}
+
+/// Whether an awaited RPC sends the call again after it waited out a retry backoff.
+///
+/// The background task retries a transient failure inline only up to
+/// `max_in_function_retry_delay`. When the call can wait durably, a longer backoff is waited out
+/// here, through the runtime timer of the call: the `Error` entry records when it retries, and the
+/// suspension coordinator can suspend the agent meanwhile. The new attempt uses the same key.
+/// Otherwise the failure stays the recorded result, as before.
+pub async fn retry_after_backoff<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: &mut DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>,
+    mut properties: golem_common::model::RetryProperties,
+    result: &Result<SchemaValue, InternalRpcError>,
+) -> anyhow::Result<bool>
+where
+    U: 'static,
+    Ctx: WorkerCtx,
+{
+    let Err(error) = result else {
+        return Ok(false);
+    };
+    if classify_rpc_error(error) != HostFailureKind::Transient
+        || !retry_backoff_waits_durably(accessor, accessor.getter())
+    {
+        return Ok(false);
+    }
+    // The same properties the background task resolved its policy with.
+    accessor.with(|mut access| access.get().state.enrich_retry_properties(&mut properties));
+    let decision = handle
+        .try_trigger_retry_or_loop_context(
+            accessor,
+            accessor.getter(),
+            result,
+            classify_rpc_error,
+            properties,
+        )
+        .await?;
+    Ok(decision == InternalRetryResult::RetryInternally)
+}
+
+impl Drop for RpcTask {
+    fn drop(&mut self) {
+        if let Some(revoker) = &self.revoker {
+            revoker.revoke();
+        }
+    }
+}
+
+impl std::future::Future for RpcTask {
+    type Output = RpcTaskResult;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.task).poll(cx)
+    }
+}
+
+pub async fn admit_rpc_result_secret_holds<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    result: Result<SchemaValue, InternalRpcError>,
+) -> Result<Result<SchemaValue, InternalRpcError>, WorkerExecutorError>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    let targets = match &result {
+        Ok(value) => {
+            accessor.with(|mut access| secret_hold_targets_for_value(access.get(), value))?
+        }
+        Err(_) => return Ok(result),
+    };
+    if targets.is_empty() {
+        return Ok(result);
+    }
+    match authorize_live_permissions_at_serialized_access(accessor, accessor.getter(), &targets)
+        .await?
+    {
+        Ok(_) => Ok(result),
+        Err(_) => Ok(Err(InternalRpcError::Denied {
+            details: "permission denied".to_string(),
+        })),
+    }
 }

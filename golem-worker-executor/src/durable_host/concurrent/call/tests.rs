@@ -197,6 +197,37 @@ async fn abandoned_final_initiation_window_preserves_accepted_start_cleanup() {
     assert_eq!(counter.load(Ordering::Acquire), 0);
 }
 
+// A guest drop before the owned start hands its session over keeps the span rule of the accepted
+// `Start`: a span observer's span is left to the observer, any other span is closed by the
+// `Cancelled`.
+#[test]
+fn guest_drop_before_handover_keeps_the_span_owner_of_the_accepted_start() {
+    for close_start_span in [false, true] {
+        let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let start_idx = OplogIndex::from_u64(8);
+        let mut session = live_unfinished_handle::<Cancellable>(start_idx, sink.clone());
+        let mut call = session.dropped_call_snapshot(None);
+        call.close_start_span = close_start_span;
+        let accepted = AcceptedAccessStart::<Cancellable> {
+            result: Some((start_idx, PendingUpload::already_durable())),
+            call: Some(call),
+            marker: Arc::new(AtomicBool::new(false)),
+            sink: Some(sink.clone()),
+            cleanup_sink: Some(sink),
+            teardown: TeardownProbe::never(),
+            _policy: PhantomData,
+        };
+        let (_, state) = accepted.into_executing(LiveCallPermit::new(counter));
+        drop(std::mem::replace(&mut session.state, state));
+        session.discard_after_guest_drop();
+        let Ok(DropEvent::UnfinishedCancellable { call }) = events.try_recv() else {
+            panic!("the dropped call must queue its cancellation");
+        };
+        assert_eq!(call.close_start_span, close_start_span);
+    }
+}
+
 pub fn live_unfinished_handle<P: DropPolicy>(
     start_idx: OplogIndex,
     sink: UnboundedSender<DropEvent>,

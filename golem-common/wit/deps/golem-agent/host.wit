@@ -43,7 +43,11 @@ interface host {
       remote-agent-error(agent-error),
       /// A keyed create found an agent that already has the key, or the agent at the ID
       /// that a key derives has another key
-      conflict(string)
+      conflict(string),
+      /// The awaited invocation was cancelled before it started
+      cancelled(string),
+      /// A cancellation found the invocation already running
+      cannot-cancel-running(string)
     }
 
     /// Gets the ID of the keyed agent of the given type and constructor parameters, or
@@ -82,22 +86,28 @@ interface host {
       %result: option<schema-value-tree>,
     }
 
-    /// Asynchronous invocation handle together with its final identity, when
-    /// preparation succeeded. Rejected calls report their error through the future.
-    record async-invocation-with-metadata {
-      metadata: option<invocation-metadata>,
-      %future: future-invoke-result,
-    }
-
-    /// Receipt returned when an invocation has been scheduled.
-    record scheduled-invocation-receipt {
-      metadata: invocation-metadata,
-    }
-
-    /// Receipt for a scheduled invocation that can still be cancelled.
-    record cancelable-scheduled-invocation-receipt {
-      metadata: invocation-metadata,
-      cancellation-token: cancellation-token,
+    /// The lifecycle state of an accepted invocation
+    enum invocation-status {
+      /// Accepted and waiting for its turn
+      pending,
+      /// Accepted and waiting for its scheduled time
+      scheduled,
+      /// Started and executing
+      running,
+      /// Started and waiting, for example for a promise or a timer
+      waiting,
+      /// Started and waiting to retry after a failure
+      retrying,
+      /// Started, and its agent was interrupted by an operator
+      interrupted,
+      /// Finished with a result
+      completed,
+      /// Finished with a failure
+      failed,
+      /// Withdrawn before it started
+      cancelled,
+      /// Recorded its result, then its agent failed during the invocation's background work
+      background-failed,
     }
 
     /// An RPC client for invoking remote agents
@@ -148,43 +158,47 @@ interface host {
       ///
       /// `input` encodes the method's parameter list. The returned result is
       /// `none` for a `unit` output and `some(value)` for a `single` output.
-      invoke-and-await: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<invocation-result-with-metadata, rpc-error>;
-
-      /// Triggers the invocation of a remote method with the given parameters,
-      /// and returns its final identity immediately.
-      /// Scope lending is not supported: `scope-card` must be `none`.
-      invoke: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<invocation-metadata, rpc-error>;
-
-      /// Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
-      /// be polled for the result together with the final invocation identity.
       ///
-      /// With this function it is possible to call multiple (different) agents simultaneously.
-      async-invoke-and-await: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> async-invocation-with-metadata;
+      /// Calls run concurrently with other calls of the same agent. Dropping an unfinished
+      /// call withdraws the invocation on a best-effort basis while it has not started.
+      invoke-and-await: async func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<invocation-result-with-metadata, rpc-error>;
 
-      /// Schedules an invocation for later and returns its final identity.
-      /// Scope lending is not supported: `scope-card` must be `none`.
-      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<scheduled-invocation-receipt, rpc-error>;
+      /// Triggers the invocation of a remote method with the given parameters, and returns
+      /// its handle once the target has durably accepted it, without waiting for its result.
+      trigger: async func(method-name: string, input: schema-value-tree) -> result<invocation, rpc-error>;
 
-      /// Schedules an invocation for later and returns its final identity and
-      /// cancellation capability. Call cancel on the returned resource to
-      /// cancel the invocation before the scheduled time.
-      /// Scope lending is not supported: `scope-card` must be `none`.
-      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<cancelable-scheduled-invocation-receipt, rpc-error>;
+      /// Schedules an invocation of a remote method for the given time, and returns its
+      /// handle once the target has durably accepted it. The returned handle can cancel the
+      /// invocation until it starts.
+      schedule: async func(scheduled-time: datetime, method-name: string, input: schema-value-tree) -> result<invocation, rpc-error>;
     }
 
-    /// Represents an asynchronous invocation result
-    resource future-invoke-result {
-      /// Awaits the result of the invocation.
-      get: async func() -> result<option<schema-value-tree>, rpc-error>;
-      /// Best-effort attempt to cancel the remote invocation by idempotency key.
-      /// If the invocation has already started or completed, this is a no-op.
-      cancel: func();
-    }
-
-    /// Cancellation token for scheduled invocations
-    resource cancellation-token {
-      /// Cancel the scheduled invocation
-      cancel: func();
+    /// The handle of an accepted invocation of an agent method, addressed by its ID.
+    ///
+    /// The ID only locates the invocation: every operation is authorized on the target,
+    /// which answers the invocation's recorded immediate caller or a caller with the
+    /// applicable management permission. Only such a caller learns that the agent or the
+    /// invocation no longer exists: once the agent is deleted, the target has no evidence of
+    /// the starter, so a caller without management permission is denied. Dropping the handle
+    /// releases only local resources; it does not cancel the invocation.
+    resource invocation {
+      /// Rebuilds the handle of the invocation with the given ID. Makes no remote call.
+      get: static func(id: invocation-id) -> invocation;
+      /// The ID of the invocation
+      id: func() -> invocation-id;
+      /// The current lifecycle state of the invocation. Fails with `not-found` when its
+      /// agent or the invocation no longer exists.
+      status: async func() -> result<invocation-status, rpc-error>;
+      /// Awaits the result of the invocation, without starting, resuming or resubmitting it.
+      /// The result is `none` for a `unit` output and `some(value)` for a `single` output.
+      /// Fails with `cancelled` when the invocation was cancelled before it started.
+      %await: async func() -> result<option<schema-value-tree>, rpc-error>;
+      /// Withdraws the invocation if it has not started yet, and returns `true`.
+      /// Returns `false` when the invocation already finished or was already cancelled,
+      /// and fails with `cannot-cancel-running` when it is running. A cancel that the
+      /// caller repeats after a crash, before its first answer was recorded, returns
+      /// `false` when that first attempt withdrew the invocation.
+      cancel: async func() -> result<bool, rpc-error>;
     }
 
     /// Get the current value of the config key.

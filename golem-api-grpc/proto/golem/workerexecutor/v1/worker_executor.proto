@@ -23,7 +23,6 @@ import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
 import "golem/worker/promise_id.proto";
 import "golem/worker/public_oplog.proto";
-import "golem/worker/scheduled_invocation_cancellation.proto";
 import "golem/worker/raw_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/update_mode.proto";
@@ -65,6 +64,9 @@ service WorkerExecutor {
   rpc GetInvocation(GetInvocationRequest) returns (GetInvocationResponse);
   rpc ListInvocations(ListInvocationsRequest) returns (ListInvocationsResponse);
   rpc LookupInvocations(LookupInvocationsRequest) returns (LookupInvocationsResponse);
+  // Internal host-authored observation/control of an existing accepted invocation. The target
+  // authorizes its recorded starter or the applicable management permission; this never admits work.
+  rpc InvocationHandle(InvocationHandleRequest) returns (InvocationHandleResponse);
 
   rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
   rpc GetAgentWallet(GetAgentWalletRequest) returns (GetAgentWalletResponse);
@@ -619,7 +621,8 @@ message CancelInvocationRequest {
   reserved 5;
   reserved "principal";
   golem.component.Caller caller = 8;
-  optional golem.worker.ScheduledInvocationCancellation scheduled = 6;
+  reserved 6;
+  reserved "scheduled";
   golem.common.UUID expected_fingerprint = 7;
 }
 
@@ -669,6 +672,43 @@ message GetInvocationRequest {
   golem.common.EnvironmentId environment_id = 2;
   golem.auth.AuthCtx auth_ctx = 3;
   golem.common.UUID invocation_id = 4;
+}
+
+enum InvocationHandleOperation {
+  INVOCATION_HANDLE_OPERATION_UNSPECIFIED = 0;
+  INVOCATION_HANDLE_OPERATION_STATUS = 1;
+  INVOCATION_HANDLE_OPERATION_AWAIT = 2;
+  INVOCATION_HANDLE_OPERATION_CANCEL = 3;
+}
+
+message InvocationHandleRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.common.UUID invocation_id = 3;
+  // The calling agent as the authenticated calling executor derives it, never guest input:
+  // the immediate caller that a call made by the calling code would get. It belongs to
+  // environment_id. Possession of invocation_id alone grants no authority.
+  golem.component.Principal caller = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
+  InvocationHandleOperation operation = 6;
+}
+
+message InvocationHandleSuccess {
+  oneof result {
+    InvocationLifecycleState status = 1;
+    golem.worker.InvocationSessionResult output = 2;
+    bool cancelled = 3;
+    golem.common.Empty not_found = 4;
+    // An outcome read from the invocation's committed terminal, not an observation failure.
+    golem.worker.v1.WorkerExecutionError invocation_failure = 5;
+  }
+}
+
+message InvocationHandleResponse {
+  oneof result {
+    InvocationHandleSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
 }
 
 // No `invocation` when the agent has no invocation with this ID.

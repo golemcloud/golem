@@ -10,6 +10,7 @@ export const rpcLayer = (shape: Partial<RpcClientShape>): Layer.Layer<RpcClient>
       upsert: () => Effect.die("unexpected upsert"),
       getById: () => Effect.die("unexpected getById"),
       create: () => Effect.die("unexpected create"),
+      getInvocation: () => Effect.die("unexpected getInvocation"),
       ...shape,
     }),
   )

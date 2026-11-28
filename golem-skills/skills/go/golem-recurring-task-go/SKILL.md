@@ -7,7 +7,7 @@ description: "Recurring / scheduled work in a Go agent. Use when the user wants 
 
 ## Overview
 
-A recurring task is a method that **reschedules itself**: it does its work, then schedules the next run. Scheduling uses `Method.Schedule(client, at, in)`, which arranges an invocation at a future time and returns a cancelable `*golem.ScheduledInvocation` (and an error if the host refuses it; `MustSchedule` panics instead).
+A recurring task is a method that **reschedules itself**: it does its work, then schedules the next run. Scheduling uses `Method.Schedule(client, at, in)`, which arranges an invocation at a future time and returns a `*golem.Invocation[Out]` handle once the target accepted it (and an error if it was not accepted; `MustSchedule` panics instead). The handle's `Cancel()` withdraws the invocation until it starts.
 
 To message itself an agent needs a client for its **own** instance. `Agent.MustGetByID(ctx.AgentID())` returns one: `ctx.AgentID()` is the running instance's agent ID, read from the host on each call, so it is also right after a snapshot restore or a fork.
 
@@ -79,12 +79,13 @@ This minimal recipe requires one `start` call per agent identity; call `tick` on
 through the scheduled chain. Repeating either call creates another chain.
 Executor restarts recover the existing chain: do not call `start` again after a
 restart. The example has no stop or application-level restart method. To add
-cancellation, retain the pending schedule handle and use a state flag in `tick`
-so an already queued tick exits without doing work or scheduling another tick.
+cancellation, store the pending tick's `ID()` in state, cancel it with
+`poller.Tick.Invocation(id).Cancel()`, and use a state flag in `tick` so a tick
+that was not withdrawn exits without doing work or scheduling another tick.
 
 ## Scheduling vs immediate self-messaging
 
-- `Schedule(client, at, in) (*ScheduledInvocation, error)` — run at a future `time.Time`. Keep the handle to cancel it: `inv.Cancel()`. `MustSchedule` panics instead of returning the error.
+- `Schedule(client, at, in) (*Invocation[Out], error)` — run at a future `time.Time`. Keep `inv.ID()` in state to cancel it in a later invocation: `poller.Tick.Invocation(id).Cancel()` returns `true` when it withdrew the tick, `false` when it already finished. `MustSchedule` panics instead of returning the error.
 - `Trigger(client, in)` / `MustTrigger(client, in)` — enqueue immediately, no delay (use it to advance a state machine to the next step now).
 - **Never self-`Call`** — a synchronous call into the same instance deadlocks (one instance processes one invocation at a time). Self-messaging must use `Trigger` or `Schedule`.
 

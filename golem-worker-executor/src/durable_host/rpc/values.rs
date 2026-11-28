@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{PreparedRpcInvocation, WasmRpcEntry, WasmRpcEntryPayload};
+use super::{PreparedRpcInvocation, RpcCallKind, WasmRpcEntry};
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::{CompletionDelivery, finish_span_in_memory};
 use crate::durable_host::durable_session::strip_streams;
+use crate::durable_host::with_import_access;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
@@ -23,9 +25,9 @@ use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
+use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::types::SerializableRpcError;
-use golem_common::schema::agent::AgentMethodSchema;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::schema_value::SchemaValue;
@@ -33,7 +35,6 @@ use golem_schema::schema::NamedFieldType;
 use golem_schema::schema::SchemaType;
 use golem_schema::schema::wit::EncodeError;
 use golem_schema::schema::wit::PermissionCardHandleDropper;
-use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::QuotaTokenHandleDropper;
 use golem_schema::schema::wit::SecretHandleDropper;
 use golem_schema::schema::wit::decode_typed_rejecting_quota_with;
@@ -42,16 +43,16 @@ use golem_schema::schema::wit::encode_value_with_streams;
 use golem_schema::schema::wit::reject_quota_handles_in_value_tree;
 use golem_schema::schema::wit::wire as core_wire;
 use std::collections::BTreeMap;
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, HasSelf, Resource};
 
-pub(super) fn discard_owned_rpc_input<D>(input: core_wire::SchemaValueTree, dropper: &mut D)
+pub fn discard_owned_rpc_input<D>(input: core_wire::SchemaValueTree, dropper: &mut D)
 where
     D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
 {
     let _ = reject_quota_handles_in_value_tree(input, dropper);
 }
 
-pub(super) fn discard_owned_rpc_config<D>(
+pub fn discard_owned_rpc_config<D>(
     config: Vec<golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue>,
     dropper: &mut D,
 ) where
@@ -62,25 +63,8 @@ pub(super) fn discard_owned_rpc_config<D>(
     }
 }
 
-pub(super) fn reject_non_await_scope_card<D>(
-    scope_card: &Option<Resource<PermissionCardHandleRep>>,
-    input: core_wire::SchemaValueTree,
-    operation: &'static str,
-    dropper: &mut D,
-) -> Result<core_wire::SchemaValueTree, String>
-where
-    D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
-{
-    if scope_card.is_some() {
-        discard_owned_rpc_input(input, dropper);
-        Err(format!("{operation} does not accept scope cards"))
-    } else {
-        Ok(input)
-    }
-}
-
 impl PreparedRpcInvocation {
-    pub(super) fn invoke_request(
+    pub fn invoke_request(
         &self,
         remote_agent_id: &OwnedAgentId,
         idempotency_key: &IdempotencyKey,
@@ -100,7 +84,7 @@ impl PreparedRpcInvocation {
     }
 
     /// The retry properties of a dispatch of this invocation to `remote_agent_id`.
-    pub(super) fn retry_properties(
+    pub fn retry_properties(
         &self,
         verb: &str,
         remote_agent_id: &OwnedAgentId,
@@ -114,16 +98,16 @@ impl PreparedRpcInvocation {
         )
     }
 
-    pub(super) fn is_ephemeral(&self) -> bool {
+    pub fn is_ephemeral(&self) -> bool {
         self.ephemeral.is_some()
     }
 
-    pub(super) fn is_streaming(&self) -> bool {
+    pub fn is_streaming(&self) -> bool {
         self.streaming
     }
 }
 
-pub(super) fn rpc_input_root(prepared: &PreparedRpcInvocation) -> SchemaType {
+pub fn rpc_input_root(prepared: &PreparedRpcInvocation) -> SchemaType {
     let method = prepared
         .remote_agent_type
         .methods
@@ -145,7 +129,7 @@ pub(super) fn rpc_input_root(prepared: &PreparedRpcInvocation) -> SchemaType {
     )
 }
 
-pub(super) fn rpc_output_root(prepared: &PreparedRpcInvocation) -> SchemaType {
+pub fn rpc_output_root(prepared: &PreparedRpcInvocation) -> SchemaType {
     prepared
         .remote_agent_type
         .methods
@@ -158,16 +142,14 @@ pub(super) fn rpc_output_root(prepared: &PreparedRpcInvocation) -> SchemaType {
         .unwrap_or_else(|| SchemaType::tuple(Vec::new()))
 }
 
-pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
+pub fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WasmRpcEntry>,
-    host_function_name: &str,
-    synchronous: bool,
+    kind: RpcCallKind,
     method_name: String,
     input: core_wire::SchemaValueTree,
-    streaming_allowed: bool,
 ) -> anyhow::Result<Result<PreparedRpcInvocation, RpcError>> {
-    ctx.check_read_only_allows(host_function_name)
+    ctx.check_read_only_allows(kind.host_function_name())
         .map_err(wasmtime::Error::from)?;
 
     let own_agent_id = ctx.owned_agent_id().clone();
@@ -181,8 +163,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         env,
         config,
     ) = {
-        let entry = ctx.table().get(resource)?;
-        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+        let payload = &ctx.table().get(resource)?.payload;
         let (env, config) = payload.target_activation.target_creation_data();
         (
             payload.remote_agent_id.clone(),
@@ -208,20 +189,25 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         .expect("method existence was checked while decoding RPC input");
     let streaming = remote_method_uses_streams(&remote_method_streams, &method.name)?;
 
-    if streaming && !streaming_allowed {
+    if streaming && kind != RpcCallKind::Awaited {
         return Ok(Err(RpcError::ProtocolError(
             "live streams require invoke-and-await".to_string(),
         )));
     }
 
-    if ephemeral.is_none() && logical_remote_agent_id == own_agent_id {
+    if kind != RpcCallKind::Scheduled
+        && ephemeral.is_none()
+        && logical_remote_agent_id == own_agent_id
+    {
         match ctx.runtime() {
             golem_common::model::entity::OwnerRuntime::Agent => {
                 return Err(anyhow::anyhow!(
                     "RPC calls to the same agent are not supported"
                 ));
             }
-            golem_common::model::entity::OwnerRuntime::Entity(_) if synchronous => {
+            golem_common::model::entity::OwnerRuntime::Entity(_)
+                if kind == RpcCallKind::Awaited =>
+            {
                 let caller = ctx.owner_invocation_id()?;
                 ctx.owner_execution
                     .lane()
@@ -246,7 +232,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     }))
 }
 
-pub(super) fn remote_method_uses_streams(
+fn remote_method_uses_streams(
     methods: &BTreeMap<String, bool>,
     method_name: &str,
 ) -> anyhow::Result<bool> {
@@ -255,27 +241,6 @@ pub(super) fn remote_method_uses_streams(
             "Streaming classification for remote agent method '{method_name}' is missing"
         )
     })
-}
-
-/// Look up an [`AgentMethodSchema`] by name from the cached remote agent type.
-/// Used on the schedule path where the result is surfaced as a
-/// `wasmtime::Error` trap, since `schedule_cancelable_invocation` has no
-/// way to return `Err(RpcError)` to the guest.
-pub(super) fn find_agent_method<'a>(
-    agent_type: &'a AgentTypeSchema,
-    method_name: &str,
-) -> anyhow::Result<&'a AgentMethodSchema> {
-    let method = agent_type
-        .methods
-        .iter()
-        .find(|m| m.name == method_name)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Method '{method_name}' not found on agent type '{}'",
-                agent_type.type_name
-            )
-        })?;
-    Ok(method)
 }
 
 /// Resolve and lift the guest-side input value tree into the schema-native
@@ -293,7 +258,7 @@ pub(super) fn find_agent_method<'a>(
 /// [`SchemaValue::QuotaToken`] snapshot via the `QuotaTokenResolver`, so the
 /// capability travels across the RPC hop as an unforgeable host snapshot rather
 /// than a guest-visible handle.
-pub(super) fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
+fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
     agent_type: &AgentTypeSchema,
     method_name: &str,
     input: core_wire::SchemaValueTree,
@@ -302,9 +267,8 @@ pub(super) fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
     // Lift (and thereby consume) the guest input *before* the method-existence
     // check. The owned `quota-token` handles the input may carry were already
     // transferred into the host resource table at the WIT boundary, and the
-    // unknown-method branch returns a non-trapping `RpcError` (or, for
-    // `async-invoke-and-await`, a baked future) that leaves the instance — and
-    // its resource table — alive. Decoding first guarantees those handles are
+    // unknown-method branch returns a non-trapping `RpcError` that leaves the
+    // instance — and its resource table — alive. Decoding first guarantees those handles are
     // consumed/dropped even when the method is unknown.
     let input_value =
         decode_value_with(input, resolver).map_err(|err| InternalRpcError::ProtocolError {
@@ -332,7 +296,7 @@ pub(super) fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
 
 /// Project an RPC output [`SchemaValue`] into the WIT
 /// `option<schema-value-tree>` result shape used by `invoke-and-await` and
-/// `future-invoke-result.get`.
+/// `invocation.await`.
 ///
 /// Per the `golem:agent@2.0.0` contract a declared `unit` output (the
 /// canonical empty tuple) maps to `none`, while a `single` output maps to
@@ -345,7 +309,7 @@ pub(super) fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
 /// `quota-token` handle for every [`SchemaValue::QuotaToken`] snapshot via the
 /// `QuotaTokenResolver`, so a capability returned from an RPC call reaches the
 /// caller's guest as an opaque, unforgeable resource handle.
-pub(super) fn schema_value_to_wire_output<Ctx: WorkerCtx>(
+pub fn schema_value_to_wire_output<Ctx: WorkerCtx>(
     value: &SchemaValue,
     resolver: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<Option<core_wire::SchemaValueTree>, EncodeError> {
@@ -355,7 +319,7 @@ pub(super) fn schema_value_to_wire_output<Ctx: WorkerCtx>(
     }
 }
 
-pub(super) fn invoke_and_await_response_to_wire<Ctx: WorkerCtx>(
+pub fn invoke_and_await_response_to_wire<Ctx: WorkerCtx>(
     result: Result<SchemaValue, SerializableRpcError>,
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
@@ -364,6 +328,47 @@ pub(super) fn invoke_and_await_response_to_wire<Ctx: WorkerCtx>(
         Err(error) => {
             let rpc_error: InternalRpcError = error.into();
             Ok(Err(rpc_error.into()))
+        }
+    }
+}
+
+/// Returns a recorded RPC result to the guest at the call's delivery boundary. A completion that
+/// the recorded run discarded parks instead, so the deterministic guest drops the call at the
+/// same point again. The call's span, when it has one, is finished first in both cases.
+pub async fn deliver_rpc_result<U, Ctx, T>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    delivery: CompletionDelivery,
+    span_id: Option<&SpanId>,
+    to_guest: impl FnOnce(&mut DurableWorkerCtx<Ctx>) -> anyhow::Result<T>,
+) -> anyhow::Result<T>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    if delivery.is_replay_discarded() {
+        if let Some(span_id) = span_id {
+            with_import_access(accessor, |mut access| {
+                finish_span_in_memory(access.get(), span_id)
+            })?;
+        }
+        std::future::pending::<()>().await;
+        unreachable!("std::future::pending never completes");
+    }
+    let value = with_import_access(accessor, |mut access| {
+        let ctx = access.get();
+        if let Some(span_id) = span_id {
+            finish_span_in_memory(ctx, span_id)?;
+        }
+        to_guest(ctx)
+    });
+    match value {
+        Ok(value) => {
+            delivery.deliver_at_accessor_terminal(accessor).await?;
+            Ok(value)
+        }
+        Err(error) => {
+            delivery.suppress();
+            Err(error)
         }
     }
 }

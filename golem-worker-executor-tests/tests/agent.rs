@@ -257,6 +257,89 @@ async fn method_failure_tail_survives_cold_lookup_and_state_reconstruction(
     Ok(())
 }
 
+/// A method failure recorded after the method's background work drained follows the `Cancelled`
+/// of an awaited call that the method dropped, and that `Cancelled` closes the call's span.
+#[test]
+#[timeout("2m")]
+async fn stream_method_failure_follows_the_cancel_of_a_dropped_awaited_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_key!("RustMethodFailure", "drop-then-fail");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let key = IdempotencyKey::fresh();
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    let request_key =
+        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
+    let (_, input) = data_value!().into_parts();
+    let invocation = InvocationStart {
+        target: Some(id_target(&worker)),
+        component_id: Some(component.id.into()),
+        method_name: Some("fail_stream_after_dropping_rpc".to_string()),
+        input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+        allow_streams: true,
+        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+        idempotency_key: Some(key.clone().into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        freshness_disposition:
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+        attempt_id: Some(uuid::Uuid::new_v4().into()),
+        expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+        request_key: Some(request_key.into()),
+        caller: Some(callers::anonymous().into()),
+        ..Default::default()
+    };
+    let error = executor
+        .invoke_agent_session(invocation)
+        .await
+        .expect_err("the method must fail");
+    assert!(
+        format!("{error:#}").contains("method gave up after dropping a call (pending: true)"),
+        "{error:#}"
+    );
+
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let invoke_start = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
+        })
+        .unwrap_or_else(|| panic!("missing awaited RPC Start: {oplog:#?}"));
+    let PublicOplogEntry::Start(start) = &invoke_start.entry else {
+        unreachable!()
+    };
+    let invoke_span = start.span_started.as_ref().unwrap().span_id.clone();
+    let cancelled = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled)
+            if cancelled.start_index == invoke_start.oplog_index
+                && cancelled.span_finished.as_ref().is_some_and(|span| span.span_id == invoke_span))
+        })
+        .unwrap_or_else(|| panic!("the dropped call has no span-closing Cancelled: {oplog:#?}"));
+    let failed = oplog
+        .iter()
+        .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFailed(_)))
+        .unwrap_or_else(|| panic!("the method failure is not recorded: {oplog:#?}"));
+    assert!(
+        cancelled.oplog_index < failed.oplog_index,
+        "the dropped call's Cancelled must precede the method failure: {oplog:#?}"
+    );
+    executor.check_oplog_is_queryable(&worker).await?;
+    Ok(())
+}
+
 #[test]
 #[timeout("2m")]
 async fn stream_method_failure_settles_active_http_tail_before_publication_and_reconstruction(
@@ -1347,6 +1430,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     ] {
         let error = executor
             .invoke_agent_session(InvocationStart {
+                requires_own_record: false,
                 target: Some(key_target(&agent_id)?),
                 constructor: None,
                 component_id: Some(component.id.into()),
@@ -1479,6 +1563,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
     let key = IdempotencyKey::fresh();
     executor
         .invoke_agent_session(InvocationStart {
+            requires_own_record: false,
             target: Some(id_target(&streaming_worker_id)),
             constructor: None,
             component_id: Some(streaming_component.id.into()),
@@ -2058,6 +2143,7 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
 
     executor
         .invoke_agent_session(InvocationStart {
+            requires_own_record: false,
             target: Some(id_target(&worker_id)),
             constructor: Some(proto_agent_key(&logical_agent_id)?),
             component_id: Some(component.id.into()),
@@ -2124,6 +2210,7 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
 
     executor
         .invoke_agent_session(InvocationStart {
+            requires_own_record: false,
             target: Some(id_target(&worker_id)),
             constructor: None,
             component_id: Some(component.id.into()),
@@ -2192,6 +2279,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
 
     executor
         .invoke_agent_session(InvocationStart {
+            requires_own_record: false,
             target: Some(id_target(&worker_id)),
             constructor: Some(proto_agent_key(&logical_agent_id)?),
             component_id: Some(component.id.into()),
@@ -3321,6 +3409,7 @@ fn counter_invocation(
 ) -> anyhow::Result<InvocationStart> {
     let lookup = mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
     Ok(InvocationStart {
+        requires_own_record: false,
         target: Some(id_target(worker_id)),
         constructor: None,
         component_id: Some(component.id.into()),
@@ -3603,6 +3692,7 @@ pub(crate) async fn invoke_and_await_agent_by_id(
     let (_, input) = params.into_parts();
     let result = executor
         .invoke_agent_session(InvocationStart {
+            requires_own_record: false,
             target: Some(id_target(agent_id)),
             constructor: None,
             component_id: Some(component.id.into()),

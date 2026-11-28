@@ -139,8 +139,8 @@ are copied unchanged from it.
 - `agents-models`: zod, `defineAgent`, `method` (the snippet imports `ai`,
   `@ai-sdk/anthropic`, `@ai-sdk/openai` itself).
 - `agents-team`: `getAllAgentTypes`, `reflection`; `GuestMethod<A, R>`
-  modelling the generated client methods (callable plus `trigger`,
-  `schedule`, `scheduleCancelable`, as emitted by
+  modelling the generated client methods (callable plus `trigger` and
+  `schedule`, both resolving to an `Invocation` handle, as emitted by
   `cli/golem-cli/src/bridge_gen/typescript/mod.rs`); declared
   `ResearchAgent` and `SlackAgent` clients; `Facts`, `Plan` schemas;
   `inDays()` returning a `golem:agent/host` `Datetime`.

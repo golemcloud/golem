@@ -16,7 +16,8 @@
 
 package golem.runtime.rpc
 
-import golem.{AgentId, Datetime, FutureInterop}
+import golem.{AgentId, Datetime}
+import golem.concurrent.GolemExecutionContext
 import golem.host.js.JsAgentId
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.JsSchemaValueTree
@@ -25,8 +26,13 @@ import golem.runtime.rpc.host.WasmRpcApi.WasmRpcClient
 
 import scala.concurrent.Future
 import scala.scalajs.js
-import scala.scalajs.js.JavaScriptException
+import scala.util.Try
+import scala.util.control.NonFatal
 
+/**
+ * A client of one remote agent on raw value trees. Every operation fails with
+ * an [[AgentRpcException]] when the host reports an `rpc-error`.
+ */
 final case class RemoteAgentClient(
   agentTypeName: String,
   rpc: RpcInvoker
@@ -36,83 +42,36 @@ final case class RemoteAgentClient(
   def agentId(): Future[AgentId] =
     rpc.agentId()
 
+  /**
+   * Invokes the method and awaits its result together with its final identity.
+   * The call borrows `scopeCard`.
+   */
   def invokeAndAwait(
     functionName: String,
     input: JsSchemaValueTree,
     scopeCard: Option[ScopeCard] = None
-  ): Either[String, Option[JsSchemaValueTree]] =
+  ): Future[InvocationResult[Option[JsSchemaValueTree]]] =
     rpc.invokeAndAwait(functionName, input, scopeCard)
 
-  def asyncInvokeAndAwait(
-    functionName: String,
-    input: JsSchemaValueTree,
-    scopeCard: Option[ScopeCard] = None
-  ): Future[Option[JsSchemaValueTree]] =
-    rpc.asyncInvokeAndAwait(functionName, input, scopeCard)
+  /**
+   * Triggers the method, and returns its handle once the target has durably
+   * accepted it. `decode` decodes the awaited result of the handle. Never lends
+   * a scope card.
+   */
+  def trigger[Out](functionName: String, input: JsSchemaValueTree)(
+    decode: Option[JsSchemaValueTree] => Out
+  ): Future[Invocation[Out]] =
+    rpc.trigger(functionName, input).map(_.mapResult(decode))(GolemExecutionContext.global)
 
-  def invokeAndAwaitWithMetadata(
-    functionName: String,
-    input: JsSchemaValueTree,
-    scopeCard: Option[ScopeCard] = None
-  ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] =
-    rpc.invokeAndAwaitWithMetadata(functionName, input, scopeCard)
-
-  def cancelableAsyncInvokeAndAwait(
-    functionName: String,
-    input: JsSchemaValueTree,
-    scopeCard: Option[ScopeCard] = None
-  ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
-    rpc.cancelableAsyncInvokeAndAwait(functionName, input, scopeCard)
-
-  def cancelableAsyncInvokeAndAwaitWithMetadata(
-    functionName: String,
-    input: JsSchemaValueTree,
-    scopeCard: Option[ScopeCard] = None
-  ): Either[String, CancelableAsyncInvocation[Option[JsSchemaValueTree]]] =
-    rpc.asyncInvokeAndAwaitWithMetadata(functionName, input, scopeCard).map { invocation =>
-      CancelableAsyncInvocation(
-        invocation.metadata,
-        invocation.result,
-        invocation.cancellationToken
-      )
-    }
-
-  def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
-    rpc.invoke(functionName, input)
-
-  def invokeWithMetadata(
-    functionName: String,
-    input: JsSchemaValueTree
-  ): Either[String, InvocationMetadata] =
-    rpc.invokeWithMetadata(functionName, input)
-
-  def scheduleInvocation(
-    datetime: Datetime,
-    functionName: String,
-    input: JsSchemaValueTree
-  ): Either[String, Unit] =
-    rpc.scheduleInvocation(datetime, functionName, input)
-
-  def scheduleInvocationWithMetadata(
-    datetime: Datetime,
-    functionName: String,
-    input: JsSchemaValueTree
-  ): Either[String, InvocationReceipt] =
-    rpc.scheduleInvocationWithMetadata(datetime, functionName, input)
-
-  def scheduleCancelableInvocation(
-    datetime: Datetime,
-    functionName: String,
-    input: JsSchemaValueTree
-  ): Either[String, CancellationToken] =
-    rpc.scheduleCancelableInvocation(datetime, functionName, input)
-
-  def scheduleCancelableInvocationWithMetadata(
-    datetime: Datetime,
-    functionName: String,
-    input: JsSchemaValueTree
-  ): Either[String, CancelableInvocationReceipt] =
-    rpc.scheduleCancelableInvocationWithMetadata(datetime, functionName, input)
+  /**
+   * Schedules the method for `datetime`, and returns its handle once the target
+   * has durably accepted it. `decode` decodes the awaited result of the handle.
+   * Never lends a scope card.
+   */
+  def schedule[Out](datetime: Datetime, functionName: String, input: JsSchemaValueTree)(
+    decode: Option[JsSchemaValueTree] => Out
+  ): Future[Invocation[Out]] =
+    rpc.schedule(datetime, functionName, input).map(_.mapResult(decode))(GolemExecutionContext.global)
 }
 
 object RemoteAgentClient {
@@ -124,17 +83,16 @@ object RemoteAgentClient {
   private[rpc] final class WasmRpcInvoker(client: WasmRpcClient, knownAgentId: Option[AgentId]) extends RpcInvoker {
     private var cachedAgentId: Option[AgentId] = knownAgentId
 
+    private implicit val ec: scala.concurrent.ExecutionContext = GolemExecutionContext.global
+
     override def agentId(): Future[AgentId] =
       cachedAgentId match {
         case Some(id) => Future.successful(id)
         case None     =>
-          implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-          client.agentId().flatMap {
-            case Right(raw) =>
-              val id = JsAgentId.toAgentId(raw)
-              cachedAgentId = Some(id)
-              Future.successful(id)
-            case Left(error) => Future.failed(AgentRpcException(AgentRpcError.fromRpcError(error)))
+          attempt(client.agentId()).flatMap(succeeded).map { raw =>
+            val id = JsAgentId.toAgentId(raw)
+            cachedAgentId = Some(id)
+            id
           }
       }
 
@@ -152,137 +110,32 @@ object RemoteAgentClient {
       functionName: String,
       input: JsSchemaValueTree,
       scopeCard: Option[ScopeCard]
-    ): Either[String, Option[JsSchemaValueTree]] =
-      invokeWithFallback(functionName)(fn =>
-        withScopeCard(scopeCard)(client.invokeAndAwait(fn, input, _)).map(_.toOption).left.map(_.toString)
-      )
+    ): Future[InvocationResult[Option[JsSchemaValueTree]]] =
+      attempt(withScopeCard(scopeCard)(client.invokeAndAwait(functionName, input, _)))
+        .flatMap(succeeded)
+        .map(result => result.copy(value = result.value.toOption))
 
-    override def invokeAndAwaitWithMetadata(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: Option[ScopeCard]
-    ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] =
-      invokeWithFallback(functionName)(fn =>
-        withScopeCard(scopeCard)(client.invokeAndAwaitWithMetadata(fn, input, _))
-          .map(value => value.copy(value = value.value.toOption))
-          .left
-          .map(_.toString)
-      )
-
-    override def asyncInvokeAndAwait(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: Option[ScopeCard]
-    ): Future[Option[JsSchemaValueTree]] =
-      safeCall(
-        withScopeCard(scopeCard)(client.asyncInvokeAndAwait(functionName, input, _)).left.map(_.toString)
-      ) match {
-        case Left(err)           => Future.failed(JavaScriptException(err))
-        case Right(futureResult) => awaitFutureResult(futureResult)
-      }
-
-    override def asyncInvokeAndAwaitWithMetadata(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: Option[ScopeCard]
-    ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] =
-      invokeWithFallback(functionName)(fn =>
-        withScopeCard(scopeCard)(client.asyncInvokeAndAwaitWithMetadata(fn, input, _)).map {
-          case (metadata, futureResult) =>
-            AsyncInvocation(
-              metadata,
-              awaitFutureResult(futureResult),
-              CancellationToken.fromFunction(() => futureResult.cancel())
-            )
-        }.left
-          .map(_.toString)
-      )
-
-    override def cancelableAsyncInvokeAndAwait(
-      functionName: String,
-      input: JsSchemaValueTree,
-      scopeCard: Option[ScopeCard]
-    ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
-      safeCall(
-        withScopeCard(scopeCard)(client.asyncInvokeAndAwait(functionName, input, _)).left.map(_.toString)
-      ) match {
-        case Left(err) =>
-          (Future.failed(JavaScriptException(err)), CancellationToken.fromFunction(() => ()))
-        case Right(futureResult) =>
-          val token = CancellationToken.fromFunction(() => futureResult.cancel())
-          (awaitFutureResult(futureResult), token)
-      }
-
-    /**
-     * Drives a host `future-invoke-result` to completion. Calling `get()` is
-     * guarded so a synchronous host/JS interop failure surfaces as a failed
-     * `Future` rather than trapping the whole guest invocation.
-     */
-    private def awaitFutureResult(
-      futureResult: WasmRpcApi.RawFutureInvokeResult
-    ): Future[Option[JsSchemaValueTree]] =
-      try {
-        FutureInterop
-          .fromPromise(futureResult.get())
-          .map(_.toOption)(golem.concurrent.GolemExecutionContext.global)
-          .recoverWith { case JavaScriptException(e) =>
-            Future.failed(JavaScriptException(s"async RPC failed: ${WasmRpcApi.decodeRpcError(e)}"))
-          }(golem.concurrent.GolemExecutionContext.global)
-      } catch {
-        case JavaScriptException(e) =>
-          Future.failed(JavaScriptException(s"async RPC failed: ${WasmRpcApi.decodeRpcError(e)}"))
-      }
-
-    override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
-      invokeWithFallback(functionName)(fn => client.invoke(fn, input).left.map(_.toString))
-
-    override def invokeWithMetadata(
+    override def trigger(
       functionName: String,
       input: JsSchemaValueTree
-    ): Either[String, InvocationMetadata] =
-      invokeWithFallback(functionName)(fn => client.invokeWithMetadata(fn, input).left.map(_.toString))
+    ): Future[Invocation[Option[JsSchemaValueTree]]] =
+      attempt(client.trigger(functionName, input)).flatMap(succeeded).flatMap(handle)
 
-    override def scheduleInvocation(
+    override def schedule(
       datetime: Datetime,
       functionName: String,
       input: JsSchemaValueTree
-    ): Either[String, Unit] =
-      invokeWithFallback(functionName)(fn => client.scheduleInvocation(datetime, fn, input).left.map(_.toString))
+    ): Future[Invocation[Option[JsSchemaValueTree]]] =
+      attempt(client.schedule(datetime, functionName, input)).flatMap(succeeded).flatMap(handle)
 
-    override def scheduleInvocationWithMetadata(
-      datetime: Datetime,
-      functionName: String,
-      input: JsSchemaValueTree
-    ): Either[String, InvocationReceipt] =
-      invokeWithFallback(functionName)(fn =>
-        client.scheduleInvocationWithMetadata(datetime, fn, input).left.map(_.toString)
-      )
-
-    override def scheduleCancelableInvocation(
-      datetime: Datetime,
-      functionName: String,
-      input: JsSchemaValueTree
-    ): Either[String, CancellationToken] =
-      invokeWithFallback(functionName)(fn =>
-        client.scheduleCancelableInvocation(datetime, fn, input).left.map(_.toString)
-      )
-
-    override def scheduleCancelableInvocationWithMetadata(
-      datetime: Datetime,
-      functionName: String,
-      input: JsSchemaValueTree
-    ): Either[String, CancelableInvocationReceipt] =
-      invokeWithFallback(functionName)(fn =>
-        client.scheduleCancelableInvocationWithMetadata(datetime, fn, input).left.map(_.toString)
-      )
+    private def handle(raw: WasmRpcApi.RawInvocation): Future[Invocation[Option[JsSchemaValueTree]]] =
+      Future.fromTry(Try(Invocation.fromHost(raw)))
   }
 
-  private def invokeWithFallback[A](functionName: String)(call: String => Either[String, A]): Either[String, A] =
-    safeCall(call(functionName))
+  private def succeeded[A](result: Either[WasmRpcApi.RpcError, A]): Future[A] =
+    result.fold(error => Future.failed(AgentRpcException(AgentRpcError.fromRpcError(error))), Future.successful)
 
-  private def safeCall[A](thunk: => Either[String, A]): Either[String, A] =
-    try thunk
-    catch {
-      case JavaScriptException(err) => Left(err.toString)
-    }
+  private def attempt[A](future: => Future[A]): Future[A] =
+    try future
+    catch { case NonFatal(error) => Future.failed(error) }
 }

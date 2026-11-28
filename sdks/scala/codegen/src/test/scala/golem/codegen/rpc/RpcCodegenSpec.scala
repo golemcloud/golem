@@ -187,7 +187,9 @@ class RpcCodegenSpec extends munit.FunSuite {
       s"missing apply in:\n$content"
     )
     assert(
-      content.contains("def trigger(id: Int, msg: String): _root_.scala.concurrent.Future[_root_.scala.Unit]"),
+      content.contains(
+        "def trigger(id: Int, msg: String): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.Invocation[String]]"
+      ),
       s"missing trigger in:\n$content"
     )
     assert(
@@ -212,7 +214,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     val content = result.files.head.content
     assert(content.contains("def apply(): _root_.scala.concurrent.Future[Unit]"), s"missing apply() in:\n$content")
     assert(
-      content.contains("def trigger(): _root_.scala.concurrent.Future[_root_.scala.Unit]"),
+      content.contains("def trigger(): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.Invocation[Unit]]"),
       s"missing trigger() in:\n$content"
     )
     assert(content.contains("def scheduleAt(when: _root_.golem.Datetime)"), s"missing scheduleAt(when) in:\n$content")
@@ -361,7 +363,21 @@ class RpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("awaitWith("), s"missing awaitWith delegation in:\n$content")
     assert(content.contains("triggerWith("), s"missing triggerWith delegation in:\n$content")
     assert(content.contains("scheduleWith("), s"missing scheduleWith delegation in:\n$content")
-    assert(content.contains("scheduleCancelableWith("), s"missing scheduleCancelableWith delegation in:\n$content")
+    assert(
+      content.contains(
+        "def trigger(id: Int, msg: String): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.Invocation[String]]"
+      ),
+      s"trigger must return an Invocation handle:\n$content"
+    )
+    assert(
+      content.contains(
+        "def scheduleAt(id: Int, msg: String, when: _root_.golem.Datetime): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.Invocation[String]]"
+      ),
+      s"scheduleAt must return an Invocation handle:\n$content"
+    )
+    List("cancelable", "scheduleCancelable", "CancellationToken", "Receipt", "CancelableAsyncInvocation").foreach {
+      removed => assert(!content.contains(removed), s"removed API $removed is generated:\n$content")
+    }
     assert(!content.contains("resolved.await("), s"should not directly call resolved.await:\n$content")
     assert(!content.contains("resolved.trigger("), s"should not directly call resolved.trigger:\n$content")
     assert(!content.contains("resolved.schedule("), s"should not directly call resolved.schedule:\n$content")
@@ -408,7 +424,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
     assert(scoped.contains("def apply(id: Int, msg: String): _root_.scala.concurrent.Future[String] ="), scoped)
     assert(scoped.contains("awaitWith(_root_.scala.Vector[_root_.scala.Any](id, msg))"), scoped)
-    assert(scoped.contains("cancelableAwaitWith("), scoped)
+    assert(!scoped.contains("cancelable"), s"scoped calls must not offer cancelable:\n$scoped")
     assert(!scoped.contains("trigger"), s"scoped calls must not offer trigger:\n$scoped")
     assert(!scoped.contains("schedule"), s"scoped calls must not offer schedule:\n$scoped")
     assert(!durable.contains("PermissionCard"), s"scope-card APIs must accept only ScopeCard:\n$durable")
@@ -421,7 +437,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     val ephemeralScoped =
       classBody(ephemeral.substring(ephemeral.indexOf(ephemeralMethod)), "GolemScopeCardCall", indent = "    ")
     assert(ephemeralScoped.contains("awaitWithMetadata("), ephemeralScoped)
-    assert(ephemeralScoped.contains("cancelableAwaitWithMetadata("), ephemeralScoped)
+    assert(!ephemeralScoped.contains("cancelable"), ephemeralScoped)
     assert(!ephemeralScoped.contains("trigger"), ephemeralScoped)
   }
 
@@ -684,7 +700,9 @@ class RpcCodegenSpec extends munit.FunSuite {
       assert(!content.contains(s"def $name("), s"removed constructor $name is generated:\n$content")
     }
     assert(content.contains("awaitWithMetadata"), s"await should return metadata:\n$content")
-    assert(content.contains("triggerWithMetadata"), s"trigger should return metadata:\n$content")
+    assert(content.contains("triggerWith("), s"trigger should return a handle:\n$content")
+    assert(content.contains("_root_.golem.runtime.rpc.Invocation["), s"trigger should return a handle:\n$content")
+    assert(!content.contains("Receipt"), s"receipts are removed:\n$content")
   }
 
   test("durable agent with unit constructor generates no-param upsert") {

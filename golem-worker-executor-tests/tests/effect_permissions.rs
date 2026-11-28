@@ -197,6 +197,16 @@ fn connect_card_transfer_delivery(
 
 #[async_trait]
 impl WorkerProxy for LoopbackCardTransferProxy {
+    async fn invocation_handle(
+        &self,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerProxyError,
+    > {
+        self.inner.invocation_handle(request).await
+    }
+
     async fn prepare(
         &self,
         target: &ResolvedTarget,
@@ -273,6 +283,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
+        requires_own_record: bool,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         self.inner
             .invoke_agent(
@@ -292,6 +303,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
                 environment_id,
                 auth_ctx,
                 scope_card,
+                requires_own_record,
             )
             .await
     }
@@ -410,19 +422,6 @@ impl WorkerProxy for LoopbackCardTransferProxy {
     ) -> Result<bool, WorkerProxyError> {
         self.inner
             .cancel_invocation(owned_agent_id, idempotency_key, auth_ctx)
-            .await
-    }
-
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &golem_common::model::OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::agent::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 

@@ -1,8 +1,9 @@
 /** Thin injectable façade over the schema-native agent RPC host. */
 import { Context, Effect, Layer } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
-import { WasmRpc } from "golem:agent/host@2.0.0"
+import { Invocation, WasmRpc } from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
+import { withSignal } from "wasm-rquickjs:import-abort"
 
 export class RpcHostError {
   readonly _tag = "RpcHostError"
@@ -12,46 +13,40 @@ export class RpcHostError {
   ) {}
 }
 
-export interface RpcInvocationHandle {
-  /** Absent when the host rejected the call; `get` then fails with the rejection error. */
-  readonly metadata: AgentHost.InvocationMetadata | undefined
-  readonly get: () => Promise<CoreTypes.SchemaValueTree | undefined>
-  readonly cancel: () => void
-  readonly drop: () => void
-}
-
-export interface RpcCancellationToken {
-  readonly cancel: () => void
+/** The handle of an accepted invocation. Mirrors the WIT `invocation` resource. */
+export interface RpcInvocation {
+  readonly id: CoreTypes.InvocationId
+  readonly status: () => Promise<AgentHost.InvocationStatus>
+  /**
+   * Mirrors `invocation.await`. Aborting `signal` drops the call; the invocation keeps running,
+   * because the host treats a dropped await as a detach.
+   */
+  readonly await: (signal: AbortSignal) => Promise<CoreTypes.SchemaValueTree | undefined>
+  readonly cancel: () => Promise<boolean>
   readonly drop: () => void
 }
 
 export interface RpcConnection {
   /** Mirrors `wasm-rpc.agent-id`. On a client of `upsert` it creates the agent when it is missing. */
   readonly agentId: () => Promise<CoreTypes.AgentId>
+  /**
+   * Mirrors `wasm-rpc.invoke-and-await`. Aborting `signal` after the call started drops the
+   * call, which withdraws the invocation on a best-effort basis while it has not started.
+   */
   readonly invokeAndAwait: (
     methodName: string,
     input: CoreTypes.SchemaValueTree,
-    scopeCard?: CoreTypes.PermissionCard,
-  ) => AgentHost.InvocationResultWithMetadata
-  readonly invoke: (
-    methodName: string,
-    input: CoreTypes.SchemaValueTree,
-  ) => AgentHost.InvocationMetadata
-  readonly asyncInvokeAndAwait: (
-    methodName: string,
-    input: CoreTypes.SchemaValueTree,
-    scopeCard?: CoreTypes.PermissionCard,
-  ) => RpcInvocationHandle
-  readonly scheduleInvocation: (
+    scopeCard: CoreTypes.PermissionCard | undefined,
+    signal: AbortSignal,
+  ) => Promise<AgentHost.InvocationResultWithMetadata>
+  /** Mirrors `wasm-rpc.trigger`. */
+  readonly trigger: (methodName: string, input: CoreTypes.SchemaValueTree) => Promise<RpcInvocation>
+  /** Mirrors `wasm-rpc.schedule`. */
+  readonly schedule: (
     scheduledAt: AgentHost.Datetime,
     methodName: string,
     input: CoreTypes.SchemaValueTree,
-  ) => AgentHost.ScheduledInvocationReceipt
-  readonly scheduleCancelableInvocation: (
-    scheduledAt: AgentHost.Datetime,
-    methodName: string,
-    input: CoreTypes.SchemaValueTree,
-  ) => { readonly metadata: AgentHost.InvocationMetadata; readonly token: RpcCancellationToken }
+  ) => Promise<RpcInvocation>
   readonly drop: () => void
 }
 
@@ -79,6 +74,8 @@ export interface RpcClientShape {
     constructorValue: CoreTypes.SchemaValueTree,
     options: AgentHost.CreateOptions,
   ) => Effect.Effect<RpcCreated, RpcHostError>
+  /** Mirrors `invocation.get`: the handle of the invocation with the given ID, without a remote call. */
+  readonly getInvocation: (id: CoreTypes.InvocationId) => Effect.Effect<RpcInvocation>
 }
 
 export class RpcClient extends Context.Service<RpcClient, RpcClientShape>()(
@@ -93,32 +90,21 @@ const dispose = (resource: unknown): void => {
   }
 }
 
+const wrapInvocation = (invocation: AgentHost.Invocation): RpcInvocation => ({
+  id: invocation.id(),
+  status: () => invocation.status(),
+  await: (signal) => withSignal(signal, () => invocation.await_()),
+  cancel: () => invocation.cancel(),
+  drop: () => dispose(invocation),
+})
+
 const wrapWasmRpc = (rpc: WasmRpc): RpcConnection => ({
   agentId: () => rpc.agentId(),
-  invokeAndAwait: (methodName, input, scopeCard) =>
-    rpc.invokeAndAwait(methodName, input, scopeCard),
-  invoke: (methodName, input) => rpc.invoke(methodName, input, undefined),
-  asyncInvokeAndAwait: (methodName, input, scopeCard) => {
-    const invocation = rpc.asyncInvokeAndAwait(methodName, input, scopeCard)
-    return {
-      metadata: invocation.metadata,
-      get: () => invocation.future.get(),
-      cancel: () => invocation.future.cancel(),
-      drop: () => dispose(invocation.future),
-    }
-  },
-  scheduleInvocation: (scheduledAt, methodName, input) =>
-    rpc.scheduleInvocation(scheduledAt, methodName, input, undefined),
-  scheduleCancelableInvocation: (scheduledAt, methodName, input) => {
-    const receipt = rpc.scheduleCancelableInvocation(scheduledAt, methodName, input, undefined)
-    return {
-      metadata: receipt.metadata,
-      token: {
-        cancel: () => receipt.cancellationToken.cancel(),
-        drop: () => dispose(receipt.cancellationToken),
-      },
-    }
-  },
+  invokeAndAwait: (methodName, input, scopeCard, signal) =>
+    withSignal(signal, () => rpc.invokeAndAwait(methodName, input, scopeCard)),
+  trigger: async (methodName, input) => wrapInvocation(await rpc.trigger(methodName, input)),
+  schedule: async (scheduledAt, methodName, input) =>
+    wrapInvocation(await rpc.schedule(scheduledAt, methodName, input)),
   drop: () => dispose(rpc),
 })
 
@@ -151,5 +137,6 @@ export const RpcLive: Layer.Layer<RpcClient> = Layer.succeed(
         },
         catch: (cause) => new RpcHostError(cause, "WasmRpc.create"),
       }),
+    getInvocation: (id) => Effect.sync(() => wrapInvocation(Invocation.get(id))),
   }),
 )

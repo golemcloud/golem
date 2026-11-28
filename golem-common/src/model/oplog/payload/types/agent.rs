@@ -14,9 +14,9 @@
 
 use wasmtime_wasi::StreamError;
 
-use super::{AgentMetadataForGuests, SerializableScheduleId, SerializableStreamError};
+use super::{AgentMetadataForGuests, SerializableStreamError};
+use crate::model::AgentMetadata;
 use crate::model::agent::TypedAgentConfigEntry;
-use crate::model::{AgentMetadata, ScheduleId};
 
 impl From<AgentMetadata> for AgentMetadataForGuests {
     fn from(mut value: AgentMetadata) -> Self {
@@ -67,15 +67,5 @@ impl From<SerializableStreamError> for StreamError {
             }
             SerializableStreamError::Trap(e) => Self::Trap(wasmtime::Error::msg(e)),
         }
-    }
-}
-
-impl SerializableScheduleId {
-    pub fn from_domain(schedule_id: ScheduleId) -> Self {
-        Self { id: schedule_id.id }
-    }
-
-    pub fn into_domain(self) -> ScheduleId {
-        ScheduleId { id: self.id }
     }
 }

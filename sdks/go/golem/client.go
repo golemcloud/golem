@@ -88,8 +88,8 @@ func (c Client[Id]) target() string {
 	return c.agentType
 }
 
-// WithScopeCard returns a copy of the client whose awaited calls — Call,
-// MustCall and CallAsync — carry card as their scope card, unless the call
+// WithScopeCard returns a copy of the client whose awaited calls — Call and
+// MustCall — carry card as their scope card, unless the call
 // attaches its own with [MethodDef.WithScopeCard]. Trigger and Schedule never
 // carry one. The card is lent, not moved: it must stay unreleased while the
 // copy is used. It panics on the zero ScopeCard.

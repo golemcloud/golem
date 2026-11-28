@@ -109,9 +109,7 @@ use golem_worker_executor::native_tool::{
     NativeToolAdapter, NativeToolCatalog, NativeToolRegistration,
 };
 use golem_worker_executor::preview2::golem::agent::host::{
-    AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, FutureInvokeResult,
-    HostFutureInvokeResult, HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata,
-    RpcError, ScheduledInvocationReceipt, WasmRpc,
+    HostInvocation, HostWasmRpc, Invocation, RpcError, WasmRpc,
 };
 use golem_worker_executor::services::HasWorker;
 use golem_worker_executor::services::active_agents::memory_probe::FixedProbe;
@@ -2446,7 +2444,7 @@ impl TestWorkerExecutor {
     }
 
     /// Pauses after committing the selected checkpoint of the next RPC for
-    /// `agent_id`.
+    /// `agent_id`: a trigger, a schedule, an awaited call or an invocation handle's await.
     pub async fn gate_next_rpc_commit(
         &self,
         agent_id: &AgentId,
@@ -4648,76 +4646,28 @@ impl HostWasmRpc for TestWorkerCtx {
         self.durable_ctx.bind_self().await
     }
 
-    async fn invoke_and_await(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
-        self.durable_ctx
-            .invoke_and_await(self_, method_name, input, scope_card)
-            .await
-    }
-
-    async fn invoke(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-        self.durable_ctx
-            .invoke(self_, method_name, input, scope_card)
-            .await
-    }
-
-    async fn async_invoke_and_await(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<AsyncInvocationWithMetadata> {
-        self.durable_ctx
-            .async_invoke_and_await(self_, method_name, input, scope_card)
-            .await
-    }
-
-    async fn schedule_invocation(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<Result<ScheduledInvocationReceipt, RpcError>> {
-        self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
-            .await
-    }
-
-    async fn schedule_cancelable_invocation(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<Result<CancelableScheduledInvocationReceipt, RpcError>> {
-        self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
-            .await
-    }
-
     async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
         HostWasmRpc::drop(&mut self.durable_ctx, rep).await
     }
 }
 
-impl HostFutureInvokeResult for TestWorkerCtx {
-    async fn cancel(&mut self, self_: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        HostFutureInvokeResult::cancel(&mut self.durable_ctx, self_).await
+impl HostInvocation for TestWorkerCtx {
+    async fn get(
+        &mut self,
+        id: golem_schema::schema::wit::wire::InvocationId,
+    ) -> anyhow::Result<Resource<Invocation>> {
+        HostInvocation::get(&mut self.durable_ctx, id).await
+    }
+
+    async fn id(
+        &mut self,
+        self_: Resource<Invocation>,
+    ) -> anyhow::Result<golem_schema::schema::wit::wire::InvocationId> {
+        HostInvocation::id(&mut self.durable_ctx, self_).await
+    }
+
+    async fn drop(&mut self, rep: Resource<Invocation>) -> anyhow::Result<()> {
+        HostInvocation::drop(&mut self.durable_ctx, rep).await
     }
 }
 
@@ -5797,12 +5747,21 @@ impl TestOplog {
         }
     }
 
-    async fn pause_after_rpc_checkpoint(&self, index: OplogIndex, entry: &OplogEntry) {
+    /// Commits an RPC checkpoint entry and holds it at the armed gate. A gate that simulates
+    /// process loss refuses the append once the executor shutdown fenced the oplog, so the
+    /// call writes nothing after the committed prefix and its task still ends.
+    async fn pause_after_rpc_checkpoint(
+        &self,
+        index: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<(), golem_worker_executor::services::oplog::OplogError> {
         let checkpoint = match entry {
             OplogEntry::Start {
                 function_name:
-                    HostFunctionName::GolemRpcWasmRpcInvoke
-                    | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult,
+                    HostFunctionName::GolemRpcWasmRpcTrigger
+                    | HostFunctionName::GolemRpcWasmRpcSchedule
+                    | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult
+                    | HostFunctionName::GolemRpcInvocationAwait,
                 ..
             } => {
                 self.rpc_starts.lock().unwrap().insert(index);
@@ -5829,10 +5788,17 @@ impl TestOplog {
                 .commit(CommitLevel::Always)
                 .await
                 .expect("oplog commit failed at the fire-and-forget RPC gate");
-            self.additional_test_deps
+            if !self
+                .additional_test_deps
                 .pause_after_rpc_commit(&self.owned_agent_id.agent_id, checkpoint)
-                .await;
+                .await
+            {
+                return Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                    "RPC checkpoint append abandoned by its test gate".into(),
+                ));
+            }
         }
+        Ok(())
     }
 
     /// Recognizes the `End` of a tracked consume-body chunk `Start` whose
@@ -6193,6 +6159,9 @@ impl Oplog for TestOplog {
                 let _ = deps
                     .consume_body_scope_end_gates
                     .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
+                let _ = deps
+                    .rpc_commit_gates
+                    .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
             },
             move || {
                 let close = close.clone();
@@ -6269,7 +6238,7 @@ impl Oplog for TestOplog {
         if let Some(start_index) = delivered_start {
             self.observe_rpc_memory_delivery(start_index);
         }
-        self.pause_after_rpc_checkpoint(index, &entry).await;
+        self.pause_after_rpc_checkpoint(index, &entry).await?;
         if track_scope_start
             && self
                 .additional_test_deps
@@ -6394,6 +6363,9 @@ impl Oplog for TestOplog {
             OplogEntry::Start { function_name, .. } => Some(function_name.clone()),
             _ => None,
         };
+        let rpc_checkpoint_entry =
+            matches!(&entry, OplogEntry::Start { .. } | OplogEntry::End { .. })
+                .then(|| entry.clone());
         let pending = self.oplog.enqueue_add(entry);
         // Delivery hands its receipt to the drain queue and resumes the guest immediately.
         // Arm at enqueue time so the guest's next memory growth cannot race receipt polling.
@@ -6409,6 +6381,9 @@ impl Oplog for TestOplog {
             }
             if let Some(start_index) = ended_start {
                 this.observe_rpc_memory_end(start_index);
+            }
+            if let Some(entry) = rpc_checkpoint_entry {
+                this.pause_after_rpc_checkpoint(index, &entry).await?;
             }
             if gated {
                 this.pause_at_consume_body_chunk_end_gate().await;
@@ -6757,7 +6732,7 @@ impl Oplog for TestOplog {
         }
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
-            .await;
+            .await?;
         if matches!(
             &ordered.entry,
             OplogEntry::Start {
@@ -6815,7 +6790,7 @@ impl Oplog for TestOplog {
         }
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
-            .await;
+            .await?;
         if matches!(
             &ordered.entry,
             OplogEntry::Start {
@@ -7704,6 +7679,7 @@ impl AdditionalTestDeps {
         let gate = Arc::new(RpcCommitGate {
             armed: AtomicBool::new(true),
             abort_return: AtomicBool::new(false),
+            shutdown: tokio_util::sync::CancellationToken::new(),
             checkpoint,
             committed_tx: std::sync::Mutex::new(Some(committed_tx)),
             release: tokio::sync::Semaphore::new(0),
@@ -7716,16 +7692,18 @@ impl AdditionalTestDeps {
         RpcCommitGateHandle { committed_rx, gate }
     }
 
-    async fn pause_after_rpc_commit(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) {
+    /// `false` means that the gate simulated process loss: it waited for the executor shutdown
+    /// fence, and the append must not return its entry.
+    async fn pause_after_rpc_commit(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) -> bool {
         let Some(gate) = self
             .rpc_commit_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
         else {
-            return;
+            return true;
         };
         if gate.checkpoint != checkpoint || !gate.armed.swap(false, Ordering::SeqCst) {
-            return;
+            return true;
         }
         if let Some(committed_tx) = gate.committed_tx.lock().unwrap().take() {
             let _ = committed_tx.send(());
@@ -7737,8 +7715,10 @@ impl AdditionalTestDeps {
             .expect("the RPC commit gate semaphore was closed");
         permit.forget();
         if gate.abort_return.load(Ordering::SeqCst) {
-            std::future::pending().await
+            gate.shutdown.cancelled().await;
+            return false;
         }
+        true
     }
 
     async fn has_rpc_commit_gate(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) -> bool {
@@ -8708,6 +8688,8 @@ pub enum RpcCheckpoint {
 struct RpcCommitGate {
     armed: AtomicBool,
     abort_return: AtomicBool,
+    /// Cancelled by the executor shutdown fence of the gated agent's oplog.
+    shutdown: tokio_util::sync::CancellationToken,
     checkpoint: RpcCheckpoint,
     committed_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
@@ -8725,6 +8707,8 @@ impl RpcCommitGateHandle {
             .expect("the RPC commit gate was dropped without firing");
     }
 
+    /// Simulates process loss after the committed checkpoint: the held append fails once the
+    /// executor shutdown fenced the oplog, so nothing after the checkpoint reaches the oplog.
     pub fn abort_return(&self) {
         self.gate.abort_return.store(true, Ordering::SeqCst);
         self.gate.release.add_permits(1);
@@ -9600,6 +9584,21 @@ impl FailingRpc {
 
 #[async_trait]
 impl Rpc for RecordingRpc {
+    async fn invocation_handle(
+        &self,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerExecutorError,
+    > {
+        self.inner
+            .invocation_handle(invocation_id, caller, operation, auth)
+            .await
+    }
+
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
@@ -9630,20 +9629,6 @@ impl Rpc for RecordingRpc {
             .await
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, ServiceRpcError> {
-        self.call_count.fetch_add(1, Ordering::Relaxed);
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -9653,7 +9638,7 @@ impl Rpc for RecordingRpc {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+    ) -> Result<(), ServiceRpcError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .schedule_invocation(
@@ -9782,6 +9767,21 @@ impl Rpc for RecordingRpc {
 
 #[async_trait]
 impl Rpc for FailingRpc {
+    async fn invocation_handle(
+        &self,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerExecutorError,
+    > {
+        self.inner
+            .invocation_handle(invocation_id, caller, operation, auth)
+            .await
+    }
+
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
@@ -9811,19 +9811,6 @@ impl Rpc for FailingRpc {
             .await
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, ServiceRpcError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -9833,7 +9820,7 @@ impl Rpc for FailingRpc {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+    ) -> Result<(), ServiceRpcError> {
         self.inner
             .schedule_invocation(
                 owned_agent_id,

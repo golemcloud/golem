@@ -13,8 +13,8 @@
 // limitations under the License.
 
 //! Scheduled invocations from a Go guest: `MethodDef.Schedule` runs a cross-agent
-//! call later without the caller waiting, and `ScheduledInvocation.Cancel` stops
-//! one that has not started yet.
+//! call later without the caller waiting, and `Invocation.Cancel` withdraws one
+//! that has not started yet and reports `false` for one already cancelled.
 
 use crate::Tracing;
 use golem_common::model::account::AccountId;
@@ -153,14 +153,18 @@ async fn go_scheduled_invocation_can_be_cancelled(
         )
         .await?;
 
-    executor
+    // The first cancellation withdraws the invocation; a repeated one finds it
+    // already cancelled.
+    let cancelled = executor
         .invoke_and_await_agent(
             &component,
             &scheduler_id,
             "bump-cancelled",
             data_value!("go-sched-target-2", 500i64),
         )
-        .await?;
+        .await?
+        .into_typed::<Vec<bool>>()?;
+    assert_eq!(cancelled, vec![true, false]);
 
     // Well past the scheduled time: the cancelled invocation must not have run.
     tokio::time::sleep(Duration::from_secs(3)).await;

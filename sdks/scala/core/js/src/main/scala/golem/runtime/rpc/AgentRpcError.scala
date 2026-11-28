@@ -38,7 +38,18 @@ object AgentRpcError {
    * A keyed create found an agent that already has the key, or the agent at the
    * ID that a key derives has another key.
    */
-  final case class Conflict(detail: String)                      extends AgentRpcError { val message = s"conflict: $detail"         }
+  final case class Conflict(detail: String) extends AgentRpcError { val message = s"conflict: $detail" }
+
+  /** The awaited invocation was cancelled before it started. */
+  final case class Cancelled(detail: String) extends AgentRpcError { val message = s"cancelled: $detail" }
+
+  /**
+   * A cancellation found the invocation already running. Cancelling a running
+   * invocation is not supported.
+   */
+  final case class CannotCancelRunning(detail: String) extends AgentRpcError {
+    val message = s"cannot-cancel-running: $detail"
+  }
   final case class InvalidInput(detail: String)                  extends AgentRpcError { val message = s"invalid-input: $detail"    }
   final case class InvalidMethod(detail: String)                 extends AgentRpcError { val message = s"invalid-method: $detail"   }
   final case class InvalidType(detail: String)                   extends AgentRpcError { val message = s"invalid-type: $detail"     }
@@ -71,13 +82,17 @@ object AgentRpcError {
           case "not-found"             => NotFound(detail)
           case "remote-internal-error" => RemoteInternal(detail)
           case "conflict"              => Conflict(detail)
+          case "cancelled"             => Cancelled(detail)
+          case "cannot-cancel-running" => CannotCancelRunning(detail)
           case other                   => Unknown(other, error.message)
         }
     }
 }
 
 /**
- * The failure of an RPC client operation (`upsert`, `create`, `getById` or
- * `agentId`) that carries the typed [[AgentRpcError]].
+ * The failure of an RPC client operation that carries the typed
+ * [[AgentRpcError]]: making a client (`upsert`, `create`, `getById`),
+ * `agentId`, an awaited call, `trigger`, `scheduleAt`, and the operations of an
+ * [[Invocation]].
  */
 final case class AgentRpcException(error: AgentRpcError) extends RuntimeException(error.message)

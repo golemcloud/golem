@@ -824,7 +824,7 @@ mod tool_attachment {
 use super::{
     HostRequestGolemApiGetAgents, HostRequestGolemApiRevertAgent,
     HostRequestGolemContextSpanAttributes, HostRequestGolemContextSpanResource,
-    HostRequestGolemRpcAsyncInvokeRejection, HostRequestGolemRpcInvoke, HostResponseGolemApiAgents,
+    HostRequestGolemRpcInvoke, HostResponseGolemApiAgents,
 };
 use crate::model::agent::{
     AgentTypeName, ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
@@ -853,10 +853,9 @@ use crate::model::oplog::types::{
     SerializableP3HttpRequestBodyFrame, SerializableP3HttpRequestOptions, SerializableP3HttpScheme,
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3TcpChunk,
     SerializableP3UdpDatagram, SerializableP3UdpEndpoint, SerializableResponseHeaders,
-    SerializableRpcError, SerializableScheduleId, SerializableStreamError,
-    SerializableToolAdmissionRefusal, SerializableToolError, SerializableToolInvocationResult,
-    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
-    SerializableToolStructuredResult,
+    SerializableRpcError, SerializableStreamError, SerializableToolAdmissionRefusal,
+    SerializableToolError, SerializableToolInvocationResult, SerializableToolOperationTerminal,
+    SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
@@ -873,20 +872,20 @@ use crate::model::oplog::{
     HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
     HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
     HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit,
-    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
-    HostResponseGolemToolInvokeResult, HostResponseGolemToolResponseSecretHoldAdmission,
-    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
-    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
-    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
-    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
-    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
-    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
-    HostResponseP3SocketsTcpSendChunk, HostResponseP3SocketsUdpReceive,
-    HostResponseP3SocketsUdpSend, HostResponsePermissionCheck, HostResponseRandomBytes,
-    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
+    HostResponseGolemRpcInvocationAccepted, HostResponseGolemToolInvokeResult,
+    HostResponseGolemToolResponseSecretHoldAdmission, HostResponseGolemToolTool,
+    HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure, HostResponseKVDelete,
+    HostResponseKVGet, HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
+    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
+    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
+    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsTcpAcquire,
+    HostResponseP3SocketsTcpReceive, HostResponseP3SocketsTcpReceiveChunk,
+    HostResponseP3SocketsTcpSend, HostResponseP3SocketsTcpSendChunk,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponsePermissionCheck,
+    HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
+    host_functions,
 };
 use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OplogIndex};
 use crate::model::{ScanCursor, Timestamp};
@@ -1020,63 +1019,32 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
 }
 
 #[test]
-fn async_rpc_rejection_request_roundtrips_stable_identity() {
-    let request = HostRequestGolemRpcAsyncInvokeRejection {
-        remote_agent_id: AgentId::from_parts(7, 3),
-        idempotency_key: IdempotencyKey::new("rejected-at-42".to_string()),
-        method_name: "increment".to_string(),
-        error: SerializableRpcError::ProtocolError {
-            details: "invalid input".to_string(),
-        },
-    };
-    let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
-    let decoded: HostRequestGolemRpcAsyncInvokeRejection =
-        desert_rust::deserialize(&bytes).unwrap();
-    assert_eq!(decoded, request);
-}
-
-#[test]
-fn scheduled_invocation_typed_result_preserves_final_receipt() {
-    let schedule_id = SerializableScheduleId {
-        id: uuid::Uuid::from_u128(0x123456789abcdef00123456789abcdef),
-    };
+fn accepted_invocation_round_trips_its_final_id_and_its_refusal() {
     let invocation_id = crate::model::OwnedInvocationId::internal(
         AgentId::from_parts(7, 1),
         AgentFingerprint(uuid::Uuid::from_u128(42)),
         "run",
         &IdempotencyKey::from("child"),
     );
-    let response: HostResponse = HostResponseGolemRpcScheduledInvocation {
-        schedule_id: schedule_id.clone(),
-        invocation_id: invocation_id.clone(),
-    }
-    .into();
-    let compatible: HostResponse = HostResponseGolemRpcScheduledInvocationCompat {
-        result: Ok((schedule_id.clone(), invocation_id.clone())),
-    }
-    .into();
-
-    assert_eq!(compatible, response);
-    assert_eq!(
-        HostResponseGolemRpcScheduledInvocationCompat::try_from(response).unwrap(),
-        HostResponseGolemRpcScheduledInvocationCompat {
-            result: Ok((schedule_id, invocation_id)),
-        }
-    );
-
     let denied = SerializableRpcError::Denied {
         details: "agent:invoke is not permitted".to_string(),
     };
-    let durable_denial: HostResponse = HostResponseGolemRpcScheduledInvocationCompat {
-        result: Err(denied.clone()),
-    }
-    .into();
-    assert_eq!(
-        HostResponseGolemRpcScheduledInvocationCompat::try_from(durable_denial).unwrap(),
-        HostResponseGolemRpcScheduledInvocationCompat {
+    for accepted in [
+        HostResponseGolemRpcInvocationAccepted {
+            result: Ok(invocation_id),
+        },
+        HostResponseGolemRpcInvocationAccepted {
             result: Err(denied),
-        }
-    );
+        },
+    ] {
+        let response: HostResponse = accepted.clone().into();
+        let encoded = crate::serialization::serialize(&response).unwrap();
+        let decoded: HostResponse = crate::serialization::deserialize(&encoded).unwrap();
+        assert_eq!(
+            HostResponseGolemRpcInvocationAccepted::try_from(decoded).unwrap(),
+            accepted
+        );
+    }
 }
 
 fn datetime_strat()
