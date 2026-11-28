@@ -25,8 +25,8 @@ use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::events::Events;
-use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
+use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{InvocationResponseStream, WorkerProxy, WorkerProxyError};
@@ -74,7 +74,9 @@ use golem_common::model::{
 };
 use golem_common::schema::SchemaValue;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
-use golem_service_base::error::worker_executor::{OplogFailureCause, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    OplogFailureCause, RecoveryCause, WorkerExecutorError,
+};
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -432,6 +434,38 @@ pub(crate) fn is_failed_history_read(error: &WorkerExecutorError) -> bool {
         WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_history_read(reason),
         WorkerExecutorError::OplogFailed { cause, .. } => *cause == OplogFailureCause::Read,
         error => InvocationObservationFailure::is_stored_read(error),
+    }
+}
+
+/// The failed read of a stored history that `error` gives, see [`is_failed_history_read`], with
+/// the agent whose history it is. A read that failed for a time does not name its agent, so it is
+/// the read of `owner`.
+pub(crate) fn unreadable_history(
+    error: &WorkerExecutorError,
+    owner: &AgentId,
+) -> Option<UnreadableOplog> {
+    const SOURCE: OplogReadSource = OplogReadSource::Other("agent history");
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { agent_id, reason } => {
+            unreadable_history(reason, agent_id)
+        }
+        WorkerExecutorError::OplogFailed {
+            agent_id,
+            details,
+            cause: OplogFailureCause::Read,
+        } => Some(UnreadableOplog::new(
+            agent_id,
+            OplogReadError::source_failure(SOURCE, details.clone()),
+        )),
+        WorkerExecutorError::RecoveryRequired {
+            details,
+            cause: RecoveryCause::OplogReadUnavailable,
+            ..
+        } => Some(UnreadableOplog::new(
+            owner,
+            OplogReadError::source_unavailable(SOURCE, details.clone()),
+        )),
+        _ => None,
     }
 }
 

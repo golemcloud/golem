@@ -1608,10 +1608,9 @@ impl StreamSessionIndexService {
         lookup: SessionLookup,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let scratch = Self::new(Arc::new(InMemoryKeyValueStorage::new()), self.oplog.clone());
-        Box::pin(scratch.lookup_inner(id, mode, fingerprint, key, lookup)).await
+        Box::pin(scratch.lookup_in(id, mode, fingerprint, key, lookup, false)).await
     }
 
-    #[tracing::instrument(name = "stream_session_index.lookup", level = "debug", skip_all)]
     async fn lookup_inner(
         &self,
         id: &OwnedAgentId,
@@ -1619,6 +1618,23 @@ impl StreamSessionIndexService {
         fingerprint: AgentFingerprint,
         key: &InvocationId,
         lookup: SessionLookup,
+    ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
+        self.lookup_in(id, mode, fingerprint, key, lookup, true)
+            .await
+    }
+
+    /// With `private_fold`, an exact lookup that the shared index cannot answer at its horizon
+    /// folds the horizon in private storage. Only coverage that was already above the horizon
+    /// when the lookup began is an error.
+    #[tracing::instrument(name = "stream_session_index.lookup", level = "debug", skip_all)]
+    async fn lookup_in(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        key: &InvocationId,
+        lookup: SessionLookup,
+        private_fold: bool,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let horizon = match lookup {
             SessionLookup::Exact(horizon) | SessionLookup::Offsets(horizon) => horizon,
@@ -1631,8 +1647,8 @@ impl StreamSessionIndexService {
             }
         };
         let namespace = Self::namespace(id, fingerprint);
-        // Whether the coverage of an exact lookup was within its horizon before this lookup.
-        let exact_within_horizon = if matches!(lookup, SessionLookup::Exact(_)) {
+        let exact = matches!(lookup, SessionLookup::Exact(_));
+        if exact && private_fold {
             let marker = self
                 .kv
                 .with_entity("stream_session_index", "read", "metadata")
@@ -1648,17 +1664,17 @@ impl StreamSessionIndexService {
                         .scratch_lookup(id, mode, fingerprint, key, lookup)
                         .await;
                 }
-                Some(Ok(metadata)) => metadata.covered_through <= horizon,
-                None => false,
+                Some(Ok(metadata)) if metadata.covered_through > horizon => {
+                    return Err("stream session index is newer than the requested horizon".into());
+                }
+                _ => {}
             }
-        } else {
-            false
-        };
-        self.catch_up_inner(id, mode, fingerprint, horizon).await?;
-        let lock = self.index_lock(id);
-        let _guard = lock.inner.lock().await;
-        let (_, metadata, value) = self
-            .cached_snapshot(
+        }
+        let snapshot = async {
+            self.catch_up_inner(id, mode, fingerprint, horizon).await?;
+            let lock = self.index_lock(id);
+            let _guard = lock.inner.lock().await;
+            self.cached_snapshot(
                 id,
                 mode,
                 fingerprint,
@@ -1672,15 +1688,26 @@ impl StreamSessionIndexService {
                         .transpose()?)
                 },
             )
-            .await?;
+            .await
+        }
+        .await;
+        let (_, metadata, value) = match snapshot {
+            // The shared index can fail on history above the horizon, for example when its
+            // coverage became unreadable after the probe and its repair reads the committed tail.
+            Err(SessionError::Unreadable(_)) if exact && private_fold => {
+                return self
+                    .scratch_lookup(id, mode, fingerprint, key, lookup)
+                    .await;
+            }
+            snapshot => snapshot?,
+        };
         if metadata.covered_through < horizon {
             return Err("stream session index coverage regressed after catch-up".into());
         }
-        if metadata.covered_through > horizon && matches!(lookup, SessionLookup::Exact(_)) {
-            if exact_within_horizon {
-                // The coverage was within the horizon before this lookup; a repair or another
-                // writer moved it past the horizon since.
-                drop(_guard);
+        if metadata.covered_through > horizon && exact {
+            // The coverage was not above the horizon when the lookup began: a repair or another
+            // writer moved it past the horizon since.
+            if private_fold {
                 return self
                     .scratch_lookup(id, mode, fingerprint, key, lookup)
                     .await;

@@ -281,7 +281,7 @@ Lazy hydration of a `Finished` result keeps a backend error apart from a corrupt
 
 An older invocation result can need the persisted result index to catch up from the oplog. A permanent read failure returns `OplogFailed`. A temporary failure, or an index that is still unavailable, returns `RecoveryRequired`. These are lookup errors, not a recorded failure of the invocation. The invocation loop takes the recovery path of the agent and does not withdraw the queued key as a duplicate. A temporary failure adds no entry. A permanent failure records the `Recovery` error that fails the agent. Cancellation reports the read error and does not answer that the invocation completed. A stream observer reports the error and records no session terminal. An unreadable attachment authority does not prove a revocation. An unreadable execution configuration in a retained attachment or preparation reports its oplog index and version, not an idempotency conflict. Stream maintenance leaves an unreadable session unfinished; a failed read of a local session ends that maintenance pass, and later sessions wait for the next pass. A temporary read failure requests another maintenance pass.
 
-`worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
+`worker/state_actor/mod.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
 threshold flushes and replica waits commit outside an explicit commit. After such a commit the
 primary oplog calls its auto-commit listener (`Oplog::set_auto_commit_listener`, held weakly),

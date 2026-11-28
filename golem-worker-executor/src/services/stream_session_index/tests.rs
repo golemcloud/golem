@@ -245,8 +245,8 @@ async fn an_exact_lookup_over_corrupt_coverage_reads_its_own_horizon_below_an_un
 }
 
 /// The coverage probe of an exact lookup is a standalone coverage read, so it has the label and
-/// entity of that read: an exact lookup over a healthy index makes the same `lookup` reads as a
-/// latest lookup.
+/// entity of that read, `read / metadata`: an exact lookup over a healthy index makes the same
+/// `lookup` reads as a latest lookup and one more `read`.
 #[test]
 #[test_r::timeout("30s")]
 async fn the_coverage_probe_of_an_exact_lookup_is_a_coverage_read() {
@@ -262,14 +262,18 @@ async fn the_coverage_probe_of_an_exact_lookup_is_a_coverage_read() {
         .await
         .unwrap();
 
-    let latest = fixture.faults.calls("lookup");
+    let latest = (fixture.faults.calls("lookup"), fixture.faults.calls("read"));
     fixture
         .index
         .lookup_latest(&fixture.id, AgentMode::Durable, fixture.fingerprint, &key)
         .await
         .unwrap();
-    let latest = fixture.faults.calls("lookup") - latest;
-    let exact = fixture.faults.calls("lookup");
+    let latest = (
+        fixture.faults.calls("lookup") - latest.0,
+        fixture.faults.calls("read") - latest.1,
+    );
+    let exact = (fixture.faults.calls("lookup"), fixture.faults.calls("read"));
+    let coverage_reads = coverage_read_metric();
     fixture
         .index
         .lookup_persisted(
@@ -281,7 +285,179 @@ async fn the_coverage_probe_of_an_exact_lookup_is_a_coverage_read() {
         )
         .await
         .unwrap();
-    let exact = fixture.faults.calls("lookup") - exact;
+    let exact = (
+        fixture.faults.calls("lookup") - exact.0,
+        fixture.faults.calls("read") - exact.1,
+    );
+    let coverage_reads = coverage_read_metric() - coverage_reads;
 
-    assert_eq!(exact, latest);
+    assert_eq!(exact, (latest.0, latest.1 + 1));
+    // The probe and the catch-up each count one `read / metadata` operation. Other tests in the
+    // process can only add to the shared counter.
+    assert!(coverage_reads >= 2, "{coverage_reads}");
+}
+
+fn coverage_read_metric() -> u64 {
+    golem_service_base::metrics::storage::LOGICAL_OPERATIONS_TOTAL
+        .with_label_values(&[
+            "keyvalue",
+            "get",
+            "stream_session_index",
+            "read",
+            "metadata",
+        ])
+        .get()
+}
+
+async fn prepare_horizon(
+    fixture: &Fixture,
+    oplog: &Arc<dyn Oplog>,
+    key: &StreamSessionKey,
+) -> OplogIndex {
+    add_create_entry(fixture, oplog).await;
+    let horizon = oplog
+        .add(
+            DurableStreamOplogRecord::Session(
+                None,
+                Box::new(StreamSessionRecord::Prepared(prepared(key))),
+            )
+            .into_inline_entry(),
+        )
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    horizon
+}
+
+fn session_key(fixture: &Fixture, key: u128) -> StreamSessionKey {
+    StreamSessionKey {
+        callee_environment_id: fixture.id.environment_id,
+        callee: fixture.id.agent_id,
+        callee_fingerprint: fixture.fingerprint,
+        idempotency_key: InvocationId(Uuid::from_u128(key)),
+    }
+}
+
+/// Runs an exact lookup at `horizon` and runs `interleave` after its coverage probe answered and
+/// before its catch-up reads the coverage.
+async fn exact_lookup_with_change_after_probe(
+    fixture: &Fixture,
+    horizon: OplogIndex,
+    key: &InvocationId,
+    interleave: impl AsyncFnOnce(),
+) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
+    let probe = fixture.faults.pause_next("read");
+    let lookup = fixture.index.lookup_persisted(
+        &fixture.id,
+        AgentMode::Durable,
+        fixture.fingerprint,
+        horizon,
+        key,
+    );
+    let drive = async {
+        probe.entered().await;
+        let catch_up = fixture.faults.pause_next("read");
+        probe.release();
+        catch_up.entered().await;
+        interleave().await;
+        catch_up.release();
+    };
+    let (result, ()) = tokio::join!(lookup, drive);
+    result
+}
+
+/// Another writer can publish coverage above the horizon of an exact lookup after its probe saw
+/// no coverage. The lookup still answers at its horizon.
+#[test]
+#[test_r::timeout("30s")]
+async fn an_exact_lookup_answers_its_horizon_when_another_writer_advances_absent_coverage() {
+    let fixture = fixture("index-exact-absent-advanced").await;
+    let oplog = open_oplog(&fixture).await;
+    let key = session_key(&fixture, 0x0016_28a1);
+    let horizon = prepare_horizon(&fixture, &oplog, &key).await;
+    oplog.add(OplogEntry::grow_memory(7)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let writer =
+        StreamSessionIndexService::new(fixture.kv.clone(), Arc::downgrade(&fixture.oplog_service));
+
+    let status =
+        exact_lookup_with_change_after_probe(&fixture, horizon, &key.idempotency_key, async || {
+            writer
+                .lookup_latest(
+                    &fixture.id,
+                    AgentMode::Durable,
+                    fixture.fingerprint,
+                    &key.idempotency_key,
+                )
+                .await
+                .unwrap();
+        })
+        .await
+        .expect("the exact lookup answers at its horizon")
+        .expect("the session is prepared at the horizon");
+
+    assert_eq!(status.first_prepared, Some(horizon));
+}
+
+/// The coverage can become unreadable after the probe of an exact lookup read it within the
+/// horizon. The repair of the shared index then reads an unreadable entry above the horizon, and
+/// the lookup still answers at its horizon.
+#[test]
+#[test_r::timeout("30s")]
+async fn an_exact_lookup_answers_its_horizon_when_coverage_becomes_corrupt_after_the_probe() {
+    let fixture = fixture("index-exact-corrupt-after-probe").await;
+    let oplog = open_oplog(&fixture).await;
+    let key = session_key(&fixture, 0x0016_28a2);
+    let horizon = prepare_horizon(&fixture, &oplog, &key).await;
+    fixture
+        .index
+        .lookup_latest(
+            &fixture.id,
+            AgentMode::Durable,
+            fixture.fingerprint,
+            &key.idempotency_key,
+        )
+        .await
+        .unwrap();
+    let tail = oplog.add(OplogEntry::grow_memory(7)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    fixture
+        .indexed
+        .append(
+            "test",
+            "corrupt",
+            "entry",
+            IndexedStorageNamespace::OpLog {
+                owned_agent_id: fixture.id.clone(),
+                agent_mode: AgentMode::Durable,
+            },
+            &fixture.id.storage_key(),
+            u64::from(tail.next()),
+            vec![0xff, 0xff, 0xff],
+            None,
+        )
+        .await
+        .unwrap();
+    let namespace = StreamSessionIndexService::namespace(&fixture.id, fixture.fingerprint);
+
+    let status =
+        exact_lookup_with_change_after_probe(&fixture, horizon, &key.idempotency_key, async || {
+            fixture
+                .kv
+                .set(
+                    "test",
+                    "corrupt",
+                    "metadata",
+                    namespace.clone(),
+                    METADATA_FIELD,
+                    &[0xff, 0x13],
+                )
+                .await
+                .unwrap();
+        })
+        .await
+        .expect("the exact lookup answers at its horizon")
+        .expect("the session is prepared at the horizon");
+
+    assert_eq!(status.first_prepared, Some(horizon));
 }

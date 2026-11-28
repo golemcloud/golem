@@ -589,7 +589,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if probe
             .status_exact(key, Some(&request.mapping))
             .await
-            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+            .map_err(consumer_authority_error)?
             != ConsumerAttachmentStatus::Active
         {
             return Err(WorkerExecutorError::invalid_request(
@@ -638,7 +638,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && probe
                 .status_exact(key, Some(&request.mapping))
                 .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+                .map_err(consumer_authority_error)?
                 != ConsumerAttachmentStatus::Active
         {
             return Err(WorkerExecutorError::invalid_request(
@@ -997,4 +997,18 @@ pub(in crate::worker) async fn wait_for_durable_stream_retry(
     interval: Duration,
 ) -> bool {
     wait_for_durable_stream_maintenance(shutdown, std::future::pending(), Some(interval)).await
+}
+
+/// A failed read of the consumer history keeps its type, so the reader reports the failed read.
+fn consumer_authority_error(
+    error: StreamStoreError,
+) -> DurableStreamRemoteError<WorkerExecutorError> {
+    match error {
+        StreamStoreError::Unreadable(unreadable) => {
+            DurableStreamRemoteError::Unreadable(unreadable)
+        }
+        error => error
+            .into_worker_executor_error(WorkerExecutorError::runtime)
+            .into(),
+    }
 }

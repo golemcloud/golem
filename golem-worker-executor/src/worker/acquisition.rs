@@ -169,7 +169,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let worker = match Self::get_exact_existing_suspended(deps, owned_agent_id).await {
                 Ok(worker) => worker,
                 Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    return Err(
+                        match crate::services::rpc::unreadable_history(
+                            &error,
+                            &owned_agent_id.agent_id,
+                        ) {
+                            Some(unreadable) => DurableStreamRemoteError::Unreadable(unreadable),
+                            None => error.into(),
+                        },
+                    );
+                }
             };
             if worker.agent_mode() != AgentMode::Ephemeral {
                 return Ok(Some((worker, None)));

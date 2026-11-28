@@ -856,7 +856,19 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(durable_stream_segment_read_response::Result::Payload(payload)) => Ok(payload),
             Some(durable_stream_segment_read_response::Result::Error(error)) => {
-                Err(WorkerProxyError::from(error).into())
+                // A producer read that failed for a time keeps its type, so the consumer waits
+                // for it. A read that failed for good stays the failure of the request.
+                match WorkerProxyError::from(error) {
+                    WorkerProxyError::InternalError(error) => {
+                        match crate::services::rpc::unreadable_history(&error, &producer_agent_id) {
+                            Some(unreadable) if unreadable.is_transient() => {
+                                Err(DurableStreamRemoteError::Unreadable(unreadable))
+                            }
+                            _ => Err(WorkerProxyError::InternalError(error).into()),
+                        }
+                    }
+                    error => Err(error.into()),
+                }
             }
             None => Err(
                 WorkerProxyError::InternalError(WorkerExecutorError::unknown(
@@ -1992,6 +2004,39 @@ mod tests {
                         },
                     )),
                 }));
+            assert!(matches!(
+                rpc.read_durable_stream_segment(request.clone(), &AuthCtx::System)
+                    .await,
+                Err(DurableStreamRemoteError::Other(_))
+            ));
+
+            let producer_read = |error: WorkerExecutorError| {
+                Ok(DurableStreamSegmentReadResponse {
+                    result: Some(durable_stream_segment_read_response::Result::Error(
+                        AgentError {
+                            error: Some(agent_error::Error::InternalError(error.into())),
+                        },
+                    )),
+                })
+            };
+            responses.lock().unwrap().push_back(producer_read(
+                WorkerExecutorError::oplog_read_unavailable(
+                    "producer oplog storage did not answer",
+                ),
+            ));
+            assert!(matches!(
+                rpc.read_durable_stream_segment(request.clone(), &AuthCtx::System)
+                    .await,
+                Err(DurableStreamRemoteError::Unreadable(unreadable))
+                    if unreadable.agent_id == identity.agent_id && unreadable.is_transient()
+            ));
+            responses
+                .lock()
+                .unwrap()
+                .push_back(producer_read(WorkerExecutorError::oplog_failed(
+                    identity.agent_id,
+                    "producer oplog is corrupt",
+                )));
             assert!(matches!(
                 rpc.read_durable_stream_segment(request.clone(), &AuthCtx::System)
                     .await,

@@ -512,3 +512,44 @@ fn only_a_failed_read_of_another_agent_is_the_failure_of_the_call() {
     );
     assert_eq!(observed_read_failure(&observer, own.clone()), Err(own));
 }
+
+/// A cold producer or consumer whose history does not read gives the failed read with the agent
+/// whose history it is, so a durable stream reader reports the read and waits for a read that
+/// failed for a time. A failed archive write and other errors are not failed reads.
+#[test]
+fn a_failed_history_read_keeps_its_agent_and_whether_it_can_pass_later() {
+    use super::unreadable_history;
+    use golem_common::model::AgentId;
+
+    let owner = AgentId::from_parts(7, 0x0e1);
+    let resumed = AgentId::from_parts(7, 0x2e5);
+    let named = AgentId::from_parts(7, 0x7a29);
+    let transient = WorkerExecutorError::oplog_read_unavailable("storage did not answer");
+    let permanent = WorkerExecutorError::oplog_failed(named, "oplog entry 43 has version 255");
+
+    let read = unreadable_history(&transient, &owner).unwrap();
+    assert_eq!((read.agent_id, read.is_transient()), (owner, true));
+    let read = unreadable_history(
+        &WorkerExecutorError::failed_to_resume_worker(resumed, transient),
+        &owner,
+    )
+    .unwrap();
+    assert_eq!((read.agent_id, read.is_transient()), (resumed, true));
+    let read = unreadable_history(
+        &WorkerExecutorError::failed_to_resume_worker(resumed, permanent),
+        &owner,
+    )
+    .unwrap();
+    assert_eq!((read.agent_id, read.is_transient()), (named, false));
+    assert_eq!(
+        unreadable_history(
+            &WorkerExecutorError::oplog_archive_write_failed(named, "archive did not store"),
+            &owner
+        ),
+        None
+    );
+    assert_eq!(
+        unreadable_history(&WorkerExecutorError::recovery_required("replay"), &owner),
+        None
+    );
+}
