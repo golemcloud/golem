@@ -30,9 +30,9 @@ use golem_test_framework::dsl::{
     GATE_TIMEOUT, SETTLE_TIMEOUT, TestDsl, WorkerLogEventStream, within,
 };
 use golem_worker_executor_test_utils::{
-    AgentInitializationEnqueueGateHandle, LastUniqueId, OplogView, PrecompiledComponent,
-    ReplayAdmissionStage, Teardown, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_with_overrides,
+    AgentInitializationEnqueueGateHandle, ExecutorTest, LastUniqueId, OplogView,
+    PrecompiledComponent, ReplayAdmissionStage, Teardown, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -92,55 +92,6 @@ const RESTART_SETTLE: Duration = Duration::from_millis(100);
 struct ServerEvent {
     connection: usize,
     payload: String,
-}
-
-/// The context, executor and stored component that the tests in this file start with.
-struct WebsocketTest {
-    context: TestContext,
-    executor: TestWorkerExecutor,
-    component: ComponentDto,
-}
-
-impl WebsocketTest {
-    /// A fresh context, an executor with the default configuration and the stored component.
-    async fn start(
-        deps: &WorkerExecutorTestDependencies,
-        last_unique_id: &LastUniqueId,
-        component: &PrecompiledComponent,
-    ) -> anyhow::Result<Self> {
-        let context = TestContext::new(last_unique_id);
-        let executor = start(deps, &context).await?;
-        Self::with_component(context, executor, component).await
-    }
-
-    /// As [`WebsocketTest::start`], with at most `limit` connections in the executor's
-    /// websocket pool.
-    async fn start_with_connection_limit(
-        deps: &WorkerExecutorTestDependencies,
-        last_unique_id: &LastUniqueId,
-        component: &PrecompiledComponent,
-        limit: usize,
-    ) -> anyhow::Result<Self> {
-        let context = TestContext::new(last_unique_id);
-        let executor = start_with_overrides(deps, &context, connection_limit(limit)).await?;
-        Self::with_component(context, executor, component).await
-    }
-
-    async fn with_component(
-        context: TestContext,
-        executor: TestWorkerExecutor,
-        component: &PrecompiledComponent,
-    ) -> anyhow::Result<Self> {
-        let component = executor
-            .component_dep(&context.default_environment_id, component)
-            .store()
-            .await?;
-        Ok(Self {
-            context,
-            executor,
-            component,
-        })
-    }
 }
 
 /// Executor overrides that allow at most `limit` connections in the websocket pool.
@@ -421,11 +372,11 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         context,
         mut executor,
         component,
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let mut peer = ReconnectTestServer::start().await;
     let agent_id = agent_key!("WebsocketTest", "guest-discarded-loss");
     let worker_id = executor
@@ -663,11 +614,11 @@ impl ReplacementCrash {
     ) -> anyhow::Result<()> {
         let initialization = self.step == ReplacementStep::Initialization;
         let after_end = self.after_end;
-        let WebsocketTest {
+        let ExecutorTest {
             mut executor,
             component,
             ..
-        } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+        } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
         let mut original = ReconnectTestServer::start().await;
         let mut replacement = ReconnectTestServer::start().await;
         let agent_id = agent_key!(
@@ -819,11 +770,17 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut peer = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "exact-loss-prefixes").await?;
     let greeting: String = executor
@@ -1317,11 +1274,11 @@ async fn websocket_report_loss_preserves_live_disconnect_and_recorded_close(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         mut executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     for closed in [false, true] {
         let mut peer = ReconnectTestServer::start().await;
         let agent_id = agent_key!("WebsocketTest", format!("closed-{closed}"));
@@ -1383,11 +1340,11 @@ async fn websocket_default_policy_reports_session_loss_after_restart(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         mut executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     for first_access in [
         "receive_next_from_persisted_result",
         "send_persisted_result",
@@ -1464,11 +1421,11 @@ async fn websocket_reconstruction_policies_are_independent_in_one_worker(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let mut report_peer = ReconnectTestServer::start().await;
     let mut automatic_peer = ReconnectTestServer::start().await;
     let agent_id = agent_key!("WebsocketTest", "independent-policies");
@@ -1531,11 +1488,11 @@ async fn websocket_report_loss_effect_joins_initialization_before_replacement(
     _tracing: &Tracing,
     #[tagged_as("tool_streaming_effect_caller")] caller: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, caller).await?;
+    } = ExecutorTest::start(deps, last_unique_id, caller).await?;
     let mut old_peer = ReconnectTestServer::start().await;
     let mut replacement_peer = ReconnectTestServer::start().await;
     let agent_id = agent_key!("WebsocketRecoveryProbe", "effect-real-loss");
@@ -1630,11 +1587,11 @@ async fn websocket_report_loss_ts_public_wrapper_replacement(
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, agent_sdk_ts).await?;
+    } = ExecutorTest::start(deps, last_unique_id, agent_sdk_ts).await?;
     let mut old_peer = ReconnectTestServer::start().await;
     let mut replacement_peer = ReconnectTestServer::start().await;
     let agent_id = agent_key!("WebSocketTest", "public-wrapper-loss");
@@ -1700,11 +1657,17 @@ async fn websocket_report_loss_absorbs_repeated_restart_without_pool_io(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         mut executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut peer = ReconnectTestServer::start().await;
     let agent_id = agent_key!("WebsocketTest", "report-loss-restarts");
     executor
@@ -1808,11 +1771,11 @@ async fn websocket_report_loss_pending_receives_after_restart(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let mut peer = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "report-loss-pending").await?;
     executor
@@ -2154,11 +2117,11 @@ async fn websocket_receives_on_two_sockets_replay_to_their_own_socket_after_cras
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     for (name, claim_order) in [
         ("two-sockets-natural", TwoSocketClaimOrder::Natural),
         ("two-sockets-reversed", TwoSocketClaimOrder::Reversed),
@@ -2178,11 +2141,11 @@ async fn websocket_echo_rust(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let peer = TestPeer::start(Accept::Once, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "ws-echo-test");
     let worker_id = executor
@@ -2214,11 +2177,11 @@ async fn websocket_echo_rust_oplog_replay(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     // The second invocation after the restart connects live again, so the peer keeps
     // accepting.
     let peer = TestPeer::start(Accept::Serially, PeerScript::Echo).await;
@@ -2268,11 +2231,11 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         context,
         executor,
         component,
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let peer = TestPeer::start(Accept::Concurrently, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "ws-phase2-reconnect");
     let worker_id = executor
@@ -2359,11 +2322,11 @@ async fn websocket_reconnect_failure_returns_guest_error(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         context,
         executor,
         component,
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let peer = TestPeer::start(Accept::Concurrently, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "ws-reconnect-failure");
     let worker_id = executor
@@ -2427,11 +2390,11 @@ async fn websocket_closed_connection_stays_terminal_after_replay(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let peer = TestPeer::start(Accept::Concurrently, PeerScript::SendThenClose("msg-0")).await;
     let agent_id = agent_key!("WebsocketTest", "ws-terminal-close-replay");
     let worker_id = executor
@@ -2483,11 +2446,11 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let peer = TestPeer::start(Accept::Concurrently, PeerScript::SendThenDrain("msg-0")).await;
     let agent_id = agent_key!("WebsocketTest", "ws-close-terminal-replay");
     let worker_id = executor
@@ -2625,11 +2588,11 @@ async fn websocket_receive_with_timeout(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let peer = TestPeer::start(Accept::Once, PeerScript::Drain).await;
     let agent_id = agent_key!("WebsocketTest", "ws-timeout-test");
     let worker_id = executor
@@ -2661,11 +2624,11 @@ async fn websocket_polling_test(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let message = "Hello from polling test";
     let peer = TestPeer::start(
         Accept::Once,
@@ -2705,11 +2668,11 @@ async fn websocket_polling_survives_repeated_timeouts(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     let message = "delayed polling message";
     // The delay outlasts several of the guest's 10 ms poll timeouts.
     let peer = TestPeer::start(
@@ -2750,11 +2713,11 @@ async fn websocket_async_bidirectional_test(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     // The echo peer serves several inbound and outbound messages on one connection.
     let peer = TestPeer::start(Accept::Once, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "websocket-async-bidi-test");
@@ -2787,11 +2750,11 @@ async fn websocket_async_bidirectional_test_oplog_replay(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    } = ExecutorTest::start(deps, last_unique_id, host_api_tests).await?;
     // The second invocation after the restart runs live again, so the peer keeps accepting.
     let peer = TestPeer::start(Accept::Serially, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "websocket-async-bidi-oplog-replay");
@@ -2836,11 +2799,11 @@ async fn websocket_echo_ts(
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start(deps, last_unique_id, agent_sdk_ts).await?;
+    } = ExecutorTest::start(deps, last_unique_id, agent_sdk_ts).await?;
     let peer = TestPeer::start(Accept::Once, PeerScript::Echo).await;
     let agent_id = agent_key!("WebSocketTest", "ws-echo-test");
     let worker_id = executor
@@ -3754,11 +3717,17 @@ async fn websocket_reconnect_concurrent_receives_complete_after_reconstruction(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut ws_server = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-contention").await?;
     connect_persisted_handle(&executor, &agent, &ws_server).await?;
@@ -3850,11 +3819,17 @@ async fn websocket_reconnect_coordination_admits_one_accessor_reconnect(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut ws_server = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-coordinate").await?;
     connect_persisted_handle(&executor, &agent, &ws_server).await?;
@@ -3946,11 +3921,17 @@ async fn websocket_reconnect_coordination_after_executor_restart(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut ws_server = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-restart").await?;
     connect_persisted_handle(&executor, &agent, &ws_server).await?;
@@ -4028,11 +4009,17 @@ async fn websocket_reconnect_coordination_with_spare_pool_permits(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 2).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(2),
+    )
+    .await?;
     let mut ws_server = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-spare").await?;
     connect_persisted_handle(&executor, &agent, &ws_server).await?;
@@ -4108,11 +4095,17 @@ async fn websocket_reconnect_failure_publishes_terminal_outcome(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut ws_server = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-terminal").await?;
     connect_persisted_handle(&executor, &agent, &ws_server).await?;
@@ -4208,11 +4201,17 @@ async fn websocket_reconnect_coordination_is_per_handle(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 2).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(2),
+    )
+    .await?;
     let mut ws_server_a = ReconnectTestServer::start().await;
     let mut ws_server_b = ReconnectTestServer::start().await;
     let agent_a = WebsocketAgent::start(&executor, &component, "ws-reconnect-per-handle-a").await?;
@@ -4354,11 +4353,17 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut ws_server = ReconnectTestServer::start().await;
     let agent =
         WebsocketAgent::start(&executor, &component, "ws-reconnect-interruptible-pool").await?;
@@ -4462,11 +4467,17 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_hand
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut ws_server = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-interruptible").await?;
     connect_persisted_handle(&executor, &agent, &ws_server).await?;
@@ -4597,11 +4608,17 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     let mut ws_server = ReconnectTestServer::start().await;
     let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-direct-send").await?;
     connect_persisted_handle(&executor, &agent, &ws_server).await?;
@@ -4743,11 +4760,17 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let WebsocketTest {
+    let ExecutorTest {
         executor,
         component,
         ..
-    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
+    } = ExecutorTest::start_with_overrides(
+        deps,
+        last_unique_id,
+        host_api_tests,
+        connection_limit(1),
+    )
+    .await?;
     // Close does not read unsolicited greetings on the reconnected transport.
     let mut ws_server = ReconnectTestServer::start_with_reconnect_messages(&[]).await;
     let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-direct-close").await?;

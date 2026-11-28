@@ -26,6 +26,7 @@ pub mod component_writer;
 pub mod dsl_impl;
 pub mod emulated_registry_service;
 pub mod emulated_worker_service;
+pub mod executor_test;
 pub mod invocation_session;
 pub mod local_http_server;
 pub mod oplog_shape;
@@ -44,6 +45,7 @@ pub use emulated_registry_service::EmulatedRegistryService;
 pub use emulated_worker_service::{
     EmulatedWorkerService, RecordedCardTransfer, RemoteRpcEvidence, WorkerServiceOptions,
 };
+pub use executor_test::ExecutorTest;
 pub use golem_test_framework::assert_worker_error;
 pub use golem_test_framework::dsl::invocation_error::{InvocationError, InvocationErrorExt};
 pub use golem_test_framework::dsl::invocation_session::{
