@@ -14,7 +14,7 @@ runs:
     - uses: ./.validation-control/.github/actions/setup-js-wasm-tools
       with:
         node-version: '24'
-        wasm-rquickjs-version: '0.5.5'
+        wasm-rquickjs-version: '0.5.6'
         install-cargo-component: 'true'
     - uses: oven-sh/setup-bun@v2
     - name: Install validation tooling for selected and control sources

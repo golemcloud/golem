@@ -60,7 +60,7 @@ pub async fn execute_build_command(
             execute_inject_to_prebuilt_quick_js(ctx, &base_build_dir, command)
         }
         app_raw::BuildCommand::PreinitializeJs(command) => {
-            execute_preinitialize_js(ctx, &base_build_dir, command).await
+            execute_preinitialize_js(ctx, component_name, &base_build_dir, command).await
         }
     }
 }
@@ -114,6 +114,7 @@ fn execute_inject_to_prebuilt_quick_js(
 
 async fn execute_preinitialize_js(
     ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
     base_build_dir: &Path,
     command: &PreinitializeJs,
 ) -> anyhow::Result<()> {
@@ -145,6 +146,7 @@ async fn execute_preinitialize_js(
                     .with_context(|| format!("Failed to read JS module from {js_module}"))?;
                 fs::create_dir_all(fs::parent_or_err(output.as_std_path())?)?;
                 let result = golem_common::javascript::preinitialize_js(
+                    component_name,
                     &input,
                     &output,
                     source,
