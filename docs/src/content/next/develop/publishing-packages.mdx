@@ -79,6 +79,39 @@ registries, which use anonymous HTTP. Archive URLs are fetched anonymously and
 must use HTTPS except on loopback. Do not include credentials, a query string,
 or a fragment in the archive URL.
 
+### OCI package signers
+
+Sign the published manifest digest, not a tag, with a Cosign 3 signing key.
+For example, to sign without a transparency log or timestamp service:
+
+```shell
+cosign signing-config create --out signing-config.json
+cosign sign --key publisher.key --signing-config signing-config.json \
+  ghcr.io/example/my-package@sha256:<manifest-digest>
+```
+
+`golem install` reads Cosign v0.3 bundles from OCI referrers and reports signer
+results on stderr. It verifies the signature with a public key from its bundled
+trust store, which contains only the Golem signing key. Rotating that key
+requires a new CLI release. Golem does not trust keys or identities supplied by
+the registry.
+
+Use `golem install --trust-store ./signers.pem <source>` to replace the bundled
+store for one invocation. The file contains one or more `PUBLIC KEY` PEM blocks,
+such as the contents of `cosign.pub`. To trust multiple keys, concatenate their
+PEM blocks in the same file. To keep trusting Golem with an override, include the
+Golem public key from the bundled store in your file. After verification, Golem
+shows the SHA-256 fingerprint of the matching DER-encoded public key (SPKI).
+Golem uses Sigstore's default signing scheme for each key type and does not fetch
+keys from URLs in the store or bundle.
+Golem does not validate certificates or check revocation. To stop trusting a key,
+remove it from the selected store.
+
+Signatures are informational. They never change package resolution, pins, or
+permissions, and an unsigned or unverifiable package can still install. Package
+integrity checks always apply. Install does not discover signatures for local
+archives or archive URLs.
+
 Build uses a verified archive from the per-user cache or fetches the source on a
 cache miss. For OCI it requests the locked manifest digest, never the tag, so
 the registry must retain that digest even after the tag moves. For a URL it

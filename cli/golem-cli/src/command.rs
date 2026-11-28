@@ -704,6 +704,9 @@ pub enum GolemCliSubcommand {
     Install {
         /// Archive path, HTTP(S) URL, or oci:// registry reference
         source: String,
+        /// Replace the bundled OCI signer trust store with this PEM public key file
+        #[arg(long, value_name = "PATH")]
+        trust_store: Option<PathBuf>,
     },
     /// Preview a package's OCI manifest digest and omitted exports without contacting a server
     Publish {
