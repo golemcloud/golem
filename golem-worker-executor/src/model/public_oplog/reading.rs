@@ -14,7 +14,9 @@
 
 use super::*;
 use crate::services::golem_config::ScanBudget;
-use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
+use golem_common::model::oplog::{
+    OplogCursor, OplogRange, OplogScan, OplogScanAllowance, OplogSearchResume,
+};
 use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::time::{Duration, Instant};
 
@@ -141,9 +143,10 @@ pub async fn get_public_oplog_chunk(
 }
 
 /// Reads an oplog page for a remote reader. The page omits entries that are larger than
-/// `limits.max_entry_bytes`, and ends early when the next entry does not fit in
-/// `limits.max_bytes`. The entries hold claims only with `ClaimVisibility::Shown`, so only claims
-/// that the reader asked for count against the limits.
+/// `limits.max_entry_bytes`, and ends early when the next entry does not fit in `limits.max_bytes`.
+/// The entries hold claims only with `ClaimVisibility::Shown`, so only claims that the reader asked
+/// for count against the limits. The page reports the last index of the oplog. Use
+/// [`get_public_oplog_range_page`] for a read with an end.
 pub async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -343,7 +346,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 
 /// Searches the oplog for a guest. The search reads no entry after `last_oplog_index`; the guest
 /// passes the `last_index` of its first result, so that its own entries, which every page adds,
-/// do not move the end of the search.
+/// do not move the end of the search. A search from after `last_oplog_index` reads no entry and
+/// gives an empty result, which tells the guest that the search is at its end.
 pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -360,6 +364,23 @@ pub async fn search_public_oplog(
     budget: ScanBudget,
     claims: ClaimVisibility,
 ) -> Result<PublicOplogSearchResult, String> {
+    let scan = RangeScan::within(budget);
+    let query = Query::parse(query)?;
+    let range = match OplogRange::new(Some(initial_oplog_index), last_oplog_index) {
+        Ok(range) => range,
+        Err(ends_before_start) => {
+            let last_index = oplog_service
+                .get_last_index(owned_agent_id, agent_mode)
+                .await
+                .map_err(|error| error.to_string())?;
+            return Ok(PublicOplogSearchResult {
+                entries: Vec::new(),
+                next_oplog_index: initial_oplog_index.max(OplogIndex::INITIAL),
+                current_component_revision: initial_component_revision,
+                last_index: ends_before_start.end().min(last_index),
+            });
+        }
+    };
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -369,21 +390,40 @@ pub async fn search_public_oplog(
         owner_kind,
         agent_type_name,
         initial_component_revision,
-        initial_oplog_index,
-        last_oplog_index,
+        range,
         count,
-        query,
-        budget,
+        &query,
+        scan,
         claims,
         InProcessChunk,
     )
     .await
 }
 
-/// Searches the oplog for a remote reader. The result is an oplog page with the limits of
-/// `get_public_oplog_page`; only the matching entries count against the limits. The search
-/// stops early when `budget` is spent.
-pub async fn search_public_oplog_page(
+/// An oplog search page for a remote reader.
+#[derive(Debug)]
+pub struct PublicOplogSearchPage {
+    pub entries: Vec<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+    /// The cursor of the next page; `None` when the search reached the end of its range.
+    pub next: Option<OplogCursor>,
+    /// The last index of the range in the oplog.
+    pub last_index: OplogIndex,
+}
+
+/// Searches one page of `range` for a remote reader, from `cursor`. The page has the limits of
+/// [`get_public_oplog_page`]; only the matching entries count against the limits.
+///
+/// `budget` covers the whole call. A search of a range with a start first scans the oplog before
+/// the start for the component revision at the start. That scan counts against `budget`. When
+/// the budget runs out before the scan reaches the start, the page is empty. Its cursor then
+/// continues the scan, and holds the start of the range as its `scan_to`. Each call reads at least
+/// one entry before it checks the budget, so each cursor is after the cursor of the request.
+///
+/// A range that holds no index of the oplog gives an empty page without a cursor, before any
+/// scan. A cursor that points past the last entry of the oplog is stale, as for
+/// [`oplog_page_start`].
+#[allow(clippy::too_many_arguments)]
+pub async fn search_public_oplog_remote(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -391,14 +431,83 @@ pub async fn search_public_oplog_page(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    initial_component_revision: ComponentRevision,
-    initial_oplog_index: OplogIndex,
+    cursor: Option<OplogCursor>,
+    range: OplogRange,
     limits: PublicOplogPageLimits,
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
-    search_public_oplog_with(
+) -> Result<PublicOplogSearchPage, WorkerExecutorError> {
+    let mut scan = RangeScan::within(budget);
+    let parsed_query = Query::parse(query).map_err(WorkerExecutorError::unknown)?;
+    let last = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await?;
+    let (resume, revision) = match &cursor {
+        None => (
+            OplogSearchResume::Scan {
+                next: OplogIndex::INITIAL,
+                range,
+            },
+            ComponentRevision::INITIAL,
+        ),
+        Some(cursor) => {
+            let resume = range
+                .resume_search(cursor)
+                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            (resume, oplog_cursor_revision(owned_agent_id, cursor, last)?)
+        }
+    };
+    let range = match resume {
+        OplogSearchResume::Scan { range, .. } | OplogSearchResume::Read(range) => range,
+    };
+    let empty = |next: Option<OplogCursor>| PublicOplogSearchPage {
+        entries: Vec::new(),
+        next,
+        last_index: range.last_index_in(last),
+    };
+    if range.is_empty_in(last) {
+        return Ok(empty(None));
+    }
+    let start = range.first_index_in(OplogIndex::INITIAL);
+    let revision = match resume {
+        OplogSearchResume::Read(_) => revision,
+        OplogSearchResume::Scan { next, .. } => {
+            let scanned = scan_component_revision_from(
+                oplog_service.clone(),
+                owned_agent_id,
+                agent_mode,
+                next,
+                revision,
+                start.min(last.next()),
+                1,
+                &mut scan,
+            )
+            .await?;
+            match scanned {
+                RevisionScan::Found(revision) => {
+                    if scan.scanned > 0 && scan.is_spent() {
+                        return Ok(empty(oplog_page_cursor(
+                            start,
+                            revision,
+                            range.last_index_in(last),
+                            Some(query),
+                        )));
+                    }
+                    revision
+                }
+                RevisionScan::Spent { next, revision } => {
+                    return Ok(empty(Some(OplogCursor {
+                        next_oplog_index: next.as_u64(),
+                        current_component_revision: revision.into(),
+                        query_hash: OplogCursor::query_hash(Some(query)),
+                        scan_to: Some(start.as_u64()),
+                    })));
+                }
+            }
+        }
+    };
+    let chunk = search_public_oplog_with(
         component_service,
         oplog_service,
         owned_agent_id,
@@ -406,24 +515,35 @@ pub async fn search_public_oplog_page(
         owner_component_id,
         owner_kind,
         agent_type_name,
-        initial_component_revision,
-        initial_oplog_index,
-        None,
+        revision,
+        range,
         limits.count,
-        query,
-        budget,
+        &parsed_query,
+        scan,
         claims,
         RemotePage::new(limits),
     )
     .await
+    .map_err(WorkerExecutorError::unknown)?;
+    Ok(PublicOplogSearchPage {
+        next: oplog_page_cursor(
+            chunk.next_oplog_index,
+            chunk.current_component_revision,
+            chunk.last_index,
+            Some(query),
+        ),
+        entries: chunk.entries,
+        last_index: chunk.last_index,
+    })
 }
 
-/// Searches the oplog from `initial_oplog_index` until the result holds `count` matches, the page
-/// is full, the oplog or `last_oplog_index` ends the search, or `budget` is spent. The budget
-/// counts the oplog entries that the search reads, matching or not, and the time since the call
-/// started. Each chunk reads at most as many entries as the result still needs matches, so the
-/// result never holds more than `count` matches. A search always reads at least one chunk, and
-/// the result points to the first entry it did not read.
+/// Searches the oplog from the first index of `range`. The search stops when the result holds
+/// `count` matches or the page is full. It also stops at the end of the oplog, at the end of
+/// `range`, or when `scan` is spent. The scan counts the oplog entries that the search reads,
+/// matching or not, and the time since the scan started. The caller can charge other reads of the
+/// same call to `scan` first. Each chunk reads at most as many entries as the result still needs
+/// matches, so the result never holds more than `count` matches. A search always reads at least
+/// one chunk, and the result points to the first entry it did not read.
 #[allow(clippy::too_many_arguments)]
 async fn search_public_oplog_with<B: ChunkBuilder>(
     component_service: Arc<dyn ComponentService>,
@@ -434,30 +554,25 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
-    initial_oplog_index: OplogIndex,
-    last_oplog_index: Option<OplogIndex>,
+    range: OplogRange,
     count: usize,
-    query: &str,
-    budget: ScanBudget,
+    query: &Query,
+    mut scan: RangeScan,
     claims: ClaimVisibility,
     mut builder: B,
 ) -> Result<PublicOplogSearchResult<B::Entry>, String> {
-    let started = Instant::now();
-    let mut scanned = 0u64;
     let mut results = Vec::new();
     let mut last_index;
-    let mut current_index = initial_oplog_index;
+    let mut current_index = range.first_index_in(OplogIndex::INITIAL);
     let mut current_component_revision = initial_component_revision;
 
-    let query = Query::parse(query)?;
-
     loop {
-        let to_last = last_oplog_index.map_or(u64::MAX, |last| {
-            (last.as_u64() + 1).saturating_sub(current_index.as_u64())
-        });
-        let chunk_size = (count.saturating_sub(results.len()) as u64)
-            .min(budget.remaining_entries(scanned))
-            .min(to_last) as usize;
+        let chunk_size = range.page_count(
+            current_index,
+            u64::try_from(count.saturating_sub(results.len()))
+                .unwrap_or(u64::MAX)
+                .min(scan.remaining_entries()),
+        );
         let (chunk, page_full) = read_public_oplog_chunk(
             component_service.clone(),
             oplog_service.clone(),
@@ -469,7 +584,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
             current_component_revision,
             current_index,
             chunk_size,
-            Some(&query),
+            Some(query),
             claims,
             &mut builder,
         )
@@ -477,16 +592,12 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
 
         results.extend(chunk.entries);
 
-        scanned += chunk.next_oplog_index.as_u64() - current_index.as_u64();
-        last_index = last_oplog_index.map_or(chunk.last_index, |last| last.min(chunk.last_index));
+        scan.charge(chunk.next_oplog_index.as_u64() - current_index.as_u64());
+        last_index = range.last_index_in(chunk.last_index);
         current_index = chunk.next_oplog_index;
         current_component_revision = chunk.current_component_revision;
 
-        if page_full
-            || current_index > last_index
-            || results.len() >= count
-            || budget.is_spent(scanned, started)
-        {
+        if page_full || current_index > last_index || results.len() >= count || scan.is_spent() {
             break;
         }
     }
@@ -555,32 +666,114 @@ async fn scan_component_revision(
     Ok(Some(initial_component_revision))
 }
 
+/// Where a scan for the component revision stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RevisionScan {
+    /// The scan reached its end. The revision is in effect at the end.
+    Found(ComponentRevision),
+    /// The allowance ran out before the end. `revision` is in effect at `next`, the first entry
+    /// that the scan did not read.
+    Spent {
+        next: OplogIndex,
+        revision: ComponentRevision,
+    },
+}
+
+/// A position of a scan for the component revision: `revision` is in effect at `next`, the first
+/// entry that the scan did not read.
+#[derive(Debug, Clone, Copy)]
+struct RevisionScanAt {
+    next: OplogIndex,
+    revision: ComponentRevision,
+}
+
+/// Scans the oplog entries from `next` to before `end` for the component revision in effect at
+/// `end`. `revision` is in effect at `next`. The scan charges the entries that it reads to `scan`.
+/// It reads at least `at_least` entries before it checks the allowance, or all entries up to
+/// `end` when they are fewer. After that, it checks the allowance before each batch.
+#[allow(clippy::too_many_arguments)]
+async fn scan_component_revision_from(
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    next: OplogIndex,
+    revision: ComponentRevision,
+    end: OplogIndex,
+    at_least: u64,
+    scan: &mut RangeScan,
+) -> Result<RevisionScan, WorkerExecutorError> {
+    use futures::TryStreamExt;
+    const BATCH_SIZE: u64 = 256;
+    let start = RevisionScanAt { next, revision };
+    // Each item is the position after one batch. The batches stop at `end`, or when the allowance
+    // is spent after the first `at_least` entries.
+    let batches = futures::stream::try_unfold((start, scan), move |(at, scan)| {
+        let oplog_service = oplog_service.clone();
+        async move {
+            let required = at_least.saturating_sub(at.next.as_u64() - start.next.as_u64());
+            if at.next >= end || (required == 0 && scan.is_spent()) {
+                return Ok(None);
+            }
+            let count = (end.as_u64() - at.next.as_u64())
+                .min(BATCH_SIZE)
+                .min(scan.remaining_entries().max(required));
+            let revision = oplog_service
+                .read_exact(owned_agent_id, agent_mode, at.next, count)
+                .await?
+                .into_values()
+                .filter_map(|entry| entry.specifies_component_revision())
+                .next_back()
+                .unwrap_or(at.revision);
+            scan.charge(count);
+            let after = RevisionScanAt {
+                next: OplogIndex::from_u64(at.next.as_u64() + count),
+                revision,
+            };
+            Ok::<_, WorkerExecutorError>(Some((after, (after, scan))))
+        }
+    });
+    let last = batches
+        .try_fold(start, |_, after| std::future::ready(Ok(after)))
+        .await?;
+    Ok(if last.next >= end {
+        RevisionScan::Found(last.revision)
+    } else {
+        RevisionScan::Spent {
+            next: last.next,
+            revision: last.revision,
+        }
+    })
+}
+
 /// The allowance of an oplog range read, and what the read charged to it so far. The time runs
 /// from the creation of the scan.
 struct RangeScan {
-    limit: OplogScanAllowance,
+    entries: u64,
+    time: Duration,
     started: Instant,
     scanned: u64,
 }
 
 impl RangeScan {
-    fn new(limit: OplogScanAllowance) -> Self {
+    fn new(entries: u64, time: Duration) -> Self {
         Self {
-            limit,
+            entries,
+            time,
             started: Instant::now(),
             scanned: 0,
         }
     }
 
     fn unlimited() -> Self {
-        Self::new(OplogScanAllowance {
-            entries: u64::MAX,
-            millis: u64::MAX,
-        })
+        Self::new(u64::MAX, Duration::MAX)
+    }
+
+    fn within(budget: ScanBudget) -> Self {
+        Self::new(budget.entries.get(), budget.time)
     }
 
     fn remaining_entries(&self) -> u64 {
-        self.limit.entries.saturating_sub(self.scanned)
+        self.entries.saturating_sub(self.scanned)
     }
 
     fn charge(&mut self, entries: u64) {
@@ -592,13 +785,15 @@ impl RangeScan {
     }
 
     fn is_spent(&self) -> bool {
-        self.scanned >= self.limit.entries
-            || self.started.elapsed() >= Duration::from_millis(self.limit.millis)
+        self.scanned >= self.entries || self.started.elapsed() >= self.time
     }
 
     fn report(&self, exhausted: bool) -> OplogScan {
         OplogScan {
-            limit: self.limit,
+            limit: OplogScanAllowance {
+                entries: self.entries,
+                millis: u64::try_from(self.time.as_millis()).unwrap_or(u64::MAX),
+            },
             charged_entries: self.scanned,
             charged_millis: self.elapsed_millis(),
             exhausted,
@@ -610,46 +805,27 @@ impl RangeScan {
 pub struct PublicOplogRangePage {
     pub entries: Vec<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
     /// The cursor of the next page of the range; `None` when the page reached the end of the
-    /// range, or when the allowance ran out before the read found the component revision at the
-    /// start of the range.
+    /// range, or when an explicit allowance ran out before the read found the component revision
+    /// at the start of the range.
     pub next: Option<OplogCursor>,
     pub first_index_in_chunk: OplogIndex,
     pub last_index: OplogIndex,
     pub scan: OplogScan,
 }
 
-/// The allowance of a range read: `requested`, or `configured` without one, clamped to
-/// `configured`. An executor never grants more than its own configured allowance, so a reader
-/// that passes on what is left of its allowance gets no fresh allowance from a retry or another
-/// executor.
-pub fn oplog_range_allowance(
-    requested: Option<OplogScanAllowance>,
-    configured: ScanBudget,
-) -> OplogScanAllowance {
-    let configured_millis = u64::try_from(configured.time.as_millis()).unwrap_or(u64::MAX);
-    match requested {
-        Some(requested) => OplogScanAllowance {
-            entries: requested.entries.min(configured.entries.get()),
-            millis: requested.millis.min(configured_millis),
-        },
-        None => OplogScanAllowance {
-            entries: configured.entries.get(),
-            millis: configured_millis,
-        },
-    }
-}
-
-/// Reads one oplog page of the range from `from` to `to`, inclusive, for a remote reader, within
-/// `allowance`. The page has the limits of [`get_public_oplog_page`], and reads no entry after
-/// `to`.
+/// Reads one oplog page of the closed range for a remote reader. The page has the limits of
+/// [`get_public_oplog_page`] and the configured scan budget. An explicit `allowance` can lower
+/// the budget for a reader that shares one allowance across pages.
 ///
 /// The allowance covers the entries that the read reads to find the component revision at
 /// `from`, when it has no cursor, and the entries that it reads for the page, also those that the
 /// byte limit of the page leaves out. The read checks it between storage batches, so a batch can
 /// take it past its limit, as the scan budget of a search can.
 /// When the allowance runs out before the end of the range, the page reports `exhausted`; a page
-/// that reaches the end of the range is complete, also when it spent the allowance. A cursor
-/// continues the range where the page stopped; it must be within the range.
+/// that reaches the end of the range is complete, also when it spent the allowance. A page with
+/// the default budget makes progress and can return a cursor for an unfinished revision scan.
+/// A reader with an explicit allowance gets no cursor if it spends the allowance in that scan.
+/// The `last_index` of the page is the last index of the oplog, not of the range.
 #[allow(clippy::too_many_arguments)]
 pub async fn get_public_oplog_range_page(
     components: Arc<dyn ComponentService>,
@@ -660,54 +836,42 @@ pub async fn get_public_oplog_range_page(
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
     cursor: Option<OplogCursor>,
-    from: OplogIndex,
-    to: OplogIndex,
+    range: OplogRange,
     limits: PublicOplogPageLimits,
-    allowance: OplogScanAllowance,
+    allowance: Option<OplogScanAllowance>,
+    budget: ScanBudget,
     claims: ClaimVisibility,
 ) -> Result<PublicOplogRangePage, WorkerExecutorError> {
-    let mut scan = RangeScan::new(allowance);
-    let from = from.max(OplogIndex::INITIAL);
-    if to < from {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "the oplog range ends at {to}, before its start {from}"
-        )));
-    }
-    if let Some(cursor) = &cursor
-        && (cursor.next_oplog_index < from.as_u64() || cursor.next_oplog_index > to.as_u64())
-    {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "the oplog cursor {cursor} is outside the range from {from} to {to}"
-        )));
-    }
-    let (start, revision) = match cursor {
-        Some(cursor) => {
-            let (start, revision) = oplog_page_start(
-                oplog_service.clone(),
-                owned_agent_id,
-                agent_mode,
-                Some(cursor),
-                from,
-            )
-            .await?;
-            (start, Some(revision))
+    let mut scan = match allowance {
+        Some(allowance) => RangeScan::new(
+            budget.entries.get().min(allowance.entries),
+            budget.time.min(Duration::from_millis(allowance.millis)),
+        ),
+        None => RangeScan::within(budget),
+    };
+    let resume = match &cursor {
+        Some(cursor) => match allowance {
+            Some(_) => range.resume(cursor).map(OplogSearchResume::Read),
+            None => range.resume_search(cursor),
         }
-        None => {
-            let revision = scan_component_revision(
-                oplog_service.clone(),
-                owned_agent_id,
-                agent_mode,
-                from,
-                &mut scan,
-            )
-            .await?;
-            (from, revision)
-        }
+        .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
+        None => OplogSearchResume::Scan {
+            next: OplogIndex::INITIAL,
+            range,
+        },
     };
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await?;
-    let end = to.min(last_index);
+    let revision = match &cursor {
+        Some(cursor) => oplog_cursor_revision(owned_agent_id, cursor, last_index)?,
+        None => ComponentRevision::INITIAL,
+    };
+    let range = match resume {
+        OplogSearchResume::Scan { range, .. } | OplogSearchResume::Read(range) => range,
+    };
+    let start = range.first_index_in(OplogIndex::INITIAL);
+    let end = range.last_index_in(last_index);
     let empty = |next: Option<OplogCursor>, scan: OplogScan| PublicOplogRangePage {
         entries: Vec::new(),
         next,
@@ -715,19 +879,50 @@ pub async fn get_public_oplog_range_page(
         last_index,
         scan,
     };
-    let Some(revision) = revision else {
-        return Ok(empty(None, scan.report(true)));
+    if start > end && cursor.is_some() {
+        return Err(stale_oplog_cursor(owned_agent_id, start, last_index));
+    }
+    let cursor_at = |next: OplogIndex, revision: ComponentRevision, scan_to| OplogCursor {
+        next_oplog_index: next.as_u64(),
+        current_component_revision: revision.into(),
+        query_hash: OplogCursor::query_hash(None),
+        scan_to,
+    };
+    let scan_end = if start > last_index {
+        last_index.next()
+    } else {
+        start
+    };
+    let revision = match resume {
+        OplogSearchResume::Read(_) => revision,
+        OplogSearchResume::Scan { next, .. } => match scan_component_revision_from(
+            oplog_service.clone(),
+            owned_agent_id,
+            agent_mode,
+            next,
+            revision,
+            scan_end,
+            u64::from(allowance.is_none()),
+            &mut scan,
+        )
+        .await?
+        {
+            RevisionScan::Found(revision) => revision,
+            RevisionScan::Spent { next, revision } => {
+                let next = (allowance.is_none() && start <= end)
+                    .then(|| cursor_at(next, revision, Some(start.as_u64())));
+                return Ok(empty(next, scan.report(true)));
+            }
+        },
     };
     if start > end {
         return Ok(empty(None, scan.report(false)));
     }
-    let cursor_at = |next: OplogIndex, revision: ComponentRevision| OplogCursor {
-        next_oplog_index: next.as_u64(),
-        current_component_revision: revision.into(),
-        query_hash: OplogCursor::query_hash(None),
-    };
-    if scan.is_spent() {
-        return Ok(empty(Some(cursor_at(start, revision)), scan.report(true)));
+    if scan.is_spent() && (allowance.is_some() || scan.scanned > 0) {
+        return Ok(empty(
+            Some(cursor_at(start, revision, None)),
+            scan.report(true),
+        ));
     }
 
     let count = (limits.count as u64)
@@ -757,8 +952,13 @@ pub async fn get_public_oplog_range_page(
     let complete = chunk.next_oplog_index > end;
     Ok(PublicOplogRangePage {
         entries: chunk.entries,
-        next: (!complete)
-            .then(|| cursor_at(chunk.next_oplog_index, chunk.current_component_revision)),
+        next: (!complete).then(|| {
+            cursor_at(
+                chunk.next_oplog_index,
+                chunk.current_component_revision,
+                None,
+            )
+        }),
         first_index_in_chunk: chunk.first_index_in_chunk,
         last_index,
         scan: scan.report(!complete && scan.is_spent()),
@@ -766,8 +966,8 @@ pub async fn get_public_oplog_range_page(
 }
 
 /// The cursor of an oplog page of `query` whose next unread entry is `next_oplog_index`. A page has
-/// a cursor if and only if the oplog has entries after the page, also when the page itself is
-/// empty because a search spent its scan budget before any match.
+/// a cursor if and only if the oplog has entries after the page within its range. This is also true
+/// when the page itself is empty, because a search spent its scan budget before any match.
 pub fn oplog_page_cursor(
     next_oplog_index: OplogIndex,
     current_component_revision: ComponentRevision,
@@ -778,6 +978,7 @@ pub fn oplog_page_cursor(
         next_oplog_index: next_oplog_index.as_u64(),
         current_component_revision: current_component_revision.into(),
         query_hash: OplogCursor::query_hash(query),
+        scan_to: None,
     })
 }
 
@@ -802,24 +1003,30 @@ pub fn check_oplog_cursor_query(
     }
 }
 
-/// Where a paged oplog read starts, and the component revision to decode its first entry with:
-/// the cursor of the previous page, or else `from` with the revision in effect there. The caller
-/// checks the query of the cursor first, with [`check_oplog_cursor_query`].
+/// The first index of a paged read and its component revision. With the cursor of the previous
+/// page, the first index is the cursor's next index. Without a cursor, it is the start of `range`,
+/// and the revision is the one in effect there. The caller
+/// checks the query of the cursor first, with [`check_oplog_cursor_query`]. A cursor outside
+/// `range` came from a read of another range, and the function refuses it as an invalid request.
 ///
-/// A page hands out a cursor only while the oplog has entries after it, and the oplog only grows,
-/// so a cursor that points past the last entry did not come from a page of this oplog: the agent
-/// was deleted and created again since, or the cursor was made up. It is refused as stale, instead
-/// of read as an empty page, which a caller would take for the end of the oplog. The revision of
-/// the cursor is not checked, because that would scan the oplog up to the cursor on every page.
+/// A page hands out a cursor only while the oplog has entries after the page within its range. The
+/// oplog only grows. So a cursor that points past the last entry did not come from a page of this
+/// oplog. The agent was deleted and created again since, or the cursor was made up. The function
+/// refuses such a cursor as stale. It does not read it as an empty page, because a caller would
+/// take that page for the end of the oplog. The function does not check the revision of the cursor,
+/// because that check would scan the oplog up to the cursor on every page.
 pub async fn oplog_page_start(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     cursor: Option<OplogCursor>,
-    from: OplogIndex,
+    range: OplogRange,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
     match cursor {
         Some(cursor) => {
+            let resumed = range
+                .resume(&cursor)
+                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
             let last_index = oplog_service
                 .get_last_index(owned_agent_id, agent_mode)
                 .await?;
@@ -837,12 +1044,45 @@ pub async fn oplog_page_start(
                     "the oplog cursor {cursor} has an invalid component revision: {e}"
                 ))
             })?;
-            Ok((OplogIndex::from_u64(cursor.next_oplog_index), revision))
+            Ok((resumed.first_index_in(OplogIndex::INITIAL), revision))
         }
         None => {
+            let start = range.first_index_in(OplogIndex::INITIAL);
             let revision =
-                find_component_revision_at(oplog_service, owned_agent_id, agent_mode, from).await?;
-            Ok((from, revision))
+                find_component_revision_at(oplog_service, owned_agent_id, agent_mode, start)
+                    .await?;
+            Ok((start, revision))
         }
     }
 }
+
+fn oplog_cursor_revision(
+    owned_agent_id: &OwnedAgentId,
+    cursor: &OplogCursor,
+    last_index: OplogIndex,
+) -> Result<ComponentRevision, WorkerExecutorError> {
+    let next = OplogIndex::from_u64(cursor.next_oplog_index);
+    if next > last_index {
+        return Err(stale_oplog_cursor(owned_agent_id, next, last_index));
+    }
+    cursor.current_component_revision.try_into().map_err(|e| {
+        WorkerExecutorError::invalid_request(format!(
+            "the oplog cursor {cursor} has an invalid component revision: {e}"
+        ))
+    })
+}
+
+fn stale_oplog_cursor(
+    owned_agent_id: &OwnedAgentId,
+    next_oplog_index: OplogIndex,
+    last_oplog_index: OplogIndex,
+) -> WorkerExecutorError {
+    WorkerExecutorError::StaleCursor {
+        agent_id: owned_agent_id.agent_id,
+        next_oplog_index,
+        reason: StaleCursorReason::PastEnd { last_oplog_index },
+    }
+}
+
+#[cfg(test)]
+mod tests;

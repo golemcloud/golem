@@ -29,10 +29,11 @@ use crate::model::agent::oplog_html::{
 use crate::oplog_export::export::{OplogExportError, OplogExportOptions, OplogExportSession};
 use crate::oplog_export::model::{OplogExportCoverage, ReportEntry};
 use crate::oplog_export::obfuscator::TokenKey;
+use anyhow::Context as _;
 use golem_client::api::WorkerClient;
-use golem_common::model::AgentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, OplogInclude, PublicOplogPageEntry};
+use golem_common::model::{AgentFingerprint, AgentId};
 use poem::http::StatusCode;
 use poem::listener::{Acceptor, Listener, TcpListener};
 use poem::web::{Data, Html, Json, Query};
@@ -106,6 +107,44 @@ pub async fn oplog_page_entry_view(
     }
 }
 
+/// The output view of an oplog page entry in full. The function reads in full an entry that the
+/// page omitted, from the incarnation of the agent that has `fingerprint`. It gives an error when
+/// that read fails.
+pub async fn oplog_page_entry_in_full(
+    ctx: &Context,
+    environment_id: &EnvironmentId,
+    agent_id: &AgentId,
+    page_entry: PublicOplogPageEntry,
+    show_claims: bool,
+    fingerprint: &AgentFingerprint,
+) -> anyhow::Result<AgentOplogEntryView> {
+    let omitted = match page_entry {
+        PublicOplogPageEntry::Included(entry) => return Ok(entry.into()),
+        PublicOplogPageEntry::Omitted(omitted) => omitted,
+    };
+    let entry = ctx
+        .golem_clients()
+        .await?
+        .worker
+        .get_oplog_entry(
+            &environment_id.0,
+            &agent_id.0,
+            omitted.oplog_index.as_u64(),
+            Some(omitted.component_revision.into()),
+            oplog_include(show_claims).as_ref(),
+            Some(&fingerprint.0),
+        )
+        .await
+        .map_service_error()
+        .with_context(|| {
+            format!(
+                "Failed to read oplog entry {} ({}, {} bytes)",
+                omitted.oplog_index, omitted.entry_type, omitted.size
+            )
+        })?;
+    Ok(entry.into())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OplogPageQuery {
@@ -113,6 +152,7 @@ struct OplogPageQuery {
     cursor_index: Option<u64>,
     cursor_revision: Option<u64>,
     cursor_query_hash: Option<String>,
+    cursor_scan_to: Option<u64>,
     count: Option<u64>,
     query: Option<String>,
 }
@@ -160,6 +200,7 @@ async fn oplog_page(
             next_oplog_index,
             current_component_revision,
             query_hash: params.cursor_query_hash.unwrap_or_default(),
+            scan_to: params.cursor_scan_to,
         }),
         _ => None,
     };

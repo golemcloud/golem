@@ -143,6 +143,8 @@ async fn search_page(
             query: RARE_QUERY.to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
             claims: golem_common::model::caller::ClaimVisibility::Hidden.to_protobuf(),
+            from_oplog_index: None,
+            to_oplog_index: None,
         })
         .await?
         .into_inner();
@@ -650,6 +652,8 @@ async fn search_oplog(
             query: query.to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
             claims: golem_common::model::caller::ClaimVisibility::Hidden.to_protobuf(),
+            from_oplog_index: None,
+            to_oplog_index: None,
         })
         .await?
         .into_inner()
@@ -695,6 +699,7 @@ async fn a_cursor_past_the_end_of_the_oplog_is_refused_as_stale(
         next_oplog_index,
         current_component_revision: 0,
         query_hash: CommonOplogCursor::query_hash(query),
+        scan_to: None,
     };
     // Far past the end, so a late entry of the new agent cannot make the cursor valid.
     let past_end = last_index + 1000;

@@ -286,6 +286,21 @@ Each recorded invocation shows its caller: the principal that started the chain,
 principal that made the call, and the tokens presented at the entry point. With
 `include=claims`, the users among the callers also show their verified claims.
 
+Reads the oplog entries from `from` to `to`, both included. Without `from`, the read starts
+at the first entry; without `to`, it goes to the end of the oplog. A `to` after the end of
+the oplog ends the read at the end of the oplog. The endpoint refuses a `to` before
+`from`. With `query`, the page holds only the entries in the range that match the query.
+Without `query`, a read with `to` is a range read: the response accounts its scan.
+A range read uses the configured scan budget. `scanEntries` and `scanMillis` can lower it
+for a reader that shares one allowance across pages. Without `query`, `lastIndex` is the
+last index of the oplog. With `query`, it is the last index of the range in the oplog.
+
+A search or a range read with `from` first scans the entries before `from` for the
+component revision. This scan counts against the budget. With the default budget, when the
+scan stops before `from`, the page is empty and its cursor has `scanTo`. Pass the cursor
+back unchanged, with or without `from`. A cursor whose query does not match is stale,
+even when it is also outside the requested range.
+
 **Query Parameters**
 
 Name|Type|Required|Description
@@ -296,7 +311,7 @@ cursor|#/components/schemas/OplogCursor|No|-
 query|string|No|-
 include|#/components/schemas/OplogInclude|No|-
 expectedFingerprint|string|No|-
-to|integer|No|The inclusive last index of a range read. Requires `from` and no `query`.
+to|integer|No|The inclusive last index of the read. Without `query`, the read is a range read.
 scanEntries|integer|No|The remaining entry allowance of a range read. Goes with `scanMillis`.
 scanMillis|integer|No|The remaining time allowance of a range read, in milliseconds.
 
@@ -443,7 +458,8 @@ scanMillis|integer|No|The remaining time allowance of a range read, in milliseco
   "next": {
     "nextOplogIndex": 0,
     "currentComponentRevision": 0,
-    "queryHash": "string"
+    "queryHash": "string",
+    "scanTo": 0
   },
   "firstIndexInChunk": 0,
   "lastIndex": 0,

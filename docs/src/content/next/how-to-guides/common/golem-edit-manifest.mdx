@@ -400,7 +400,7 @@ auth:
 
 | Field | Description |
 |-------|-------------|
-| `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml`, `toon` |
+| `format` | Default output: `text`, `json`, `jsonl`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml`, `toon` |
 | `autoConfirm` | Auto-confirm prompts (`true`) |
 | `redeployAgents` | Equivalent to `--redeploy-agents`: delete and recreate agents; agent state is lost |
 | `reset` | Equivalent to `--reset`: delete existing agents for the deployed components after deployment, losing their state, and enable incompatibility-replacement fallbacks; the environment itself is retained |

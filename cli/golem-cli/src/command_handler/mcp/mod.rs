@@ -1970,6 +1970,7 @@ mod tests {
             "keep_shape",
             "keep_error_text",
             "max_entry_bytes",
+            "output",
         ] {
             assert!(
                 properties.get(export).is_none(),

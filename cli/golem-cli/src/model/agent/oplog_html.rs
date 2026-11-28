@@ -147,24 +147,28 @@ mod platform {
     }
 }
 
+/// Creates the temporary file of an export to `path`, in the directory of `path`, and creates that
+/// directory when it is missing. The file gets the mode that a plain write of `path` gives it. An
+/// existing target keeps its mode. A new file gets 0666 under the umask, not the 0600 of a
+/// temporary file. The export renames the file to `path` when it is complete.
+pub(crate) fn export_temporary_file(path: &Path) -> anyhow::Result<tempfile::NamedTempFile> {
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+            parent.to_path_buf()
+        }
+        _ => PathBuf::from("."),
+    };
+    let file = platform::temporary(&parent)
+        .with_context(|| format!("failed to create a temporary file in {}", parent.display()))?;
+    platform::preserve_mode(file.as_file(), path)?;
+    Ok(file)
+}
+
 impl OplogExportHtmlWriter {
     pub fn create(path: &Path, title: &str) -> anyhow::Result<Self> {
-        let parent = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create {}", parent.display()))?;
-                parent.to_path_buf()
-            }
-            _ => PathBuf::from("."),
-        };
-        // The file gets the mode that a plain `--html` write gives it: an existing target keeps
-        // its mode, and a new file gets 0666 under the umask instead of the 0600 of a temporary
-        // file.
-        let file = platform::temporary(&parent);
-        let mut file = file.with_context(|| {
-            format!("failed to create a temporary file in {}", parent.display())
-        })?;
-        platform::preserve_mode(file.as_file(), path)?;
+        let mut file = export_temporary_file(path)?;
         let (prefix, suffix) = template_parts(title)?;
         file.write_all(prefix.as_bytes())?;
         Ok(Self {
@@ -521,6 +525,9 @@ mod tests {
             write_export(&existing, &[]);
             assert_eq!(mode(&existing), 0o640);
         }
+
+        #[path = "export/tests.rs"]
+        mod export;
     }
 
     #[test]

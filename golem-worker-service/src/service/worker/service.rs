@@ -79,7 +79,7 @@ use golem_common::model::invocation_session_public::{
     InvocationSelector, JsonMethodInput, PublicAgentTarget, PublicConfigEntry, PublicErrorCode,
     PublicNativeToolTarget, PublicTypedValue,
 };
-use golem_common::model::oplog::OplogCursor;
+use golem_common::model::oplog::{OplogCursor, OplogRange};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName, ToolSource};
 use golem_common::model::{
@@ -1420,7 +1420,7 @@ impl WorkerService {
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let start = cursor
             .as_ref()
-            .map(|cursor| cursor.next_oplog_index)
+            .map(|cursor| cursor.scan_to.unwrap_or(cursor.next_oplog_index))
             .unwrap_or_else(|| from_oplog_index.into());
         let end = start
             .checked_add(count.saturating_sub(1))
@@ -1489,11 +1489,13 @@ impl WorkerService {
             .await
     }
 
-    /// Searches the oplog. `claims` reaches the executor only after the oplog read
-    /// check.
+    /// Searches the oplog entries of `range`. `claims` reaches the executor only after the oplog
+    /// read check.
+    #[allow(clippy::too_many_arguments)]
     pub async fn search_oplog(
         &self,
         agent_id: &OwnedAgentId,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1512,6 +1514,7 @@ impl WorkerService {
         self.worker_client
             .search_oplog(
                 &agent_id.agent_id,
+                range,
                 cursor,
                 count,
                 query,
@@ -4704,7 +4707,7 @@ mod tests {
         InvocationSelector, PublicAgentTarget, PublicConfigEntry,
     };
     use golem_common::model::json::NormalizedJsonValue;
-    use golem_common::model::oplog::{OplogCursor, OplogIndex};
+    use golem_common::model::oplog::{OplogCursor, OplogIndex, OplogRange};
     use golem_common::model::tool::{ToolBindingOwner, ToolName};
     use golem_common::model::type_id::{TypeId, TypeIdKind};
     use golem_common::model::{
@@ -5677,6 +5680,7 @@ mod tests {
         async fn search_oplog(
             &self,
             _: &AgentId,
+            _: OplogRange,
             _: Option<OplogCursor>,
             _: u64,
             _: String,
@@ -7339,6 +7343,7 @@ mod tests {
                 .worker_service
                 .search_oplog(
                     &owned,
+                    OplogRange::ALL,
                     None,
                     10,
                     "bob".to_string(),
@@ -7371,6 +7376,7 @@ mod tests {
                     .worker_service
                     .search_oplog(
                         &owned,
+                        OplogRange::ALL,
                         None,
                         10,
                         "bob".to_string(),
@@ -7404,6 +7410,9 @@ mod tests {
             "a denied oplog read reached the worker client, or the claims request was lost"
         );
     }
+
+    #[path = "oplog/tests.rs"]
+    mod oplog;
 
     #[test]
     async fn plugin_lifecycle_resolves_and_authorizes_the_concrete_plugin_name() {

@@ -185,6 +185,7 @@ impl OplogReads for FakeReads {
             next_oplog_index: taken.last().unwrap().entry.oplog_index.as_u64() + 1,
             current_component_revision: REVISION,
             query_hash: OplogCursor::query_hash(query),
+            scan_to: None,
         });
         Ok(OplogPage {
             entries: taken
@@ -197,8 +198,9 @@ impl OplogReads for FakeReads {
     }
 
     /// Accounts the scan as the server does: a read without a cursor charges the entries before
-    /// `from`, which it reads to find the component revision, and every read charges the entries
-    /// of its page and `millis_per_read`. The allowance is clamped to the configured one.
+    /// `from`, which it reads to find the component revision. Every read charges the entries of its
+    /// page and `millis_per_read`. A read without an allowance has no limit. The fake clamps an
+    /// allowance to the configured one.
     async fn read_range_page(
         &self,
         from: u64,
@@ -213,15 +215,22 @@ impl OplogReads for FakeReads {
             cursor: cursor.map(|c| c.next_oplog_index),
             allowance,
         });
-        let limit = allowance.map_or(self.scan, |a| OplogScanAllowance {
-            entries: a.entries.min(self.scan.entries),
-            millis: a.millis.min(self.scan.millis),
-        });
+        let limit = allowance.map_or(
+            OplogScanAllowance {
+                entries: u64::MAX,
+                millis: u64::MAX,
+            },
+            |a| OplogScanAllowance {
+                entries: a.entries.min(self.scan.entries),
+                millis: a.millis.min(self.scan.millis),
+            },
+        );
         let start = cursor.map_or(from, |c| c.next_oplog_index);
         let cursor_at = |index: u64| OplogCursor {
             next_oplog_index: index,
             current_component_revision: REVISION,
             query_hash: OplogCursor::query_hash(None),
+            scan_to: None,
         };
         let scan = |charged_entries: u64, charged_millis: u64, exhausted: bool| OplogScan {
             limit,
@@ -802,6 +811,33 @@ async fn start_lookup_with_a_query_sends_no_query() {
 }
 
 #[test]
+async fn a_query_from_an_index_exports_only_the_later_matches() {
+    let reads = FakeReads::new(vec![
+        create(),
+        log_entry(2, "MARKER-R"),
+        log_entry(3, "other"),
+        log_entry(4, "MARKER-R"),
+        log_entry(5, "MARKER-R"),
+    ]);
+    let mut options = options();
+    options.from = Some(3);
+    options.query = Some("MARKER-R".to_string());
+    options.page_size = 1;
+    let (result, sink, log) = run(reads, options).await;
+    result.unwrap();
+    let indices: Vec<u64> = sink.entries.iter().map(|e| e.index).collect();
+    assert_eq!(indices, vec![4, 5]);
+    assert!(page_reads(&log).iter().any(|event| matches!(
+        event,
+        Event::Page {
+            from: Some(3),
+            query: Some(_),
+            ..
+        }
+    )));
+}
+
+#[test]
 async fn coverage_lists_are_capped() {
     let n = 150u64;
     let mut entries = vec![
@@ -1213,7 +1249,12 @@ async fn small_pages_share_one_allowance_and_completion_at_the_allowance_succeed
         .collect::<Vec<_>>();
     assert_eq!(
         allowances,
-        vec![None, Some((6, 990)), Some((4, 980)), Some((2, 970))]
+        vec![
+            Some((u64::MAX, u64::MAX)),
+            Some((6, 990)),
+            Some((4, 980)),
+            Some((2, 970))
+        ]
     );
 }
 

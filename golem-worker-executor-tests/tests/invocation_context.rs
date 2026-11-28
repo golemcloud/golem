@@ -110,7 +110,7 @@ fn observation(invocation_id: Option<String>, caller: &str) -> Observation {
 }
 
 async fn constructor_invocation_id(
-    executor: &(impl TestDsl + Sync),
+    executor: &impl TestDsl,
     agent_id: &OwnedAgentId,
 ) -> anyhow::Result<String> {
     let fingerprint = executor.get_worker_metadata(agent_id).await?.fingerprint;

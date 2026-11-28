@@ -32,6 +32,8 @@ golem-worker-executor --test <file> -- <filter>`); build the required WASM fixtu
     immediately, or on its next wakeup if already unloaded.
   - `interrupt(&agent_id)` / `resume(&agent_id, force)` — stop and later reconstruct.
   - `get_oplog(&agent_id, from)` / `search_oplog(&agent_id, query)` — assert oplog shape.
+  - `read_oplog(&agent_id, range, query)` — read an `OplogRange` in full, with or without a
+    query; `get_oplog` and `search_oplog` are default methods over it.
   - `wait_for_status(..)`, `check_oplog_is_queryable(..)`.
 - Test components under `test-components/` provide counters (`agent_counters`) and host-API
   drivers (`host_api_tests`); a counter is the canonical provider-side effect meter.

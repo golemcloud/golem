@@ -22,11 +22,11 @@ use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::oplog::public_oplog_entry::FailedUpdateParams;
 use golem_common::model::oplog::public_oplog_entry::PendingUpdateParams;
 use golem_common::model::oplog::{
-    MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
-    PublicEntityInvocationOperation, PublicExternalToolResult, PublicOplogEntry,
-    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
-    PublicUpdateDescription,
+    MultipartPartData, OmittedOplogEntry, OplogCursor, OplogIndex, OplogRange,
+    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicEntityCallMode, PublicEntityInvocation, PublicEntityInvocationOperation,
+    PublicExternalToolResult, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex, PublicSnapshotData, PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
@@ -135,6 +135,238 @@ fn serialize_oplog_documents<S: serde::Serializer>(
 
 impl StructuredOutput for AgentOplogPageView {
     const KIND: &'static str = "agent.oplog-page";
+}
+
+/// The entries that an oplog export holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OplogExportSelection {
+    /// Every entry of the range: each entry directly follows the entry before it.
+    EveryEntry(OplogRange),
+    /// The entries of the range that match a query: each entry comes after the entry before it.
+    Matches,
+}
+
+/// Checks that an oplog export can write the entry at `index` after the entry at `previous`. The
+/// check refuses an entry at or before `previous`, because the read repeated or reordered entries.
+/// When the export holds every entry, the check also refuses an entry that does not directly follow
+/// `previous`, because the read left out entries. It also refuses a first entry that is not at the
+/// start of a range with a start. It does not check the first entry of a range without a start,
+/// because only the server knows the first entry that the oplog holds.
+fn check_oplog_export_order(
+    selection: OplogExportSelection,
+    previous: Option<OplogIndex>,
+    index: OplogIndex,
+) -> anyhow::Result<()> {
+    match (selection, previous) {
+        (OplogExportSelection::EveryEntry(range), None) if !range.can_start_at(index) => {
+            anyhow::bail!(
+                "the oplog read started at the entry at index {index}, not at the start of the \
+                 range at index {}",
+                range.first_index_in(index)
+            )
+        }
+        (OplogExportSelection::EveryEntry(_), None) => Ok(()),
+        (OplogExportSelection::Matches, None) => Ok(()),
+        (_, Some(previous)) if index <= previous => anyhow::bail!(
+            "the oplog read returned the entry at index {index} after the entry at index {previous}"
+        ),
+        (OplogExportSelection::EveryEntry(_), Some(previous)) if previous.next() != index => {
+            anyhow::bail!(
+                "the oplog read returned the entry at index {index} after the entry at index \
+                 {previous}, without the entries between them"
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Checks that an oplog export ends at the end of its range. `last` is the index of the last
+/// written entry. `range_last` is the last index of the range in the oplog, as the last page of the
+/// read gives it. When the export holds every entry, its last entry must be at `range_last`,
+/// because the read otherwise left out the entries at the end. The check accepts an export of every
+/// entry without entries only when the range holds no index of the oplog, as
+/// [`OplogRange::is_empty_in`] gives it. An export of the matches has no end rule.
+fn check_oplog_export_end(
+    selection: OplogExportSelection,
+    last: Option<OplogIndex>,
+    range_last: OplogIndex,
+) -> anyhow::Result<()> {
+    match (selection, last) {
+        (OplogExportSelection::Matches, _) => Ok(()),
+        (OplogExportSelection::EveryEntry(_), Some(last)) if last == range_last => Ok(()),
+        (OplogExportSelection::EveryEntry(range), None) if range.is_empty_in(range_last) => Ok(()),
+        (OplogExportSelection::EveryEntry(_), Some(last)) => anyhow::bail!(
+            "the oplog read ended at the entry at index {last}, not at the end of the range at \
+             index {range_last}"
+        ),
+        (OplogExportSelection::EveryEntry(_), None) => anyhow::bail!(
+            "the oplog read returned no entry, but the range ends at index {range_last}"
+        ),
+    }
+}
+
+/// Writes an oplog export as JSON Lines: each entry is the `agent.oplog` document that `--format
+/// json` prints for it, on its own line. The writer refuses an entry that
+/// `check_oplog_export_order` refuses. It refuses an end that `check_oplog_export_end` refuses. So
+/// a wrong read fails the export and does not write a wrong file.
+pub struct OplogJsonlWriter<W: std::io::Write> {
+    writer: W,
+    masking: crate::model::masking::MaskingConfig,
+    selection: OplogExportSelection,
+    last_index: Option<OplogIndex>,
+    count: u64,
+}
+
+impl<W: std::io::Write> OplogJsonlWriter<W> {
+    pub fn new(
+        writer: W,
+        masking: crate::model::masking::MaskingConfig,
+        selection: OplogExportSelection,
+    ) -> Self {
+        Self {
+            writer,
+            masking,
+            selection,
+            last_index: None,
+            count: 0,
+        }
+    }
+
+    pub fn write(&mut self, entry: AgentOplogEntryView) -> anyhow::Result<()> {
+        let index = OplogIndex::from_u64(entry.index);
+        check_oplog_export_order(self.selection, self.last_index, index)?;
+        let document =
+            crate::model::cli_output::to_structured_output_value_masked(entry, self.masking)?;
+        serde_json::to_writer(&mut self.writer, &document)?;
+        self.writer.write_all(b"\n")?;
+        self.last_index = Some(index);
+        self.count += 1;
+        Ok(())
+    }
+
+    /// Checks the end of the export against `range_last`, the last index of the range in the oplog.
+    /// Then it flushes the written lines. It gives the inner writer and the count of the written
+    /// entries.
+    pub fn finish(mut self, range_last: OplogIndex) -> anyhow::Result<(W, u64)> {
+        check_oplog_export_end(self.selection, self.last_index, range_last)?;
+        self.writer.flush()?;
+        Ok((self.writer, self.count))
+    }
+}
+
+/// One page of an oplog export read.
+pub struct OplogExportPage<E> {
+    pub entries: Vec<E>,
+    pub next: Option<OplogCursor>,
+    /// The `last_index` of the response of the read.
+    pub last_index: OplogIndex,
+}
+
+/// The read of the pages of an oplog export.
+enum OplogExportRead {
+    /// The first page, from the start of the range of the export.
+    First,
+    /// A later page, from the cursor of the page before it. `range` ends at the last index of the
+    /// range in the oplog at the first page, so the export ends also when the oplog grows.
+    Next {
+        range: OplogRange,
+        cursor: OplogCursor,
+    },
+    /// The page before it had no cursor, so the read is complete.
+    Done,
+}
+
+impl OplogExportRead {
+    /// The read after a page of `range`. `last_index` is the end reported by the first page.
+    fn after(
+        range: OplogRange,
+        next: Option<OplogCursor>,
+        last_index: OplogIndex,
+    ) -> anyhow::Result<Self> {
+        match next {
+            None => Ok(Self::Done),
+            Some(cursor) => {
+                let next = cursor.next_oplog_index;
+                range
+                    .close_in(last_index)
+                    .map(|range| Self::Next { range, cursor })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "the oplog read gave a cursor at index {next}, but the range holds no \
+                             index of the oplog that ends at index {last_index}"
+                        )
+                    })
+            }
+        }
+    }
+}
+
+/// Writes the oplog entries of `range` to `writer`, page by page. `read_page` reads one page of a
+/// range from a cursor. `read_in_full` gives the full view of an entry of a page.
+/// `check_agent` checks after the last page that the agent is still the incarnation of the first
+/// page. The function closes the range at the end of the oplog at the first page, so a growing
+/// oplog does not make the export endless. It writes each page before it reads the next page. It
+/// gives the inner writer and the count of the written entries.
+pub async fn write_oplog_export<
+    W,
+    E,
+    ReadPage,
+    PageRead,
+    ReadInFull,
+    EntryRead,
+    CheckAgent,
+    AgentCheck,
+>(
+    writer: OplogJsonlWriter<W>,
+    range: OplogRange,
+    read_page: ReadPage,
+    read_in_full: ReadInFull,
+    check_agent: CheckAgent,
+) -> anyhow::Result<(W, u64)>
+where
+    W: std::io::Write,
+    ReadPage: Fn(OplogRange, Option<OplogCursor>) -> PageRead,
+    PageRead: std::future::Future<Output = anyhow::Result<OplogExportPage<E>>>,
+    ReadInFull: Fn(E) -> EntryRead,
+    EntryRead: std::future::Future<Output = anyhow::Result<AgentOplogEntryView>>,
+    CheckAgent: FnOnce() -> AgentCheck,
+    AgentCheck: std::future::Future<Output = anyhow::Result<()>>,
+{
+    use futures_util::TryStreamExt;
+    let (read_page, read_in_full) = (&read_page, &read_in_full);
+    let pages = futures_util::stream::try_unfold(OplogExportRead::First, move |read| async move {
+        let (read_range, cursor, pinned_end) = match read {
+            OplogExportRead::First => (range, None, None),
+            OplogExportRead::Next { range, cursor } => (
+                range,
+                Some(cursor),
+                range.to_indices().1.map(OplogIndex::from_u64),
+            ),
+            OplogExportRead::Done => return anyhow::Ok(None),
+        };
+        let page = read_page(read_range, cursor).await?;
+        let range_last = pinned_end.unwrap_or_else(|| read_range.last_index_in(page.last_index));
+        let next = OplogExportRead::after(read_range, page.next, range_last)?;
+        Ok(Some(((page.entries, range_last), next)))
+    });
+    let (writer, range_last) = pages
+        .try_fold(
+            (writer, None),
+            |(writer, _), (entries, range_last)| async move {
+                let writer = futures_util::stream::iter(entries.into_iter().map(anyhow::Ok))
+                    .try_fold(writer, |mut writer, entry| async move {
+                        writer.write(read_in_full(entry).await?)?;
+                        Ok(writer)
+                    })
+                    .await?;
+                Ok((writer, Some(range_last)))
+            },
+        )
+        .await?;
+    let range_last =
+        range_last.ok_or_else(|| anyhow::anyhow!("The oplog read returned no page"))?;
+    check_agent().await?;
+    writer.finish(range_last)
 }
 
 impl TextOutput for AgentOplogPageView {
@@ -1809,6 +2041,9 @@ mod tests {
             serde_json::json!([3, 5])
         );
     }
+
+    #[path = "export/tests.rs"]
+    mod export;
 
     fn agent_metadata(agent_key: &str) -> AgentMetadataView {
         AgentMetadataView {

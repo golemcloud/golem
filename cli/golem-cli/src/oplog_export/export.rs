@@ -64,7 +64,7 @@ pub struct OplogRangePage {
 /// The two oplog reads of the export.
 #[async_trait]
 pub trait OplogReads: Send + Sync {
-    /// Reads one page. A read with a query never sends `from`.
+    /// Reads one page.
     async fn read_page(
         &self,
         from: Option<u64>,
@@ -73,8 +73,9 @@ pub trait OplogReads: Send + Sync {
         query: Option<&str>,
     ) -> anyhow::Result<OplogPage>;
 
-    /// Reads one page of the range from `from` to `to`, inclusive, within `allowance`, or
-    /// within the configured allowance of the server without one. A failed read is not retried,
+    /// Reads one page of the range from `from` to `to`, inclusive. The server applies its
+    /// configured scan budget, which `allowance` can lower. It checks the time budget between
+    /// storage batches, so a batch can run past the limit. A failed read is not retried,
     /// because the server can have spent allowance on it.
     async fn read_range_page(
         &self,
@@ -435,8 +436,9 @@ async fn read_create<R: OplogReads>(
     }
 }
 
-/// Exports the oplog of one agent into the sink: the header, every entry from `options.from`
-/// or of `options.query` in index order, then, after a final root check, the coverage.
+/// Exports the oplog of one agent into the sink. It writes the header, and then every entry from
+/// `options.from` that matches `options.query`, in index order. After a final root check, it writes
+/// the coverage.
 pub async fn export_oplog<R: OplogReads>(
     reads: R,
     key: &'static TokenKey,
@@ -476,12 +478,20 @@ pub struct OplogRange {
     pub to: u64,
 }
 
+/// The server clamps this initial allowance to its configured budget. An explicit allowance
+/// prevents a revision scan from reading past a spent budget to make progress on the first page.
+const ANY_ALLOWANCE: OplogScanAllowance = OplogScanAllowance {
+    entries: u64::MAX,
+    millis: u64::MAX,
+};
+
 /// Exports one closed range of the oplog of one agent as one report, built in memory.
 ///
-/// The range must be within the oplog at the pin of the root. The reads of the range share one
-/// scan allowance of the server: the first read gets the configured allowance, and each later
-/// read passes on what the reads before it left. When the allowance runs out before the end of
-/// the range, the export fails with [`OplogExportError::ScanBudgetExceeded`].
+/// The range must be within the oplog at the pin of the root. The reads of the range share one scan
+/// allowance of the server. The first read asks for [`ANY_ALLOWANCE`], and the server clamps it to
+/// its configured allowance. Each later read passes on what the reads before it left. When the
+/// allowance runs out before the end of the range, the export fails with
+/// [`OplogExportError::ScanBudgetExceeded`].
 ///
 /// `document_bytes` is the size of the document of a report, with its newline. When the report
 /// cannot fit in `limit_bytes`, the export fails with [`OplogExportError::OutputTooLarge`] and
@@ -524,7 +534,7 @@ pub async fn export_oplog_range<R: OplogReads>(
     let mut entry_bytes = 0usize;
 
     let mut cursor: Option<OplogCursor> = None;
-    let mut allowance: Option<OplogScanAllowance> = None;
+    let mut allowance: Option<OplogScanAllowance> = Some(ANY_ALLOWANCE);
     // The first index that the next page may hold.
     let mut position = from;
     loop {

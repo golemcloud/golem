@@ -27,7 +27,8 @@ use crate::command::shared_args::{OplogExportArgs, OplogViewerArgs};
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
-    OplogViewerServer, open_in_browser, oplog_include, oplog_page_entry_view, serve_oplog_viewer,
+    OplogViewerServer, open_in_browser, oplog_include, oplog_page_entry_in_full,
+    oplog_page_entry_view, serve_oplog_viewer,
 };
 use crate::command_handler::agent::stream::{AgentConnection, LiveOutput};
 use crate::context::Context;
@@ -45,9 +46,12 @@ use crate::model::agent::action_result::{
     AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
-use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView};
+use crate::model::agent::oplog::{
+    AgentOplogEntryView, AgentOplogPageView, OplogExportPage, OplogExportSelection,
+    OplogJsonlWriter, write_oplog_export,
+};
 use crate::model::agent::oplog_html::{
-    OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
+    OplogViewerDocument, OplogViewerMode, export_temporary_file, render_oplog_viewer_html,
 };
 use crate::model::agent::{
     AgentAddress, AgentCreateView, AgentGetView, AgentListCursor, AgentUpsertView,
@@ -55,13 +59,14 @@ use crate::model::agent::{
 };
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
+use crate::model::format::Format;
 use crate::model::help::{
     AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
     ParameterErrorTableView,
 };
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text_format::{log_fuzzy_match, log_text_view};
-use anyhow::{anyhow, bail};
+use anyhow::{Context as AnyhowContext, anyhow, bail};
 use colored::Colorize;
 use golem_common::model::invocation_session_public::PublicErrorCode;
 use jiff::Timestamp as JiffTimestamp;
@@ -94,7 +99,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentId, ComponentName};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogCursor, OplogRange, PublicOplogPageEntry};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, FilterComparator, IdempotencyKey, OplogIndex,
 };
@@ -119,6 +124,18 @@ use terminal_size::terminal_size;
 use tokio::time::sleep;
 use tracing::debug;
 use uuid::Uuid;
+
+/// Checks that an oplog read that writes a file with `--output` has the format `jsonl`, so that
+/// the format of the file is explicit. The format comes from `--format`, or else from the default
+/// format of the manifest environment or of the profile.
+fn check_oplog_output_format(output: Option<&Path>, format: Format) -> anyhow::Result<()> {
+    match (output, format) {
+        (None, _) | (Some(_), Format::Jsonl) => Ok(()),
+        (Some(_), format) => Err(anyhow!(
+            "--output writes JSON Lines, not {format}; pass --format jsonl"
+        )),
+    }
+}
 
 fn client_update_mode(mode: AgentUpdateMode) -> golem_common::model::agent::AgentUpdateMode {
     match mode {
@@ -271,28 +288,36 @@ impl AgentCommandHandler {
                 AgentSubcommand::Oplog {
                     agent_id,
                     from,
+                    to,
                     query,
                     omit_payloads,
                     show_claims,
+                    output,
                     page,
                     cursor,
                     viewer,
                     export,
                 } => {
+                    let range = OplogRange::from_indices(from, to)
+                        .map_err(|error| anyhow!("Invalid oplog range: {error}"))?;
+                    check_oplog_output_format(output.as_deref(), self.ctx.format())?;
                     if page {
                         self.cmd_oplog_page(
                             agent_id,
-                            from,
+                            range,
                             cursor,
                             query,
                             omit_payloads,
                             show_claims,
                         )
                         .await
+                    } else if let Some(output) = output {
+                        self.cmd_oplog_jsonl_export(agent_id, range, query, show_claims, &output)
+                            .await
                     } else {
                         self.cmd_oplog(
                             agent_id,
-                            from,
+                            range,
                             query,
                             omit_payloads,
                             show_claims,
@@ -954,13 +979,14 @@ impl AgentCommandHandler {
     async fn cmd_oplog(
         &self,
         agent_id: AgentIdArgs,
-        from: Option<u64>,
+        range: OplogRange,
         query: Option<String>,
         omit_payloads: bool,
         show_claims: bool,
         viewer: OplogViewerArgs,
         export: OplogExportArgs,
     ) -> anyhow::Result<()> {
+        let (from, to) = range.to_indices();
         self.ctx.silence_app_context_init().await;
         let lookup_error = |error| {
             if export.obfuscate {
@@ -1061,7 +1087,7 @@ impl AgentCommandHandler {
                         query.as_deref(),
                         oplog_include(show_claims).as_ref(),
                         None,
-                        None,
+                        to,
                         None,
                         None,
                     )
@@ -1141,16 +1167,149 @@ impl AgentCommandHandler {
         Ok(())
     }
 
+    /// Exports the oplog entries of `range` that match `query` to `path` as JSON Lines. The export
+    /// follows each cursor to the oplog end reported by the first page, capped by the range end.
+    /// Later appends do not move that end. The export writes each page before it reads the next.
+    /// It follows empty pages with a cursor and has no total scan budget. It reads in full each
+    /// entry that a page omits for its size, and a failed read fails the export.
+    ///
+    /// The export reads the agent's metadata fingerprint before the first page. The worker service
+    /// compares it with current metadata before each read. The export compares it again after
+    /// the last page. A mismatch fails the export. These checks are separate from the oplog reads.
+    ///
+    /// The export writes to a temporary file in the directory of `path`. It renames the file to
+    /// `path` only after the last entry, so a failed export leaves `path` as it was.
+    async fn cmd_oplog_jsonl_export(
+        &self,
+        agent_id: AgentIdArgs,
+        range: OplogRange,
+        query: Option<String>,
+        show_claims: bool,
+        path: &Path,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let agent_id = self.agent_id_of(&agent_id_match).await?;
+        let environment_id = agent_id_match.environment.environment_id;
+        let fingerprint = self
+            .ctx
+            .golem_clients()
+            .await?
+            .worker
+            .get_worker_metadata(&environment_id.0, &agent_id.0, None)
+            .await
+            .map_service_error()?
+            .fingerprint;
+
+        let file = export_temporary_file(path)?;
+        let selection = match query {
+            Some(_) => OplogExportSelection::Matches,
+            None => OplogExportSelection::EveryEntry(range),
+        };
+        let writer = OplogJsonlWriter::new(
+            std::io::BufWriter::new(file),
+            self.ctx.masking_config(),
+            selection,
+        );
+
+        let (ctx, environment_id, agent_id, query, fingerprint) = (
+            &self.ctx,
+            &environment_id,
+            &agent_id,
+            query.as_deref(),
+            &fingerprint,
+        );
+        let batch_size = ctx.http_batch_size();
+        let (buffered, count) = write_oplog_export(
+            writer,
+            range,
+            move |range: OplogRange, cursor: Option<OplogCursor>| async move {
+                let (from, to) = range.to_indices();
+                let page = ctx
+                    .golem_clients()
+                    .await?
+                    .worker
+                    .get_oplog(
+                        &environment_id.0,
+                        &agent_id.0,
+                        from,
+                        batch_size,
+                        cursor.as_ref(),
+                        query,
+                        oplog_include(show_claims).as_ref(),
+                        Some(&fingerprint.0),
+                        to,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_service_error()?;
+                anyhow::Ok(OplogExportPage {
+                    entries: page.entries,
+                    next: page.next,
+                    last_index: OplogIndex::from_u64(page.last_index),
+                })
+            },
+            move |entry| {
+                oplog_page_entry_in_full(
+                    ctx,
+                    environment_id,
+                    agent_id,
+                    entry,
+                    show_claims,
+                    fingerprint,
+                )
+            },
+            move || async move {
+                let current = ctx
+                    .golem_clients()
+                    .await?
+                    .worker
+                    .get_worker_metadata(&environment_id.0, &agent_id.0, None)
+                    .await
+                    .map_service_error()?
+                    .fingerprint;
+                anyhow::ensure!(
+                    current == *fingerprint,
+                    "The agent became another incarnation during the export"
+                );
+                Ok(())
+            },
+        )
+        .await?;
+        let file = buffered
+            .into_inner()
+            .map_err(|error| error.into_error())
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+        file.as_file()
+            .sync_all()
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+        file.persist(path)
+            .map_err(|error| error.error)
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+
+        log_action(
+            "Exported",
+            format!(
+                "{count} oplog entries of agent {} to {}",
+                format_agent_id_match(&agent_id_match),
+                path.display().to_string().log_color_highlight()
+            ),
+        );
+        Ok(())
+    }
+
     /// One server page of the oplog, as one `agent.oplog-page` document.
     async fn cmd_oplog_page(
         &self,
         agent_id: AgentIdArgs,
-        from: Option<u64>,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         query: Option<String>,
         omit_payloads: bool,
         show_claims: bool,
     ) -> anyhow::Result<()> {
+        let (from, to) = range.to_indices();
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let agent_id = self.agent_id_of(&agent_id_match).await?;
@@ -1170,7 +1329,7 @@ impl AgentCommandHandler {
                 query.as_deref(),
                 oplog_include(show_claims).as_ref(),
                 None,
-                None,
+                to,
                 None,
                 None,
             )
@@ -4886,4 +5045,7 @@ mod tests {
             r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#,
         );
     }
+
+    #[path = "export/tests.rs"]
+    mod export;
 }

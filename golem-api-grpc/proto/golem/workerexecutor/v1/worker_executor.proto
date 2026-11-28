@@ -395,8 +395,8 @@ message GetOplogRequest {
   // The last oplog index of a range read, inclusive. A range read reads no entry after it, and
   // the response accounts its scan.
   optional uint64 to_oplog_index = 8;
-  // The scan allowance that a range read may still spend. Without it, the read gets the
-  // configured allowance of the executor. The executor clamps it to its configured allowance.
+  // The scan allowance that a range read may still spend. The executor clamps it to its
+  // configured allowance and uses the configured allowance when none is given.
   optional golem.worker.OplogScanAllowance scan_allowance = 9;
   // Whether the callers in the entries hold the users' verified claims.
   ClaimVisibility claims = 10;
@@ -413,6 +413,7 @@ message GetOplogSuccessResponse {
   repeated golem.worker.OplogPageEntry entries = 1;
   optional golem.worker.OplogCursor next = 2;
   uint64 first_index_in_chunk = 3;
+  // The last index of the oplog, also for a range read.
   uint64 last_index = 5;
   // The scan accounting of a range read; absent for other reads.
   optional golem.worker.OplogScan scan = 6;
@@ -449,6 +450,11 @@ message SearchOplogRequest {
   golem.auth.AuthCtx auth_ctx = 6;
   // Whether the callers in the entries hold the users' verified claims.
   ClaimVisibility claims = 7;
+  // Without a value, the search starts at the first entry that the oplog holds.
+  optional uint64 from_oplog_index = 8;
+  // The last oplog index of the search, inclusive. Without a value, the search goes to the end
+  // of the oplog.
+  optional uint64 to_oplog_index = 9;
 }
 
 message SearchOplogResponse {
@@ -461,6 +467,8 @@ message SearchOplogResponse {
 message SearchOplogSuccessResponse {
   repeated golem.worker.OplogPageEntry entries = 1;
   optional golem.worker.OplogCursor next = 2;
+  // The last index of the range in the oplog: the smaller of `to_oplog_index` and the last index
+  // of the oplog.
   uint64 last_index = 5;
 }
 

@@ -61,7 +61,7 @@ use golem_common::model::filesystem::{
     validate_file_read_path,
 };
 use golem_common::model::oplog::{
-    OplogCursor, OplogIndex, OplogScan, OplogScanAllowance, PublicOplogEntryWithIndex,
+    OplogCursor, OplogIndex, OplogRange, OplogScan, OplogScanAllowance, PublicOplogEntryWithIndex,
     PublicOplogPageEntry,
 };
 use golem_common::model::type_id::TypeId;
@@ -105,8 +105,7 @@ fn freshness_disposition_for_dispatch(
 pub struct OplogRangeRead {
     /// The last oplog index of the range, inclusive.
     pub to: OplogIndex,
-    /// The allowance that the read may still spend; without it, the executor applies its
-    /// configured allowance.
+    /// The allowance that the read may still spend; without it, the read has no scan limit.
     pub allowance: Option<OplogScanAllowance>,
 }
 
@@ -697,6 +696,7 @@ pub trait WorkerClient: Send + Sync {
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1787,6 +1787,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1801,6 +1802,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             move |worker_executor_client| {
                 let agent_id = agent_id;
                 let query_clone = query.clone();
+                let (from_oplog_index, to_oplog_index) = range.to_indices();
                 Box::pin(
                     worker_executor_client.search_oplog(workerexecutor::v1::SearchOplogRequest {
                         agent_id: Some(agent_id.into()),
@@ -1810,6 +1812,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                         claims: claims.to_protobuf(),
+                        from_oplog_index,
+                        to_oplog_index,
                     }),
                 )
             },

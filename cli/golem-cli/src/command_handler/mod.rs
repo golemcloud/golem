@@ -661,7 +661,12 @@ pub fn requires_executor_runtime(command_parse_result: &GolemCliCommandParseResu
 fn render_raw_schema_document(format: Format, value: &serde_json::Value) -> anyhow::Result<String> {
     match format {
         Format::Text => Ok(serde_json::to_string(value)?),
-        Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml | Format::Toon => {
+        Format::Json
+        | Format::Jsonl
+        | Format::PrettyJson
+        | Format::Yaml
+        | Format::PrettyYaml
+        | Format::Toon => {
             render_structured_document(format, SHOULD_COLORIZE.should_colorize(), value)
         }
     }
