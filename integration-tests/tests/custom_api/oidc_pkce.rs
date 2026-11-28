@@ -6,11 +6,8 @@
 //
 //     http://license.golem.cloud/LICENSE
 
-use crate::custom_api::http_test_context::{
-    HttpTestContext, make_test_context_with_files_and_setup,
-};
+use crate::custom_api::http_test_context::HttpTestContext;
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::agent::AgentTypeName;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, SecuritySchemeAgentSecurity,
 };
@@ -47,10 +44,9 @@ async fn context(
     let scheme_id = Arc::new(Mutex::new(None));
     let captured_id = scheme_id.clone();
     let issuer = fixture.issuer.to_string();
-    let gateway = make_test_context_with_files_and_setup(
-        deps,
-        vec![(
-            AgentTypeName("PrincipalAgent".into()),
+    let gateway = HttpTestContext::builder("golem_it_agent_sdk_ts", "golem-it:agent-sdk-ts")
+        .agent_with(
+            "PrincipalAgent",
             HttpApiDeploymentAgentOptions {
                 security: Some(HttpApiDeploymentAgentSecurity::SecurityScheme(
                     SecuritySchemeAgentSecurity {
@@ -58,12 +54,8 @@ async fn context(
                     },
                 )),
             },
-        )],
-        "golem_it_agent_sdk_ts",
-        "golem-it:agent-sdk-ts",
-        golem_common::model::http_api_deployment::HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
-        &[],
-        move |user, env_id, domain| async move {
+        )
+        .before_component(move |user, env_id, domain| async move {
             let client = user.deps.registry_service().client(&user.token).await;
             let scheme = client
                 .create_security_scheme(
@@ -91,9 +83,9 @@ async fn context(
                 .await?;
             *captured_id.lock().unwrap() = Some(scheme.id);
             Ok(())
-        },
-    )
-    .await?;
+        })
+        .build(deps)
+        .await?;
     let scheme_id = scheme_id.lock().unwrap().unwrap();
     Ok(PkceContext {
         gateway,

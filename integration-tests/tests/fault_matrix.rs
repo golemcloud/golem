@@ -26,7 +26,7 @@ test_r::enable!();
 
 #[test_r::sequential]
 mod rows {
-    use crate::http_test_context::{HttpTestContext, make_test_context};
+    use crate::http_test_context::HttpTestContext;
     use anyhow::{Context, ensure};
     use golem_api_grpc::proto::golem::worker::{
         ResumeOperation, ToolByteStreamRole, invocation_response, invocation_session_completion,
@@ -34,7 +34,6 @@ mod rows {
     };
     use golem_client::model::ComponentDto;
     use golem_common::base_model::agent::AgentTypeName;
-    use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
     use golem_common::base_model::type_id::TypeId;
     use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
     use golem_common::model::durable_stream::StreamSessionRecord;
@@ -1034,16 +1033,10 @@ mod rows {
         deps: &EnvBasedTestDependencies,
         fixture: Fixture,
     ) -> anyhow::Result<HttpTestContext> {
-        make_test_context(
-            deps,
-            vec![(
-                AgentTypeName(FIXTURE_AGENT_TYPE.to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            )],
-            fixture.wasm,
-            fixture.component,
-        )
-        .await
+        HttpTestContext::builder(fixture.wasm, fixture.component)
+            .agents([FIXTURE_AGENT_TYPE])
+            .build(deps)
+            .await
     }
 
     fn durable_fixtures() -> impl Iterator<Item = Fixture> {

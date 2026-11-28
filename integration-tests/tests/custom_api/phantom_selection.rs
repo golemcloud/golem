@@ -1,4 +1,4 @@
-use super::http_test_context::{HttpTestContext, make_test_context};
+use super::http_test_context::HttpTestContext;
 use golem_api_grpc::proto::golem::registry::v1::{
     GetActiveRoutesForDomainRequest, get_active_routes_for_domain_response,
     registry_service_client::RegistryServiceClient,
@@ -6,7 +6,6 @@ use golem_api_grpc::proto::golem::registry::v1::{
 use golem_client::model::ComponentDto;
 use golem_common::agent_key;
 use golem_common::base_model::agent::AgentTypeName;
-use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::{AgentId, AgentStatus};
 use golem_service_base::custom_api::CompiledRoutes;
@@ -21,9 +20,8 @@ use uuid::Uuid;
 inherit_test_dep!(EnvBasedTestDependencies);
 
 async fn context(deps: &EnvBasedTestDependencies) -> anyhow::Result<HttpTestContext> {
-    make_test_context(
-        deps,
-        [
+    HttpTestContext::builder("golem_it_agent_sdk_rust_release", "golem-it:agent-sdk-rust")
+        .agents([
             "SelectedQueryAgent",
             "SelectedRequiredQueryAgent",
             "SelectedPathAgent",
@@ -31,19 +29,9 @@ async fn context(deps: &EnvBasedTestDependencies) -> anyhow::Result<HttpTestCont
             "DurableStreamAgent",
             "PhantomStreamAgent",
             "EphemeralStreamAgent",
-        ]
-        .into_iter()
-        .map(|name| {
-            (
-                AgentTypeName(name.into()),
-                HttpApiDeploymentAgentOptions::default(),
-            )
-        })
-        .collect(),
-        "golem_it_agent_sdk_rust_release",
-        "golem-it:agent-sdk-rust",
-    )
-    .await
+        ])
+        .build(deps)
+        .await
 }
 
 fn selected(path: &str, selector: Option<Uuid>) -> String {
