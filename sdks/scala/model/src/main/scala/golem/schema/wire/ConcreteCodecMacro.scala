@@ -93,14 +93,15 @@ private[wire] object ConcreteCodecMacro {
                 case Right(_)    => '{ golem.schema.Quantity.concreteCodec[u](using golem.schema.QuantityUnit.derived[u]) }
               }
           }
-        case '[golem.UByte]        => '{ ConcreteCodec.ubyte }
-        case '[golem.UShort]       => '{ ConcreteCodec.ushort }
-        case '[golem.UInt]         => '{ ConcreteCodec.uint }
-        case '[golem.ULong]        => '{ ConcreteCodec.ulong }
-        case '[java.util.UUID]     => '{ ConcreteCodec.uuid }
-        case '[java.time.Instant]  => '{ ConcreteCodec.instant }
-        case '[java.time.Duration] => '{ ConcreteCodec.duration }
-        case '[Option[t]]          =>
+        case '[golem.UByte]                 => '{ ConcreteCodec.ubyte }
+        case '[golem.UShort]                => '{ ConcreteCodec.ushort }
+        case '[golem.UInt]                  => '{ ConcreteCodec.uint }
+        case '[golem.ULong]                 => '{ ConcreteCodec.ulong }
+        case '[java.util.UUID]              => '{ ConcreteCodec.uuid }
+        case '[zio.blocks.schema.json.Json] => '{ ConcreteCodec.json }
+        case '[java.time.Instant]           => '{ ConcreteCodec.instant }
+        case '[java.time.Duration]          => '{ ConcreteCodec.duration }
+        case '[Option[t]]                   =>
           exact[Option[Any]]("Option[A]")
           '{ ConcreteCodec.option(${ build[t](registry, next) }) }
         case '[List[t]] =>

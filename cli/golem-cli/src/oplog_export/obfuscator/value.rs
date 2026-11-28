@@ -719,6 +719,7 @@ impl<'r, 'a> Walker<'r, 'a> {
             ),
             SchemaValue::Char(c) => self.str_leaf(c.encode_utf8(&mut [0u8; 4]), region),
             SchemaValue::String(s) => self.str_leaf(s, region),
+            SchemaValue::Json(text) => self.str_leaf(text, region),
             SchemaValue::Text(text) => self.str_leaf(&text.text, region),
             SchemaValue::Path { path } => self.str_leaf(path, region),
             SchemaValue::Url { url } => self.str_leaf(url, region),
@@ -1000,6 +1001,7 @@ fn leaf_matches(ty: &SchemaType, value: &SchemaValue) -> bool {
             | (SchemaType::F64 { .. }, SchemaValue::F64(_))
             | (SchemaType::Char { .. }, SchemaValue::Char(_))
             | (SchemaType::String { .. }, SchemaValue::String(_))
+            | (SchemaType::Json { .. }, SchemaValue::Json(_))
             | (SchemaType::Text { .. }, SchemaValue::Text(_))
             | (SchemaType::Binary { .. }, SchemaValue::Binary(_))
             | (SchemaType::Path { .. }, SchemaValue::Path { .. })

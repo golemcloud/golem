@@ -34,7 +34,7 @@ import (
 const conformanceCorpus = "../../../../test-data/reflection-conformance/v1.json"
 
 // kindsBeyondCorpus are schema kinds the shared corpus does not enumerate yet.
-var kindsBeyondCorpus = []string{"uuid"}
+var kindsBeyondCorpus = []string{"uuid", "json"}
 
 type conformanceCase struct {
 	ID        string            `json:"id"`

@@ -257,6 +257,8 @@ pub enum KnownRole {
     Multimodal,
     UnstructuredText,
     UnstructuredBinary,
+    StandardMultimodal,
+    TaskUpdate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +278,7 @@ pub enum TypeKind {
     F64,
     Char,
     String,
+    Json,
     Record,
     Variant,
     Enum,

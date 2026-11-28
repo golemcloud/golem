@@ -119,6 +119,10 @@ pub enum ValueError {
         expected: String,
         found: String,
     },
+    InvalidJson {
+        path: ValuePath,
+        reason: String,
+    },
     VariantCaseOutOfRange {
         path: ValuePath,
         case: u32,
@@ -282,6 +286,9 @@ impl Display for ValueError {
         match self {
             ValueError::UnsupportedFeature { path, feature } => {
                 write!(f, "validation at {path} requires feature `{feature}`")
+            }
+            ValueError::InvalidJson { path, reason } => {
+                write!(f, "invalid JSON at {path}: {reason}")
             }
             ValueError::ShapeMismatch {
                 path,
@@ -745,6 +752,7 @@ fn shape_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Path { .. } => "path",
         SchemaValue::Url { .. } => "url",
         SchemaValue::Uuid(_) => "uuid",
+        SchemaValue::Json(_) => "json",
         SchemaValue::Datetime { .. } => "datetime",
         SchemaValue::Duration(_) => "duration",
         SchemaValue::Quantity(_) => "quantity",
@@ -787,6 +795,7 @@ fn type_name(ty: &SchemaType) -> &'static str {
         SchemaType::Path { .. } => "path",
         SchemaType::Url { .. } => "url",
         SchemaType::Uuid { .. } => "uuid",
+        SchemaType::Json { .. } => "json",
         SchemaType::Datetime { .. } => "datetime",
         SchemaType::Duration { .. } => "duration",
         SchemaType::Quantity { .. } => "quantity",
@@ -989,6 +998,14 @@ fn check<'a>(
             check_url(restrictions, url.as_str(), path, errors);
         }
         (SchemaType::Uuid { .. }, SchemaValue::Uuid(_)) => {}
+        (SchemaType::Json { .. }, SchemaValue::Json(value)) => {
+            if let Err(error) = serde_json::from_str::<serde_json::Value>(value) {
+                errors.push(ValueError::InvalidJson {
+                    path: path.snapshot(),
+                    reason: error.to_string(),
+                });
+            }
+        }
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { .. }) => {}
         (SchemaType::Duration { .. }, SchemaValue::Duration(_)) => {}
         (SchemaType::Quantity { spec, .. }, SchemaValue::Quantity(value)) => {

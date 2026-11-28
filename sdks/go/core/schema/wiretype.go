@@ -79,6 +79,8 @@ func wireToTypeBody(node wireNode) (SchemaTypeBody, MetadataEnvelope, error) {
 		return readType(node, func(wireBareType) SchemaTypeBody { return CharType{} })
 	case "string":
 		return readType(node, func(wireBareType) SchemaTypeBody { return StringType{} })
+	case "json":
+		return readType(node, func(wireBareType) SchemaTypeBody { return JsonType{} })
 	case "datetime":
 		return readType(node, func(wireBareType) SchemaTypeBody { return DatetimeType{} })
 	case "duration":
@@ -358,9 +360,9 @@ type wireRole struct {
 
 func (r wireRole) model() Role {
 	if r.Tag == "other" {
-		return Role(r.Value)
+		return Role{Tag: RoleOther, Value: r.Value}
 	}
-	return Role(r.Tag)
+	return Role{Tag: RoleTag(r.Tag)}
 }
 
 // wireBase is embedded by every type payload, supplying the metadata envelope.

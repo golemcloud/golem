@@ -87,6 +87,7 @@ export type SchemaTypeBody =
   | { tag: 'char' }
   | { tag: 'string' }
   | { tag: 'uuid' }
+  | { tag: 'json' }
   // Structural composites
   | { tag: 'record'; fields: NamedFieldType[] }
   | { tag: 'variant'; cases: VariantCaseType[] }
@@ -548,6 +549,7 @@ export type SchemaValue =
   | { tag: 'char'; value: string }
   | { tag: 'string'; value: string }
   | { tag: 'uuid'; value: Uuid }
+  | { tag: 'json'; value: string }
   // Structural composites
   | { tag: 'record'; fields: SchemaValue[] }
   | { tag: 'variant'; caseIndex: number; payload?: SchemaValue }
@@ -633,6 +635,7 @@ export const t = {
   char: (): SchemaType => schemaType({ tag: 'char' }),
   string: (): SchemaType => schemaType({ tag: 'string' }),
   uuid: (): SchemaType => schemaType({ tag: 'uuid' }),
+  json: (): SchemaType => schemaType({ tag: 'json' }),
   record: (fields: NamedFieldType[]): SchemaType => schemaType({ tag: 'record', fields }),
   variant: (cases: VariantCaseType[]): SchemaType => schemaType({ tag: 'variant', cases }),
   enum: (cases: string[]): SchemaType => schemaType({ tag: 'enum', cases }),
@@ -690,6 +693,7 @@ export const v = {
   char: (value: string): SchemaValue => ({ tag: 'char', value }),
   string: (value: string): SchemaValue => ({ tag: 'string', value }),
   uuid: (value: Uuid): SchemaValue => ({ tag: 'uuid', value }),
+  json: (value: string): SchemaValue => ({ tag: 'json', value }),
   record: (fields: SchemaValue[]): SchemaValue => ({ tag: 'record', fields }),
   variant: (caseIndex: number, payload?: SchemaValue): SchemaValue => ({
     tag: 'variant',

@@ -392,6 +392,17 @@ fn token_golden_vector() {
 }
 
 #[test]
+fn json_is_an_opaque_customer_string_for_redaction() {
+    let text = r#"{"customer-key":"private-value","nested":[null,false]}"#;
+    let value = SchemaValue::Json(text.into());
+    for keep in all_keep() {
+        let node = render(keep, &value);
+        assert_eq!(node, render(keep, &SchemaValue::String(text.into())));
+        assert!(!json(&node).contains("customer-key"));
+    }
+}
+
+#[test]
 fn str_kinds_share_one_token() {
     let keep = KeepFlags::default();
     let string = json(&render(keep, &SchemaValue::String("text".into())));

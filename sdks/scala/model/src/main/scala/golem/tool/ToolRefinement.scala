@@ -159,6 +159,7 @@ object ToolRefinement {
         "numeric"
       case CharType              => "char"
       case StringType            => "string"
+      case JsonType              => "json"
       case _: TextType           => "text"
       case _: PathType           => "path"
       case _: UrlType            => "url"

@@ -26,6 +26,49 @@ fn branch(
 // ============================================================
 
 ///|
+test "reserved A2A roles reject node and member metadata without changing Other" {
+  for role in [@types.StandardMultimodal, @types.TaskUpdate] {
+    let metadata = { ..empty_metadata(), role: Some(role), }
+    let marked : SchemaType = { body: Json, metadata, }
+    for
+      root in [
+        marked,
+        schema_type(List(marked)),
+        schema_type(
+          Record([{ name: "payload", body: schema_type(Json), metadata, }]),
+        ),
+        schema_type(
+          Variant([
+            { name: "payload", payload: Some(schema_type(Json)), metadata, },
+          ]),
+        ),
+        schema_type(
+          Union([
+            {
+              tag: "payload",
+              body: vstr(),
+              discriminator: @types.Prefix("p"),
+              metadata,
+            },
+          ]),
+        ),
+        { body: Ref("json"), metadata, },
+      ] {
+      assert_true(
+        !validate_graph({ defs: [def("json", schema_type(Json))], root, }).is_empty(),
+      )
+    }
+  }
+  for name in ["standard-multimodal", "task-update"] {
+    let root : SchemaType = {
+      body: Json,
+      metadata: { ..empty_metadata(), role: Some(@types.Other(name)), },
+    }
+    assert_eq(validate_graph({ defs: [], root, }).length(), 0)
+  }
+}
+
+///|
 test "well-formed record graph passes" {
   let rec = schema_type(
     Record([field("name", vstr()), field("age", schema_type(S32(None)))]),

@@ -2950,6 +2950,12 @@ impl ScalaBridgeGenerator {
             }
             SchemaType::Path { .. } => format!("{CODEC}.encodePath({val_expr})"),
             SchemaType::Url { .. } => format!("{CODEC}.encodeUrl({val_expr})"),
+            SchemaType::Json { .. } => match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => format!(
+                    "{GUEST_SV}.JsonValue(_root_.zio.blocks.schema.json.Json.jsonCodec.encodeToString({val_expr}))"
+                ),
+                ScalaBridgeMode::ExternalRest => format!("{SV}.JsonValue(({val_expr}).render)"),
+            },
             SchemaType::Uuid { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 format!("{GUEST_SV}.UuidValue({val_expr})")
             }
@@ -3155,6 +3161,12 @@ impl ScalaBridgeGenerator {
             }
             SchemaType::Path { .. } => format!("{CODEC}.asPath({val_expr})"),
             SchemaType::Url { .. } => format!("{CODEC}.asUrl({val_expr})"),
+            SchemaType::Json { .. } => match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => format!(
+                    "_root_.golem.schema.FromSchema[_root_.zio.blocks.schema.json.Json].fromValue({val_expr}).fold(error => throw error, _root_.scala.Predef.identity)"
+                ),
+                ScalaBridgeMode::ExternalRest => format!("{CODEC}.asJson({val_expr})"),
+            },
             SchemaType::Uuid { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
                 "{val_expr} match {{ case {GUEST_SV}.UuidValue(value) => value; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected UUID value, got $other\") }}"
             ),
@@ -3422,6 +3434,11 @@ impl ScalaBridgeGenerator {
             .to_string()),
             SchemaType::Url { .. } => Ok("_root_.java.net.URI".to_string()),
             SchemaType::Uuid { .. } => Ok(UUID.to_string()),
+            SchemaType::Json { .. } => Ok(match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => "_root_.zio.blocks.schema.json.Json",
+                ScalaBridgeMode::ExternalRest => "_root_.golem.bridge.runtime.json.Json",
+            }
+            .to_string()),
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
             SchemaType::Duration { .. } => Ok("_root_.java.time.Duration".to_string()),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {

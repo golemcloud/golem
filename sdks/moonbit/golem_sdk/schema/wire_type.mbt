@@ -286,6 +286,11 @@ pub impl WireSchema for Uuid with fn append_wire_type(encoder) {
 }
 
 ///|
+pub impl WireSchema for Json with fn append_wire_type(encoder) {
+  encoder.push(@types.SchemaTypeBody::JsonType)
+}
+
+///|
 pub impl WireSchema for Path with fn append_wire_type(encoder) {
   encoder.push(
     @types.SchemaTypeBody::PathType({

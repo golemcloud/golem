@@ -14,6 +14,7 @@
 
 import type { SchemaCodec } from '../../schema/codec';
 import { Uuid } from '../../uuid';
+import { parseJsonValue } from '../schema-model/json';
 import {
   assertSchemaValueRepresentable,
   cloneSchemaValue,
@@ -713,6 +714,14 @@ export function schemaLeafValueMatches(
       return value.tag === 'char' && isUnicodeScalar(value.value);
     case 'string':
       return value.tag === 'string' && typeof value.value === 'string';
+    case 'json':
+      if (value.tag !== 'json' || typeof value.value !== 'string') return false;
+      try {
+        parseJsonValue(value.value);
+        return true;
+      } catch {
+        return false;
+      }
     case 'uuid':
       return value.tag === 'uuid' && value.value instanceof Uuid;
     case 'path':

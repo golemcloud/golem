@@ -37,14 +37,14 @@ async fn go_mcp_client_projects_contract_and_runs_imported_middleware() {
                             "description":"Exercises the imported MCP projection.",
                             "inputSchema":{
                                 "type":"object",
-                                "properties":{"query":{"type":"string"}},
-                                "required":["query"],
+                                "properties":{"query":{"type":"string"},"payload":{}},
+                                "required":["query","payload"],
                                 "additionalProperties":false
                             },
                             "outputSchema":{
                                 "type":"object",
-                                "properties":{"answer":{"type":"string"},"score":{"type":"integer"}},
-                                "required":["answer","score"],
+                                "properties":{"answer":{"type":"string"},"score":{"type":"integer"},"payload":{}},
+                                "required":["answer","score","payload"],
                                 "additionalProperties":false
                             }
                         }]})
@@ -76,11 +76,11 @@ async fn go_mcp_client_projects_contract_and_runs_imported_middleware() {
                             .push((arguments.clone(), idempotency_key));
                         match query {
                             "streamed" => json!({
-                                "structuredContent":{"answer":"stream-answer","score":7},
+                                "structuredContent":{"answer":"stream-answer","score":7,"payload":arguments["payload"]},
                                 "content":[{"type":"text","text":"finite-stream"}]
                             }),
                             "blocks" => json!({
-                                "structuredContent":{"answer":"blocks-answer","score":11},
+                                "structuredContent":{"answer":"blocks-answer","score":11,"payload":arguments["payload"]},
                                 "content":[
                                     {"type":"text","text":"left"},
                                     {"type":"text","text":"right"}
@@ -245,7 +245,7 @@ async fn go_mcp_client_projects_contract_and_runs_imported_middleware() {
                 .map(|(arguments, _)| arguments.clone())
                 .collect::<Vec<_>>(),
             ["streamed", "blocks", "error"]
-                .map(|query| json!({"query":query}))
+                .map(|query| json!({"query":query,"payload":{"b":[1,null,{"x":"y"}],"a":1.5}}))
                 .to_vec()
         );
         assert_eq!(

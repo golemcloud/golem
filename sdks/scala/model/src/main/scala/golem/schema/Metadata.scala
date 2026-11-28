@@ -26,6 +26,8 @@ object Role {
   case object Multimodal               extends Role
   case object UnstructuredText         extends Role
   case object UnstructuredBinary       extends Role
+  case object StandardMultimodal       extends Role
+  case object TaskUpdate               extends Role
   final case class Other(name: String) extends Role
 }
 

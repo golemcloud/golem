@@ -40,6 +40,8 @@ message Role {
     string other = 2;
     golem.common.Empty unstructured_text = 3;
     golem.common.Empty unstructured_binary = 4;
+    golem.common.Empty standard_multimodal = 5;
+    golem.common.Empty task_update = 6;
   }
 }
 
@@ -92,6 +94,7 @@ message SchemaType {
     golem.common.Empty duration_type = 45;
     QuantitySpec quantity_type = 46;
     golem.common.Empty uuid_type = 47;
+    golem.common.Empty json_type = 48;
 
     // Discriminated union (closed, inferred-tag)
     UnionSpec union_type = 60;
@@ -330,6 +333,7 @@ message SchemaValue {
     DurationValue duration_value = 45;
     QuantityValue quantity_value = 46;
     golem.common.UUID uuid_value = 47;
+    string json_value = 48;
 
     // Discriminated union
     UnionValue union_value = 60;

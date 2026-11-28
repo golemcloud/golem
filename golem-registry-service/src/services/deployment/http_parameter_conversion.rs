@@ -621,6 +621,10 @@ mod test {
             SchemaType::record(vec![]),
             SchemaType::list(SchemaType::record(vec![])),
             SchemaType::map(SchemaType::string(), SchemaType::list(SchemaType::string())),
+            SchemaType::json(),
+            SchemaType::option(SchemaType::json()),
+            SchemaType::list(SchemaType::json()),
+            SchemaType::map(SchemaType::string(), SchemaType::json()),
         ] {
             let error = build_http_agent_method_parameters(
                 &empty_mount(),
@@ -1028,6 +1032,72 @@ mod test {
             let encoded: golem_api_grpc::proto::golem::customapi::MethodParameter =
                 parameter.clone().into();
             assert_eq!(MethodParameter::try_from(encoded).unwrap(), parameter);
+        }
+    }
+
+    #[test]
+    fn json_is_body_only_including_references_and_wrappers() {
+        let graph = SchemaGraph {
+            defs: vec![golem_common::schema::SchemaTypeDef {
+                id: golem_common::schema::TypeId::new("json"),
+                name: None,
+                body: SchemaType::json(),
+            }],
+            root: SchemaType::tuple(vec![]),
+        };
+        for ty in [
+            SchemaType::json(),
+            SchemaType::option(SchemaType::json()),
+            SchemaType::list(SchemaType::json()),
+            SchemaType::map(SchemaType::string(), SchemaType::json()),
+            SchemaType::ref_to(golem_common::schema::TypeId::new("json")),
+        ] {
+            let schema = input(vec![NamedField::user_supplied("payload", ty)]);
+            let endpoint = empty_post_endpoint();
+            let (body, params) = build_http_agent_method_parameters(
+                &empty_mount(),
+                &endpoint,
+                &graph,
+                &schema,
+                &|e| e,
+            )
+            .unwrap();
+            assert!(matches!(body, RequestBodySchema::JsonBody { .. }));
+            assert!(matches!(
+                params.as_slice(),
+                [MethodParameter::JsonObjectBodyField { .. }]
+            ));
+            let mut endpoint = endpoint;
+            endpoint.header_vars = vec![HeaderVariable {
+                header_name: "x-payload".into(),
+                variable_name: "payload".into(),
+            }];
+            assert!(
+                build_http_agent_method_parameters(
+                    &empty_mount(),
+                    &endpoint,
+                    &graph,
+                    &schema,
+                    &|e| e
+                )
+                .is_err()
+            );
+            endpoint.header_vars.clear();
+            endpoint.path_suffix = vec![PathSegment::Segment(
+                schema_http::PathSegment::PathVariable(PathVariable {
+                    variable_name: "payload".into(),
+                }),
+            )];
+            assert!(
+                build_http_agent_method_parameters(
+                    &empty_mount(),
+                    &endpoint,
+                    &graph,
+                    &schema,
+                    &|e| e
+                )
+                .is_err()
+            );
         }
     }
 

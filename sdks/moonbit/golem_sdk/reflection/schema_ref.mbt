@@ -359,6 +359,11 @@ fn SchemaRef::validate_refinements(
     (U64(r), U64(v)) => check_unsigned_refinement(r, v)
     (F32(r), F32(v)) => check_numeric_refinement(r, v.to_double())
     (F64(r), F64(v)) => check_numeric_refinement(r, v)
+    (Json, Json(text)) => {
+      let _ = @json.parse(text) catch {
+        error => raise Schema(error.to_string())
+      }
+    }
     (Record(fields), Record(values)) =>
       for index in 0..<fields.length() {
         self.validate_refinements(fields[index].body, values[index])
@@ -1072,6 +1077,10 @@ fn SchemaRef::unpack(
       Json::string(value)
     (@model.SchemaTypeBody::Uuid, @model.SchemaValue::Uuid(value)) =>
       Json::string(@types.uuid_to_string(value))
+    (@model.SchemaTypeBody::Json, @model.SchemaValue::Json(text)) =>
+      @json.parse(text) catch {
+        error => raise Schema(error.to_string())
+      }
     (
       @model.SchemaTypeBody::Union(branches),
       @model.SchemaValue::Union(tag, value),
@@ -1350,6 +1359,7 @@ fn SchemaRef::pack(
     }
     Path(_) => Path(json_string(json))
     Url(_) => Url(json_string(json))
+    Json => @model.SchemaValue::Json(json.stringify())
     Uuid =>
       match @types.parse_uuid(json_string(json)) {
         Ok(value) => Uuid(value)

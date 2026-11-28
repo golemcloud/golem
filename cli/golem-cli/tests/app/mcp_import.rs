@@ -925,18 +925,20 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
                             "type":"object",
                             "properties":{
                                 "item-id":{"type":"string","minLength":3},
-                                "includeHistory":{"type":"boolean","default":false}
+                                "includeHistory":{"type":"boolean","default":false},
+                                "payload":{}
                             },
-                            "required":["item-id"],
+                            "required":["item-id","payload"],
                             "additionalProperties":false
                         },
                         "outputSchema":{
                             "type":"object",
                             "properties":{
                                 "id":{"type":"string"},
-                                "revision":{"type":"integer","minimum":0}
+                                "revision":{"type":"integer","minimum":0},
+                                "payload":{}
                             },
-                            "required":["id","revision"],
+                            "required":["id","revision","payload"],
                             "additionalProperties":false
                         }
                     }]}),
@@ -953,6 +955,7 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
                         let Some(item_id) = arguments["item-id"].as_str().map(str::to_owned) else {
                             return StatusCode::BAD_REQUEST.into_response();
                         };
+                        let payload = arguments["payload"].clone();
                         calls.lock().unwrap().push(arguments);
                         if item_id == "error" {
                             json!({
@@ -977,7 +980,7 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
                                 _ => json!([{"type":"text","text":format!("stdout:{item_id}")}]),
                             };
                             json!({
-                                "structuredContent":{"id":item_id,"revision":7},
+                                "structuredContent":{"id":item_id,"revision":7,"payload":payload},
                                 "content":content
                             })
                         }
@@ -1079,7 +1082,7 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
           methods: {
             async call({ itemId, includeHistory }) {
               try {
-                const invocation = CatalogLookupClient.newClient().catalog_lookup(includeHistory, itemId);
+                const invocation = CatalogLookupClient.newClient().catalog_lookup(includeHistory, itemId, { b: [1, null, { x: 'y' }], a: 1.5 });
                 const collected = await invocation.collect();
                 if (collected.result.status === 'rejected') throw collected.result.reason;
                 if (collected.stdout.status === 'rejected') throw collected.stdout.reason;
@@ -1146,7 +1149,8 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
             "text",
             false,
             vec![
-                "\"structured\":{\"id\":\"text\",\"revision\":\"7\"}",
+                "\"id\":\"text\"",
+                "\"revision\":\"7\"",
                 "\"tag\":\"streamed\"",
                 "stdout:text",
             ],
@@ -1154,10 +1158,7 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
         (
             "none",
             false,
-            vec![
-                "\"structured\":{\"id\":\"none\",\"revision\":\"7\"}",
-                "\"tag\":\"none\"",
-            ],
+            vec!["\"id\":\"none\"", "\"revision\":\"7\"", "\"tag\":\"none\""],
         ),
         ("blocks", true, vec!["\"tag\":\"blocks\"", "left", "right"]),
         (
@@ -1200,16 +1201,23 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
                 "missing {fragment} for {item_id}: {observed}"
             );
         }
+        if item_id != "error" {
+            let projected: Value = serde_json::from_str(observed.lines().next().unwrap()).unwrap();
+            assert_eq!(
+                projected["structured"],
+                json!({"id":item_id,"revision":"7","payload":{"b":[1,null,{"x":"y"}],"a":1.5}})
+            );
+        }
     }
     assert_eq!(
         *calls.lock().unwrap(),
         vec![
-            json!({"item-id":"text","includeHistory":false}),
-            json!({"item-id":"none","includeHistory":false}),
-            json!({"item-id":"blocks","includeHistory":true}),
-            json!({"item-id":"resource","includeHistory":false}),
-            json!({"item-id":"error","includeHistory":false}),
-            json!({"item-id":"middleware","includeHistory":true}),
+            json!({"item-id":"text","includeHistory":false,"payload":{"b":[1,null,{"x":"y"}],"a":1.5}}),
+            json!({"item-id":"none","includeHistory":false,"payload":{"b":[1,null,{"x":"y"}],"a":1.5}}),
+            json!({"item-id":"blocks","includeHistory":true,"payload":{"b":[1,null,{"x":"y"}],"a":1.5}}),
+            json!({"item-id":"resource","includeHistory":false,"payload":{"b":[1,null,{"x":"y"}],"a":1.5}}),
+            json!({"item-id":"error","includeHistory":false,"payload":{"b":[1,null,{"x":"y"}],"a":1.5}}),
+            json!({"item-id":"middleware","includeHistory":true,"payload":{"b":[1,null,{"x":"y"}],"a":1.5}}),
         ]
     );
     upstream.shutdown().await;

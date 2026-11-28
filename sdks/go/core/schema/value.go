@@ -65,6 +65,9 @@ type CharValue struct{ Value rune }
 // StringValue is a string.
 type StringValue struct{ Value string }
 
+// JsonValue carries JSON text. Value acceptance validates the text.
+type JsonValue struct{ Value string }
+
 // RecordValue holds one value per declared field, in declaration order.
 type RecordValue struct{ Fields []SchemaValue }
 
@@ -173,6 +176,7 @@ func (F32Value) isSchemaValue()            {}
 func (F64Value) isSchemaValue()            {}
 func (CharValue) isSchemaValue()           {}
 func (StringValue) isSchemaValue()         {}
+func (JsonValue) isSchemaValue()           {}
 func (RecordValue) isSchemaValue()         {}
 func (VariantValue) isSchemaValue()        {}
 func (EnumValue) isSchemaValue()           {}

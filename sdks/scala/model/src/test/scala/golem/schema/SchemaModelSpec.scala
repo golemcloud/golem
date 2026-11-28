@@ -156,6 +156,18 @@ object SchemaModelSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("SchemaModelSpec")(
+      test("JSON wire transport preserves text and reserved role identity") {
+        val roles =
+          List(Role.StandardMultimodal, Role.TaskUpdate, Role.Other("standard-multimodal"), Role.Other("task-update"))
+        val graphs = roles.map(role =>
+          SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.JsonType, MetadataEnvelope(role = Some(role))))
+        )
+        val values = List(" {\"x\": [1, null]} ", "null", "{").map(SchemaValue.JsonValue.apply)
+        assertTrue(
+          graphs.forall(graph => SchemaWire.schemaGraphFromWit(SchemaWire.schemaGraphToWit(graph)) == graph),
+          values.forall(value => SchemaWire.schemaValueFromWit(SchemaWire.schemaValueToWit(value)) == value)
+        )
+      },
       suite("SchemaBuilder")(
         test("register reserves before building so self-recursive types close to a ref") {
           import SchemaTypeBody._

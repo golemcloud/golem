@@ -29,6 +29,57 @@ inherit_test_dep!(Tracing);
 
 const EXPECTED: &str = "2|1|1|true|true|true";
 
+async fn check_native_json_rpc(template: &str, write_agent: impl FnOnce(&TestContext)) {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    let app = format!("{template}-native-json");
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, &app, flag::TEMPLATE, template])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd(&app);
+    write_agent(&ctx);
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    let mut yaml: serde_yaml::Value =
+        serde_yaml::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    yaml.as_mapping_mut().unwrap().remove("httpApi");
+    fs::write_str(manifest, serde_yaml::to_string(&yaml).unwrap()).unwrap();
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let expected = serde_json::json!({"b": [1, null, {"x": "y"}], "a": 1.5});
+    let argument = format!(
+        "Json({})",
+        serde_json::to_string(&expected.to_string()).unwrap()
+    );
+    let output = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            r#"JsonEcho("caller")"#,
+            "rpc",
+            &argument,
+            flag::FORMAT,
+            "json",
+            "--no-stream",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+    let documents = output.stdout_json::<serde_json::Value>();
+    let result = documents
+        .iter()
+        .find(|event| event["$type"] == "agent.invoke")
+        .unwrap();
+    let typed: golem_common::schema::graph::TypedSchemaValue =
+        serde_json::from_value(result["resultJson"].clone()).unwrap();
+    let golem_common::schema::SchemaValue::Json(text) = typed.value() else {
+        panic!("{template} did not return the JSON schema node: {result}");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(text).unwrap(),
+        expected
+    );
+}
+
 async fn deploy_and_check(template: &str, write_caller: impl FnOnce(&TestContext)) {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
@@ -77,6 +128,156 @@ fn find_source(root: &Path, name: &str) -> PathBuf {
         }
     }
     panic!("no {name} under {}", root.display())
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn typescript_native_json_roundtrips_over_rpc() {
+    check_native_json_rpc("ts", |ctx| {
+        let source = find_source(ctx.cwd_path(), "counter-agent.ts");
+        fs::write_str(
+            source,
+            indoc! {r#"
+            import { z } from 'zod';
+            import { defineAgent, method, s } from '@golemcloud/golem-ts-sdk';
+            const JsonEcho = defineAgent({
+              name: 'JsonEcho', id: { name: z.string() },
+              methods: {
+                echo: method({ input: { value: s.json() }, returns: s.json() }),
+                rpc: method({ input: { value: s.json() }, returns: s.json() }),
+              },
+            });
+            JsonEcho.implement({
+              init: () => ({}),
+              methods: {
+                echo: ({ value }) => value,
+                rpc: ({ value }) => JsonEcho.client.upsert({ name: 'target' }).echo({ value }),
+              },
+            });
+        "#},
+        )
+        .unwrap();
+    })
+    .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn effect_native_json_roundtrips_over_rpc() {
+    check_native_json_rpc("effect", |ctx| {
+        let source = find_source(ctx.cwd_path(), "counter-agent.ts");
+        fs::write_str(
+            source,
+            indoc! {r#"
+            import { Effect, Schema } from 'effect';
+            import { defineAgent, method, WitTypes } from '@golemcloud/effect-golem';
+            const JsonEcho = defineAgent({
+              name: 'JsonEcho', id: { name: Schema.String },
+              methods: {
+                echo: method({ input: { value: WitTypes.Json }, success: WitTypes.Json }),
+                rpc: method({ input: { value: WitTypes.Json }, success: WitTypes.Json }),
+              },
+            });
+            JsonEcho.implement({
+              init: () => Effect.succeed({}),
+              methods: () => ({
+                echo: ({ value }) => Effect.succeed(value),
+                rpc: ({ value }) => Effect.gen(function* () {
+                  const target = yield* JsonEcho.client.upsert({ name: 'target' });
+                  return yield* target.echo({ value });
+                }).pipe(Effect.orDie, Effect.scoped),
+              }),
+            });
+        "#},
+        )
+        .unwrap();
+    })
+    .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn scala_native_json_roundtrips_over_rpc() {
+    check_native_json_rpc("scala", |ctx| {
+        let counter = find_source(ctx.cwd_path(), "CounterAgent.scala");
+        let package = fs::read_to_string(&counter).unwrap().lines().next().unwrap().to_string();
+        fs::write_str(counter.with_file_name("JsonEcho.scala"), format!("{package}\n{}", indoc! {r#"
+            import golem.BaseAgent
+            import golem.runtime.annotations.{agentDefinition, agentImplementation}
+            import zio.blocks.schema.json.Json
+            import scala.concurrent.Future
+            @agentDefinition()
+            trait JsonEcho extends BaseAgent {
+              class Id(val name: String)
+              def echo(value: Json): Future[Json]
+              def rpc(value: Json): Future[Json]
+            }
+            @agentImplementation()
+            final class JsonEchoImpl(private val name: String) extends JsonEcho {
+              override def echo(value: Json): Future[Json] = Future.successful(value)
+              override def rpc(value: Json): Future[Json] = JsonEchoClient.upsert("target").echo(value)
+            }
+        "#})).unwrap();
+    }).await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn moonbit_native_json_roundtrips_over_rpc() {
+    check_native_json_rpc("moonbit", |ctx| {
+        let counter = find_source(ctx.cwd_path(), "counter.mbt");
+        fs::write_str(
+            counter.with_file_name("json_echo.mbt"),
+            indoc! {r#"
+            ///|
+            #derive.agent
+            struct JsonEcho { name : String }
+            ///|
+            fn JsonEcho::new(name : String) -> JsonEcho { { name, } }
+            ///|
+            pub fn JsonEcho::echo(_self : Self, value : Json) -> Json { value }
+            ///|
+            pub async fn JsonEcho::rpc(_self : Self, value : Json) -> Json {
+              JsonEchoClient::upsert("target").echo(value)
+            }
+        "#},
+        )
+        .unwrap();
+    })
+    .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn go_native_json_roundtrips_over_rpc() {
+    check_native_json_rpc("go", |ctx| {
+        let counter = find_source(ctx.cwd_path(), "counter.go");
+        let definition = fs::read_to_string(&counter).unwrap();
+        fs::write_str(&counter, definition + indoc! {r#"
+
+            type JsonID struct { Name string }
+            type JsonInput struct { Value json.RawMessage }
+            var JsonAgent = golem.DefineAgent[JsonID](golem.Spec{Name: "JsonEcho"})
+            var EchoJson = JsonAgent.Method[JsonInput, json.RawMessage]("echo")
+            var RpcJson = JsonAgent.Method[JsonInput, json.RawMessage]("rpc")
+        "#}).unwrap();
+        let definition = fs::read_to_string(&counter).unwrap().replace("import \"github.com", "import \"encoding/json\"\n\nimport \"github.com");
+        fs::write_str(&counter, definition).unwrap();
+        let implementation = counter.parent().unwrap().join("impl/impl.go");
+        let source = fs::read_to_string(&implementation).unwrap();
+        fs::write_str(&implementation, source + indoc! {r#"
+
+            func init() {
+              owner := counter.JsonAgent.Implement(func(counter.JsonID) *state { return &state{} })
+              owner.Handle(counter.EchoJson, func(_ *golem.Context[state], in counter.JsonInput) json.RawMessage { return in.Value })
+              owner.Handle(counter.RpcJson, func(_ *golem.Context[state], in counter.JsonInput) json.RawMessage {
+                return counter.EchoJson.MustCall(counter.JsonAgent.Upsert(counter.JsonID{Name: "target"}), in)
+              })
+            }
+        "#}).unwrap();
+        let source = fs::read_to_string(&implementation).unwrap().replace("import (", "import (\n\"encoding/json\"");
+        fs::write_str(implementation, source).unwrap();
+    }).await;
 }
 
 #[test]

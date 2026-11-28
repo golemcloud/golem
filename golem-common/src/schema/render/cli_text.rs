@@ -69,6 +69,7 @@ fn type_to_text_inner(
         SchemaType::F64 { .. } => "f64".to_string(),
         SchemaType::Char { .. } => "char".to_string(),
         SchemaType::String { .. } => "string".to_string(),
+        SchemaType::Json { .. } => "json".to_string(),
         SchemaType::Record { fields, .. } => {
             let inner = fields
                 .iter()
@@ -427,6 +428,10 @@ fn render_value(
         (SchemaType::F64 { .. }, SchemaValue::F64(f)) => Ok(f.to_string()),
         (SchemaType::Char { .. }, SchemaValue::Char(c)) => Ok(format!("'{c}'")),
         (SchemaType::String { .. }, SchemaValue::String(s)) => Ok(format!("{s:?}")),
+        (SchemaType::Json { .. }, SchemaValue::Json(_)) => {
+            golem_schema::schema::render::to_json_value(graph, ty, value)
+                .map(|json| json.to_string())
+        }
 
         (SchemaType::Text { .. }, SchemaValue::Text(p)) => Ok(canonical::text::to_text(p)),
         (SchemaType::Binary { .. }, SchemaValue::Binary(p)) => Ok(canonical::binary::to_text(p)?),

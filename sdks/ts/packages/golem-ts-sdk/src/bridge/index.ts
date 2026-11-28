@@ -6,6 +6,8 @@ import type { UnstructuredBinary as SdkUnstructuredBinary } from '../newTypes/bi
 import type { UnstructuredText as SdkUnstructuredText } from '../newTypes/textInput';
 
 export type * from '../internal/schema-model/model';
+export type { JsonValue } from '../schema/ref';
+export { assertJsonValue, parseJsonValue, stringifyJsonValue } from '../internal/schema-model/json';
 export {
   t,
   v,

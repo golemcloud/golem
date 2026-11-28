@@ -77,8 +77,13 @@ These schema categories have the same canonical shapes across SDKs. Restrictions
 | URL             | `"https://example.com/file"`                             |
 | Path            | `"/data/file.txt"`                                       |
 | Quantity        | `{"mantissa":"12345","scale":2,"unit":"m"}`              |
+| JSON            | `{"b":[1,null,{"x":"y"}],"a":1.5}` (inline, not quoted) |
 
 Binary bytes use **unpadded base64url**, not a numeric array. Language and MIME type annotations are optional. Ordinary byte lists remain numeric arrays; choose a rich binary schema explicitly when that is the intended contract.
+
+The JSON schema type accepts objects, arrays, strings, numbers, booleans and null. JSON Schema and OpenAPI project it as `{}`, including inside records and lists. HTTP bindings accept it only in a body field, not in a path, query or header. For a method parameter named `payload`, send `{"payload": <JSON value>}`; the outer method-input object does not change.
+
+Schema transports store JSON text and preserve it without parsing. Value acceptance and native SDK conversion parse the text and reject malformed JSON. Native number ranges and precision remain those of each SDK and the host; this type does not add arbitrary-precision cross-language numbers. Canonical JSON uses null for an absent option, so `option<json>` cannot distinguish an absent value from a present JSON null in that projection. The schema transport retains that distinction.
 
 ## SDK types to JSON
 
@@ -111,6 +116,7 @@ Use `s.uint8Array()`, `s.int8Array()`, `s.uint16Array()`, `s.int16Array()`, `s.u
 | Rich schema / export                  | Category                           |
 | ------------------------------------- | ---------------------------------- |
 | `s.char()`, `s.uuid()`                | Character, UUID                    |
+| `s.json()`                            | Native `JsonValue`                  |
 | `s.datetime()`, `s.duration()`        | Datetime, duration                 |
 | `s.url()`, `s.text()`, `s.binary()`   | URL, text, binary                  |
 | `Path(options?)`, `Quantity(options)` | Path, quantity schema constructors |
@@ -171,6 +177,7 @@ Numeric pins are `WitTypes.Int8`, `Int16`, `Int32`, `Int64`, `Uint8`, `Uint16`, 
 | Rich schema                                                    | Category            |
 | -------------------------------------------------------------- | ------------------- |
 | `WitTypes.Char`                                                | Character           |
+| `WitTypes.Json`                                                | Native `JsonValue`  |
 | `WitTypes.Datetime`, `WitTypes.Duration`                       | Datetime, duration  |
 | `WitTypes.Url()`, `WitTypes.Path()`, `WitTypes.Quantity(spec)` | URL, path, quantity |
 | `WitTypes.Text()`, `WitTypes.Binary()`                         | Text, binary        |
@@ -216,7 +223,7 @@ Derives preserve case names by default. Use derive `rename` / `rename_all` attri
 | ---------------------- | --------------------------------------- | ------------------------------------------------------------------------- |
 | `jiff`                 | `jiff::civil::Date`, `Time`, `DateTime` | `"2026-01-02"`, `"03:04:05.000000000"`, `"2026-01-02T03:04:05.000000000"` |
 | `jiff`                 | `jiff::SignedDuration`                  | `{"nanoseconds":"1500000000"}`                                            |
-| `serde_json_types`     | `serde_json::Value`                     | `"{\"count\":5}"` (a string containing JSON)                              |
+| `serde_json_types`     | `serde_json::Value`                     | `{"count":5}` (inline JSON)                                                |
 | `url`                  | `url::Url`                              | `"https://example.com/"`                                                  |
 | `bytes`                | `bytes::Bytes`                          | `{"bytes":"AQID"}` (rich binary, unlike `Vec<u8>`)                        |
 | `mac_address`          | `mac_address::MacAddress`               | `{"bytes":[0,1,2,3,4,5]}` (fixed six bytes)                               |
@@ -278,6 +285,7 @@ Case names are preserved. `Text(text: String)` becomes `{"Text":{"text":"hi"}}`.
 | Rich Scala type                                                      | Category            |
 | -------------------------------------------------------------------- | ------------------- |
 | `java.util.UUID`                                                     | UUID                |
+| `zio.blocks.schema.json.Json`                                        | Native JSON         |
 | `java.time.Instant`, `java.time.Duration`                            | Datetime, duration  |
 | `golem.schema.GolemPath`, `java.net.URI`, `golem.schema.Quantity[U]` | Path, URL, quantity |
 | `golem.schema.Text`                                                  | Text                |
@@ -329,6 +337,7 @@ Custom MoonBit records and enums use `#derive.golem_schema`. Case names are pres
 | ---------------------------------------------------- | ------------------- |
 | `@schema.Datetime`, `@schema.Uuid`                   | Datetime, UUID      |
 | `@schema.Duration`, `@schema.Text[S]`                | Duration, text      |
+| `Json`                                               | Native JSON         |
 | `@schema.Url`, `@schema.Path`, `@schema.Quantity[U]` | URL, path, quantity |
 | `Bytes`                                              | Binary              |
 
@@ -397,6 +406,7 @@ var _ = golem.DefineEnum[Status]("active", "closed")
 | ---------------------------------------------- | ------------------------ |
 | `golem.UUID`, `time.Time`, `time.Duration`     | UUID, datetime, duration |
 | `golem.Text`, `golem.Binary`                   | Text, binary             |
+| `json.RawMessage`                             | Native JSON              |
 | `golem.URL`, `golem.Path`, `golem.Quantity[U]` | URL, path, quantity      |
 
 </Tabs.Tab>

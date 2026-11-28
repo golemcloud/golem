@@ -115,6 +115,15 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 	case StringType:
 		n, err := expect[StringValue](v, path, "string")
 		return utf8Rendered(n.Value, path, err)
+	case JsonType:
+		n, err := expect[JsonValue](v, path, "json")
+		if err != nil {
+			return nil, err
+		}
+		if err := checkJSON(n.Value, path); err != nil {
+			return nil, err
+		}
+		return json.RawMessage(n.Value), nil
 	case PathType:
 		n, err := expect[PathValue](v, path, "path")
 		return utf8Rendered(n.Value, path, err)
@@ -464,6 +473,9 @@ func (r Ref) PackJSONBytes(data []byte) (SchemaValue, error) {
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("golem: invalid JSON: data after the value")
 	}
+	if err := checkJSONUnicode(string(data), ""); err != nil {
+		return nil, err
+	}
 	return r.PackJSON(value)
 }
 
@@ -589,6 +601,15 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 			return nil, typeErr(path, "string", value)
 		}
 		return StringValue{Value: raw}, nil
+	case JsonType:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s: invalid JSON: %w", pathOrRoot(path), err)
+		}
+		if err := checkJSON(string(raw), path); err != nil {
+			return nil, err
+		}
+		return JsonValue{Value: string(raw)}, nil
 	case PathType:
 		raw, ok := value.(string)
 		if !ok {

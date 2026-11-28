@@ -2819,6 +2819,24 @@ fn colliding_names_tool() -> Tool {
     }
 }
 
+#[test]
+fn native_json_clients_compile_in_both_modes() {
+    for mode in [RustBridgeMode::ExternalRest, RustBridgeMode::GuestWasmRpc] {
+        let dir = TempDir::new().unwrap();
+        let package_dir = Utf8Path::from_path(dir.path()).unwrap();
+        RustBridgeGenerator::new_with_mode(
+            crate::bridge_gen::fixtures::json_agent("rust"),
+            package_dir,
+            true,
+            mode,
+        )
+        .unwrap()
+        .generate()
+        .unwrap();
+        cargo_check(package_dir);
+    }
+}
+
 fn uuid_agent() -> AgentTypeSchema {
     agent(
         "UuidAgent",

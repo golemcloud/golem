@@ -192,6 +192,12 @@ fn encode(
             canonical::url::to_json(url).map_err(RenderError::from)
         }
         (SchemaType::Uuid { .. }, SchemaValue::Uuid(value)) => Ok(canonical::uuid::to_json(value)),
+        (SchemaType::Json { .. }, SchemaValue::Json(value)) => {
+            serde_json::from_str(value).map_err(|e| RenderError::ValueMismatch {
+                path: r.path.render(),
+                reason: format!("invalid JSON: {e}"),
+            })
+        }
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             canonical::datetime::to_json(value).map_err(RenderError::from)
         }
@@ -628,6 +634,7 @@ fn from_json_body(
             let value = canonical::uuid::from_json(json)?;
             Ok(SchemaValue::Uuid(value))
         }
+        SchemaType::Json { .. } => Ok(SchemaValue::Json(json.to_string())),
         SchemaType::Datetime { .. } => {
             let dt = canonical::datetime::from_json(json)?;
             Ok(SchemaValue::Datetime { value: dt })
@@ -1213,6 +1220,7 @@ fn type_name(ty: &SchemaType) -> &'static str {
         SchemaType::Path { .. } => "path",
         SchemaType::Url { .. } => "url",
         SchemaType::Uuid { .. } => "uuid",
+        SchemaType::Json { .. } => "json",
         SchemaType::Datetime { .. } => "datetime",
         SchemaType::Duration { .. } => "duration",
         SchemaType::Quantity { .. } => "quantity",
@@ -1255,6 +1263,7 @@ fn value_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Path { .. } => "path",
         SchemaValue::Url { .. } => "url",
         SchemaValue::Uuid(_) => "uuid",
+        SchemaValue::Json(_) => "json",
         SchemaValue::Datetime { .. } => "datetime",
         SchemaValue::Duration(_) => "duration",
         SchemaValue::Quantity(_) => "quantity",

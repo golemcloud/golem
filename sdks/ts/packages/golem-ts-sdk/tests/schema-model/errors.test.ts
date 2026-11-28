@@ -78,6 +78,7 @@ describe('schema value decode failures', () => {
       'f64-value': { valid: () => ({ tag: 'f64-value', val: 0 }) },
       'char-value': { valid: () => ({ tag: 'char-value', val: 'x' }) },
       'string-value': { valid: () => ({ tag: 'string-value', val: '' }) },
+      'json-value': { valid: () => ({ tag: 'json-value', val: '{"a":1}' }) },
       'record-value': {
         valid: () => ({ tag: 'record-value', val: [] }),
         malformed: () => [{ tag: 'record-value', val: null }],

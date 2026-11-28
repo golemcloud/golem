@@ -453,6 +453,7 @@ pub fn value_kind(v: &SchemaValue) -> &'static str {
         SchemaValue::Path { .. } => "path",
         SchemaValue::Url { .. } => "url",
         SchemaValue::Uuid(_) => "uuid",
+        SchemaValue::Json(_) => "json",
         SchemaValue::Datetime { .. } => "datetime",
         SchemaValue::Duration(_) => "duration",
         SchemaValue::Quantity(_) => "quantity",

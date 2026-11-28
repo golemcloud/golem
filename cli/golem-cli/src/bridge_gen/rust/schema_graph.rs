@@ -86,6 +86,7 @@ fn emit_body(body: &wire::SchemaTypeBody) -> TokenStream {
     match body {
         RefType(value) => quote! { #path::RefType(#value) },
         BoolType => quote! { #path::BoolType },
+        JsonType => quote! { #path::JsonType },
         S8Type(value) => numeric_body("S8Type", value),
         S16Type(value) => numeric_body("S16Type", value),
         S32Type(value) => numeric_body("S32Type", value),
@@ -270,6 +271,12 @@ fn emit_metadata(value: &wire::MetadataEnvelope) -> TokenStream {
                 }
                 wire::Role::UnstructuredBinary => {
                     quote! { golem_rust::schema::wit::wire::Role::UnstructuredBinary }
+                }
+                wire::Role::StandardMultimodal => {
+                    quote! { golem_rust::schema::wit::wire::Role::StandardMultimodal }
+                }
+                wire::Role::TaskUpdate => {
+                    quote! { golem_rust::schema::wit::wire::Role::TaskUpdate }
                 }
                 wire::Role::Other(value) => {
                     quote! { golem_rust::schema::wit::wire::Role::Other(#value.to_string()) }

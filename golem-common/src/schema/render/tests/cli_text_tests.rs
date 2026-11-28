@@ -30,6 +30,24 @@ use proptest::prelude::*;
 use test_r::test;
 
 #[test]
+fn json_renders_as_compact_json_without_string_escaping() {
+    let graph = SchemaGraph::anonymous(SchemaType::json());
+    assert_eq!(type_to_cli_text(&graph, &graph.root), "json");
+    for (text, expected) in [
+        ("{ \"a\": [1, null] }", "{\"a\":[1,null]}"),
+        ("\"text\"", "\"text\""),
+        ("null", "null"),
+        ("false", "false"),
+    ] {
+        assert_eq!(
+            value_to_cli_text(&graph, &graph.root, &SchemaValue::Json(text.into())).unwrap(),
+            expected
+        );
+    }
+    assert!(value_to_cli_text(&graph, &graph.root, &SchemaValue::Json("{".into())).is_err());
+}
+
+#[test]
 fn type_record_renders_concise_form() {
     let ty = SchemaType::record(vec![
         NamedFieldType {

@@ -6,6 +6,23 @@ fn round_trip(v : SchemaValue) -> SchemaValue raise {
 }
 
 ///|
+test "JSON native and public projections preserve values and reject invalid payloads" {
+  let codec = public_value_codec("{\"root\":{\"kind\":\"json\",\"value\":{}}}")
+  for text in ["{\"b\":[1,null],\"a\":false}", "[null,true]", "\"text\"", "1.5", "false", "null"] {
+    let value = JsonValue(text)
+    let expected = @json.parse(text)
+    @debug.assert_eq(as_json(value), expected)
+    @debug.assert_eq(codec.encode_application(value), expected)
+    @debug.assert_eq(codec.decode(codec.encode(value)), value)
+  }
+  for text in ["{", "", "null trailing"] {
+    try as_json(JsonValue(text)) catch { _ => () } noraise { _ => fail("invalid JSON accepted") }
+    try codec.encode(JsonValue(text)) catch { _ => () } noraise { _ => fail("invalid JSON projected") }
+  }
+  try as_json(StringValue("{}")) catch { _ => () } noraise { _ => fail("wrong tag accepted") }
+}
+
+///|
 test "direct writer preserves all optional payloads and numeric tokens" {
   let cases : Array[SchemaValue] = [
     F32Value(-0.0),
@@ -15,6 +32,7 @@ test "direct writer preserves all optional payloads and numeric tokens" {
     F64Value(-1.0 / 0.0),
     F64Value(0.0 / 0.0),
     StringValue("\"\\\n\t\u0001é😀"),
+    JsonValue(" {\"b\": [1, null], \"a\": false} "),
     UuidValue(Uuid::from_bits(0x0123456789abcdefUL, 0xfedcba9876543210UL)),
     FixedListValue([U8Value(7)]),
     VariantValue(1, None),

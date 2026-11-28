@@ -70,12 +70,21 @@ type MetadataEnvelope struct {
 }
 
 // Role tags a type with a consumer-facing intent.
-type Role string
+type Role struct {
+	Tag   RoleTag
+	Value string
+}
+
+// RoleTag identifies a named role or an open registry entry.
+type RoleTag string
 
 const (
-	RoleMultimodal         Role = "multimodal"
-	RoleUnstructuredText   Role = "unstructured-text"
-	RoleUnstructuredBinary Role = "unstructured-binary"
+	RoleMultimodal         RoleTag = "multimodal"
+	RoleUnstructuredText   RoleTag = "unstructured-text"
+	RoleUnstructuredBinary RoleTag = "unstructured-binary"
+	RoleStandardMultimodal RoleTag = "standard-multimodal"
+	RoleTaskUpdate         RoleTag = "task-update"
+	RoleOther              RoleTag = "other"
 )
 
 // SchemaTypeBody is the structural body of a type. The interface is closed:
@@ -94,6 +103,9 @@ type CharType struct{}
 
 // StringType is an unconstrained string.
 type StringType struct{}
+
+// JsonType is an arbitrary JSON value, distinct from a string.
+type JsonType struct{}
 
 // S8Type is a s8 number.
 type S8Type struct{ Restrictions *NumericRestrictions }
@@ -353,6 +365,7 @@ func (RefType) isSchemaTypeBody()            {}
 func (BoolType) isSchemaTypeBody()           {}
 func (CharType) isSchemaTypeBody()           {}
 func (StringType) isSchemaTypeBody()         {}
+func (JsonType) isSchemaTypeBody()           {}
 func (S8Type) isSchemaTypeBody()             {}
 func (S16Type) isSchemaTypeBody()            {}
 func (S32Type) isSchemaTypeBody()            {}

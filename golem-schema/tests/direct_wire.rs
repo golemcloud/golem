@@ -157,8 +157,27 @@ fn bigints_use_the_normal_string_representation() {
 
 #[cfg(feature = "serde_json_types")]
 #[test]
-fn json_values_use_the_normal_string_representation() {
-    assert_direct_parity(serde_json::json!({"values": [1, false, null], "text": "é"}));
+fn json_values_use_the_json_node() {
+    use golem_schema::schema::{FromSchema, IntoSchema, SchemaType, SchemaValue};
+    let graph = golem_schema::schema::wit::decode_graph(&schema::<serde_json::Value>()).unwrap();
+    assert_eq!(graph.root, SchemaType::json());
+    for value in [
+        serde_json::json!({"values": [1, false, null], "text": "é"}),
+        serde_json::json!([1, {"x": false}]),
+        serde_json::Value::Null,
+        serde_json::json!("text"),
+        serde_json::json!(3.5),
+        serde_json::json!(false),
+    ] {
+        assert_direct_parity(value.clone());
+        assert_eq!(value.to_value(), SchemaValue::Json(value.to_string()));
+        assert!(serde_json::Value::from_value(&SchemaValue::String(value.to_string())).is_err());
+    }
+    let malformed = golem_schema::schema::wit::wire::SchemaValueTree {
+        value_nodes: vec![wire::SchemaValueNode::JsonValue("{".into())],
+        root: 0,
+    };
+    assert!(decode::<serde_json::Value>(malformed).is_err());
     assert!(decode::<serde_json::Value>(encode("{").unwrap()).is_err());
 }
 

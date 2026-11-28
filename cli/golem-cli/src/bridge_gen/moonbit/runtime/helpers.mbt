@@ -142,6 +142,16 @@ pub fn as_string(v : SchemaValue) -> String raise {
 }
 
 ///|
+pub fn as_json(v : SchemaValue) -> Json raise {
+  match v {
+    JsonValue(text) => @json.parse(text) catch {
+      error => raise BridgeError(error.to_string())
+    }
+    o => mismatch("json", o)
+  }
+}
+
+///|
 pub fn as_path(v : SchemaValue) -> Path raise {
   match v {
     PathValue(x) => Path::new(x)

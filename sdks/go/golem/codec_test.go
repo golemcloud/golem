@@ -1,6 +1,7 @@
 package golem
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
@@ -173,6 +174,38 @@ func TestRoundTripPrimitivesAndRecords(t *testing.T) {
 	assertRoundTrip(t, "uint8", uint8(255))
 	assertRoundTrip(t, "float64", 3.5)
 	assertRoundTrip(t, "record", Money{Amount: 1050, Currency: "EUR"})
+}
+
+func TestNativeJSONCodec(t *testing.T) {
+	for _, text := range []string{` {"b":[1,null,{"x":"y"}],"a":1.5} `, `[false,null]`, `"text"`, `1.5`, `true`, `null`, `"\ud83d\ude00"`, `{"\ud83d\ude00":"\\ud800"}`} {
+		in := json.RawMessage(text)
+		assertRoundTrip(t, "JSON", in)
+		assertRoundTrip(t, "record JSON field", struct{ Payload json.RawMessage }{in})
+		c := defs.Compile(reflect.TypeFor[json.RawMessage]())
+		g := engine.GraphBuilder{E: defs.Engine}
+		root := g.Node(c)
+		if g.Build().TypeNodes[root].Body.Tag() != types.SchemaTypeBodyJsonType {
+			t.Fatal("JSON derived as bytes")
+		}
+	}
+	c := defs.Compile(reflect.TypeFor[json.RawMessage]())
+	for _, text := range []string{`"\ud800"`, `{"key":"\udfff"}`, `{"\ud800":true}`} {
+		mustPanic(t, "surrogates", func() {
+			engine.EncodeWith(c, reflect.ValueOf(json.RawMessage(text)))
+		})
+		out := reflect.New(reflect.TypeFor[json.RawMessage]()).Elem()
+		d := engine.Decoder{Nodes: []types.SchemaValueNode{types.MakeSchemaValueNodeJsonValue(text)}}
+		if err := c.Decode(&d, out, 0); err == nil {
+			t.Fatalf("decoded host-invalid JSON %q", text)
+		}
+	}
+	for _, n := range []types.SchemaValueNode{types.MakeSchemaValueNodeStringValue(`{}`), types.MakeSchemaValueNodeJsonValue(`{`), types.MakeSchemaValueNodeJsonValue(`1e400`)} {
+		out := reflect.New(reflect.TypeFor[json.RawMessage]()).Elem()
+		d := engine.Decoder{Nodes: []types.SchemaValueNode{n}}
+		if err := c.Decode(&d, out, 0); err == nil {
+			t.Fatal("accepted malformed or wrong-tag JSON")
+		}
+	}
 }
 
 func TestRoundTripNestedComposites(t *testing.T) {

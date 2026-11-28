@@ -65,6 +65,50 @@ function roundtripGraph(graph: SchemaGraph): void {
   expect(schemaGraphFromWit(schemaGraphToWit(graph))).toEqual(graph);
 }
 
+describe('reserved A2A roles', () => {
+  it('preserves named wire tags but rejects every metadata position at acceptance', () => {
+    for (const role of [{ tag: 'standard-multimodal' }, { tag: 'task-update' }] as const) {
+      const metadata = { ...emptyMetadata(), role };
+      const roots = [
+        { ...t.json(), metadata },
+        t.record([{ ...field('payload', t.json()), metadata }]),
+        t.variant([{ ...variantCase('payload', t.json()), metadata }]),
+        schemaType({
+          tag: 'union',
+          branches: [
+            {
+              tag: 'payload',
+              body: t.string(),
+              discriminator: { tag: 'prefix', val: '' },
+              metadata,
+            },
+          ],
+        }),
+      ];
+      for (const root of roots) {
+        const graph = { defs: new Map(), root };
+        roundtripGraph(graph);
+        expect(validateSchemaGraph(graph)).toContainEqual(
+          expect.objectContaining({ code: 'unsupported-role' }),
+        );
+      }
+      const graph = {
+        root: t.string(),
+        defs: new Map([['unused', { name: undefined, body: { ...t.json(), metadata } }]]),
+      };
+      expect(validateSchemaGraph(graph)).toContainEqual(
+        expect.objectContaining({ code: 'unsupported-role' }),
+      );
+    }
+    expect(validateSchemaGraph({ defs: new Map(), root: t.option(t.json()) })).toEqual([]);
+    const root = {
+      ...t.json(),
+      metadata: { ...emptyMetadata(), role: { tag: 'other' as const, val: 'TaskUpdate' } },
+    };
+    expect(validateSchemaGraph({ defs: new Map(), root })).toEqual([]);
+  });
+});
+
 describe('recursive and mutually-recursive types', () => {
   it('self-recursive Tree closes via reserve/commit and emits one def', () => {
     const b = new SchemaBuilder();

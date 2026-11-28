@@ -38,6 +38,62 @@ func roundTrip(t *testing.T, root SchemaType, in string) string {
 	return string(out)
 }
 
+func TestNativeJSONProjection(t *testing.T) {
+	root := typ(JsonType{})
+	for _, in := range []string{`{"b":[1,null,{"x":"y"}],"a":1.5}`, `[null,false]`, `"text"`, `3.5`, `true`, `null`, `18446744073709551615`, `"\ud83d\ude00"`, `{"\ud83d\ude00":"\\ud800"}`} {
+		out := roundTrip(t, root, in)
+		var want, got any
+		if err := json.Unmarshal([]byte(in), &want); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(want, got) {
+			t.Fatalf("%s projected as %s", in, out)
+		}
+		if in == `18446744073709551615` && out != in {
+			t.Fatalf("integer text changed: %s", out)
+		}
+	}
+	r := NewRef(SchemaGraph{Root: root})
+	for _, text := range []string{"", "{", "null trailing", "1e400", `"\ud800"`, `{"key":"\udfff"}`, `{"\ud800":true}`} {
+		v := JsonValue{Value: text}
+		if _, err := r.PackJSONBytes([]byte(text)); err == nil {
+			t.Errorf("packed %q", text)
+		}
+		if err := r.Validate(v); err == nil {
+			t.Errorf("accepted %q", text)
+		}
+		if _, err := r.UnpackJSONBytes(v); err == nil {
+			t.Errorf("rendered %q", text)
+		}
+		wire, err := MarshalWireValue(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := UnmarshalWireValue(wire)
+		if err != nil || got != v {
+			t.Fatalf("transport lost raw text: %v, %v", got, err)
+		}
+	}
+	if err := r.Validate(StringValue{Value: `{}`}); err == nil {
+		t.Fatal("accepted old string node")
+	}
+	record := typ(RecordType{Fields: []NamedField{{Name: "payload", Body: root}}})
+	if got := roundTrip(t, record, `{"payload":{"x":[false,null]}}`); got != `{"payload":{"x":[false,null]}}` {
+		t.Fatal(got)
+	}
+	optional := NewRef(SchemaGraph{Root: typ(OptionType{Inner: root})})
+	if got, err := optional.PackJSONBytes([]byte("null")); err != nil || !reflect.DeepEqual(got, OptionValue{}) {
+		t.Fatalf("optional null: %v, %v", got, err)
+	}
+	projected, err := optional.ToJSONSchemaBytes(false)
+	if err != nil || !strings.Contains(string(projected), `"anyOf"`) {
+		t.Fatalf("optional schema: %s, %v", projected, err)
+	}
+}
+
 func mustReject(t *testing.T, root SchemaType, in, wantMsg string) {
 	t.Helper()
 	_, err := NewRef(SchemaGraph{Root: root}).PackJSONBytes([]byte(in))

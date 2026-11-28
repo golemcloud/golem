@@ -110,6 +110,8 @@ func sampleBody(tag uint8, inner int32) (types.SchemaTypeBody, bool) {
 		return types.MakeSchemaTypeBodyCharType(), true
 	case types.SchemaTypeBodyStringType:
 		return types.MakeSchemaTypeBodyStringType(), true
+	case types.SchemaTypeBodyJsonType:
+		return types.MakeSchemaTypeBodyJsonType(), true
 	case types.SchemaTypeBodyRecordType:
 		return types.MakeSchemaTypeBodyRecordType([]types.NamedFieldType{
 			{Name: "f", Body: inner},

@@ -93,6 +93,7 @@ fn emit_schema_type(typ: &SchemaType) -> String {
     let body = match typ {
         Ref { id, .. } => format!("{{ tag: 'ref', id: {} }}", string(id.as_str())),
         Bool { .. } => "{ tag: 'bool' }".to_string(),
+        Json { .. } => "{ tag: 'json' }".to_string(),
         S8 { restrictions, .. } => numeric("s8", restrictions.as_ref()),
         S16 { restrictions, .. } => numeric("s16", restrictions.as_ref()),
         S32 { restrictions, .. } => numeric("s32", restrictions.as_ref()),
@@ -261,6 +262,8 @@ fn metadata(value: &MetadataEnvelope) -> String {
             Role::Multimodal => "{ tag: 'multimodal' }".to_string(),
             Role::UnstructuredText => "{ tag: 'unstructured-text' }".to_string(),
             Role::UnstructuredBinary => "{ tag: 'unstructured-binary' }".to_string(),
+            Role::StandardMultimodal => "{ tag: 'standard-multimodal' }".to_string(),
+            Role::TaskUpdate => "{ tag: 'task-update' }".to_string(),
             Role::Other(value) => format!("{{ tag: 'other', val: {} }}", string(value)),
         },
     );

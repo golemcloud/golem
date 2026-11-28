@@ -75,6 +75,8 @@ fn role_strategy() -> impl Strategy<Value = Role> {
         Just(Role::Multimodal),
         Just(Role::UnstructuredText),
         Just(Role::UnstructuredBinary),
+        Just(Role::StandardMultimodal),
+        Just(Role::TaskUpdate),
         ident_strategy().prop_map(Role::Other),
     ]
 }
@@ -250,6 +252,7 @@ fn leaf_schema_type_strategy(def_ids: Vec<TypeId>) -> BoxedStrategy<SchemaType> 
         Just(SchemaType::char()).boxed(),
         Just(SchemaType::string()).boxed(),
         Just(SchemaType::uuid()).boxed(),
+        Just(SchemaType::json()).boxed(),
         Just(SchemaType::datetime()).boxed(),
         Just(SchemaType::duration()).boxed(),
         text_restrictions().prop_map(SchemaType::text).boxed(),
@@ -409,6 +412,9 @@ fn base_leaf_schema_value_strategy() -> BoxedStrategy<SchemaValue> {
         short_string().prop_map(|path| SchemaValue::Path { path }),
         short_string().prop_map(|url| SchemaValue::Url { url }),
         any::<u128>().prop_map(|value| SchemaValue::Uuid(uuid::Uuid::from_u128(value))),
+        short_string().prop_map(|value| SchemaValue::Json(
+            serde_json::json!({"value": value, "items": [1.5, null, false]}).to_string()
+        )),
         datetime_strategy().prop_map(|value| SchemaValue::Datetime { value }),
         any::<i64>().prop_map(|nanoseconds| {
             SchemaValue::Duration(DurationValuePayload { nanoseconds })

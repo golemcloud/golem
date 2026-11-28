@@ -122,6 +122,7 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         case '[java.time.Instant]                  => SchemaType(SchemaTypeBody.DatetimeType)
         case '[java.time.Duration]                 => SchemaType(SchemaTypeBody.DurationType)
         case '[java.util.UUID]                     => t.uuid
+        case '[zio.blocks.schema.json.Json]        => t.json
         case '[Array[Byte]]                        => t.list(t.u8)
         case '[Option[a]]                          => exact[Option[Any]](ty, "Option[A]"); t.option(body(TypeRepr.of[a]))
         case '[Either[e, a]]                       =>

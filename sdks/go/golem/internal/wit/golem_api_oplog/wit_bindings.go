@@ -8207,44 +8207,52 @@ func wasm_lower_1_t78(pinner *runtime.Pinner, value golem_core_types.SchemaValue
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(27))
 		wasm_lower_1_t4(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
+	case golem_core_types.SchemaValueNodeJsonValue:
+		payload := value.JsonValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
+		utf819 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf819)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf819)))
+
 	case golem_core_types.SchemaValueNodeDatetimeValue:
 		payload := value.DatetimeValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
 		wasm_lower_1_t5(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaValueNodeDurationValue:
 		payload := value.DurationValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
 		wasm_lower_1_t69(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaValueNodeQuantityValueNode:
 		payload := value.QuantityValueNode()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
 		wasm_lower_1_t42(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaValueNodeUnionValue:
 		payload := value.UnionValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
 		wasm_lower_1_t70(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaValueNodeSecretValue:
 		payload := value.SecretValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
 		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (payload).TakeHandle()
 
 	case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 		payload := value.QuotaTokenHandle()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
 		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (payload).TakeHandle()
 
 	case golem_core_types.SchemaValueNodePermissionCardHandle:
 		payload := value.PermissionCardHandle()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
 		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (payload).TakeHandle()
 
 	case golem_core_types.SchemaValueNodeStreamValue:
 		payload := value.StreamValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
 		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (payload).TakeHandle()
 
 	default:
@@ -8805,38 +8813,43 @@ func wasm_lift_1_t78(src unsafe.Pointer) golem_core_types.SchemaValueNode {
 		variant = golem_core_types.MakeSchemaValueNodeUuidValue(result13)
 
 	case 28:
-		result14 := wasm_lift_1_t5(unsafe.Add(unsafe.Pointer(src), 8))
+		value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
 
-		variant = golem_core_types.MakeSchemaValueNodeDatetimeValue(result14)
+		variant = golem_core_types.MakeSchemaValueNodeJsonValue(value14)
 
 	case 29:
-		result15 := wasm_lift_1_t69(unsafe.Add(unsafe.Pointer(src), 8))
+		result15 := wasm_lift_1_t5(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = golem_core_types.MakeSchemaValueNodeDurationValue(result15)
+		variant = golem_core_types.MakeSchemaValueNodeDatetimeValue(result15)
 
 	case 30:
-		result16 := wasm_lift_1_t42(unsafe.Add(unsafe.Pointer(src), 8))
+		result16 := wasm_lift_1_t69(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = golem_core_types.MakeSchemaValueNodeQuantityValueNode(result16)
+		variant = golem_core_types.MakeSchemaValueNodeDurationValue(result16)
 
 	case 31:
-		result17 := wasm_lift_1_t70(unsafe.Add(unsafe.Pointer(src), 8))
+		result17 := wasm_lift_1_t42(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = golem_core_types.MakeSchemaValueNodeUnionValue(result17)
+		variant = golem_core_types.MakeSchemaValueNodeQuantityValueNode(result17)
 
 	case 32:
+		result18 := wasm_lift_1_t70(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+		variant = golem_core_types.MakeSchemaValueNodeUnionValue(result18)
 
 	case 33:
 
-		variant = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+		variant = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
 
 	case 34:
 
-		variant = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+		variant = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
 
 	case 35:
+
+		variant = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+
+	case 36:
 
 		variant = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
 
@@ -9821,42 +9834,46 @@ func wasm_lower_1_t57(pinner *runtime.Pinner, value golem_core_types.SchemaTypeB
 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
 
-	case golem_core_types.SchemaTypeBodyDatetimeType:
+	case golem_core_types.SchemaTypeBodyJsonType:
 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
 
-	case golem_core_types.SchemaTypeBodyDurationType:
+	case golem_core_types.SchemaTypeBodyDatetimeType:
 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
 
+	case golem_core_types.SchemaTypeBodyDurationType:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+
 	case golem_core_types.SchemaTypeBodyQuantityType:
 		payload := value.QuantityType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
 		wasm_lower_1_t44(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaTypeBodyUnionType:
 		payload := value.UnionType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
 		wasm_lower_1_t49(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaTypeBodySecretType:
 		payload := value.SecretType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
 		wasm_lower_1_t50(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaTypeBodyQuotaTokenType:
 		payload := value.QuotaTokenType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
 		wasm_lower_1_t51(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaTypeBodyPermissionCardType:
 		payload := value.PermissionCardType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
 		wasm_lower_1_t52(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_core_types.SchemaTypeBodyFutureType:
 		payload := value.FutureType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(37))
 
 		switch payload.Tag() {
 		case witTypes.OptionNone:
@@ -9873,7 +9890,7 @@ func wasm_lower_1_t57(pinner *runtime.Pinner, value golem_core_types.SchemaTypeB
 
 	case golem_core_types.SchemaTypeBodyStreamType:
 		payload := value.StreamType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(37))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(38))
 
 		switch payload.Tag() {
 		case witTypes.OptionNone:
@@ -10255,38 +10272,42 @@ func wasm_lift_1_t57(src unsafe.Pointer) golem_core_types.SchemaTypeBody {
 
 	case 29:
 
-		variant = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+		variant = golem_core_types.MakeSchemaTypeBodyJsonType()
 
 	case 30:
 
-		variant = golem_core_types.MakeSchemaTypeBodyDurationType()
+		variant = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 	case 31:
+
+		variant = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+	case 32:
 		result34 := wasm_lift_1_t44(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_core_types.MakeSchemaTypeBodyQuantityType(result34)
 
-	case 32:
+	case 33:
 		result35 := wasm_lift_1_t49(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_core_types.MakeSchemaTypeBodyUnionType(result35)
 
-	case 33:
+	case 34:
 		result36 := wasm_lift_1_t50(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_core_types.MakeSchemaTypeBodySecretType(result36)
 
-	case 34:
+	case 35:
 		result37 := wasm_lift_1_t51(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(result37)
 
-	case 35:
+	case 36:
 		result38 := wasm_lift_1_t52(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_core_types.MakeSchemaTypeBodyPermissionCardType(result38)
 
-	case 36:
+	case 37:
 		var option39 witTypes.Option[int32]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
 		case 0:
@@ -10301,7 +10322,7 @@ func wasm_lift_1_t57(src unsafe.Pointer) golem_core_types.SchemaTypeBody {
 
 		variant = golem_core_types.MakeSchemaTypeBodyFutureType(option39)
 
-	case 37:
+	case 38:
 		var option40 witTypes.Option[int32]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
 		case 0:
@@ -11222,9 +11243,17 @@ func wasm_lower_1_t21(pinner *runtime.Pinner, value golem_core_types.Role, dst u
 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
 
+	case golem_core_types.RoleStandardMultimodal:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+
+	case golem_core_types.RoleTaskUpdate:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+
 	case golem_core_types.RoleOther:
 		payload := value.Other()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
 		utf8 := unsafe.Pointer(unsafe.StringData(payload))
 		pinner.Pin(utf8)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))
@@ -11644,6 +11673,14 @@ func wasm_lift_1_t21(src unsafe.Pointer) golem_core_types.Role {
 		variant = golem_core_types.MakeRoleUnstructuredBinary()
 
 	case 3:
+
+		variant = golem_core_types.MakeRoleStandardMultimodal()
+
+	case 4:
+
+		variant = golem_core_types.MakeRoleTaskUpdate()
+
+	case 5:
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 
 		variant = golem_core_types.MakeRoleOther(value0)

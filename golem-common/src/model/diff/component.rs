@@ -409,6 +409,35 @@ mod tests {
     }
 
     #[test]
+    fn json_tool_field_changes_deployment_hash_and_definition_diff() {
+        let mut current_config = tool_config(None);
+        current_config.definition.schema.root =
+            crate::schema::SchemaType::record(vec![crate::schema::NamedFieldType {
+                name: "payload".to_string(),
+                body: crate::schema::SchemaType::string(),
+                metadata: Default::default(),
+            }]);
+        let mut new_config = current_config.clone();
+        new_config.definition.schema.root =
+            crate::schema::SchemaType::record(vec![crate::schema::NamedFieldType {
+                name: "payload".to_string(),
+                body: crate::schema::SchemaType::json(),
+                metadata: Default::default(),
+            }]);
+        let current = component(current_config);
+        let new = component(new_config);
+
+        assert_ne!(current.hash().unwrap(), new.hash().unwrap());
+        let diff = new.diff_with_current(&current).unwrap().unwrap();
+        assert!(!diff.wasm_changed);
+        assert!(matches!(
+            diff.tool_deployment_config_changes.get("grep"),
+            Some(BTreeMapDiffValue::Update(DiffForHashOf::ValueDiff { diff }))
+                if diff.definition_changed
+        ));
+    }
+
+    #[test]
     fn binding_only_tool_change_changes_component_hash_and_produces_value_diff() {
         let current = component(tool_config(None));
         let new = component(tool_config(Some(ToolBindingInput::default())));

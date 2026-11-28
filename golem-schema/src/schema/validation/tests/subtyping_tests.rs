@@ -26,6 +26,16 @@ use crate::schema::validation::subtyping::{
 use proptest::prelude::*;
 use test_r::test;
 
+#[test]
+fn json_is_distinct_from_string_in_subtyping() {
+    let graph = SchemaGraph::empty();
+    let json = SchemaType::json();
+    let string = SchemaType::string();
+    assert!(is_assignable(&graph, &json, &json));
+    assert!(!is_assignable(&graph, &json, &string));
+    assert!(!is_assignable(&graph, &string, &json));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
 

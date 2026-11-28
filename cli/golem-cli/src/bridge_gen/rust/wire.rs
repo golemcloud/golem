@@ -390,6 +390,9 @@ impl RustBridgeGenerator {
             SchemaType::String { .. } => {
                 push(quote! { __wire::SchemaValueNode::StringValue(#val.clone()) })
             }
+            SchemaType::Json { .. } => {
+                push(quote! { __wire::SchemaValueNode::JsonValue(#val.to_string()) })
+            }
             SchemaType::Path { .. } => {
                 push(quote! { __wire::SchemaValueNode::PathValue(#val.clone()) })
             }
@@ -608,6 +611,10 @@ impl RustBridgeGenerator {
             SchemaType::F64 { .. } => scalar!(F64Value, "f64"),
             SchemaType::Char { .. } => scalar!(CharValue, "char"),
             SchemaType::String { .. } => scalar!(StringValue, "string"),
+            SchemaType::Json { .. } => quote! {
+                <golem_rust::serde_json::Value as golem_rust::schema::wit::direct::FromWire>::read_wire(__reader, #index)
+                    .map_err(|__error| __error.to_string())
+            },
             SchemaType::Path { .. } => scalar!(PathValue, "path"),
             SchemaType::Url { .. } => {
                 quote! { match __reader.take(#index).map_err(|e| e.to_string())? {

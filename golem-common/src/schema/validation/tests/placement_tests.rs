@@ -21,6 +21,19 @@ use crate::schema::validation::placement::{PlacementError, SchemaScope, validate
 use test_r::test;
 
 #[test]
+fn reserved_a2a_roles_are_allowed_in_output_placement() {
+    for role in [Role::StandardMultimodal, Role::TaskUpdate] {
+        let root = SchemaType::record(vec![]).with_metadata(MetadataEnvelope {
+            role: Some(role),
+            ..Default::default()
+        });
+        let graph = SchemaGraph::anonymous(root);
+        validate_placement(&graph, SchemaScope::AgentMethodOutput).unwrap();
+        assert!(crate::schema::validation::validate_graph(&graph).is_err());
+    }
+}
+
+#[test]
 fn secret_in_constructor_is_rejected() {
     let graph = SchemaGraph::anonymous(SchemaType::secret(SecretSpec::default()));
     let errors = validate_placement(&graph, SchemaScope::Constructor).expect_err("should fail");

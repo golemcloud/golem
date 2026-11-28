@@ -238,6 +238,12 @@ fn parse_cm_value_inner<D: Dialect>(
             let (s, _, _) = lexer.expect_string()?;
             Ok(SchemaValue::String(s))
         }
+        SchemaType::Json { .. } => {
+            let text = parse_rich_constructor(lexer, "Json")?;
+            serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|error| perr(lexer.position(), &format!("invalid JSON value: {error}")))?;
+            Ok(SchemaValue::Json(text))
+        }
         SchemaType::List { element, .. } => D::parse_list(lexer, graph, element),
         SchemaType::Tuple { elements, .. } => D::parse_tuple(lexer, graph, elements),
         SchemaType::Record { fields, .. } => D::parse_record(lexer, graph, def_name, fields),

@@ -171,6 +171,14 @@ declare module 'golem:core/types@2.0.0' {
   {
     tag: 'unstructured-binary'
   } |
+  /** Reserved for the standard A2A multimodal value. */
+  {
+    tag: 'standard-multimodal'
+  } |
+  /** Reserved for the standard A2A task-update value. */
+  {
+    tag: 'task-update'
+  } |
   /** Any other producer-defined role, preserved verbatim. */
   {
     tag: 'other'
@@ -571,6 +579,9 @@ declare module 'golem:core/types@2.0.0' {
     tag: 'uuid-type'
   } |
   {
+    tag: 'json-type'
+  } |
+  {
     tag: 'datetime-type'
   } |
   {
@@ -811,6 +822,11 @@ declare module 'golem:core/types@2.0.0' {
   {
     tag: 'uuid-value'
     val: Uuid
+  } |
+  /** JSON text; accepts every JSON top-level value. */
+  {
+    tag: 'json-value'
+    val: string
   } |
   {
     tag: 'datetime-value'

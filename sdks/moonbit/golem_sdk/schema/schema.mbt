@@ -126,6 +126,7 @@ pub fn value_kind(v : @model.SchemaValue) -> String {
     Path(_) => "path"
     Url(_) => "url"
     Uuid(_) => "uuid"
+    Json(_) => "json"
     Datetime(_) => "datetime"
     Duration(_) => "duration"
     Quantity(_) => "quantity"

@@ -255,6 +255,24 @@ object WellFormednessSpec extends ZIOSpecDefault {
       case _                                                                             => false
     }
   override def spec = suite("WellFormednessSpec")(
+    test("reserved A2A roles are rejected on roots, fields, cases and union branches") {
+      val roles = List(Role.StandardMultimodal, Role.TaskUpdate)
+      val roots = roles.flatMap { role =>
+        val metadata = MetadataEnvelope(role = Some(role))
+        List(
+          t.json.copy(metadata = metadata),
+          t.record(List(NamedFieldType("payload", t.json, metadata))),
+          t.variant(List(VariantCaseType("payload", Some(t.json), metadata))),
+          SchemaType(UnionType(List(UnionBranch("payload", t.string, DiscriminatorRule.Prefix(""), metadata))))
+        )
+      }
+      assertTrue(
+        roots.forall(root => WellFormedness.validateGraph(graph(root)).isLeft),
+        WellFormedness
+          .validateGraph(graph(t.json.copy(metadata = MetadataEnvelope(role = Some(Role.Other("task-update"))))))
+          .isRight
+      )
+    },
     suite("discriminator_pair_classification_matches_portable_matrix")(
       classificationCases.map(c =>
         test(c.name) {

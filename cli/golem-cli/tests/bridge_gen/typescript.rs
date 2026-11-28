@@ -426,6 +426,74 @@ void exercise;
     install_and_build(&package_dir);
 }
 
+#[test]
+fn native_json_clients_compile_in_both_modes() {
+    for mode in [
+        TypeScriptBridgeMode::ExternalRest,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    ] {
+        let dir = TempDir::new().unwrap();
+        generate_and_compile_with_mode(
+            crate::bridge_gen::fixtures::json_agent("typescript"),
+            Utf8Path::from_path(dir.path()).unwrap(),
+            mode,
+        );
+        if mode == TypeScriptBridgeMode::GuestWasmRpc {
+            let package = Utf8Path::from_path(dir.path())
+                .unwrap()
+                .join("json-agent-guest-client");
+            let client = package.join("json-agent-guest-client.js");
+            let source = std::fs::read_to_string(&client).unwrap();
+            std::fs::write(
+                &client,
+                source.replace("@golemcloud/golem-ts-sdk", "./guest-runtime.mjs"),
+            )
+            .unwrap();
+            let json_runtime = std::fs::canonicalize(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../sdks/ts/packages/golem-ts-sdk/dist/runtime/internal/schema-model/json.mjs"
+            ))
+            .unwrap();
+            std::fs::write(
+                package.join("guest-runtime.mjs"),
+                format!(
+                    r#"import {{ assertJsonValue, parseJsonValue, stringifyJsonValue }} from {};
+let response;
+export function setResponse(value) {{ response = value; }}
+export const bridge = {{
+  assertJsonValue, parseJsonValue, stringifyJsonValue,
+  withCapabilityAdoptionTransaction: (body) => body(),
+  upsertRemoteAgent: () => ({{
+    invokeAndAwait: async (_method, input) => response ?? input.fields[0],
+  }}),
+}};
+"#,
+                    serde_json::to_string(&json_runtime).unwrap(),
+                ),
+            )
+            .unwrap();
+            run_node_script(
+                &package,
+                "json-round-trip.mjs",
+                r#"import assert from 'node:assert/strict';
+import { JsonAgent } from './json-agent-guest-client.js';
+import { setResponse } from './guest-runtime.mjs';
+const client = JsonAgent.upsert({ initial: true });
+for (const value of [{ b: [1, null, { x: 'y' }], a: 1.5 }, [null, false], null, 'text', 3.5, true]) {
+  assert.deepEqual(await client.echo(value), value);
+  const nested = { payload: value, maybe: value, items: [value] };
+  assert.deepEqual(await client.nested(nested), nested);
+}
+for (const response of [{ tag: 'string', value: '{}' }, { tag: 'json', value: '{' }]) {
+  setResponse(response);
+  await assert.rejects(client.echo(null));
+}
+"#,
+            );
+        }
+    }
+}
+
 fn uuid_agent() -> AgentTypeSchema {
     agent(
         "UuidAgent",

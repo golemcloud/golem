@@ -185,6 +185,8 @@ impl From<Role> for proto::Role {
             Role::Multimodal => proto::role::Value::Multimodal(ProtoEmpty {}),
             Role::UnstructuredText => proto::role::Value::UnstructuredText(ProtoEmpty {}),
             Role::UnstructuredBinary => proto::role::Value::UnstructuredBinary(ProtoEmpty {}),
+            Role::StandardMultimodal => proto::role::Value::StandardMultimodal(ProtoEmpty {}),
+            Role::TaskUpdate => proto::role::Value::TaskUpdate(ProtoEmpty {}),
             Role::Other(s) => proto::role::Value::Other(s),
         };
         Self { value: Some(inner) }
@@ -199,6 +201,8 @@ impl TryFrom<proto::Role> for Role {
             Some(proto::role::Value::Multimodal(_)) => Ok(Role::Multimodal),
             Some(proto::role::Value::UnstructuredText(_)) => Ok(Role::UnstructuredText),
             Some(proto::role::Value::UnstructuredBinary(_)) => Ok(Role::UnstructuredBinary),
+            Some(proto::role::Value::StandardMultimodal(_)) => Ok(Role::StandardMultimodal),
+            Some(proto::role::Value::TaskUpdate(_)) => Ok(Role::TaskUpdate),
             Some(proto::role::Value::Other(s)) => Ok(Role::Other(s)),
             None => Err("Missing field: Role.value".to_string()),
         }
@@ -261,6 +265,7 @@ impl From<SchemaType> for proto::SchemaType {
             SchemaType::Path { spec, .. } => Body::PathType(spec.into()),
             SchemaType::Url { restrictions, .. } => Body::UrlType(restrictions.into()),
             SchemaType::Uuid { .. } => Body::UuidType(ProtoEmpty {}),
+            SchemaType::Json { .. } => Body::JsonType(ProtoEmpty {}),
             SchemaType::Datetime { .. } => Body::DatetimeType(ProtoEmpty {}),
             SchemaType::Duration { .. } => Body::DurationType(ProtoEmpty {}),
             SchemaType::Quantity { spec, .. } => Body::QuantityType(spec.into()),
@@ -412,6 +417,7 @@ impl TryFrom<proto::SchemaType> for SchemaType {
                 metadata,
             },
             Body::UuidType(_) => SchemaType::Uuid { metadata },
+            Body::JsonType(_) => SchemaType::Json { metadata },
             Body::DatetimeType(_) => SchemaType::Datetime { metadata },
             Body::DurationType(_) => SchemaType::Duration { metadata },
             Body::QuantityType(q) => SchemaType::Quantity {
@@ -1028,6 +1034,7 @@ fn schema_value_to_proto(
         SchemaValue::Path { path } => ValueBody::PathValue(path),
         SchemaValue::Url { url } => ValueBody::UrlValue(url),
         SchemaValue::Uuid(value) => ValueBody::UuidValue(value.into()),
+        SchemaValue::Json(value) => ValueBody::JsonValue(value),
         SchemaValue::Datetime { value } => ValueBody::DatetimeValue(datetime_to_proto(value)),
         SchemaValue::Duration(d) => ValueBody::DurationValue(proto::DurationValue {
             nanoseconds: d.nanoseconds,
@@ -1189,6 +1196,7 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
             ValueBody::PathValue(p) => SchemaValue::Path { path: p },
             ValueBody::UrlValue(u) => SchemaValue::Url { url: u },
             ValueBody::UuidValue(value) => SchemaValue::Uuid(value.into()),
+            ValueBody::JsonValue(value) => SchemaValue::Json(value),
             ValueBody::DatetimeValue(d) => SchemaValue::Datetime {
                 value: datetime_from_proto(d)?,
             },
@@ -1298,6 +1306,58 @@ impl TryFrom<proto::TypedSchemaValue> for TypedSchemaValue {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn json_contract_and_named_roles_round_trip() {
+        let graph = SchemaGraph::anonymous(SchemaType::json());
+        assert_eq!(
+            SchemaGraph::try_from(proto::SchemaGraph::from(graph.clone())).unwrap(),
+            graph
+        );
+        let value = SchemaValue::Json(r#"{ "b": [1,null,{"x":"y"}], "a": 1.5 }"#.into());
+        assert_eq!(
+            SchemaValue::try_from(proto::SchemaValue::try_from(value.clone()).unwrap()).unwrap(),
+            value
+        );
+        for inner in [None, Some(Box::new(SchemaValue::Json("null".into())))] {
+            let optional = SchemaValue::Option { inner };
+            assert_eq!(
+                SchemaValue::try_from(proto::SchemaValue::try_from(optional.clone()).unwrap())
+                    .unwrap(),
+                optional
+            );
+            #[cfg(feature = "full")]
+            {
+                let mut bytes = Vec::new();
+                desert_rust::serialize(&optional, &mut bytes).unwrap();
+                assert_eq!(
+                    desert_rust::deserialize::<SchemaValue>(&bytes).unwrap(),
+                    optional
+                );
+            }
+        }
+        for role in [
+            Role::StandardMultimodal,
+            Role::TaskUpdate,
+            Role::Other("StandardMultimodal".into()),
+            Role::Other("standard-multimodal".into()),
+            Role::Other("task-update".into()),
+        ] {
+            assert_eq!(
+                Role::try_from(proto::Role::from(role.clone())).unwrap(),
+                role
+            );
+        }
+        #[cfg(feature = "full")]
+        {
+            let mut bytes = Vec::new();
+            desert_rust::serialize(&value, &mut bytes).unwrap();
+            assert_eq!(
+                desert_rust::deserialize::<SchemaValue>(&bytes).unwrap(),
+                value
+            );
+        }
+    }
 
     #[test]
     fn datetime_protobuf_preserves_pre_epoch_nanoseconds() {

@@ -116,6 +116,7 @@ pub fn schema_value_check_text(value : SchemaValue) -> Unit raise {
         raise BridgeError("char value is not a Unicode scalar value: \{v}")
       }
     StringValue(v) => text(v, "string value")
+    JsonValue(v) => text(v, "json value")
     TextValue(v, language) => {
       text(v, "text value")
       if language is Some(language) {
@@ -203,6 +204,7 @@ fn schema_value_write_json(value : SchemaValue, output : StringBuilder) -> Unit 
     CharValue(v) =>
       node("char", () => string(String::from_array([v.unsafe_to_char()])))
     StringValue(v) => node("string", () => string(v))
+    JsonValue(v) => node("json", () => string(v))
     UuidValue(v) => node("uuid", () => string(v.to_string()))
     RecordValue(v) => children("record", "fields", v)
     TupleValue(v) => children("tuple", "elements", v)
@@ -386,6 +388,7 @@ fn schema_value_json_node(value : SchemaValue) -> Json {
     CharValue(v) =>
       node("char", Json::string(String::from_array([v.unsafe_to_char()])))
     StringValue(v) => node("string", Json::string(v))
+    JsonValue(v) => node("json", Json::string(v))
     UuidValue(v) => node("uuid", Json::string(v.to_string()))
     RecordValue(fields) =>
       node(
@@ -644,6 +647,7 @@ pub fn schema_value_from_json(j : Json) -> SchemaValue raise {
       CharValue(s.get_char(0).unwrap().to_int())
     }
     "string" => StringValue(expect_string(value))
+    "json" => JsonValue(expect_string(value))
     "uuid" => UuidValue(Uuid::parse_canonical(expect_string(value)))
     "record" => {
       let m = expect_object(value)

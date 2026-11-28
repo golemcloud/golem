@@ -117,6 +117,8 @@ func (c *valueConverter) node(idx int32) (core.SchemaValue, error) {
 		return core.CharValue{Value: n.CharValue()}, nil
 	case types.SchemaValueNodeStringValue:
 		return core.StringValue{Value: n.StringValue()}, nil
+	case types.SchemaValueNodeJsonValue:
+		return core.JsonValue{Value: n.JsonValue()}, nil
 	case types.SchemaValueNodePathValue:
 		return core.PathValue{Value: n.PathValue()}, nil
 	case types.SchemaValueNodeUrlValue:
@@ -214,7 +216,7 @@ func (c *valueConverter) node(idx int32) (core.SchemaValue, error) {
 
 // witValueTagCount pins how many value cases the bindings declare. Bump it
 // deliberately, with the case added above — see TestEveryWitValueTagConverts.
-const witValueTagCount = 36
+const witValueTagCount = 37
 
 func (c *valueConverter) each(idxs []int32) ([]core.SchemaValue, error) {
 	out := make([]core.SchemaValue, 0, len(idxs))
@@ -271,6 +273,8 @@ func (f *flattener) push(v core.SchemaValue) (int32, error) {
 	defer func() { f.depth-- }()
 
 	switch t := v.(type) {
+	case core.JsonValue:
+		return f.add(types.MakeSchemaValueNodeJsonValue(t.Value)), nil
 	case core.BoolValue:
 		return f.add(types.MakeSchemaValueNodeBoolValue(t.Value)), nil
 	case core.S8Value:

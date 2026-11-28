@@ -20,8 +20,102 @@ import { Bytes, KeyValue, Path, Quantity, s } from '../src/schema/markers';
 import { compileSchema } from '../src/schema/adapter';
 import { getExtendedToolDefinition, toolDefinition } from '../src/tool';
 import { encodeTool } from '../src/internal/tool';
+import { schemaValueFromWit, schemaValueToWit } from '../src/internal/schema-model';
 
 describe('tool schema markers', () => {
+  it('encodes proxy data properties without reading values or serialization hooks', () => {
+    const value = new Proxy(
+      { x: [1, null, { y: 'nested' }] },
+      {
+        get() {
+          throw new Error('Property getters must not run');
+        },
+      },
+    );
+    const codec = compileSchema(s.json());
+    expect(codec.fromValue(codec.toValue(value))).toEqual({ x: [1, null, { y: 'nested' }] });
+  });
+
+  it('uses native JSON values without a string fallback or lossy JavaScript coercions', async () => {
+    const marker = s.json();
+    const codec = compileSchema(marker);
+    expect(codec.graph.root.body).toEqual({ tag: 'json' });
+    for (const value of [
+      { b: [1, null, { x: 'y' }], a: 1.5 },
+      [1, null],
+      null,
+      false,
+      'text 😀',
+      3.5,
+    ]) {
+      const packed = codec.toValue(value);
+      expect(packed.tag).toBe('json');
+      expect(codec.fromValue(schemaValueFromWit(schemaValueToWit(packed)))).toEqual(value);
+      expect(await marker['~standard'].validate(value)).toEqual({ value });
+    }
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const disguisedSparse = new Array(1);
+    Object.defineProperty(disguisedSparse, '4294967295', { value: 7, enumerable: true });
+    class HookedArray extends Array<number> {
+      toJSON() {
+        throw new Error('JSON serialization hooks must not run');
+      }
+    }
+    for (const value of [
+      undefined,
+      1n,
+      NaN,
+      Infinity,
+      new Date(),
+      { x: undefined },
+      [undefined],
+      new Array(1),
+      disguisedSparse,
+      new HookedArray(1, 2),
+      cyclic,
+    ]) {
+      expect(() => codec.toValue(value)).toThrow();
+      expect(await marker['~standard'].validate(value)).toHaveProperty('issues');
+    }
+    for (const text of ['"\\ud800"', '{"key":"\\udfff"}', '{"\\ud800":true}']) {
+      expect(() => codec.toValue(JSON.parse(text))).toThrow();
+      expect(() => codec.fromValue({ tag: 'json', value: text })).toThrow();
+    }
+    for (const text of ['{', '1e400'])
+      expect(() => codec.fromValue({ tag: 'json', value: text })).toThrow();
+    expect(() => codec.fromValue({ tag: 'string', value: '{}' })).toThrow();
+  });
+
+  it('rejects inherited JSON serialization hooks without executing them', () => {
+    const codec = compileSchema(s.json());
+    for (const prototype of [Array.prototype, Object.prototype]) {
+      const original = Object.getOwnPropertyDescriptor(prototype, 'toJSON');
+      let hookCalls = 0;
+      let rejected = false;
+      try {
+        Object.defineProperty(prototype, 'toJSON', {
+          configurable: true,
+          value() {
+            hookCalls++;
+            return 'replaced';
+          },
+        });
+        try {
+          codec.toValue([1, 2]);
+        } catch {
+          rejected = true;
+        }
+      } finally {
+        if (original) Object.defineProperty(prototype, 'toJSON', original);
+        else Reflect.deleteProperty(prototype, 'toJSON');
+      }
+      expect({ rejected, hookCalls }).toEqual({ rejected: true, hookCalls: 0 });
+    }
+    const value = { toJSON: 1, nested: [1, 2] };
+    expect(codec.fromValue(codec.toValue(value))).toEqual(value);
+  });
+
   it('preserves constrained text metadata with a plain string runtime value', async () => {
     const marker = s.text({ minLength: 2, maxLength: 4, regex: '^[a-z]+$' });
     const codec = compileSchema(marker);

@@ -262,3 +262,93 @@ mod differential {
         }
     }
 }
+
+mod json_contract {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn json_syntax_and_transport_round_trips() {
+        let graph = SchemaGraph::anonymous(SchemaType::json());
+        validate_graph(&graph).unwrap();
+        for text in ["null", "false", "1.5", "\"text\"", "[]", "{}", "1e308"] {
+            let value = SchemaValue::Json(text.into());
+            validate_value(&graph, &graph.root, &value).unwrap();
+        }
+        for text in ["", "NaN", "Infinity", "01", "1e", "{} garbage"] {
+            assert!(validate_value(&graph, &graph.root, &SchemaValue::Json(text.into())).is_err());
+        }
+        for text in ["1e400", "-1e400", "{\"nested\":[1e400]}"] {
+            // RawValue verifies JSON syntax without interpreting numeric payloads.
+            serde_json::from_str::<Box<serde_json::value::RawValue>>(text).unwrap();
+            let value = SchemaValue::Json(text.into());
+            assert!(validate_value(&graph, &graph.root, &value).is_err());
+            assert!(to_json_value(&graph, &graph.root, &value).is_err());
+            #[cfg(feature = "protobuf")]
+            {
+                let wire = golem_schema::proto::golem::schema::SchemaValue::try_from(value.clone())
+                    .unwrap();
+                assert_eq!(SchemaValue::try_from(wire).unwrap(), value);
+            }
+            #[cfg(feature = "full")]
+            {
+                let mut bytes = Vec::new();
+                desert_rust::serialize(&value, &mut bytes).unwrap();
+                assert_eq!(
+                    desert_rust::deserialize::<SchemaValue>(&bytes).unwrap(),
+                    value
+                );
+            }
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            {
+                use golem_schema::schema::wit::{decode_typed_owned, encode_typed_owned};
+                let typed = TypedSchemaValue::new(graph.clone(), value.clone());
+                assert_eq!(
+                    decode_typed_owned(encode_typed_owned(typed.clone()).unwrap()).unwrap(),
+                    typed
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn json_numbers_follow_native_precision() {
+        let graph = SchemaGraph::anonymous(SchemaType::json());
+        for text in [
+            "9007199254740991",
+            "9007199254740992",
+            "9007199254740993",
+            "18446744073709551615",
+            "1.5",
+        ] {
+            let value = SchemaValue::Json(text.into());
+            validate_value(&graph, &graph.root, &value).unwrap();
+            assert_eq!(
+                to_json_value(&graph, &graph.root, &value)
+                    .unwrap()
+                    .to_string(),
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn json_objects_preserve_reserved_looking_keys() {
+        let graph = SchemaGraph::anonymous(SchemaType::json());
+        for text in [
+            r#"{"$serde_json::private::Number":"1"}"#,
+            r#"{"$serde_json::private::Number":"not a number"}"#,
+            r#"{"nested":[{"$serde_json::private::Number":"1"}]}"#,
+        ] {
+            let value = SchemaValue::Json(text.into());
+            validate_value(&graph, &graph.root, &value).unwrap();
+            let json = to_json_value(&graph, &graph.root, &value).unwrap();
+            assert!(json.is_object());
+            assert_eq!(json.to_string(), text);
+            assert_eq!(
+                from_json_value(&graph, &graph.root, &json).unwrap(),
+                SchemaValue::Json(json.to_string())
+            );
+        }
+    }
+}

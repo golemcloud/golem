@@ -160,6 +160,7 @@ object SchemaFingerprintV1 {
         e.array(4); e.uint(28); optionalSet(e, "url.allowed_schemes", r.allowedSchemes)
         optionalSet(e, "url.allowed_hosts", r.allowedHosts); encodeMetadata(e, t.metadata)
       case UuidType        => leaf(38)
+      case JsonType        => leaf(39)
       case DatetimeType    => leaf(29); case DurationType => leaf(30)
       case QuantityType(s) =>
         e.array(6); e.uint(31); e.text(s.baseUnit); e.array(s.allowedSuffixes.size); s.allowedSuffixes.foreach(e.text)
@@ -214,6 +215,8 @@ object SchemaFingerprintV1 {
       case Some(Role.Multimodal)         => e.array(1); e.uint(0)
       case Some(Role.UnstructuredText)   => e.array(1); e.uint(1)
       case Some(Role.UnstructuredBinary) => e.array(1); e.uint(2)
+      case Some(Role.StandardMultimodal) => e.array(1); e.uint(4)
+      case Some(Role.TaskUpdate)         => e.array(1); e.uint(5)
       case Some(Role.Other(x))           => e.array(2); e.uint(3); e.text(x)
     }
   }

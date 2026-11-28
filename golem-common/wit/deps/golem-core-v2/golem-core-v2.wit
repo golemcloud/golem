@@ -226,6 +226,10 @@ interface types {
         unstructured-text,
         /// `variant { inline: binary, url: url }` ergonomic unstructured-binary wrapper.
         unstructured-binary,
+        /// Reserved for the standard A2A multimodal value.
+        standard-multimodal,
+        /// Reserved for the standard A2A task-update value.
+        task-update,
         /// Any other producer-defined role, preserved verbatim.
         other(string),
     }
@@ -299,6 +303,7 @@ interface types {
         path-type(path-spec),
         url-type(url-restrictions),
         uuid-type,
+        json-type,
         datetime-type,
         duration-type,
         quantity-type(quantity-spec),
@@ -591,6 +596,8 @@ interface types {
         path-value(string),
         url-value(string),
         uuid-value(uuid),
+        /// JSON text; accepts every JSON top-level value.
+        json-value(string),
         datetime-value(datetime),
         duration-value(duration-value-payload),
         quantity-value-node(quantity-value),

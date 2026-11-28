@@ -39,6 +39,8 @@ func (c *converter) body(b types.SchemaTypeBody) (core.SchemaTypeBody, error) {
 		return core.CharType{}, nil
 	case types.SchemaTypeBodyStringType:
 		return core.StringType{}, nil
+	case types.SchemaTypeBodyJsonType:
+		return core.JsonType{}, nil
 	case types.SchemaTypeBodyS8Type:
 		return core.S8Type{Restrictions: numericToCore(b.S8Type())}, nil
 	case types.SchemaTypeBodyS16Type:
@@ -222,4 +224,4 @@ func (c *converter) body(b types.SchemaTypeBody) (core.SchemaTypeBody, error) {
 
 // witBodyTagCount pins how many type cases the bindings declare. Bump it
 // deliberately, with the case added above — see TestEveryWitBodyTagConverts.
-const witBodyTagCount = 38
+const witBodyTagCount = 39

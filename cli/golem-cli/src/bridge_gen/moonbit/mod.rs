@@ -2562,6 +2562,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredB
             }
             SchemaType::Path { .. } => format!("@runtime.PathValue(({val}).value)"),
             SchemaType::Url { .. } => format!("@runtime.UrlValue(({val}).value)"),
+            SchemaType::Json { .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => {
+                    format!("@runtime.JsonValue(({val}).stringify())")
+                }
+                MoonBitBridgeMode::GuestWasmRpc => {
+                    format!("@model.SchemaValue::Json(({val}).stringify())")
+                }
+            },
             SchemaType::Uuid { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => format!("@runtime.UuidValue({val})"),
                 MoonBitBridgeMode::GuestWasmRpc => {
@@ -2767,6 +2775,10 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredB
             }
             SchemaType::Path { .. } => format!("@runtime.as_path({val})"),
             SchemaType::Url { .. } => format!("@runtime.as_url({val})"),
+            SchemaType::Json { .. } => match self.mode {
+                MoonBitBridgeMode::ExternalRest => format!("@runtime.as_json({val})"),
+                MoonBitBridgeMode::GuestWasmRpc => format!("@schema.from_value_as({val})"),
+            },
             SchemaType::Uuid { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => format!(
                     "match {val} {{ @runtime.UuidValue(value) => value; other => raise @runtime.BridgeError(\"Expected UUID value, got \" + repr(other)) }}"
@@ -3018,6 +3030,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredB
             SchemaType::Path { .. } => Ok(self.rich_type_reference("Path")),
             SchemaType::Url { .. } => Ok(self.rich_type_reference("Url")),
             SchemaType::Uuid { .. } => Ok(self.rich_type_reference("Uuid")),
+            SchemaType::Json { .. } => Ok("Json".to_string()),
             SchemaType::Datetime { .. } => Ok(self.rich_type_reference("Datetime")),
             SchemaType::Duration { .. } => Ok(self.rich_type_reference("Duration")),
             SchemaType::Record { .. }
@@ -3294,6 +3307,7 @@ fn emit_schema_type(ty: &SchemaType) -> String {
         Bool { .. } => "@model.Bool".into(),
         Char { .. } => "@model.Char".into(),
         String { .. } => "@model.String".into(),
+        Json { .. } => "@model.Json".into(),
         S8 { restrictions, .. } => mb_numeric("S8", restrictions.as_ref()),
         S16 { restrictions, .. } => mb_numeric("S16", restrictions.as_ref()),
         S32 { restrictions, .. } => mb_numeric("S32", restrictions.as_ref()),
@@ -3466,6 +3480,8 @@ fn mb_metadata(value: &MetadataEnvelope) -> String {
         Some(Role::Multimodal) => "Some(@types.Multimodal)".into(),
         Some(Role::UnstructuredText) => "Some(@types.UnstructuredText)".into(),
         Some(Role::UnstructuredBinary) => "Some(@types.UnstructuredBinary)".into(),
+        Some(Role::StandardMultimodal) => "Some(@types.StandardMultimodal)".into(),
+        Some(Role::TaskUpdate) => "Some(@types.TaskUpdate)".into(),
         Some(Role::Other(v)) => format!("Some(@types.Other({}))", moonbit_string_literal(v)),
     };
     format!(

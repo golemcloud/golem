@@ -38,6 +38,21 @@ object SchemaRefSpec extends ZIOSpecDefault {
   )
 
   def spec = suite("SchemaRef")(
+    test("JSON values project inline and optional JSON uses anyOf") {
+      val ref      = SchemaRef(SchemaGraph(ListMap.empty, t.json))
+      val optional = SchemaRef(SchemaGraph(ListMap.empty, t.option(t.json)))
+      val values   = List("{\"x\":[1,null]}", "[false,2]", "null", "false", "1.5", "\"text\"").map(text =>
+        Json.parse(text).toOption.get
+      )
+      assertTrue(
+        ref.toJsonSchema(includeDraftMarker = false) == Json.Object(),
+        values.forall(value => ref.packJson(value).flatMap(ref.unpackJson) == Right(value)),
+        ref.unpackJson(JsonValue("{")).isLeft,
+        optional.toJsonSchema(includeDraftMarker = false) == Json.Object(
+          "anyOf" -> Json.Array(Json.Object("type" -> Json.String("null")), Json.Object())
+        )
+      )
+    },
     test("packs and unpacks canonical record JSON") {
       val ref  = SchemaRef(graph)
       val json = Json.Object(

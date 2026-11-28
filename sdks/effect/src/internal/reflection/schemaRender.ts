@@ -23,14 +23,10 @@ import type {
 import { cloneSchemaValue } from "../schema-model/model.js"
 import { floatFromBits } from "../schema-model/validation.js"
 import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
+import { parseJsonValue, stringifyJsonValue } from "../schema-model/json.js"
 
 export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { readonly [key: string]: JsonValue }
+  null | boolean | number | string | JsonValue[] | { readonly [key: string]: JsonValue }
 export interface RenderIssue {
   readonly path: ReadonlyArray<string | number>
   readonly message: string
@@ -135,6 +131,12 @@ export function fromCanonicalJson(
     }
     case "string":
       return { tag: "string", value: expectString(json, path) }
+    case "json":
+      try {
+        return { tag: "json", value: stringifyJsonValue(json) }
+      } catch (error) {
+        return fail(path, String(error))
+      }
     case "text":
       return decodeText(json, path)
     case "binary":
@@ -323,6 +325,12 @@ export function toCanonicalJson(
       return value.value
     case "uuid":
       return uuidToString(value.value)
+    case "json":
+      try {
+        return parseJsonValue(value.value)
+      } catch (error) {
+        return fail(path, `invalid JSON: ${String(error)}`)
+      }
     case "text":
       return {
         text: value.text,
@@ -753,6 +761,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     case "uuid":
       rendered = { type: "string", format: "uuid", title: "UUID" }
       break
+    case "json":
+      rendered = {}
+      break
     case "datetime":
       rendered = { type: "string", format: "date-time" }
       break
@@ -849,7 +860,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       }
       break
     case "option":
-      rendered = { oneOf: [{ type: "null" }, renderSchema(graph, body.element)] }
+      rendered = {
+        [resolve(graph, body.element).body.tag === "json" ? "anyOf" : "oneOf"]: [
+          { type: "null" },
+          renderSchema(graph, body.element),
+        ],
+      }
       break
     case "result":
       rendered = {

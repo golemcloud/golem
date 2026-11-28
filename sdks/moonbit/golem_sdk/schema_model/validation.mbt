@@ -56,6 +56,7 @@ pub suberror SchemaError {
     reason~ : String
   )
   InvalidRegex(tag~ : String, regex~ : String, message~ : String)
+  ReservedRole(String)
   TextLengthRangeInverted
   BinaryByteRangeInverted
   /// An `Option<X>` was declared where `X` is itself nullable on the canonical
@@ -141,11 +142,13 @@ fn check_type(
   known : Map[String, Unit],
   errors : Array[SchemaError],
 ) -> Unit {
+  check_reserved_role(ty.metadata, errors)
   match ty.body {
     Ref(id) => if !known.contains(id) { errors.push(DanglingRef(id)) }
     Record(fields) => {
       let seen : Map[String, Unit] = Map([])
       for f in fields {
+        check_reserved_role(f.metadata, errors)
         if !set_insert(seen, f.name) {
           errors.push(DuplicateFieldName(f.name))
         }
@@ -158,6 +161,7 @@ fn check_type(
       }
       let seen : Map[String, Unit] = Map([])
       for c in cases {
+        check_reserved_role(c.metadata, errors)
         if !set_insert(seen, c.name) {
           errors.push(DuplicateVariantCase(c.name))
         }
@@ -240,6 +244,19 @@ fn check_type(
       }
     // Leaves with no structural constraints: primitives, Char, String,
     // Uuid, Datetime, Duration, Path, Url, QuotaToken.
+    _ => ()
+  }
+}
+
+///|
+fn check_reserved_role(
+  metadata : @types.MetadataEnvelope,
+  errors : Array[SchemaError],
+) -> Unit {
+  match metadata.role {
+    Some(@types.StandardMultimodal) =>
+      errors.push(ReservedRole("standard-multimodal"))
+    Some(@types.TaskUpdate) => errors.push(ReservedRole("task-update"))
     _ => ()
   }
 }
@@ -439,6 +456,7 @@ fn validate_union(
   }
   let seen : Map[String, Unit] = Map([])
   for branch in branches {
+    check_reserved_role(branch.metadata, errors)
     if !set_insert(seen, branch.tag) {
       errors.push(DuplicateUnionTag(branch.tag))
     }

@@ -246,6 +246,10 @@ pub enum SchemaType {
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
+    Json {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
     Datetime {
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
@@ -331,6 +335,7 @@ impl SchemaType {
             | SchemaType::Path { metadata, .. }
             | SchemaType::Url { metadata, .. }
             | SchemaType::Uuid { metadata }
+            | SchemaType::Json { metadata }
             | SchemaType::Datetime { metadata }
             | SchemaType::Duration { metadata }
             | SchemaType::Quantity { metadata, .. }
@@ -375,6 +380,7 @@ impl SchemaType {
             | SchemaType::Path { metadata, .. }
             | SchemaType::Url { metadata, .. }
             | SchemaType::Uuid { metadata }
+            | SchemaType::Json { metadata }
             | SchemaType::Datetime { metadata }
             | SchemaType::Duration { metadata }
             | SchemaType::Quantity { metadata, .. }
@@ -516,6 +522,11 @@ impl SchemaType {
     }
     pub fn uuid() -> Self {
         Self::Uuid {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn json() -> Self {
+        Self::Json {
             metadata: MetadataEnvelope::default(),
         }
     }

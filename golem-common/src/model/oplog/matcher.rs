@@ -823,7 +823,9 @@ impl PublicOplogEntry {
             SchemaValue::Char(v) => {
                 Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            SchemaValue::String(v) => Self::string_match(v, path_stack, query_path, query),
+            SchemaValue::String(v) | SchemaValue::Json(v) => {
+                Self::string_match(v, path_stack, query_path, query)
+            }
             SchemaValue::Record { fields } => {
                 if let SchemaType::Record {
                     fields: field_types,

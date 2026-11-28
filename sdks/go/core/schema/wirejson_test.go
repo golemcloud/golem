@@ -46,6 +46,7 @@ func everyValueCase() []SchemaValue {
 		F64Value{Value: -2.25},
 		CharValue{Value: '✓'},
 		StringValue{Value: "hello"},
+		JsonValue{Value: ` {"b":[1,null,{"x":"y"}],"a":1.5} `},
 		RecordValue{Fields: []SchemaValue{BoolValue{Value: false}, StringValue{Value: "x"}}},
 		VariantValue{Case: 2, Payload: value(StringValue{Value: "p"})},
 		EnumValue{Case: 3},

@@ -244,6 +244,7 @@ fn collect_stream_elements<'a>(ty: &'a SchemaType, elements: &mut Vec<Option<&'a
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
         | SchemaType::Uuid { .. }
+        | SchemaType::Json { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
@@ -485,6 +486,7 @@ fn encode_type(
             metadata,
         } => encode_url(encoder, restrictions, metadata)?,
         SchemaType::Uuid { metadata } => encode_leaf(encoder, 38, metadata)?,
+        SchemaType::Json { metadata } => encode_leaf(encoder, 39, metadata)?,
         SchemaType::Datetime { metadata } => encode_leaf(encoder, 29, metadata)?,
         SchemaType::Duration { metadata } => encode_leaf(encoder, 30, metadata)?,
         SchemaType::Quantity { spec, metadata } => {
@@ -789,6 +791,14 @@ fn encode_metadata(
             encoder.array(1);
             encoder.unsigned(2);
         }
+        Some(Role::StandardMultimodal) => {
+            encoder.array(1);
+            encoder.unsigned(4);
+        }
+        Some(Role::TaskUpdate) => {
+            encoder.array(1);
+            encoder.unsigned(5);
+        }
         Some(Role::Other(role)) => {
             encoder.array(2);
             encoder.unsigned(3);
@@ -903,6 +913,36 @@ mod tests {
     #[cfg(feature = "regex")]
     use crate::schema::{Role, TextRestrictions};
     use test_r::test;
+
+    #[test]
+    fn json_and_named_role_encodings_are_distinct() {
+        use crate::schema::Role;
+        let graph = SchemaGraph::empty();
+        assert_ne!(
+            schema_fingerprint_v1(&graph, Some(&SchemaType::json())).unwrap(),
+            schema_fingerprint_v1(&graph, Some(&SchemaType::string())).unwrap()
+        );
+        let mut encodings = std::collections::HashSet::new();
+        for role in [
+            Role::StandardMultimodal,
+            Role::TaskUpdate,
+            Role::Other("StandardMultimodal".into()),
+            Role::Other("standard-multimodal".into()),
+            Role::Other("TaskUpdate".into()),
+            Role::Other("task-update".into()),
+        ] {
+            let mut encoder = super::CborEncoder::default();
+            super::encode_metadata(
+                &mut encoder,
+                &MetadataEnvelope {
+                    role: Some(role),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(encodings.insert(encoder.bytes));
+        }
+    }
 
     #[test]
     fn v1_golden_vectors() {

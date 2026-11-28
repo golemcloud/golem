@@ -212,6 +212,8 @@ export class GraphEncoder {
         return { tag: 'string-type' };
       case 'uuid':
         return { tag: 'uuid-type' };
+      case 'json':
+        return { tag: 'json-type' };
       case 'record':
         return {
           tag: 'record-type',
@@ -407,6 +409,8 @@ export function schemaGraphRootsFromWit(
         return { tag: 'string' };
       case 'uuid-type':
         return { tag: 'uuid' };
+      case 'json-type':
+        return { tag: 'json' };
       case 'record-type':
         return {
           tag: 'record',
@@ -609,6 +613,7 @@ export function assertSchemaValueRepresentable(
       }
       return;
     }
+    case 'json':
     case 'string':
     case 'path':
     case 'url':
@@ -842,6 +847,8 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: 'string-value', val: v.value };
       case 'uuid':
         return { tag: 'uuid-value', val: v.value };
+      case 'json':
+        return { tag: 'json-value', val: v.value };
       case 'record':
         return { tag: 'record-value', val: v.fields.map((f) => emit(f)) };
       case 'variant':
@@ -1183,6 +1190,7 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         rangedBigint(n.val.highBits, 'uuid-value.val.highBits', 0n, (1n << 64n) - 1n);
         rangedBigint(n.val.lowBits, 'uuid-value.val.lowBits', 0n, (1n << 64n) - 1n);
         return;
+      case 'json-value':
       case 'string-value':
       case 'path-value':
       case 'url-value':
@@ -1484,6 +1492,8 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
         return { tag: 'string', value: n.val };
       case 'uuid-value':
         return { tag: 'uuid', value: Uuid.from(n.val) };
+      case 'json-value':
+        return { tag: 'json', value: n.val };
       case 'record-value':
         return { tag: 'record', fields: n.val.map((i) => fromIdx(i)) };
       case 'variant-value':

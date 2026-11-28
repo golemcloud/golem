@@ -327,6 +327,38 @@ fn single_agent_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPacka
     compile(pkg.package_dir().as_path());
 }
 
+#[test]
+fn native_json_clients_compile_in_both_modes() {
+    let agent = crate::bridge_gen::fixtures::json_agent("scala");
+    let external = GeneratedPackage::new(agent.clone());
+    run_sbt_test(
+        external.package_dir().as_path(),
+        r#"
+package golem.bridge.runtime
+class StreamRuntimeTest extends munit.FunSuite {
+  test("JSON stays inline through native and public codecs") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"json","value":{}}}""")
+    List("""{"b":[1,null,{"x":"y"}],"a":false}""", "[null,true]", "\"text\"", "1.5", "false", "null").foreach { text =>
+      val value = SchemaValue.JsonValue(text)
+      val parsed = json.Json.parse(text).toOption.get
+      assertEquals(SchemaValueCodec.asJson(value), parsed)
+      assertEquals(SchemaValueCodec.fromJson(SchemaValueCodec.toJson(value)), Right(value))
+      assertEquals(codec.encodeApplication(value), parsed)
+    }
+    List("{", "", "null trailing").foreach { text =>
+      intercept[BridgeException](SchemaValueCodec.asJson(SchemaValue.JsonValue(text)))
+      intercept[BridgeException](codec.encode(SchemaValue.JsonValue(text)))
+    }
+    intercept[BridgeException](SchemaValueCodec.asJson(SchemaValue.StringValue("{}")))
+    intercept[BridgeException](codec.encode(SchemaValue.StringValue("{}")))
+  }
+}
+"#,
+    );
+    let guest = GeneratedPackage::new_with_mode(agent, ScalaBridgeMode::GuestWasmRpc);
+    compile_guest_if_enabled(guest.package_dir().as_path());
+}
+
 fn native_uuid_agent() -> AgentTypeSchema {
     agent(
         "UuidAgent",

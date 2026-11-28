@@ -131,6 +131,10 @@ pub enum Role {
     /// "unstructured binary" wrapper: a payload that is either inline bytes or
     /// a URL referencing the bytes.
     UnstructuredBinary,
+    /// Reserved for the standard A2A multimodal value.
+    StandardMultimodal,
+    /// Reserved for the standard A2A task-update value.
+    TaskUpdate,
     /// Any other producer-defined role. Preserved verbatim so a receiver that
     /// does not understand it does not lose the producer's intent.
     Other(String),

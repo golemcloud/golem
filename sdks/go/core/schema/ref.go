@@ -204,6 +204,8 @@ func (r Ref) TypeName() string {
 		return "char"
 	case StringType:
 		return "string"
+	case JsonType:
+		return "json"
 	case S8Type:
 		return "s8"
 	case S16Type:

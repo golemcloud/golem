@@ -24,6 +24,7 @@ import {
 import { Uuid } from '../uuid';
 import { Datetime } from '../datetime';
 import { SchemaRenderError, type JsonValue } from './ref';
+import { parseJsonValue, stringifyJsonValue } from '../internal/schema-model/json';
 
 type Path = readonly (string | number)[];
 
@@ -85,6 +86,12 @@ export function fromCanonicalJson(
     }
     case 'string':
       return { tag: 'string', value: expectString(json, path) };
+    case 'json':
+      try {
+        return { tag: 'json', value: stringifyJsonValue(json) };
+      } catch (error) {
+        fail(path, String(error));
+      }
     case 'uuid': {
       const input = expectString(json, path);
       try {
@@ -276,6 +283,12 @@ export function toCanonicalJson(
       return value.value;
     case 'uuid':
       return value.value.toString();
+    case 'json':
+      try {
+        return parseJsonValue(value.value);
+      } catch (error) {
+        fail(path, `invalid JSON: ${String(error)}`);
+      }
     case 'text':
       return {
         text: value.text,
@@ -534,6 +547,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     case 'uuid':
       rendered = { type: 'string', format: 'uuid' };
       break;
+    case 'json':
+      rendered = {};
+      break;
     case 'text': {
       const text: Record<string, JsonValue> = { type: 'string' };
       if (body.restrictions.minLength !== undefined) text.minLength = body.restrictions.minLength;
@@ -713,7 +729,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       };
       break;
     case 'option':
-      rendered = { oneOf: [{ type: 'null' }, renderSchema(graph, body.element)] };
+      rendered = {
+        [resolve(graph, body.element).body.tag === 'json' ? 'anyOf' : 'oneOf']: [
+          { type: 'null' },
+          renderSchema(graph, body.element),
+        ],
+      };
       break;
     case 'result':
       rendered = {

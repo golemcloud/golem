@@ -2024,6 +2024,7 @@ impl TypeScriptBridgeGenerator {
             return Ok(format!("base.UnstructuredBinary.toSchemaValue({value})"));
         }
         Ok(match typ {
+            SchemaType::Json { .. } => format!("({{ kind: 'json', value: base.stringifyJsonValue({value}) }})"),
             SchemaType::S64 { .. } => format!("({{ kind: 's64', value: ({value}).toString() }})"),
             SchemaType::U64 { .. } => format!("({{ kind: 'u64', value: ({value}).toString() }})"),
             SchemaType::Bool { .. }
@@ -2372,6 +2373,7 @@ impl TypeScriptBridgeGenerator {
                 "((n: any): number => typeof n.value === 'number' ? n.value : n.value.$float === 'nan' ? Number.NaN : n.value.$float === 'positive-infinity' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY)({value})"
             ),
             SchemaType::Bool { .. } => format!("(({value} as any).value as boolean)"),
+            SchemaType::Json { .. } => format!("base.parseJsonValue(({value} as any).value)"),
             SchemaType::S8 { .. }
             | SchemaType::S16 { .. }
             | SchemaType::S32 { .. }
@@ -3001,6 +3003,9 @@ impl TypeScriptBridgeGenerator {
             ));
         }
         let rendered = match typ {
+            SchemaType::Json { .. } => format!(
+                "((n: any) => {{ if (n.tag !== 'json') throw new TypeError('Expected a JSON schema value'); return base.parseJsonValue(n.value); }})({value})"
+            ),
             SchemaType::String { .. } | SchemaType::Char { .. } => {
                 format!("((n: any) => n.value as string)({value})")
             }
@@ -3222,6 +3227,9 @@ impl TypeScriptBridgeGenerator {
             ));
         }
         let rendered = match typ {
+            SchemaType::Json { .. } => format!(
+                "((n: any) => {{ if (n.kind !== 'json') throw new TypeError('Expected a JSON schema value'); return base.parseJsonValue(n.value); }})({value})"
+            ),
             SchemaType::String { .. } | SchemaType::Char { .. } => {
                 format!("((n: any) => n.value as string)({value})")
             }
@@ -3501,6 +3509,9 @@ impl TypeScriptBridgeGenerator {
             SchemaType::F64 { .. } => format!("{{ tag: 'f64', value: {value} }}"),
             SchemaType::Char { .. } => format!("{{ tag: 'char', value: {value} }}"),
             SchemaType::String { .. } => format!("{{ tag: 'string', value: {value} }}"),
+            SchemaType::Json { .. } => {
+                format!("({{ tag: 'json', value: base.stringifyJsonValue({value}) }})")
+            }
             SchemaType::Option { inner, .. } => format!(
                 "((v: any) => ({{ tag: 'option', value: v === undefined ? undefined : {} }}))({value})",
                 self.encode_schema_value("v", inner)?
@@ -3690,6 +3701,9 @@ impl TypeScriptBridgeGenerator {
             ),
             SchemaType::Char { .. } => format!("{{ kind: 'char', value: {value} }}"),
             SchemaType::String { .. } => format!("{{ kind: 'string', value: {value} }}"),
+            SchemaType::Json { .. } => {
+                format!("({{ kind: 'json', value: base.stringifyJsonValue({value}) }})")
+            }
             SchemaType::Option { inner, .. } => {
                 let inner_encode = self.encode_schema_value("item", inner)?;
                 format!("base.encodeOption({value}, (item) => ({inner_encode}))")
@@ -4173,6 +4187,7 @@ impl TypeScriptBridgeGenerator {
             return Ok(self.unstructured_binary_type(restrictions));
         }
         Ok(match typ {
+            SchemaType::Json { .. } => "base.JsonValue".to_string(),
             SchemaType::String { .. }
             | SchemaType::Char { .. }
             | SchemaType::Path { .. }
@@ -4367,6 +4382,7 @@ impl TypeScriptBridgeGenerator {
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?
                 .join(" | "),
+            SchemaType::Json { .. } => "base.JsonValue".to_string(),
             SchemaType::String { .. }
             | SchemaType::Char { .. }
             | SchemaType::Path { .. }
@@ -4422,6 +4438,7 @@ impl TypeScriptBridgeGenerator {
                     return Ok(self.unstructured_binary_type(restrictions));
                 }
                 match typ {
+                    SchemaType::Json { .. } => Ok("base.JsonValue".to_string()),
                     SchemaType::String { .. } => Ok("string".to_string()),
                     SchemaType::Char { .. } => Ok("string".to_string()),
                     SchemaType::F64 { .. } => Ok("number".to_string()),
@@ -4640,6 +4657,7 @@ impl TypeScriptBridgeGenerator {
                     Ok(format!("{}[]", inner_type))
                 }
             }
+            SchemaType::Json { .. } => Ok("base.JsonValue".to_string()),
             SchemaType::String { .. } => Ok("string".to_string()),
             SchemaType::Char { .. } => Ok("string".to_string()),
             SchemaType::F64 { .. } => Ok("number".to_string()),

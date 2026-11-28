@@ -517,6 +517,7 @@ fn collect_forbidden_parameter_types(
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
         | SchemaType::Uuid { .. }
+        | SchemaType::Json { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. } => {}

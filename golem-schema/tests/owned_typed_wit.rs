@@ -7,6 +7,48 @@ use golem_schema::schema::wit::{
 use golem_schema::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use test_r::test;
 
+#[test]
+fn json_contract_and_named_roles_round_trip() {
+    use golem_schema::schema::wit::{decode_graph, decode_metadata, encode_metadata};
+    use golem_schema::schema::{MetadataEnvelope, Role, SchemaType};
+
+    let graph = SchemaGraph::anonymous(SchemaType::json());
+    assert_eq!(decode_graph(&encode_graph(&graph).unwrap()).unwrap(), graph);
+    let value = TypedSchemaValue::new(
+        graph,
+        SchemaValue::Json(r#"{ "b": [1,null,{"x":"y"}], "a": 1.5 }"#.into()),
+    );
+    let encoded = encode_typed_owned(value.clone()).unwrap();
+    assert!(matches!(
+        encoded.value.value_nodes[encoded.value.root as usize],
+        wire::SchemaValueNode::JsonValue(_)
+    ));
+    assert_eq!(decode_typed_owned(encoded).unwrap(), value);
+    for inner in [None, Some(Box::new(SchemaValue::Json("null".into())))] {
+        let value = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::option(SchemaType::json())),
+            SchemaValue::Option { inner },
+        );
+        assert_eq!(
+            decode_typed_owned(encode_typed_owned(value.clone()).unwrap()).unwrap(),
+            value
+        );
+    }
+    for role in [
+        Role::StandardMultimodal,
+        Role::TaskUpdate,
+        Role::Other("StandardMultimodal".into()),
+        Role::Other("standard-multimodal".into()),
+        Role::Other("task-update".into()),
+    ] {
+        let metadata = MetadataEnvelope {
+            role: Some(role),
+            ..Default::default()
+        };
+        assert_eq!(decode_metadata(&encode_metadata(&metadata)), metadata);
+    }
+}
+
 fn typed(value: SchemaValue) -> TypedSchemaValue {
     TypedSchemaValue::new(SchemaGraph::empty(), value)
 }

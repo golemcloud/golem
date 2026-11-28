@@ -329,6 +329,12 @@ object ConcreteCodec {
     scalar[java.util.UUID](WitSchemaTypeBody.UuidType)(WitSchemaValueNode.UuidValue.apply) {
       case WitSchemaValueNode.UuidValue(value) => value
     }
+  val json: ConcreteCodec[zio.blocks.schema.json.Json] =
+    scalar[zio.blocks.schema.json.Json](WitSchemaTypeBody.JsonType)(value =>
+      WitSchemaValueNode.JsonValue(zio.blocks.schema.json.Json.jsonCodec.encodeToString(value))
+    ) { case WitSchemaValueNode.JsonValue(text) =>
+      zio.blocks.schema.json.Json.parse(text).fold(e => throw SchemaDecodeError(e.toString), identity)
+    }
   val instant: ConcreteCodec[java.time.Instant] = scalar[java.time.Instant](WitSchemaTypeBody.DatetimeType)(value =>
     WitSchemaValueNode.DatetimeValue(Datetime(value.getEpochSecond, value.getNano))
   ) {

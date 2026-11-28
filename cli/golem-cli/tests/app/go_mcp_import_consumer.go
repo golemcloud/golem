@@ -3,8 +3,10 @@
 package catalog
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
 	lookup "golem.local/bridge/catalog-lookup-tool-guest-client"
 
@@ -36,7 +38,10 @@ func failure(err error) string {
 func init() {
 	consumer := Consumer.Implement(func(ID) *state { return &state{} })
 	consumer.Handle(Run, func(_ *golem.Context[state], in RunIn) string {
-		inv, err := lookup.Root.Call(func(a *lookup.RootArgs) { a.Query = in.Query })
+		inv, err := lookup.Root.Call(func(a *lookup.RootArgs) {
+			a.Query = in.Query
+			a.Payload = json.RawMessage(`{"b":[1,null,{"x":"y"}],"a":1.5}`)
+		})
 		if err != nil {
 			return failure(err)
 		}
@@ -48,6 +53,11 @@ func init() {
 			return fmt.Sprintf("stdout-error:%v", out.StdoutErr)
 		}
 		res := out.Result
+		var payload any
+		if err := json.Unmarshal(res.Structured.Payload, &payload); err != nil || !reflect.DeepEqual(payload,
+			map[string]any{"b": []any{float64(1), nil, map[string]any{"x": "y"}}, "a": 1.5}) {
+			return "bad-json-payload"
+		}
 		switch in.Query {
 		case "streamed":
 			if res.Structured.Answer != "stream-answer" || res.Structured.Score != 7 {

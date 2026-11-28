@@ -15,6 +15,50 @@ fn roundtrip(p: &Projection, json: Value) -> SchemaValue {
 }
 
 #[test]
+fn open_schemas_use_native_json_without_string_fallback() {
+    for schema in [json!({}), json!(true), json!({"description":"open"})] {
+        let p = project(schema);
+        assert!(matches!(p.root(), SchemaType::Json { .. }));
+        for json in [
+            json!({"nested":[1,false,null]}),
+            json!([1, null]),
+            json!(null),
+            json!("text"),
+            json!(3.5),
+            json!(false),
+        ] {
+            assert_eq!(
+                roundtrip(&p, json.clone()),
+                SchemaValue::Json(json.to_string())
+            );
+            assert!(p.to_json(&SchemaValue::String(json.to_string())).is_err());
+        }
+    }
+    let p = project(json!({"type":"object","additionalProperties":true}));
+    let value = roundtrip(&p, json!({"x":{"nested":[null,7]}}));
+    assert_eq!(
+        value,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Map {
+                entries: vec![(
+                    SchemaValue::String("x".into()),
+                    SchemaValue::Json("{\"nested\":[null,7]}".into())
+                )],
+            }]
+        }
+    );
+    let constrained = project(json!({"minLength":3}));
+    roundtrip(&constrained, json!(false));
+    roundtrip(&constrained, json!("long"));
+    assert!(constrained.from_json(&json!("x")).is_err());
+    assert!(
+        constrained
+            .to_json(&SchemaValue::Json("\"x\"".into()))
+            .is_err()
+    );
+}
+
+#[test]
 fn open_objects_and_presence_preserve_values() {
     let p = project(json!({
         "type":"object", "properties": {
@@ -203,6 +247,36 @@ fn schema_and_instance_bounds_are_inclusive() {
     limits.schema_nodes = 2;
     limits.schema_depth = 0;
     assert!(Projection::new(source, limits).is_err());
+}
+
+#[test]
+fn json_text_is_bounded_before_parsing_including_nested_leaves() {
+    let limits = Limits {
+        instance_bytes: 16,
+        ..Default::default()
+    };
+    let p = Projection::new(json!({}), limits).unwrap();
+    assert_eq!(
+        p.to_json(&SchemaValue::Json("null".into())).unwrap(),
+        json!(null)
+    );
+    for text in [
+        format!("{}null", " ".repeat(17)),
+        format!("\"{}\"", "x".repeat(17)),
+    ] {
+        assert!(matches!(
+            p.to_json(&SchemaValue::Json(text.clone())),
+            Err(Error::Limit(_))
+        ));
+        let object =
+            Projection::new(json!({"type":"object","additionalProperties":true}), limits).unwrap();
+        let value = SchemaValue::Record {
+            fields: vec![SchemaValue::Map {
+                entries: vec![(SchemaValue::String("x".into()), SchemaValue::Json(text))],
+            }],
+        };
+        assert!(matches!(object.to_json(&value), Err(Error::Limit(_))));
+    }
 }
 
 #[test]

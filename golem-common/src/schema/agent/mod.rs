@@ -737,6 +737,7 @@ fn contains_future(ty: &SchemaType) -> bool {
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
         | SchemaType::Uuid { .. }
+        | SchemaType::Json { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
@@ -792,6 +793,7 @@ fn contains_stream(ty: &SchemaType) -> bool {
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
         | SchemaType::Uuid { .. }
+        | SchemaType::Json { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }

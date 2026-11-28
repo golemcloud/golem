@@ -22,6 +22,70 @@ use serde_json::{Value, json};
 use test_r::test;
 
 #[test]
+fn json_compositions_accept_every_json_kind_and_keep_optional_fields_optional() {
+    use crate::schema::{SchemaTypeDef, TypeId};
+    use golem_schema::schema::render::{from_json_value, to_json_value};
+    let json_ref = SchemaType::ref_to(TypeId::new("payload"));
+    for ty in [
+        SchemaType::json(),
+        SchemaType::option(SchemaType::json()),
+        SchemaType::option(json_ref),
+    ] {
+        let graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: TypeId::new("payload"),
+                name: None,
+                body: SchemaType::json(),
+            }],
+            root: ty.clone(),
+        };
+        let schema = to_json_schema(&graph, &ty);
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        for json in [
+            json!({"b":[1,null,{"x":"y"}],"a":1.5}),
+            json!([1, null]),
+            json!("text"),
+            json!(3.5),
+            json!(false),
+            json!(null),
+        ] {
+            assert!(validator.is_valid(&json), "{schema}: {json}");
+            let value = from_json_value(&graph, &ty, &json).unwrap();
+            assert_eq!(to_json_value(&graph, &ty, &value).unwrap(), json);
+        }
+    }
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "required".into(),
+            body: SchemaType::json(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "optional".into(),
+            body: SchemaType::option(SchemaType::json()),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "items".into(),
+            body: SchemaType::list(SchemaType::json()),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(ty);
+    let schema = to_json_schema(&graph, &graph.root);
+    assert_eq!(schema["properties"]["required"], json!({}));
+    assert_eq!(schema["properties"]["items"]["items"], json!({}));
+    assert_eq!(schema["required"], json!(["required", "items"]));
+    let json = json!({"required":{"a":1},"items":[null,false,"x",[1]]});
+    assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&json));
+    let value = from_json_value(&graph, &graph.root, &json).unwrap();
+    let rendered = to_json_value(&graph, &graph.root, &value).unwrap();
+    assert_eq!(rendered["required"], json!({"a":1}));
+    let openapi = golem_schema::schema::render::openapi::to_openapi_components(&graph, &graph.root);
+    assert_eq!(openapi["root"]["properties"], schema["properties"]);
+}
+
+#[test]
 fn record_emits_object_with_properties() {
     let ty = SchemaType::record(vec![
         NamedFieldType {

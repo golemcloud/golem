@@ -76,6 +76,33 @@ fn tool(root: CommandNode) -> Tool {
 }
 
 #[test]
+fn native_json_parameter_projects_inline_and_preserves_object_arguments() {
+    let mut command = body();
+    command.options = vec![option(
+        "payload",
+        OptionShape::Scalar(SchemaType::json()),
+        true,
+    )];
+    let export = compile(&tool(node("root", Some(command))))
+        .unwrap()
+        .remove(0);
+    let schema = export.input_json_schema().unwrap();
+    assert_eq!(schema["properties"]["payload"], json!({}));
+    let input = json!({"payload":{"b":[1,null,{"x":"y"}],"a":1.5}});
+    let (value, _) = export
+        .parse_arguments(input.as_object().unwrap().clone())
+        .unwrap();
+    assert_eq!(
+        value.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::Json(
+                "{\"a\":1.5,\"b\":[1,null,{\"x\":\"y\"}]}".into()
+            )],
+        }
+    );
+}
+
+#[test]
 fn omission_respects_author_types_defaults_and_collection_bounds() {
     let mut command = body();
     command.options = vec![

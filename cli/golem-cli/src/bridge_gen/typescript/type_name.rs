@@ -109,6 +109,7 @@ impl TypeName for TypeScriptTypeName {
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
             | SchemaType::Uuid { .. }
+            | SchemaType::Json { .. }
             | SchemaType::Datetime { .. }
             | SchemaType::Duration { .. }
             | SchemaType::Quantity { .. }

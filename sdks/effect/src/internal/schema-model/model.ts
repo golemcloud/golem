@@ -124,6 +124,7 @@ export type SchemaTypeBody =
   | { tag: "path"; spec: PathSpec }
   | { tag: "url"; restrictions: UrlRestrictions }
   | { tag: "uuid" }
+  | { tag: "json" }
   | { tag: "datetime" }
   | { tag: "duration" }
   | { tag: "quantity"; spec: QuantitySpec }
@@ -585,6 +586,7 @@ export type SchemaValue =
   | { tag: "path"; value: string }
   | { tag: "url"; value: string }
   | { tag: "uuid"; value: Uuid }
+  | { tag: "json"; value: string }
   | { tag: "datetime"; value: Datetime }
   | { tag: "duration"; nanoseconds: bigint }
   | { tag: "quantity"; value: QuantityValue }
@@ -665,6 +667,7 @@ export const t = {
   path: (spec: PathSpec): SchemaType => schemaType({ tag: "path", spec }),
   url: (restrictions: UrlRestrictions): SchemaType => schemaType({ tag: "url", restrictions }),
   uuid: (): SchemaType => schemaType({ tag: "uuid" }),
+  json: (): SchemaType => schemaType({ tag: "json" }),
   datetime: (): SchemaType => schemaType({ tag: "datetime" }),
   duration: (): SchemaType => schemaType({ tag: "duration" }),
   quantity: (spec: QuantitySpec): SchemaType => schemaType({ tag: "quantity", spec }),
@@ -734,6 +737,7 @@ export const v = {
   path: (value: string): SchemaValue => ({ tag: "path", value }),
   url: (value: string): SchemaValue => ({ tag: "url", value }),
   uuid: (value: Uuid): SchemaValue => ({ tag: "uuid", value }),
+  json: (value: string): SchemaValue => ({ tag: "json", value }),
   datetime: (value: Datetime): SchemaValue => ({ tag: "datetime", value }),
   duration: (nanoseconds: bigint): SchemaValue => ({ tag: "duration", nanoseconds }),
   quantity: (value: QuantityValue): SchemaValue => ({ tag: "quantity", value }),

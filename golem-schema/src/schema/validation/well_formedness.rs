@@ -15,7 +15,7 @@
 //! Structural well-formedness checks for a [`SchemaGraph`].
 
 use crate::schema::graph::{RefResolutionError, SchemaGraph};
-use crate::schema::metadata::TypeId;
+use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, NumericRestrictionError, PathSpec, QuantitySpec,
     QuantityValue, SchemaType, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
@@ -29,6 +29,7 @@ use std::fmt::{self, Display, Formatter};
 pub enum SchemaError {
     /// Validation requires an optional Cargo feature.
     UnsupportedFeature(&'static str),
+    UnsupportedRole(Role),
     DuplicateTypeId(TypeId),
     DanglingRef(TypeId),
     /// A named reference whose alias chain is a pure cycle
@@ -100,7 +101,9 @@ pub enum SchemaError {
     /// canonical JSON wire (option-of-option, option-of-union-with-nullable-
     /// branch, option-of-ref-resolving-to-nullable). The canonical JSON
     /// encoding `null | inner` collapses `Some(None)` and `None`, so the
-    /// nesting is rejected at construction time.
+    /// nesting is rejected at construction time. JSON is an intentional
+    /// exception: `option<json>` is supported, and canonical JSON null
+    /// decodes to `None` even when the original value was `Some(Json(null))`.
     NullableNesting {
         inner: String,
     },
@@ -111,6 +114,9 @@ impl Display for SchemaError {
         match self {
             SchemaError::UnsupportedFeature(feature) => {
                 write!(f, "schema requires feature `{feature}`")
+            }
+            SchemaError::UnsupportedRole(role) => {
+                write!(f, "role `{role:?}` has no supported schema shape")
             }
             SchemaError::DuplicateTypeId(id) => write!(f, "duplicate type id `{id}`"),
             SchemaError::DanglingRef(id) => write!(f, "dangling type reference `{id}`"),
@@ -268,12 +274,19 @@ pub fn validate_root_type(graph: &SchemaGraph, ty: &SchemaType) -> Result<(), Ve
     }
 }
 
+fn check_role(metadata: &MetadataEnvelope, errors: &mut Vec<SchemaError>) {
+    if let Some(role @ (Role::StandardMultimodal | Role::TaskUpdate)) = &metadata.role {
+        errors.push(SchemaError::UnsupportedRole(role.clone()));
+    }
+}
+
 fn check_type(
     graph: &SchemaGraph,
     ty: &SchemaType,
     known: &HashSet<TypeId>,
     errors: &mut Vec<SchemaError>,
 ) {
+    check_role(ty.metadata(), errors);
     match ty {
         SchemaType::Ref { id, .. } => {
             if !known.contains(id) {
@@ -303,6 +316,7 @@ fn check_type(
         SchemaType::Record { fields, .. } => {
             let mut seen: HashSet<&str> = HashSet::new();
             for field in fields {
+                check_role(&field.metadata, errors);
                 if !seen.insert(field.name.as_str()) {
                     errors.push(SchemaError::DuplicateFieldName(field.name.clone()));
                 }
@@ -316,6 +330,7 @@ fn check_type(
             }
             let mut seen: HashSet<&str> = HashSet::new();
             for case in cases {
+                check_role(&case.metadata, errors);
                 if !seen.insert(case.name.as_str()) {
                     errors.push(SchemaError::DuplicateVariantCase(case.name.clone()));
                 }
@@ -441,6 +456,7 @@ fn check_type(
         | SchemaType::Char { .. }
         | SchemaType::String { .. }
         | SchemaType::Uuid { .. }
+        | SchemaType::Json { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::QuotaToken { .. }
@@ -608,6 +624,7 @@ fn validate_union(
     }
     let mut seen: HashSet<&str> = HashSet::new();
     for branch in &spec.branches {
+        check_role(&branch.metadata, errors);
         if !seen.insert(branch.tag.as_str()) {
             errors.push(SchemaError::DuplicateUnionTag(branch.tag.clone()));
         }
@@ -858,12 +875,13 @@ fn classify_discriminator_pair(
     }
 }
 
-/// Whether `ty` can be encoded as JSON `null` on the canonical wire.
+/// Whether `ty` is prohibited as an option's inner type.
 ///
 /// True when `ty` is an `Option<_>`, a `Union` whose any branch body is
 /// nullable, or a `Ref` resolving (after cycle-aware traversal) to a
 /// nullable type. The traversal terminates on cycles by treating any
-/// re-entered [`TypeId`] as non-nullable.
+/// re-entered [`TypeId`] as non-nullable. JSON is deliberately excluded:
+/// optional JSON uses the canonical null-as-None convention.
 fn is_nullable(graph: &SchemaGraph, ty: &SchemaType, visited: &mut HashSet<TypeId>) -> bool {
     match ty {
         SchemaType::Option { .. } => true,

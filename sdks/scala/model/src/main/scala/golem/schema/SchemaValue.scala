@@ -67,6 +67,7 @@ object SchemaValue {
   final case class PathValue(value: String)                                   extends SchemaValue
   final case class UrlValue(value: String)                                    extends SchemaValue
   final case class UuidValue(value: UUID)                                     extends SchemaValue
+  final case class JsonValue(value: String)                                   extends SchemaValue
   final case class DatetimeValue(value: Datetime)                             extends SchemaValue
   final case class DurationValue(nanoseconds: Long)                           extends SchemaValue
   final case class QuantityValueNode(value: QuantityValue)                    extends SchemaValue

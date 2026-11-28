@@ -22,6 +22,8 @@ import {
 } from "./internal/schema-model/permissionCardHandle.js"
 import { GuestSecretHandle, isGuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 import type { StreamError } from "./internal/schema-model/errors.js"
+import type { JsonValue } from "./SchemaRef.js"
+import { assertJsonValue } from "./internal/schema-model/json.js"
 
 /**
  * Annotation key used by the codec to override the default WIT primitive
@@ -339,6 +341,7 @@ export type WitSchemaNode =
   | { readonly tag: "path"; readonly spec: PathSpec }
   | { readonly tag: "url"; readonly restrictions: UrlRestrictions }
   | { readonly tag: "uuid" }
+  | { readonly tag: "json" }
   | { readonly tag: "datetime" }
   | { readonly tag: "duration" }
   | { readonly tag: "quantity"; readonly spec: QuantitySpec }
@@ -406,6 +409,19 @@ export const Url = (restrictions: UrlRestrictions = {}): Schema.String & WitSche
   Schema.String.pipe(
     Schema.annotate({ [witSchemaNodeAnnotationKey]: { tag: "url", restrictions } }),
   )
+
+/** Native JSON value schema, carried as the first-class JSON node. @since 2.0.0 @category schemas */
+export const Json = native(
+  (value): value is JsonValue => {
+    try {
+      assertJsonValue(value)
+      return true
+    } catch {
+      return false
+    }
+  },
+  { tag: "json" },
+)
 
 const isDatetime = (u: unknown): u is DatetimeValue =>
   typeof u === "object" &&

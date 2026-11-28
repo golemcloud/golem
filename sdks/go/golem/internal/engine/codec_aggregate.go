@@ -16,7 +16,9 @@ package engine
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	"github.com/golemcloud/golem/sdks/go/core/values"
 	"reflect"
 	"slices"
@@ -437,6 +439,31 @@ func compileEnum(c *Codec, d *EnumDef) {
 // each has a Go representation indistinguishable from a primitive, so only the
 // named type reveals the intent.
 var namedTypeCodecs = map[reflect.Type]func(*Codec){
+	reflect.TypeFor[json.RawMessage](): func(c *Codec) {
+		ref := core.NewRef(core.SchemaGraph{Root: core.SchemaType{Body: core.JsonType{}}})
+		c.Body = func(*GraphBuilder) types.SchemaTypeBody { return types.MakeSchemaTypeBodyJsonType() }
+		c.Encode = func(b *ValBuilder, v reflect.Value) int32 {
+			text := string(v.Bytes())
+			if err := ref.Validate(core.JsonValue{Value: text}); err != nil {
+				panic(err)
+			}
+			return b.Push(types.MakeSchemaValueNodeJsonValue(text))
+		}
+		c.Decode = func(d *Decoder, dst reflect.Value, idx int32) error {
+			n, err := d.Node(idx)
+			if err != nil {
+				return err
+			}
+			if n.Tag() != types.SchemaValueNodeJsonValue {
+				return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
+			}
+			if err := ref.Validate(core.JsonValue{Value: n.JsonValue()}); err != nil {
+				return err
+			}
+			dst.SetBytes([]byte(n.JsonValue()))
+			return nil
+		}
+	},
 	reflect.TypeFor[values.Char](): func(c *Codec) {
 		scalar(c, types.MakeSchemaTypeBodyCharType(), types.SchemaValueNodeCharValue,
 			func(b *ValBuilder, v reflect.Value) int32 {

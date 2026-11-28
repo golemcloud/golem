@@ -72,6 +72,7 @@ object SchemaTypeBody {
   final case class F64Type(restrictions: Option[NumericRestrictions] = None) extends SchemaTypeBody
   case object CharType                                                       extends SchemaTypeBody
   case object StringType                                                     extends SchemaTypeBody
+  case object JsonType                                                       extends SchemaTypeBody
 
   // Structural composites
   final case class RecordType(fields: List[NamedFieldType])                    extends SchemaTypeBody
@@ -141,6 +142,7 @@ object t {
   def f64(restrictions: Option[NumericRestrictions]): SchemaType = st(F64Type(restrictions.flatMap(_.normalize)))
   def char: SchemaType                                           = st(CharType)
   def string: SchemaType                                         = st(StringType)
+  def json: SchemaType                                           = st(JsonType)
 
   def record(fields: List[NamedFieldType]): SchemaType                       = st(RecordType(fields))
   def variant(cases: List[VariantCaseType]): SchemaType                      = st(VariantType(cases))
