@@ -630,7 +630,6 @@ fn server_tracing_does_not_overwrite_the_retained_repository_key() {
                 .into_iter()
                 .map(move |(enabled, explicit_key)| (alias, enabled, explicit_key))
         })
-        .filter(|(alias, enabled, explicit_key)| *alias != "not-created" || !enabled || *explicit_key)
         .for_each(|(alias, enabled, explicit_key)| {
             figment::Jail::expect_with(|jail| {
                 jail.clear_env();
@@ -703,7 +702,7 @@ fn server_tracing_does_not_overwrite_the_retained_repository_key() {
                         )
                         .await
                 })));
-                if alias == "noncolliding" {
+                if alias == "noncolliding" || (alias == "not-created" && (!enabled || explicit_key)) {
                     assert!(result.unwrap_err().is::<TracingInitialized>());
                     assert!(called.get());
                     assert_eq!(std::fs::read(&log_path).unwrap(), b"log would replace key");
@@ -715,8 +714,14 @@ fn server_tracing_does_not_overwrite_the_retained_repository_key() {
                         "{alias}, enabled={enabled}, explicit_key={explicit_key}: rejection precedes tracing"
                     );
                 }
-                if alias == "not-created" && (!enabled || explicit_key) {
-                    assert!(!key_path.exists());
+                if alias == "not-created" && enabled && !explicit_key {
+                    assert!(
+                        golem_worker_executor::services::golem_config::FilesystemSnapshotRepositoryKey::parse(
+                            &std::fs::read_to_string(&key_path).unwrap()
+                        ).is_ok()
+                    );
+                } else if alias == "not-created" {
+                    assert_eq!(std::fs::read(&key_path).unwrap(), b"log would replace key");
                 } else {
                     assert_eq!(std::fs::read_to_string(&key_path).unwrap(), key);
                 }
@@ -735,6 +740,8 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
         ("scheduler.db", None),
         ("kv-store/kv-running_workers", None),
         ("kv-store/kv-schedule.db", None),
+        #[cfg(windows)]
+        ("kv-store/kv-ſchedule.db", None),
         ("kv-store/kv-user-defined.db", None),
         ("kv-store/epochs.db", None),
         ("custom.db", Some("REGISTRY_SERVICE__DB")),
@@ -828,7 +835,7 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
         let recovery_files = database.2
             && (matches!(
                 database.0,
-                "registry_service.db" | "kv-store/kv-running_workers" | "kv-store/epochs.db"
+                "registry_service.db" | "kv-store/kv-running_workers" | "kv-store/epochs.db" | "kv-store/kv-ſchedule.db"
             ) || database.0.ends_with("durable-oplog-unrelated.db")
                 || database.1 == Some("WORKER_SERVICE__MCP__SESSION_STORAGE")
                 || database.0 == "other-kv/kv-running_workers"
@@ -852,6 +859,9 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
             "uri-memory",
             "uri-memory-then-disk",
             "uri-disk-then-memory",
+            "uri-memdb",
+            "uri-memdb-then-disk",
+            "uri-disk-then-memdb",
             "literal-percent",
             #[cfg(unix)]
             "multi-uri",
@@ -872,6 +882,10 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
             #[cfg(windows)]
             "windows-case",
             #[cfg(windows)]
+            "windows-multi-case",
+            #[cfg(windows)]
+            "windows-multi-case-hard-link",
+            #[cfg(windows)]
             "windows-database-symlink",
             #[cfg(unix)]
             "symlink",
@@ -890,15 +904,17 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                     || (database.0.0 == "custom.db" && database.0.1 == Some("REGISTRY_SERVICE__DB")))
                 && (!alias.starts_with("multi-uri") || database.0.0.starts_with("other-"))
                 && (!alias.starts_with("multi-uri-indexed") || database.0.1 == Some("WORKER_EXECUTOR__INDEXED_STORAGE"))
-                && (!alias.starts_with("windows-")
+                && (!alias.starts_with("windows-") || alias.starts_with("windows-multi-")
                     || (database.0.0 == "custom.db" && database.0.1 == Some("REGISTRY_SERVICE__DB")))
+                && (!alias.starts_with("windows-multi-")
+                    || database.0.0.starts_with("kv-store/") || database.0.0.starts_with("other-"))
                 && (*alias != "windows-database-symlink" || !database.1.is_empty())
         })
         .flat_map(move |alias| [false, true].map(|retained_key| (database, alias, retained_key)))
     })
     .for_each(|(((database, selected_store, selected), suffix), alias, retained_key)| {
         figment::Jail::expect_with(|jail| {
-            let selected = selected && !matches!(alias, "uri-memory" | "uri-disk-then-memory");
+            let selected = selected && !matches!(alias, "uri-memory" | "uri-disk-then-memory" | "uri-memdb" | "uri-disk-then-memdb");
             let selected = if alias.starts_with("multi-uri") && !alias.starts_with("multi-uri-indexed") {
                 selected_store.is_some_and(|store| store.contains("KEY_VALUE_STORAGE"))
                     && (selected || matches!(alias, "multi-uri-query" | "multi-uri-fragment" | "multi-uri-nul"))
@@ -930,11 +946,14 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                 database_path.clone()
             };
             std::fs::create_dir_all(resolved_database.parent().unwrap()).unwrap();
-            let state_path = resolved_database.with_file_name(format!(
+            let mut state_path = resolved_database.with_file_name(format!(
                 "{}{suffix}",
                 resolved_database.file_name().unwrap().to_str().unwrap()
             ));
-            if !matches!(alias, "not-created" | "uri-absent" | "windows-case" | "multi-uri-absent" | "multi-uri-indexed-absent") {
+            if alias.starts_with("windows-multi-") {
+                state_path.set_file_name(state_path.file_name().unwrap().to_str().unwrap().to_uppercase());
+            }
+            if !matches!(alias, "not-created" | "uri-absent" | "windows-case" | "windows-multi-case" | "multi-uri-absent" | "multi-uri-indexed-absent") {
                 std::fs::write(&state_path, b"preserve selected SQLite state").unwrap();
             }
             #[cfg(windows)]
@@ -1048,6 +1067,9 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                         "uri-memory" => format!("file:{selected_database}?%6dode=memory"),
                         "uri-memory-then-disk" => format!("file:{selected_database}?mode=memory&mode=rwc"),
                         "uri-disk-then-memory" => format!("file:{selected_database}?mode=rwc&mode=memory"),
+                        "uri-memdb" => format!("file:{selected_database}?%76fs=mem%64b"),
+                        "uri-memdb-then-disk" => format!("file:{selected_database}?vfs=memdb&vfs={}", if cfg!(windows) { "win32" } else { "unix" }),
+                        "uri-disk-then-memdb" => format!("file:{selected_database}?vfs={}&vfs=memdb", if cfg!(windows) { "win32" } else { "unix" }),
                         _ => selected_database,
                     };
                     jail.set_env(
@@ -1058,14 +1080,14 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
             }
             let log_path = if alias == "windows-case" {
                 state_path.with_file_name(state_path.file_name().unwrap().to_str().unwrap().to_uppercase())
-            } else if matches!(alias, "direct" | "not-created" | "literal-percent")
+            } else if matches!(alias, "direct" | "not-created" | "literal-percent" | "windows-multi-case")
                 || alias.starts_with("uri") || (alias.starts_with("multi-uri") && alias != "multi-uri-hard-link") || alias.ends_with("database-symlink") {
                 state_path.clone()
             } else {
                 data_dir.join("server.log")
             };
             match alias {
-                "hard-link" | "multi-uri-hard-link" => std::fs::hard_link(&state_path, &log_path).unwrap(),
+                "hard-link" | "multi-uri-hard-link" | "windows-multi-case-hard-link" => std::fs::hard_link(&state_path, &log_path).unwrap(),
                 #[cfg(unix)]
                 "symlink" => std::os::unix::fs::symlink(&state_path, &log_path).unwrap(),
                 _ => {}
@@ -1123,7 +1145,7 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                     "{database}, {alias}, retained_key={retained_key}"
                 );
             }
-            if matches!(alias, "not-created" | "uri-absent" | "windows-case" | "multi-uri-absent" | "multi-uri-indexed-absent") && selected {
+            if matches!(alias, "not-created" | "uri-absent" | "windows-case" | "windows-multi-case" | "multi-uri-absent" | "multi-uri-indexed-absent") && selected {
                 assert!(!state_path.exists());
             } else {
                 assert_eq!(

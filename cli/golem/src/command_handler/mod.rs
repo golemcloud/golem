@@ -332,10 +332,13 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
         }
         Ok(())
     };
-    check_path(
-        &config.data_dir.join(crate::filesystem_config::KEY_FILE),
-        "retained repository key",
-    )?;
+    let retained_key = config.data_dir.join(crate::filesystem_config::KEY_FILE);
+    if retained_key
+        .try_exists()
+        .context("Failed to inspect the retained repository key")?
+    {
+        check_path(&retained_key, "retained repository key")?;
+    }
     let check_sqlite_path = |path: &Path| -> anyhow::Result<()> {
         #[cfg(unix)]
         let database =
@@ -385,6 +388,11 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
             .filter_map(|option| option.split_once('='))
             .rfind(|(key, _)| decode(key) == b"mode")
             .is_some_and(|(_, value)| decode(value) == b"memory")
+            || query
+                .split('&')
+                .filter_map(|option| option.split_once('='))
+                .rfind(|(key, _)| decode(key) == b"vfs")
+                .is_some_and(|(_, value)| decode(value) == b"memdb")
         {
             return Ok(None);
         }
@@ -418,7 +426,49 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
             None => Ok(()),
         }
     };
+    fn strip_filename_affix<'a>(name: &'a str, affix: &str, at_end: bool) -> Option<&'a str> {
+        #[cfg(unix)]
+        {
+            if at_end {
+                name.strip_suffix(affix)
+            } else {
+                name.strip_prefix(affix)
+            }
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+            let split = if at_end {
+                name.char_indices().rev().nth(affix.chars().count() - 1)?.0
+            } else {
+                name.char_indices()
+                    .nth(affix.chars().count())
+                    .map_or(name.len(), |(index, _)| index)
+            };
+            let (prefix, suffix) = name.split_at(split);
+            let (candidate, remainder) = if at_end {
+                (suffix, prefix)
+            } else {
+                (prefix, suffix)
+            };
+            let left = candidate.encode_utf16().collect::<Box<[_]>>();
+            let right = affix.encode_utf16().collect::<Box<[_]>>();
+            // Both slices remain valid until the comparison returns.
+            let result = unsafe {
+                CompareStringOrdinal(
+                    left.as_ptr(),
+                    left.len().try_into().ok()?,
+                    right.as_ptr(),
+                    right.len().try_into().ok()?,
+                    1,
+                )
+            };
+            (result == CSTR_EQUAL).then_some(remainder)
+        }
+    }
     let is_agent_file_key = |key: &str| {
+        #[cfg(windows)]
+        let key = key.to_ascii_lowercase().into_boxed_str();
         key.split_once('_').is_some_and(|(environment, agent)| {
             [environment, agent].into_iter().all(|id| {
                 uuid::Uuid::parse_str(id).is_ok_and(|uuid| uuid.hyphenated().to_string() == id)
@@ -427,27 +477,24 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     };
     let is_key_value_database = |name: &str, persistent: bool| {
         (persistent
-            && matches!(
-                name,
-                "kv-running_workers" | "kv-schedule.db" | "kv-user-defined.db"
-            ))
-            || name
-                .strip_prefix("kv-worker-")
-                .and_then(|key| key.strip_suffix(".db"))
+            && ["kv-running_workers", "kv-schedule.db", "kv-user-defined.db"]
+                .into_iter()
+                .any(|expected| strip_filename_affix(name, expected, false) == Some("")))
+            || strip_filename_affix(name, "kv-worker-", false)
+                .and_then(|key| strip_filename_affix(key, ".db", true))
                 .is_some_and(is_agent_file_key)
     };
     let is_indexed_database = |name: &str| {
-        name == "epochs.db"
-            || name
-                .strip_suffix(".db")
+        strip_filename_affix(name, "epochs.db", false) == Some("")
+            || strip_filename_affix(name, ".db", true)
                 .and_then(|name| {
-                    name.strip_prefix("durable-")
-                        .or_else(|| name.strip_prefix("ephemeral-"))
+                    strip_filename_affix(name, "durable-", false)
+                        .or_else(|| strip_filename_affix(name, "ephemeral-", false))
                 })
                 .and_then(|name| {
-                    name.strip_prefix("oplog-").or_else(|| {
-                        name.strip_prefix("compressed-oplog-l")
-                            .or_else(|| name.strip_prefix("blob-oplog-l"))
+                    strip_filename_affix(name, "oplog-", false).or_else(|| {
+                        strip_filename_affix(name, "compressed-oplog-l", false)
+                            .or_else(|| strip_filename_affix(name, "blob-oplog-l", false))
                             .and_then(|name| name.split_once('-'))
                             .and_then(|(level, key)| {
                                 level
@@ -480,7 +527,7 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
             if let Some(name) = name.to_str() {
                 let database = ["-wal", "-shm", "-journal"]
                     .into_iter()
-                    .find_map(|suffix| name.strip_suffix(suffix))
+                    .find_map(|suffix| strip_filename_affix(name, suffix, true))
                     .unwrap_or(name);
                 if selected(database) {
                     check_sqlite(&root.join(database).to_string_lossy())?;
