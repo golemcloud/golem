@@ -174,27 +174,12 @@ impl ComponentRevisionRecord {
         let metadata = self.metadata.value();
         let provision = metadata.component_provision_config();
         let component_config = diff::ComponentConfig {
-            schema: metadata.config_schema().clone(),
             initial_permissions: diff::AgentTypeInitialPermission {
                 lower_positive: provision.initial_permissions.lower_positive.clone(),
                 lower_negative: provision.initial_permissions.lower_negative.clone(),
                 upper_positive: provision.initial_permissions.upper_positive.clone(),
                 upper_negative: provision.initial_permissions.upper_negative.clone(),
             },
-            config: provision
-                .config
-                .iter()
-                .map(|entry| {
-                    Ok((entry.path.join("."), NormalizedJsonValue::new(
-                    golem_schema::schema::render::to_json_value(
-                        entry.value.graph(), entry.value.root_type(), entry.value.value()
-                    ).map_err(|reason| diff::DiffError::TypedConfigJsonConversion {
-                        operation: "component revision to_diffable component config conversion",
-                        path: entry.path.join("."), reason: reason.to_string(),
-                    })?
-                )))
-                })
-                .collect::<Result<_, _>>()?,
             env: provision.env.clone(),
             files_by_path: provision
                 .files
@@ -241,13 +226,14 @@ impl ComponentRevisionRecord {
                                 .config
                                 .iter()
                                 .map(|e| {
+                                    let golem_common::model::component_metadata::ConfigBindingSource::Static(value) = &e.value_source;
                                     Ok((
                                         e.path.join("."),
                                         NormalizedJsonValue::new(
                                             golem_schema::schema::render::to_json_value(
-                                                e.value.graph(),
-                                                e.value.root_type(),
-                                                e.value.value(),
+                                                value.graph(),
+                                                value.root_type(),
+                                                value.value(),
                                             )
                                             .map_err(|reason| {
                                                 diff::DiffError::TypedConfigJsonConversion {

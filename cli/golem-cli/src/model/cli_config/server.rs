@@ -17,6 +17,7 @@ use crate::model::app_raw::{BuiltinServer, Environment, Server};
 use colored::Colorize;
 use url::Url;
 
+/// The selected server's label in CLI diagnostics.
 pub trait ToFormattedServerContext {
     fn to_formatted_server_context(&self, builtin_local_url: &Url) -> String;
 }

@@ -104,6 +104,7 @@ fn generate_config_schema_impl(
                     source: #golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigSource::#source,
                     path: field_path,
                     value_type: #value_type,
+                    default_value: None,
                 });
             }
         };
@@ -139,6 +140,7 @@ fn generate_config_schema_impl(
                         path: field_path,
                         value_type: #golem_rust_crate_ident::agentic::secret_schema_graph::<<#field_ty as #golem_rust_crate_ident::agentic::InnerTypeHelper>::Type>()
                             .expect("failed to build config schema graph"),
+                        default_value: None,
                     };
                     config_entries.push(config_entry);
                 }
@@ -160,6 +162,7 @@ fn generate_config_schema_impl(
                         path: field_path,
                         value_type: #golem_rust_crate_ident::schema::try_into_schema_graph::<#field_ty>()
                             .expect("failed to build config schema graph"),
+                        default_value: None,
                     };
                     config_entries.push(config_entry);
                 }

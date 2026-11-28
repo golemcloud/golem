@@ -98,7 +98,6 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
     let binding_update = ComponentUpdate {
         current_revision: component.revision,
         package_metadata: None,
-        config_schema: None,
         component_provision_config: None,
         agent_types: None,
         agent_type_provision_config_updates: None,

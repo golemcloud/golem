@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::{ExportedInstance, TopLevelExport};
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::AgentTypeName;
@@ -126,6 +127,81 @@ fn component_metadata_helpers_use_exact_known_export_names() {
 }
 
 #[test]
+fn config_bindings_preserve_static_values_and_origins() {
+    use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+    let entry = TypedAgentConfigEntry {
+        path: vec!["limits".into(), "maximum".into()],
+        value: TypedSchemaValue::new(
+            SchemaGraph {
+                root: crate::schema::SchemaType::u64(),
+                defs: vec![],
+            },
+            SchemaValue::U64(u64::MAX),
+        ),
+    };
+    let mut binding = ConfigBinding::from(entry);
+    binding.origins.push(ConfigBindingOrigin {
+        value_path: vec![],
+        location: ConfigOriginLocation::Manifest {
+            file: "golem.yaml".into(),
+        },
+        source_path: vec!["config".into(), "limits".into(), "maximum".into()],
+        layer: "prod".into(),
+    });
+    binding.origins.push(ConfigBindingOrigin {
+        value_path: vec![],
+        location: ConfigOriginLocation::Package(ConfigPackageOrigin {
+            source: "https://packages.example.com/settings.golem".into(),
+            package_digest: "sha256:package-content".into(),
+        }),
+        source_path: vec![
+            "agents".into(),
+            "Main".into(),
+            "config".into(),
+            "limits".into(),
+            "maximum".into(),
+        ],
+        layer: "package".into(),
+    });
+    let json = serde_json::to_value(&binding).unwrap();
+    assert_eq!(json["valueSource"]["kind"], "static");
+    assert_eq!(
+        json["origins"][1]["location"],
+        serde_json::json!({
+            "kind": "package",
+            "source": "https://packages.example.com/settings.golem",
+            "packageDigest": "sha256:package-content"
+        })
+    );
+    assert_eq!(json, binding.to_json().unwrap());
+    assert_eq!(
+        ConfigBinding::parse_from_json(Some(json.clone())).unwrap(),
+        binding
+    );
+    assert_eq!(
+        serde_json::from_value::<ConfigBinding>(json).unwrap(),
+        binding
+    );
+    let config: ConfigBindings = vec![binding.clone()];
+    let binary = crate::serialization::serialize(&config).unwrap();
+    assert_eq!(
+        crate::serialization::deserialize::<ConfigBindings>(&binary).unwrap(),
+        config
+    );
+    let proto: golem_api_grpc::proto::golem::component::ConfigBinding =
+        binding.clone().try_into().unwrap();
+    assert_eq!(ConfigBinding::try_from(proto.clone()).unwrap(), binding);
+    let mut invalid = proto;
+    invalid.value_source = None;
+    assert!(ConfigBinding::try_from(invalid).is_err());
+    binding.origins.clear();
+    let json = serde_json::to_value(&binding).unwrap();
+    assert!(json.get("origins").is_none());
+    assert_eq!(json, binding.to_json().unwrap());
+}
+
+#[test]
 fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
     let agent_type = AgentTypeName("Cart".to_string());
     let card_id = CardId::new();
@@ -152,19 +228,16 @@ fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
             AgentTypeProvisionConfig {
                 initial_permissions: card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: vec![],
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
         )]),
     )
-    .with_component_config(
-        crate::schema::ComponentConfigSchema::default(),
-        ComponentProvisionConfig {
-            initial_permissions: card.clone(),
-            ..Default::default()
-        },
-    );
+    .with_component_provision_config(ComponentProvisionConfig {
+        initial_permissions: card.clone(),
+        ..Default::default()
+    });
 
     let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
         metadata.try_into().unwrap();
@@ -336,10 +409,7 @@ fn component_metadata_grpc_roundtrip_preserves_tool_envelope() {
         decoded.with_provision_configs(decoded.agent_type_provision_configs().clone()),
         decoded.with_tools(decoded.tools().clone()),
         decoded.with_tool_middlewares(decoded.tool_middlewares().clone()),
-        decoded.with_component_config(
-            decoded.config_schema().clone(),
-            decoded.component_provision_config().clone(),
-        ),
+        decoded.with_component_provision_config(decoded.component_provision_config().clone()),
     ] {
         transformed.redact_host_managed_values_for_external();
         assert_eq!(transformed.agent_type_ids(), &agent_type_ids);

@@ -276,10 +276,6 @@ async fn expand_one(
         let wasm = unpack.blob(&spec.wasm, "wasm", false).await?;
         let mut declaration = unpack.provision(&spec.provision).await?;
         declaration.insert("componentWasm".into(), json!(wasm));
-        declaration.insert(
-            "configSchema".into(),
-            serde_json::to_value(&spec.config_schema)?,
-        );
         insert(&mut output.declarations.components, component, declaration)?;
         output.components.insert(
             ComponentName(component.into()),

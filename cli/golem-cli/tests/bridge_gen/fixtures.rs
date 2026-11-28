@@ -56,6 +56,7 @@ pub fn multimodal(cases: Vec<VariantCaseType>) -> SchemaType {
 pub fn local_config(path: Vec<&str>, value_type: SchemaType) -> AgentConfigDeclarationSchema {
     AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
+        default_value: None,
         path: path.into_iter().map(|s| s.to_string()).collect(),
         value_type,
     }

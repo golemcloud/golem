@@ -46,7 +46,7 @@ fn physical_request(
         Some(http::uri::PathAndQuery::from_static("/charge/93")),
         fields,
         None,
-        Empty::new().map_err(|never| match never {}).boxed_unsync(),
+        Empty::new().boxed_unsync(),
     );
     let req = store.data_mut().table.push(request).unwrap();
     let position = IdempotencyKeyPosition {

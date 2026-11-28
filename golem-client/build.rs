@@ -270,6 +270,26 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::base_model::component_metadata::AgentTypeProvisionConfig",
             ),
             (
+                "ConfigBinding",
+                "golem_common::base_model::component_metadata::ConfigBinding",
+            ),
+            (
+                "ConfigBindingDto",
+                "golem_common::model::component::ConfigBindingDto",
+            ),
+            (
+                "ConfigBindingSource",
+                "golem_common::base_model::component_metadata::ConfigBindingSource",
+            ),
+            (
+                "ConfigBindingOrigin",
+                "golem_common::base_model::component_metadata::ConfigBindingOrigin",
+            ),
+            (
+                "ConfigOriginLocation",
+                "golem_common::base_model::component_metadata::ConfigOriginLocation",
+            ),
+            (
                 "AgentTypeProvisionConfigCreation",
                 "golem_common::model::component::AgentTypeProvisionConfigCreation",
             ),

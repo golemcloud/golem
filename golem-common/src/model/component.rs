@@ -35,13 +35,14 @@ impl ComponentDto {
                                 .config
                                 .iter()
                                 .map(|e| {
+                                    let crate::model::component_metadata::ConfigBindingSource::Static(value) = &e.value_source;
                                     Ok((
                                         e.path.join("."),
                                         NormalizedJsonValue::new(
                                             golem_schema::schema::render::to_json_value(
-                                                e.value.graph(),
-                                                e.value.root_type(),
-                                                e.value.value(),
+                                                value.graph(),
+                                                value.root_type(),
+                                                value.value(),
                                             )
                                             .map_err(|reason| {
                                                 diff::DiffError::TypedConfigJsonConversion {
@@ -174,7 +175,6 @@ impl ComponentDto {
                 .map(|agent_type| (agent_type.type_name.0.clone(), agent_type.clone().into()))
                 .collect(),
             component_config: diff::ComponentConfig {
-                schema: metadata.config_schema().clone(),
                 initial_permissions: {
                     let card = &metadata.component_provision_config().initial_permissions;
                     diff::AgentTypeInitialPermission {
@@ -184,24 +184,6 @@ impl ComponentDto {
                         upper_negative: card.upper_negative.clone(),
                     }
                 },
-                config: metadata
-                    .component_provision_config()
-                    .config
-                    .iter()
-                    .map(|entry| {
-                        (
-                            entry.path.join("."),
-                            crate::model::json::NormalizedJsonValue::new(
-                                golem_schema::schema::render::to_json_value(
-                                    entry.value.graph(),
-                                    entry.value.root_type(),
-                                    entry.value.value(),
-                                )
-                                .unwrap_or_default(),
-                            ),
-                        )
-                    })
-                    .collect(),
                 env: metadata.component_provision_config().env.clone(),
                 files_by_path: metadata
                     .component_provision_config()
@@ -352,7 +334,7 @@ mod tests {
             )]),
         );
         let wasm_hash = diff::Hash::empty();
-        let dto = ComponentDto {
+        let mut dto = ComponentDto {
             id: ComponentId::new(),
             revision: ComponentRevision::new(1).unwrap(),
             environment_id: EnvironmentId::new(),
@@ -366,12 +348,52 @@ mod tests {
             wasm_hash,
             package_metadata: None,
         };
+        let agent_name = crate::model::agent::AgentTypeName("ConfigOwner".into());
+        dto.metadata.agent_type_provision_configs.insert(
+            agent_name.clone(),
+            crate::model::component_metadata::AgentTypeProvisionConfig {
+                initial_permissions: crate::model::component::AgentTypeInitialPermissions::default(
+                )
+                .to_polymorphic_card(),
+                env: BTreeMap::new(),
+                plugins: vec![],
+                files: vec![],
+                config: vec![crate::model::component_metadata::ConfigBinding {
+                    path: vec!["enabled".into()],
+                    value_source: crate::model::component_metadata::ConfigBindingSource::Static(
+                        crate::schema::TypedSchemaValue::new(
+                            SchemaGraph::anonymous(crate::schema::SchemaType::bool()),
+                            crate::schema::SchemaValue::Bool(true),
+                        ),
+                    ),
+                    origins: vec![],
+                }],
+            },
+        );
         let expected = diff::Component {
             wasm_hash,
             package_metadata: None,
             agent_types: BTreeMap::new(),
             component_config: diff::ComponentConfig::default().into(),
-            agent_type_provision_configs: BTreeMap::new(),
+            agent_type_provision_configs: BTreeMap::from([(
+                "ConfigOwner".into(),
+                diff::AgentTypeProvisionConfig {
+                    config: BTreeMap::from([(
+                        "enabled".into(),
+                        NormalizedJsonValue::new(serde_json::json!(true)),
+                    )]),
+                    env: BTreeMap::new(),
+                    files_by_path: BTreeMap::new(),
+                    plugins_by_grant_id: BTreeMap::new(),
+                    initial_permissions: diff::AgentTypeInitialPermission {
+                        lower_positive: vec![],
+                        lower_negative: vec![],
+                        upper_positive: vec![],
+                        upper_negative: vec![],
+                    },
+                }
+                .into(),
+            )]),
             tool_deployment_configs: BTreeMap::from([(
                 tool_name.as_str().to_string(),
                 diff::ToolDeploymentConfig {
@@ -390,6 +412,45 @@ mod tests {
         };
 
         assert_eq!(
+            dto.to_diffable().unwrap().hash().unwrap(),
+            expected.hash().unwrap()
+        );
+
+        // Origins do not contribute to deployment identity.
+        for binding in &mut dto
+            .metadata
+            .agent_type_provision_configs
+            .get_mut(&agent_name)
+            .unwrap()
+            .config
+        {
+            binding
+                .origins
+                .push(crate::model::component_metadata::ConfigBindingOrigin {
+                    value_path: vec![],
+                    location: crate::model::component_metadata::ConfigOriginLocation::Manifest {
+                        file: "golem.yaml".into(),
+                    },
+                    source_path: vec!["config".into()],
+                    layer: "prod".into(),
+                });
+        }
+        assert_eq!(
+            dto.to_diffable().unwrap().hash().unwrap(),
+            expected.hash().unwrap()
+        );
+        dto.metadata
+            .agent_type_provision_configs
+            .get_mut(&agent_name)
+            .unwrap()
+            .config[0]
+            .value_source = crate::model::component_metadata::ConfigBindingSource::Static(
+            crate::schema::TypedSchemaValue::new(
+                SchemaGraph::anonymous(crate::schema::SchemaType::bool()),
+                crate::schema::SchemaValue::Bool(false),
+            ),
+        );
+        assert_ne!(
             dto.to_diffable().unwrap().hash().unwrap(),
             expected.hash().unwrap()
         );

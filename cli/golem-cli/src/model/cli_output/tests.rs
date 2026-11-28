@@ -279,6 +279,8 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     ),
     registry_entry!("BuildResult", "build", arb_build_result),
     registry_entry!("CleanResult", "clean", arb_clean_result),
+    registry_entry!("ConfigListView", "config.list", arb_config_list_result),
+    registry_entry!("ConfigGetView", "config.get", arb_config_get_result),
     registry_entry!("DeployPlanView", "deploy.plan", arb_deploy_plan_result),
     registry_entry!("DeployResultView", "deploy", arb_deploy_result),
     registry_entry!(
@@ -1084,8 +1086,7 @@ fn component_metadata_displays_tools_middlewares_and_files() {
             sample.tools.clone(),
             sample.tool_middlewares.clone(),
         )
-        .with_component_config(
-            Default::default(),
+        .with_component_provision_config(
             golem_common::model::component_metadata::ComponentProvisionConfig {
                 files: sample.files.clone(),
                 ..Default::default()
@@ -1195,24 +1196,116 @@ fn component_metadata_displays_tools_middlewares_and_files() {
 
 #[test]
 fn component_manifest_trace_structured_output_masks_secret_payloads() {
-    let value = hidden_structured_output(crate::model::component::ComponentManifestTraceView {
+    use crate::model::app::{AgentLayerId, ComponentLayerId};
+    use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::map::MapMergeMode;
+    use crate::model::cascade::property::vec::VecMergeMode;
+    use crate::model::masking::Masked;
+
+    let mut field = arb_static_config_field()
+        .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+        .unwrap()
+        .current();
+    field.fill = json!({"password": "resolved-config-secret"}).into();
+    let mut trace = crate::model::component::ComponentManifestTraceView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
+        manifest_only: false,
         properties: sample_component_layer_properties(),
         agents: std::collections::BTreeMap::from([(
             golem_common::model::agent::AgentTypeName("Agent".to_string()),
             sample_agent_layer_properties(),
         )]),
-    });
+        resolved_config: Some(vec![field]),
+    };
+    let component_layer = ComponentLayerId::ComponentCommon(trace.component_name.clone());
+    for mode in [
+        MapMergeMode::Upsert,
+        MapMergeMode::Remove,
+        MapMergeMode::Replace,
+    ] {
+        trace.properties.env.apply_layer(
+            &component_layer,
+            None,
+            (
+                mode,
+                indexmap::IndexMap::from([
+                    ("API_TOKEN".into(), "updated-env-secret".into()),
+                    ("PUBLIC_LABEL".into(), "visible-label".into()),
+                ]),
+            ),
+        );
+    }
+    for mode in [VecMergeMode::Prepend, VecMergeMode::Replace] {
+        trace.properties.plugins.apply_layer(
+            &component_layer,
+            None,
+            (
+                mode,
+                vec![crate::model::app_raw::PluginInstallation {
+                    account: None,
+                    name: "plugin".into(),
+                    version: "1.0.0".into(),
+                    parameters: std::collections::HashMap::from([(
+                        "token".into(),
+                        "updated-plugin-secret".into(),
+                    )]),
+                }],
+            ),
+        );
+    }
+    let properties = trace.agents.values_mut().next().unwrap();
+    let agent_layer =
+        AgentLayerId::AgentCommon(golem_common::model::agent::AgentTypeName("Agent".into()));
+    for value in [
+        Some(json!({"db": {"password": "updated-config-secret"}, "other": [false, 23, null]})),
+        Some(json!(["replaced-config-secret"])),
+        None,
+    ] {
+        properties.config.apply_layer(&agent_layer, None, value);
+    }
+    let visible =
+        to_structured_output_value_masked(trace.clone(), MaskingConfig::show_secrets()).unwrap();
+    assert_eq!(
+        visible["properties"]["config"]["value"]["db"]["password"],
+        "manifest-config-secret"
+    );
+    assert_eq!(
+        visible["resolvedConfig"][0]["fill"]["password"],
+        "resolved-config-secret"
+    );
+    assert!(visible["properties"].get("configSchema").is_none());
+    assert!(visible["properties"].get("configInputs").is_none());
+    let masked = trace.clone().masked(MaskingConfig::hide_secrets()).unwrap();
+    let yaml_value = serde_yaml::to_value(&masked).unwrap();
+    let yaml_json = serde_json::to_value(yaml_value).unwrap();
+    let value = hidden_structured_output(trace);
 
-    assert_no_plaintext(
-        &value,
-        &[
-            "manifest-config-secret",
-            "manifest-env-secret",
-            "manifest-plugin-secret",
-            "agent-config-secret",
-            "agent-env-secret",
-        ],
+    assert!(COMMAND_OUTPUT_SCHEMA_VALIDATOR.is_valid(&visible));
+    assert!(COMMAND_OUTPUT_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(value["properties"].get("configSchema").is_none());
+    let secrets = [
+        "manifest-config-secret",
+        "manifest-env-secret",
+        "manifest-plugin-secret",
+        "resolved-config-secret",
+        "agent-config-secret",
+        "agent-env-secret",
+        "updated-env-secret",
+        "updated-plugin-secret",
+        "updated-config-secret",
+        "replaced-config-secret",
+    ];
+    assert_no_plaintext(&value, &secrets);
+    assert_no_plaintext(&yaml_json, &secrets);
+    for secret in secrets {
+        assert!(
+            visible.to_string().contains(secret),
+            "show-secrets lost {secret}"
+        );
+    }
+    assert_eq!(
+        value["properties"]["env"]["value"]["PUBLIC_LABEL"],
+        "visible-label"
     );
     assert!(
         value.to_string().contains("FROM_AGENT"),
@@ -1318,10 +1411,13 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                     "API_TOKEN".to_string(),
                     "component-env-secret".to_string(),
                 )]),
-                config: vec![golem_common::model::agent::TypedAgentConfigEntry {
-                    path: vec!["db".to_string(), "password".to_string()],
-                    value: typed_schema_string("component-config-secret"),
-                }],
+                config: vec![
+                    golem_common::model::agent::TypedAgentConfigEntry {
+                        path: vec!["db".to_string(), "password".to_string()],
+                        value: typed_schema_string("component-config-secret"),
+                    }
+                    .into(),
+                ],
                 plugins: vec![golem_common::model::component::InstalledPlugin {
                     environment_plugin_grant_id:
                         golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId(
@@ -1503,6 +1599,7 @@ fn sample_agent_type_schema(
         snapshotting: golem_common::model::agent::Snapshotting::Disabled(golem_schema::Empty {}),
         config: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
             source: golem_common::model::agent::AgentConfigSource::Secret,
+            default_value: None,
             path: vec!["db".to_string(), "password".to_string()],
             value_type: golem_common::schema::SchemaType::string(),
         }],
@@ -4070,10 +4167,14 @@ fn arb_agent_config_declaration()
         ],
         proptest::collection::vec(arb_small_string(), 1..3),
         arb_schema_type(),
+        proptest::option::of(
+            arb_small_string().prop_map(golem_common::schema::SchemaValue::String),
+        ),
     )
-        .prop_map(|(source, path, value_type)| {
+        .prop_map(|(source, path, value_type, default_value)| {
             golem_common::schema::agent::AgentConfigDeclarationSchema {
                 source,
+                default_value,
                 path,
                 value_type,
             }
@@ -6599,16 +6700,19 @@ fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
         (
             arb_small_string(),
             arb_component_layer_properties(),
+            proptest::option::of(proptest::collection::vec(arb_static_config_field(), 0..4)),
             proptest::collection::btree_map(
                 arb_small_string().prop_map(golem_common::model::agent::AgentTypeName),
                 arb_agent_layer_properties(),
                 0..3,
             ),
         )
-            .prop_map(|(component_name, properties, agents)| {
+            .prop_map(|(component_name, properties, resolved_config, agents)| {
                 crate::model::component::ComponentManifestTraceView {
                     component_name: golem_common::model::component::ComponentName(component_name),
+                    manifest_only: resolved_config.is_none(),
                     properties,
+                    resolved_config,
                     agents,
                 }
             }),
@@ -6626,6 +6730,7 @@ fn arb_agent_layer_id() -> BoxedStrategy<crate::model::app::AgentLayerId> {
         (agent_type(), arb_small_string()).prop_map(|(agent_type, template)| {
             crate::model::app::AgentLayerId::AgentTemplate(agent_type, template)
         }),
+        agent_type().prop_map(crate::model::app::AgentLayerId::AgentPackage),
         agent_type().prop_map(crate::model::app::AgentLayerId::AgentCommon),
         agent_type().prop_map(crate::model::app::AgentLayerId::AgentEnvironmentPresets),
         agent_type().prop_map(crate::model::app::AgentLayerId::AgentCustomPresets),
@@ -6860,23 +6965,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             properties
                 .config
                 .apply_layer(&second_layer_id, selection, Some(config_second));
-            properties
-                .config
-                .apply_layer(&layer_id, selection, Some(json!("replacement")));
-            properties.config_schema.apply_layer(
-                &layer_id,
-                selection,
-                Some(golem_common::schema::ComponentConfigSchema {
-                    schema: golem_common::schema::SchemaGraph::anonymous(
-                        golem_common::schema::SchemaType::string(),
-                    ),
-                    declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
-                        source: golem_common::model::agent::AgentConfigSource::Local,
-                        path: vec!["generated".to_string()],
-                        value_type: golem_common::schema::SchemaType::string(),
-                    }],
-                }),
-            );
             properties.node_http_routers.apply_layer(
                 &layer_id,
                 selection,
@@ -7251,6 +7339,27 @@ fn arb_agent_type_provision_config()
         arb_polymorphic_card(),
     )
         .prop_map(|(env, config, plugins, files, initial_permission)| {
+            let mut config = config.into_iter().map(golem_common::model::component_metadata::ConfigBinding::from).collect::<Vec<_>>();
+            if let Some(binding) = config.first_mut() {
+                binding.origins.push(
+                    golem_common::model::component_metadata::ConfigBindingOrigin {
+                        value_path: vec!["member".into()],
+                        location: golem_common::model::component_metadata::ConfigOriginLocation::Manifest { file: "golem.yaml".into() },
+                        source_path: vec!["config".into()],
+                        layer: "prod".into(),
+                    },
+                );
+                binding.origins.push(golem_common::model::component_metadata::ConfigBindingOrigin {
+                    value_path: vec![],
+                    location: golem_common::model::component_metadata::ConfigOriginLocation::Package(
+                        golem_common::model::component_metadata::ConfigPackageOrigin {
+                            source: "utilities.golem".into(),
+                            package_digest: "sha256:package-content".into(),
+                        }),
+                    source_path: vec!["agents".into(), "Main".into(), "config".into()],
+                    layer: "package".into(),
+                });
+            }
             golem_common::model::component_metadata::AgentTypeProvisionConfig {
                 env,
                 config,
@@ -7385,6 +7494,62 @@ fn arb_polymorphic_card() -> BoxedStrategy<golem_common::model::card::Polymorphi
                 }
             },
         )
+        .boxed()
+}
+
+fn arb_static_config_field() -> BoxedStrategy<crate::model::config::StaticConfigFieldView> {
+    (
+        arb_agent_type_name(),
+        proptest::option::of("[a-z]{0,12}"),
+        any::<bool>(),
+    )
+        .prop_map(|(agent, fill, selected)| {
+            use crate::model::config::{StaticConfigFieldView, StaticConfigSource};
+            use golem_common::schema::config::ConfigOrigin;
+            let origin = ConfigOrigin {
+                file: "golem.yaml".into(),
+                path: vec!["config".into(), "local".into(), "label".into()],
+                layer: "environment".into(),
+                package: selected.then(|| {
+                    golem_common::model::component_metadata::ConfigPackageOrigin {
+                        source: "utilities.golem".into(),
+                        package_digest: "sha256:package-content".into(),
+                    }
+                }),
+            };
+            StaticConfigFieldView {
+                component: golem_common::model::component::ComponentName("app:main".into()),
+                agent_type: agent,
+                path: vec!["settings".into(), "label".into()],
+                schema: golem_common::schema::SchemaGraph::anonymous(
+                    golem_common::schema::SchemaType::option(
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                ),
+                fill: serde_json::to_value(fill).unwrap().into(),
+                sources: vec![StaticConfigSource {
+                    path: vec![],
+                    origin: origin.clone(),
+                }],
+                catalog_origin: selected.then_some(origin),
+            }
+        })
+        .boxed()
+}
+
+fn arb_config_list_result() -> OutputDocumentStrategy {
+    proptest::collection::vec(arb_static_config_field(), 0..4)
+        .prop_map(|fields| {
+            to_structured_output_value(crate::model::config::ConfigListView { fields }).unwrap()
+        })
+        .boxed()
+}
+
+fn arb_config_get_result() -> OutputDocumentStrategy {
+    arb_static_config_field()
+        .prop_map(|field| {
+            to_structured_output_value(crate::model::config::ConfigGetView { field }).unwrap()
+        })
         .boxed()
 }
 
@@ -8540,7 +8705,7 @@ fn arb_plugin_registration()
 
 fn arb_profile_create_result() -> OutputDocumentStrategy {
     serialized_output((any::<bool>(), arb_small_string(), any::<bool>()).prop_map(
-        |(created, profile, set_active)| crate::model::config::profile::ProfileCreateResult {
+        |(created, profile, set_active)| crate::model::cli_config::profile::ProfileCreateResult {
             created,
             profile: crate::config::ProfileName(profile),
             set_active,
@@ -8555,11 +8720,11 @@ fn arb_profile_get_result() -> OutputDocumentStrategy {
 fn arb_profile_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_profile_view(), 0..5)
-            .prop_map(|profiles| crate::model::config::profile::ProfileListView { profiles }),
+            .prop_map(|profiles| crate::model::cli_config::profile::ProfileListView { profiles }),
     )
 }
 
-fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
+fn arb_profile_view() -> BoxedStrategy<crate::model::cli_config::ProfileView> {
     (
         any::<bool>(),
         arb_small_string(),
@@ -8571,7 +8736,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
     )
         .prop_map(
             |(is_active, name, url, worker_url, allow_insecure, authenticated, default_format)| {
-                crate::model::config::ProfileView {
+                crate::model::cli_config::ProfileView {
                     is_active,
                     name: crate::config::ProfileName(name),
                     url: url.map(|url| url.parse().expect("generated URL should parse")),
@@ -8589,7 +8754,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
 fn arb_profile_switch_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(switched, profile)| {
-            crate::model::config::profile::ProfileSwitchResult {
+            crate::model::cli_config::profile::ProfileSwitchResult {
                 switched,
                 profile: crate::config::ProfileName(profile),
             }
@@ -8600,7 +8765,7 @@ fn arb_profile_switch_result() -> OutputDocumentStrategy {
 fn arb_profile_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, profile)| {
-            crate::model::config::profile::ProfileDeleteView {
+            crate::model::cli_config::profile::ProfileDeleteView {
                 deleted,
                 profile: crate::config::ProfileName(profile),
             }
@@ -8610,10 +8775,12 @@ fn arb_profile_delete_result() -> OutputDocumentStrategy {
 
 fn arb_profile_config_set_format_result() -> OutputDocumentStrategy {
     serialized_output((any::<bool>(), arb_small_string(), arb_format()).prop_map(
-        |(updated, profile, format)| crate::model::config::profile::ProfileConfigSetFormatResult {
-            updated,
-            profile: crate::config::ProfileName(profile),
-            format,
+        |(updated, profile, format)| {
+            crate::model::cli_config::profile::ProfileConfigSetFormatResult {
+                updated,
+                profile: crate::config::ProfileName(profile),
+                format,
+            }
         },
     ))
 }

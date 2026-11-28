@@ -16,11 +16,13 @@ fn configured_reflected_type() -> AgentType {
         path: ["greeting"],
         source: @common.AgentConfigSource::LOCAL,
         schema: string_schema,
+        default_value: None,
       },
       {
         path: ["apiKey"],
         source: @common.AgentConfigSource::SECRET,
         schema: string_schema,
+        default_value: None,
       },
     ],
   }
@@ -71,6 +73,7 @@ test "native config accepts large integers without a JSON round trip" {
     path: ["counter"],
     source: @common.AgentConfigSource::LOCAL,
     schema: SchemaRef::new({ defs: [], root: @model.schema_type(U64(None)), }),
+    default_value: None,
   })
   let native = agent_type.validate_config_values([
     {
@@ -94,13 +97,80 @@ test "native config accepts large integers without a JSON round trip" {
 ///|
 test "agent snapshot accessors return defensive nested copies" {
   let agent_type = configured_reflected_type()
+  agent_type.config[0] = {
+    ..agent_type.config[0],
+    default_value: Some(@model.Record([@model.String("original")])),
+  }
   let declarations = agent_type.config()
   let path = declarations[0].path()
   path[0] = "mutated"
+  guard declarations[0].default_value() is Some(@model.Record(fields)) else {
+    fail("expected a record default")
+  }
+  fields[0] = @model.String("mutated")
   declarations[0] = declarations[1]
   let graph = agent_type.constructor_input().graph()
   graph.root.metadata.aliases.push("mutated")
 
   assert_eq(agent_type.config()[0].path(), ["greeting"])
+  assert_eq(
+    agent_type.config()[0].default_value(),
+    Some(@model.Record([@model.String("original")])),
+  )
   assert_eq(agent_type.constructor_input().root().metadata.aliases, [])
+}
+
+///|
+test "reflected config preserves absent and native option defaults" {
+  let graph = @model.schema_graph_to_wit({
+    defs: [],
+    root: @model.schema_type(Option(@model.schema_type(String))),
+  })
+  let defaults : Array[@model.SchemaValue?] = [
+    None,
+    Some(Option(None)),
+    Some(Option(Some(String("árvíz\n")))),
+  ]
+  let config : Array[@common.AgentConfigDeclaration] = []
+  for i, default_value in defaults {
+    config.push({
+      source: @common.AgentConfigSource::LOCAL,
+      path: ["nested", "field\{i}"],
+      value_type: graph.root,
+      default_value: default_value.map(value => {
+        @model.schema_value_to_wit(value)
+      }),
+    })
+  }
+  let reflected = decode_agent_type({
+    agent_type: {
+      type_name: "Defaults",
+      kind: @common.AgentTypeKind::REGULAR,
+      description: "",
+      source_language: "moonbit",
+      schema: graph,
+      constructor_: {
+        name: None,
+        description: "",
+        prompt_hint: None,
+        input_schema: @common.InputSchema::Parameters([]),
+      },
+      methods: [],
+      dependencies: [],
+      mode: @common.AgentMode::DURABLE,
+      http_mount: None,
+      snapshotting: @common.Snapshotting::Disabled,
+      config,
+    },
+  })
+  let declarations = reflected.config()
+  for i, expected in defaults {
+    assert_eq(declarations[i].default_value(), expected)
+    assert_eq(declarations[i].path(), ["nested", "field\{i}"])
+    assert_eq(declarations[i].source(), @common.AgentConfigSource::LOCAL)
+    assert_eq(
+      declarations[i].schema().graph(),
+      @model.schema_graph_from_wit(graph),
+    )
+  }
 }

@@ -79,6 +79,80 @@ fn node_http_router_ports_match_manifest_schema() {
 }
 
 #[test]
+fn config_catalog_grammar_matches_manifest_schema() {
+    for (catalog, valid) in [
+        (
+            serde_json::json!({"public":{"count":7,"flag":false,"items":[1,null,3]}}),
+            true,
+        ),
+        (
+            serde_json::json!({"live":{"$kind":"shared"},"key":{"$kind":"secret","$init":"{{ KEY }}","$destinations":[]}}),
+            true,
+        ),
+        (
+            serde_json::json!({"model":{"$kind":"shared","$init":{"key":{"$secret":"keys.api"}}},"keys":{"api":{"$kind":"secret"}}}),
+            true,
+        ),
+        (
+            serde_json::json!({"token":{"$kind":"secret","$oauth":{"authorizationServer":"https://login.test","clientId":"client","scopes":["read"],"resource":"https://resource.test","clientSecret":{"$secret":"keys.client"}}}}),
+            true,
+        ),
+        (
+            serde_json::json!({"budget":{"$kind":"resource","$init":{"limit":{"type":"Capacity","value":17},"enforcementAction":"reject","unit":"call","units":"calls"}}}),
+            true,
+        ),
+        (
+            serde_json::json!({"_name":1,"-other":2,"Exact_Name":3}),
+            true,
+        ),
+        (serde_json::json!({"with.dot":1}), false),
+        (serde_json::json!({"0name":1}), false),
+        (serde_json::json!({"alias":{"$config":"public"}}), false),
+        (
+            serde_json::json!({"live":{"$kind":"shared","$init":{"$kind":"shared"}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"key":{"$kind":"secret","$init":{"$secret":"other"}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"key":{"$kind":"secret","$destinations":null}}),
+            false,
+        ),
+        (
+            serde_json::json!({"key":{"$kind":"secret","$oauth":{"authorizationServer":"x","clientId":"c","scopes":[],"resource":"r","clientSecret":null}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"key":{"$kind":"secret","$init":null,"$oauth":{}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"budget":{"$kind":"resource","$init":null}}),
+            false,
+        ),
+        (
+            serde_json::json!({"budget":{"$kind":"resource","$init":{"limit":{"type":"Capacity","value":17,"typo":5},"enforcementAction":"reject","unit":"call","units":"calls"}}}),
+            false,
+        ),
+        (serde_json::json!({"wrong":{"$kind":"other"}}), false),
+    ] {
+        let document = serde_json::json!({"config":{"local":catalog}});
+        assert_eq!(
+            serde_json::from_value::<Application>(document.clone()).is_ok(),
+            valid,
+            "serde: {document}"
+        );
+        assert_eq!(
+            JSON_SCHEMA_VALIDATOR.is_valid(&document),
+            valid,
+            "schema: {document}"
+        );
+    }
+}
+
+#[test]
 fn component_wasm_is_the_only_manifest_artifact_path() {
     for section in ["components", "componentTemplates"] {
         for preset in [false, true] {
@@ -491,21 +565,6 @@ fn arb_initial_component_file_model() -> BoxedStrategy<InitialComponentFile> {
         .boxed()
 }
 
-fn arb_component_config_schema_model() -> BoxedStrategy<ComponentConfigSchema> {
-    arb_ident()
-        .prop_map(|name| ComponentConfigSchema {
-            schema: golem_common::schema::SchemaGraph::anonymous(
-                golem_common::schema::SchemaType::string(),
-            ),
-            declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
-                source: golem_common::model::agent::AgentConfigSource::Local,
-                path: vec![name],
-                value_type: golem_common::schema::SchemaType::string(),
-            }],
-        })
-        .boxed()
-}
-
 fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
     (
         any::<bool>(),
@@ -524,7 +583,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
-            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -545,7 +603,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 is_default,
                 component_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config_schema, config, env_merge_mode, env),
+                (config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
                 (tools_merge_mode, tools),
             )| ComponentPreset {
@@ -557,7 +615,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 build,
                 custom_commands,
                 clean,
-                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -591,7 +648,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
-            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -614,7 +670,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 (templates, guest_language),
                 component_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config_schema, config, env_merge_mode, env),
+                (config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
                 (tools_merge_mode, tools),
                 presets,
@@ -628,7 +684,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 build,
                 custom_commands,
                 clean,
-                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -664,7 +719,6 @@ fn arb_component_model() -> BoxedStrategy<Component> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
-            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -688,7 +742,7 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 dir,
                 component_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config_schema, config, env_merge_mode, env),
+                (config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
                 (tools_merge_mode, tools),
                 presets,
@@ -702,7 +756,6 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 build,
                 custom_commands,
                 clean,
-                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -1690,6 +1743,45 @@ fn arb_retry_policy_defaults_model()
     .boxed()
 }
 
+fn arb_config_catalog_value() -> BoxedStrategy<Value> {
+    let initializer = prop_oneof![Just(Value::Null), arb_json_value()];
+    let leaf = prop_oneof![
+        initializer.clone(),
+        prop::option::of(initializer.clone()).prop_map(|initializer| {
+            let mut value = serde_json::json!({"$kind":"shared"});
+            if let Some(initializer) = initializer { value["$init"] = initializer; }
+            value
+        }),
+        (prop::option::of(initializer), prop::option::of(prop::collection::vec(arb_ident(), 0..=2))).prop_map(|(initializer, destinations)| {
+            let mut value = serde_json::json!({"$kind":"secret"});
+            if let Some(initializer) = initializer { value["$init"] = initializer; }
+            if let Some(destinations) = destinations { value["$destinations"] = serde_json::json!(destinations); }
+            value
+        }),
+        (arb_ident(), prop::option::of(arb_ident()), prop::collection::vec(arb_ident(), 0..=2)).prop_map(|(client, secret, scopes)| {
+            let mut value = serde_json::json!({"$kind":"secret","$oauth":{"authorizationServer":"login","clientId":client,"scopes":scopes,"resource":"service"}});
+            if let Some(secret) = secret { value["$oauth"]["clientSecret"] = serde_json::json!({"$secret":secret}); }
+            value
+        }),
+        prop::option::of(arb_resource_limit_model()).prop_map(|limit| {
+            let mut value = serde_json::json!({"$kind":"resource"});
+            if let Some(limit) = limit { value["$init"] = serde_json::json!({"limit":limit,"enforcementAction":"reject","unit":"call","units":"calls"}); }
+            value
+        }),
+        arb_ident().prop_map(|path| serde_json::json!({"$secret":path})),
+    ];
+    prop::collection::btree_map(
+        arb_ident(),
+        leaf.prop_recursive(2, 24, 3, |entry| {
+            prop::collection::btree_map(arb_ident(), entry, 1..=3)
+                .prop_map(|entries| serde_json::json!(entries))
+        }),
+        1..=3,
+    )
+    .prop_map(|entries| serde_json::json!(entries))
+    .boxed()
+}
+
 fn arb_application_model_v3() -> BoxedStrategy<Application> {
     (
         arb_opt(arb_semver()),
@@ -1727,6 +1819,13 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
             arb_secret_defaults_model(),
             arb_retry_policy_defaults_model(),
             arb_resource_defaults_model(),
+            prop::collection::vec(
+                (
+                    arb_ident().prop_map(EnvironmentName),
+                    arb_config_catalog_value(),
+                ),
+                1..=2,
+            ),
         ),
     )
         .prop_map(
@@ -1745,6 +1844,7 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
                     secret_defaults,
                     retry_policy_defaults,
                     resource_defaults,
+                    config,
                 ),
             )| Application {
                 manifest_version,
@@ -1764,6 +1864,12 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
                 environments,
                 version,
                 bridge,
+                config: config
+                    .into_iter()
+                    .map(|(environment, value)| {
+                        (environment, serde_json::from_value(value).unwrap())
+                    })
+                    .collect(),
                 secret_defaults,
                 retry_policy_defaults,
                 resource_defaults,
@@ -1848,27 +1954,33 @@ fn schema_and_parser_reject_unsupported_wasi_config() {
 }
 
 #[test]
-fn schema_and_serde_accept_inherited_component_config_schema() {
-    let config_schema = serde_json::to_value(
-        arb_component_config_schema_model()
-            .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
-            .unwrap()
-            .current(),
-    )
-    .unwrap();
+fn schema_and_serde_reject_component_config_schema() {
     let value = serde_json::json!({
         "app": "test-app",
         "componentTemplates": {"configured": {
-            "configSchema": config_schema,
-            "presets": {"custom": {"configSchema": config_schema}}
+            "presets": {"custom": {}}
         }},
         "components": {"app:main": {
             "templates": "configured", "componentWasm": "main.wasm",
-            "presets": {"custom": {"configSchema": config_schema}}
+            "presets": {"custom": {}}
         }}
     });
     assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
-    serde_json::from_value::<Application>(value).unwrap();
+    for path in [
+        "/componentTemplates/configured",
+        "/componentTemplates/configured/presets/custom",
+        "/components/app:main",
+        "/components/app:main/presets/custom",
+    ] {
+        let mut unsupported = value.clone();
+        unsupported.pointer_mut(path).unwrap()["configSchema"] = serde_json::json!({});
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&unsupported), "{path}");
+        let error = serde_json::from_value::<Application>(unsupported).unwrap_err();
+        assert!(
+            error.to_string().contains("configSchema"),
+            "{path}: {error}"
+        );
+    }
 }
 
 #[test]
@@ -2149,7 +2261,7 @@ fn manifest_loading_rejects_invalid_tool_binding_scopes() {
 }
 
 #[test]
-fn manifest_loading_accepts_wildcard_and_escaped_tool_binding_paths() {
+fn manifest_loading_accepts_wildcard_and_exact_tool_binding_paths() {
     let source = indoc::indoc! { r#"
             app: test-app
             agents:
@@ -2157,8 +2269,8 @@ fn manifest_loading_accepts_wildcard_and_escaped_tool_binding_paths() {
                 tools:
                   grep:
                     configKeysReadable: "*"
-                    secretKeysReadable: ['credentials.github\=token']
-                    secretKeysRevealable: ['"database url".password']
+                    secretKeysReadable: ['credentials.github=token']
+                    secretKeysRevealable: ['database url.password']
         "# };
 
     Application::from_yaml_str(source).expect("valid scopes should load");
@@ -2173,8 +2285,8 @@ fn middleware_secret_scopes_preserve_omitted_empty_wildcard_and_concrete_values(
   secretKeysReadable: []
   secretKeysRevealable: "*"
 - name: audit
-  secretKeysReadable: ['credentials.github\=token']
-  secretKeysRevealable: ['"database url".password']
+  secretKeysReadable: ['credentials.github=token']
+  secretKeysRevealable: ['database url.password']
 "#,
     )
     .unwrap();
@@ -2972,6 +3084,22 @@ proptest! {
         cases: 256,
         .. ProptestConfig::default()
     })]
+
+    #[test]
+    fn proptest_config_catalog_wire_contract(catalog in arb_config_catalog_value(), invalid_kind in "[a-z]{1,8}") {
+        let document = serde_json::json!({"config":{"local":catalog}});
+        for format in [Format::Json, Format::Yaml] {
+            let text = match format { Format::Json => serde_json::to_string(&document).unwrap(), _ => serde_yaml::to_string(&document).unwrap() };
+            let app: Application = match format { Format::Json => serde_json::from_str(&text).unwrap(), _ => serde_yaml::from_str(&text).unwrap() };
+            prop_assert_eq!(&serde_json::to_value(app).unwrap()["config"], &document["config"]);
+        }
+        prop_assert!(JSON_SCHEMA_VALIDATOR.is_valid(&document));
+        let mut invalid = document;
+        invalid["config"]["local"]["invalid"] = serde_json::json!({"$kind":format!("invalid-{invalid_kind}")});
+        prop_assert!(serde_json::from_value::<Application>(invalid.clone()).is_err());
+        prop_assert!(serde_yaml::from_str::<Application>(&serde_yaml::to_string(&invalid).unwrap()).is_err());
+        prop_assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&invalid));
+    }
 
     #[test]
     fn proptest_schema_accepts_serialized_application_documents(app in arb_application_document()) {

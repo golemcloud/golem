@@ -20,18 +20,19 @@ use crate::model::app::{
 };
 use crate::model::app_raw;
 use crate::model::cli_output::StructuredOutput;
+use crate::model::config::StaticConfigFieldView;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::language::GuestLanguage;
 use crate::model::masking::{
-    Masked, MaskingConfig, is_sensitive_key, mask_secret, mask_sensitive_map,
-    mask_typed_agent_config_entries,
+    Masked, MaskingConfig, is_sensitive_key, mask_config_bindings, mask_secret, mask_sensitive_map,
 };
 use crate::model::text_format::*;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{
+    AgentTypeProvisionConfig, ConfigBinding, ConfigBindingSource,
+};
 use golem_common::model::AgentId;
-use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::owner::{AgentOwnerLeaf, AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::recipient::{
@@ -44,21 +45,19 @@ use golem_common::model::card::{
     parse_polymorphic_permission,
 };
 use golem_common::model::component::{
-    AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
-};
-use golem_common::model::component::{
     AgentFileOptions, AgentFilePath, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     ArchiveFilePath, PluginInstallation,
 };
 use golem_common::model::component::{AgentFilePermissions, ComponentName};
+use golem_common::model::component::{
+    ComponentDto, ComponentId, ComponentRevision, ConfigBindingDto,
+};
 use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
 use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use golem_common::model::{diff, tool};
-use golem_common::schema::agent::{
-    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, InputSchema, OutputSchema,
-};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, InputSchema, OutputSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
 use heck::{ToLowerCamelCase, ToSnakeCase};
@@ -221,8 +220,7 @@ impl Masked for ComponentView {
             }
 
             if let Some(secret_paths) = secret_config_paths_by_agent_type.get(&agent_type_name.0) {
-                provision_config.config =
-                    mask_typed_agent_config_entries(config, &provision_config.config, secret_paths);
+                mask_config_bindings(config, &mut provision_config.config, secret_paths);
             }
         }
 
@@ -274,7 +272,7 @@ impl ComponentView {
 #[derive(Clone, Debug, Default)]
 pub struct AgentTypeManifestProvisionConfig {
     pub env: BTreeMap<String, String>,
-    pub config: Vec<AgentConfigEntryDto>,
+    pub config: Vec<ConfigBindingDto>,
     pub initial_card: Option<ParsedInitialPermissionCard>,
     pub files: Vec<crate::model::app::ProvisionFile>,
     pub plugins: Vec<app_raw::PluginInstallation>,
@@ -502,8 +500,7 @@ pub fn agent_type_reads_identity_from_env(agent_type: &AgentTypeSchema) -> bool 
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
     pub package_metadata: Option<golem_common::model::component::ComponentPackageMetadata>,
-    pub config_schema: ComponentConfigSchema,
-    pub component_config: Vec<AgentConfigEntryDto>,
+    pub static_config: Vec<crate::model::config::StaticConfigFieldView>,
     pub component_initial_card: Option<ParsedInitialPermissionCard>,
     pub component_env: BTreeMap<String, String>,
     pub component_files: Vec<InitialComponentFile>,
@@ -1532,9 +1529,10 @@ impl StructuredOutput for ComponentGetView {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentManifestTraceView {
     pub component_name: ComponentName,
+    pub manifest_only: bool,
     pub properties: ComponentLayerProperties,
-    /// The resolved layers of each agent type of the component. Empty when the component is not
-    /// built, because the agent types come from the built component.
+    pub resolved_config: Option<Vec<StaticConfigFieldView>>,
+    /// The resolved layers of each agent type of the component. Empty in manifest-only mode.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<AgentTypeName, AgentLayerProperties>,
 }
@@ -1546,7 +1544,7 @@ impl StructuredOutput for ComponentManifestTraceView {
     where
         S: Serializer,
     {
-        self.to_masked_value(config)
+        self.masked(config)
             .map_err(S::Error::custom)?
             .serialize(serializer)
     }
@@ -1559,42 +1557,55 @@ impl TextOutput for ComponentManifestTraceView {
             log_manifest_trace_agent_header(agent_type_name);
             log_manifest_trace_properties(properties);
         }
+        if let Some(resolved_config) = &self.resolved_config {
+            log_manifest_trace_properties(&serde_json::json!({"resolvedConfig": resolved_config}));
+        }
     }
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
-        if config.show_secrets {
-            self.log();
-        } else {
-            let mut properties = serde_json::to_value(&self.properties)?;
-            mask_component_layer_properties(&mut properties);
-            log_manifest_trace_value(&properties);
-            for (agent_type_name, properties) in &self.agents {
-                let mut properties = serde_json::to_value(properties)?;
-                mask_component_layer_properties(&mut properties);
-                log_manifest_trace_agent_header(agent_type_name);
-                log_manifest_trace_value(&properties);
-            }
-        }
+        self.masked(config)?.log();
         Ok(())
     }
 }
 
-impl ComponentManifestTraceView {
-    fn to_masked_value(&self, config: MaskingConfig) -> anyhow::Result<Value> {
-        let mut value = serde_json::to_value(self)?;
-        if !config.show_secrets
-            && let Some(object) = value.as_object_mut()
-        {
-            if let Some(properties) = object.get_mut("properties") {
-                mask_component_layer_properties(properties);
+impl Masked for ComponentManifestTraceView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        if !config.show_secrets {
+            self.properties
+                .config
+                .for_each_value_mut(mask_json_leaf_values);
+            self.properties
+                .env
+                .for_each_value_mut(|key, value| mask_manifest_env(key, value));
+            self.properties
+                .plugins
+                .for_each_value_mut(mask_manifest_plugin);
+            for properties in self.agents.values_mut() {
+                properties.config.for_each_value_mut(mask_json_leaf_values);
+                properties
+                    .env
+                    .for_each_value_mut(|key, value| mask_manifest_env(key, value));
+                properties.plugins.for_each_value_mut(mask_manifest_plugin);
             }
-            if let Some(agents) = object.get_mut("agents").and_then(Value::as_object_mut) {
-                for properties in agents.values_mut() {
-                    mask_component_layer_properties(properties);
+            if let Some(fields) = &mut self.resolved_config {
+                for field in fields {
+                    mask_json_leaf_values(&mut field.fill.0);
                 }
             }
         }
-        Ok(value)
+        Ok(self)
+    }
+}
+
+fn mask_manifest_env(key: &str, value: &mut String) {
+    if is_sensitive_key(key) {
+        *value = mask_secret();
+    }
+}
+
+fn mask_manifest_plugin(plugin: &mut app_raw::PluginInstallation) {
+    for (key, value) in &mut plugin.parameters {
+        mask_manifest_env(key, value);
     }
 }
 
@@ -1616,16 +1627,6 @@ fn log_manifest_trace_properties(properties: &impl Serialize) {
     log_manifest_trace_rendered(rendered);
 }
 
-fn log_manifest_trace_value(properties: &Value) {
-    let rendered = if SHOULD_COLORIZE.should_colorize() {
-        to_colored_json(properties)
-    } else {
-        serde_json::to_string_pretty(properties).map_err(Into::into)
-    };
-
-    log_manifest_trace_rendered(rendered);
-}
-
 fn log_manifest_trace_rendered(rendered: anyhow::Result<String>) {
     match rendered {
         Ok(rendered) => {
@@ -1637,51 +1638,7 @@ fn log_manifest_trace_rendered(rendered: anyhow::Result<String>) {
     }
 }
 
-fn mask_component_layer_properties(properties: &mut Value) {
-    let Some(properties) = properties.as_object_mut() else {
-        return;
-    };
-
-    if let Some(config) = properties.get_mut("config") {
-        mask_config_property_payloads(config);
-    }
-    if let Some(env) = properties.get_mut("env") {
-        mask_sensitive_keyed_values(env);
-    }
-    if let Some(plugins) = properties.get_mut("plugins") {
-        mask_sensitive_keyed_values(plugins);
-    }
-}
-
-fn mask_config_property_payloads(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            for (key, value) in object {
-                match key.as_str() {
-                    "value" | "newValue" => mask_json_leaf_values(value),
-                    "insertedEntries" | "updatedEntries" => mask_json_object_values(value),
-                    _ => mask_config_property_payloads(value),
-                }
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                mask_config_property_payloads(value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn mask_json_object_values(value: &mut Value) {
-    if let Some(object) = value.as_object_mut() {
-        for value in object.values_mut() {
-            mask_json_leaf_values(value);
-        }
-    }
-}
-
-fn mask_json_leaf_values(value: &mut Value) {
+pub(crate) fn mask_json_leaf_values(value: &mut Value) {
     match value {
         Value::Null => {}
         Value::Array(values) => {
@@ -1695,26 +1652,6 @@ fn mask_json_leaf_values(value: &mut Value) {
             }
         }
         _ => *value = Value::String(mask_secret()),
-    }
-}
-
-fn mask_sensitive_keyed_values(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            for (key, value) in object {
-                if is_sensitive_key(key) {
-                    mask_json_leaf_values(value);
-                } else {
-                    mask_sensitive_keyed_values(value);
-                }
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                mask_sensitive_keyed_values(value);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1761,15 +1698,16 @@ fn format_plugins(plugins: &[InstalledPlugin]) -> String {
         .join("\n")
 }
 
-fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
+fn format_typed_config(config: &[ConfigBinding]) -> String {
     config
         .iter()
         .map(|entry| {
             let key = entry.path.join(".");
+            let ConfigBindingSource::Static(value) = &entry.value_source;
             let value = golem_schema::schema::render::to_json_value(
-                entry.value.graph(),
-                entry.value.root_type(),
-                entry.value.value(),
+                value.graph(),
+                value.root_type(),
+                value.value(),
             )
             .map(|v| v.to_string())
             .unwrap_or_else(|_| "<invalid>".to_string());

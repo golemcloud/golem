@@ -65,7 +65,14 @@ fn sample_agent_type() -> @common.AgentType raise {
     mode: DURABLE,
     http_mount: None,
     snapshotting: Disabled,
-    config: [{ source: LOCAL, path: ["a", "b"], value_type: foo_graph(), }],
+    config: [
+      {
+        source: LOCAL,
+        path: ["a", "b"],
+        value_type: foo_graph(),
+        default_value: Some(@model.Record([@model.S32(42)])),
+      },
+    ],
   }
   def.to_agent_type()
 }
@@ -137,6 +144,11 @@ test "method output and config encode into the shared pool" {
     content=(
       #|["a", "b"]
     ),
+  )
+  let expected_default : @model.SchemaValue? = Some(Record([S32(42)]))
+  assert_eq(
+    at.config[0].default_value.map(@model_host.schema_value_from_wit),
+    expected_default,
   )
 }
 

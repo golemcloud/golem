@@ -20,6 +20,7 @@ use crate::command::api::secret::SecretSubcommand;
 use crate::command::api_token::ApiTokenSubcommand;
 use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
+use crate::command::config::ConfigSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
 use crate::command::invocation::InvocationSubcommand;
@@ -1009,6 +1010,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: SecretSubcommand,
     },
+    /// Inspect static config resolved from local manifests and built owner schemas
+    Config {
+        #[clap(subcommand)]
+        subcommand: ConfigSubcommand,
+    },
     /// Manage retry policies
     RetryPolicy {
         #[clap(subcommand)]
@@ -1643,8 +1649,8 @@ pub mod component {
         ManifestTrace {
             #[command(flatten)]
             component_name: OptionalComponentNames,
-            /// Build the selected components first, so that the trace includes the agent types of
-            /// every component. Up-to-date components are not rebuilt.
+            /// Build the selected components and resolve static config using their schemas and
+            /// code defaults. Up-to-date components are not rebuilt. Does not inspect deployed state.
             #[clap(long, default_value = "false")]
             build: bool,
         },
@@ -2696,6 +2702,32 @@ pub mod resource_definition {
         /// List quota resource definitions in the environment
         #[command(after_help = crate::command_examples::RESOURCE_LIST)]
         List,
+    }
+}
+
+pub mod config {
+    use clap::Subcommand;
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::component::ComponentName;
+
+    #[derive(Debug, Subcommand)]
+    pub enum ConfigSubcommand {
+        /// List static field types, resolved fills and source layers
+        List {
+            /// Limit inspection to one agent type, using its exact declared name
+            #[arg(long)]
+            agent_type: Option<AgentTypeName>,
+            /// Limit inspection to one component
+            #[arg(long)]
+            component: Option<ComponentName>,
+        },
+        /// Inspect an exact AgentType.field path
+        Get {
+            field: String,
+            /// Limit inspection to one component
+            #[arg(long)]
+            component: Option<ComponentName>,
+        },
     }
 }
 

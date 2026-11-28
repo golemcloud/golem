@@ -74,6 +74,40 @@ impl<L: Layer, K: Serialize, V: Serialize> Default for MapProperty<L, K, V> {
 }
 
 impl<L: Layer, K: Serialize, V: Serialize> MapProperty<L, K, V> {
+    pub fn for_each_value_mut(&mut self, mut visit: impl FnMut(&K, &mut V)) {
+        for (key, value) in &mut self.value {
+            visit(key, value);
+        }
+        for element in &mut self.trace {
+            match element {
+                MapPropertyTraceElem::Upsert {
+                    inserted_entries,
+                    updated_entries,
+                    ..
+                } => {
+                    for (key, value) in inserted_entries
+                        .iter_mut()
+                        .chain(updated_entries.iter_mut())
+                    {
+                        visit(key, value);
+                    }
+                }
+                MapPropertyTraceElem::Replace { new_entries, .. } => {
+                    for (key, value) in new_entries {
+                        visit(key, value);
+                    }
+                }
+                MapPropertyTraceElem::Remove {
+                    removed_entries, ..
+                } => {
+                    for (key, value) in removed_entries {
+                        visit(key, value);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn new(map: IndexMap<K, V>) -> Self {
         Self {
             value: map,

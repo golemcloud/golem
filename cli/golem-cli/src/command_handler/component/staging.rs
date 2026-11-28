@@ -494,7 +494,6 @@ impl<'a> ComponentStager<'a> {
                 &component_initial_permission_recipient_context(environment, component_name),
             ),
             env: self.component_deploy_properties.component_env.clone(),
-            config: self.component_deploy_properties.component_config.clone(),
             plugin_installations: self
                 .resolve_plugins(&self.component_deploy_properties.component_plugins)?,
             files,

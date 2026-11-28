@@ -20,7 +20,7 @@ use crate::error::NonSuccessfulExit;
 use crate::log::log_action;
 use crate::log::log_error;
 use crate::log::logln;
-use crate::model::config::profile::ProfileConfigSetFormatResult;
+use crate::model::cli_config::profile::ProfileConfigSetFormatResult;
 use crate::model::format::Format;
 use crate::model::help::AvailableProfileNamesHelp;
 use crate::model::text_format::log_text_view;

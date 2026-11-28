@@ -1233,16 +1233,10 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
-    path: "components.<component-name>.configSchema",
-  }}>
-    ***Optional component configuration schema*** with `schema` and `declarations` fields. Templates and presets can also set it; a later layer replaces the schema rather than merging declarations.
-  </Field>
-
-  <Field meta={{
     path: "components.<component-name>.config",
     since: Release.R_1_5_0
   }}>
-    ***Optional configuration*** for the component.
+    ***Optional configuration defaults*** inherited by the agent types exported by the component. Each agent type declares its schema in code. The component has no separate typed configuration schema or stored bindings.
   </Field>
 
   <Field meta={{

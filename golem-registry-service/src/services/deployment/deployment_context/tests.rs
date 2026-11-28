@@ -60,6 +60,113 @@ fn test_environment() -> Environment {
     }
 }
 
+#[test]
+fn static_config_readiness_validates_agent_values_and_missing_values() {
+    use golem_common::model::agent::TypedAgentConfigEntry;
+    use golem_common::model::component::AgentTypeInitialPermissions;
+    use golem_common::model::component_metadata::{AgentTypeProvisionConfig, ConfigBinding};
+    use golem_common::schema::TypedSchemaValue;
+
+    for (ty, default, value, nested, accepted) in [
+        (SchemaType::u32(), None, None, false, false),
+        (SchemaType::u32(), Some("23"), None, false, false),
+        (
+            SchemaType::u32(),
+            Some("23"),
+            Some((SchemaType::u32(), SchemaValue::U32(0))),
+            false,
+            true,
+        ),
+        (
+            SchemaType::u32(),
+            Some("23"),
+            Some((
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            )),
+            false,
+            false,
+        ),
+        (
+            SchemaType::option(SchemaType::string()),
+            None,
+            None,
+            false,
+            true,
+        ),
+        (
+            SchemaType::option(SchemaType::string()),
+            None,
+            Some((
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            )),
+            false,
+            false,
+        ),
+        (
+            SchemaType::option(SchemaType::string()),
+            None,
+            None,
+            true,
+            false,
+        ),
+    ] {
+        let path = if nested {
+            vec!["group".into(), "value".into()]
+        } else {
+            vec!["value".into()]
+        };
+        let declaration = AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path,
+            value_type: ty,
+            default_value: default.map(|value| SchemaValue::U32(value.parse().unwrap())),
+        };
+        let entries = value
+            .into_iter()
+            .map(|(ty, value)| TypedAgentConfigEntry {
+                path: declaration.path.clone(),
+                value: TypedSchemaValue::new(SchemaGraph::anonymous(ty), value),
+            })
+            .collect::<Vec<_>>();
+        let mut component = test_tool_component("owner", BTreeMap::new());
+        let mut agent = agent_type_with_secret_config(
+            AgentTypeName("Owner".into()),
+            vec![],
+            SchemaType::string(),
+        );
+        agent.config = vec![declaration.clone()];
+        component.metadata = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            vec![],
+            vec![agent.clone()],
+            BTreeMap::from([(
+                agent.type_name,
+                AgentTypeProvisionConfig {
+                    initial_permissions: AgentTypeInitialPermissions::default()
+                        .to_polymorphic_card(),
+                    env: BTreeMap::new(),
+                    config: entries.into_iter().map(ConfigBinding::from).collect(),
+                    plugins: vec![],
+                    files: vec![],
+                },
+            )]),
+        );
+        let context = DeploymentContext {
+            environment: test_environment(),
+            components: BTreeMap::from([(component.component_name.clone(), component)]),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+            registered_agent_types: HashMap::new(),
+        };
+        let mut errors = vec![];
+        context.validate_static_config(&mut errors);
+        assert_eq!(errors.is_empty(), accepted, "{errors:?}");
+        assert!(errors.iter().all(|error| matches!(error, DeployValidationError::InvalidStaticConfig { agent_type_name, .. } if agent_type_name.0 == "Owner")));
+    }
+}
+
 fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
     SecuritySchemeDetails {
         id: golem_common::model::security_scheme::SecuritySchemeId::new(),
@@ -135,7 +242,10 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
     let mut agent = agent_type_with_secret_config(
         AgentTypeName(name.into()),
         vec!["key".into()],
-        SchemaType::string(),
+        SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::string()),
+            category: None,
+        }),
     );
     agent.kind = golem_common::schema::AgentTypeKind::HttpRouter;
     agent.mode = AgentMode::Ephemeral;
@@ -969,7 +1079,7 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
     let provision = |file| AgentTypeProvisionConfig {
         files: vec![file],
         env: BTreeMap::new(),
-        config: vec![],
+        config: Default::default(),
         plugins: vec![],
         initial_permissions: golem_common::model::card::PolymorphicCard {
             card_id: golem_common::model::card::CardId::new(),
@@ -1540,7 +1650,10 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
         let mut agent = agent_type_with_secret_config(
             AgentTypeName("site".into()),
             vec!["key".into()],
-            SchemaType::string(),
+            SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: None,
+            }),
         );
         agent.kind = kind;
         if kind == AgentTypeKind::HttpRouter {
@@ -1668,6 +1781,7 @@ fn agent_type_with_secret_config(
         snapshotting: Snapshotting::Disabled(Default::default()),
         config: vec![AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
+            default_value: None,
             path,
             value_type,
         }],

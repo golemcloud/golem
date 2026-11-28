@@ -37,7 +37,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     resolve_revert_last_invocations_response, resume_worker_response, revert_worker_response,
     search_oplog_response, update_worker_response,
 };
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{
+    AgentTypeProvisionConfig, ConfigBinding, ConfigBindings,
+};
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
@@ -50,7 +52,8 @@ use golem_common::model::agent::{AgentKey, OwnedAgentId};
 use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
-    ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
+    ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, ConfigBindingDto,
+    InitialAgentFile,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
@@ -1764,8 +1767,8 @@ impl WorkerLogEventStream for GrpcWorkerLogEventStream {
 fn parse_provision_config_from_cached_analysis(
     cached_analysis: &CachedAnalysis,
     agent_type_name: &AgentTypeName,
-    config: Vec<AgentConfigEntryDto>,
-) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
+    config: Vec<ConfigBindingDto>,
+) -> anyhow::Result<ConfigBindings> {
     let agent_type = cached_analysis
         .agent_types
         .iter()
@@ -1778,8 +1781,8 @@ fn parse_provision_config_from_cached_analysis(
 fn parse_provision_config_from_component_metadata(
     component_metadata: &golem_common::model::component_metadata::ComponentMetadata,
     agent_type_name: &AgentTypeName,
-    config: Vec<AgentConfigEntryDto>,
-) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
+    config: Vec<ConfigBindingDto>,
+) -> anyhow::Result<ConfigBindings> {
     let agent_type = component_metadata
         .find_agent_type_by_name_ref(agent_type_name)
         .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in component metadata"))?;
@@ -1790,9 +1793,10 @@ fn parse_provision_config_from_component_metadata(
 fn parse_provision_config_from_agent_type_schema(
     agent_type: &AgentTypeSchema,
     agent_type_name: &AgentTypeName,
-    config: Vec<AgentConfigEntryDto>,
-) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
-    config
+    config: Vec<ConfigBindingDto>,
+) -> anyhow::Result<ConfigBindings> {
+    let mut origins = HashMap::new();
+    let mut entries = config
         .into_iter()
         .map(|entry| {
             let declaration = agent_type
@@ -1831,12 +1835,31 @@ fn parse_provision_config_from_agent_type_schema(
                 )
             })?;
 
+            origins.insert(entry.path.clone(), entry.origins.unwrap_or_default());
             Ok(TypedAgentConfigEntry {
                 path: entry.path,
                 value: TypedSchemaValue::new(graph, schema_value),
             })
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let schema = golem_common::schema::config::ConfigSchema::from_declarations(
+        &agent_type.schema,
+        &agent_type.config,
+        &golem_common::schema::config::ConfigOrigin {
+            file: agent_type_name.0.clone().into(),
+            path: vec!["config".into()],
+            layer: "code".into(),
+            package: None,
+        },
+    )?;
+    schema.apply_missing_defaults(&mut entries);
+    Ok(entries
+        .into_iter()
+        .map(|entry| ConfigBinding {
+            origins: origins.remove(&entry.path).unwrap_or_default(),
+            ..ConfigBinding::from(entry)
+        })
+        .collect())
 }
 
 impl TestWorkerExecutor {

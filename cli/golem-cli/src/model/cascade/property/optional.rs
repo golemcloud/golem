@@ -48,6 +48,18 @@ impl<L: Layer, V> Default for OptionalProperty<L, V> {
 }
 
 impl<L: Layer, V> OptionalProperty<L, V> {
+    pub fn for_each_value_mut(&mut self, mut visit: impl FnMut(&mut V)) {
+        if let Some(value) = &mut self.value {
+            visit(value);
+        }
+        for element in &mut self.trace {
+            match element {
+                OptionalPropertyTraceElem::Override { value, .. } => visit(value),
+                OptionalPropertyTraceElem::Skip { .. } => {}
+            }
+        }
+    }
+
     pub fn new(value: Option<V>) -> Self {
         Self {
             value,

@@ -25860,6 +25860,11 @@ components:
             type: string
         value_type:
           $ref: '#/components/schemas/SchemaType'
+        default_value:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
       required:
       - source
       - path
@@ -26142,7 +26147,7 @@ components:
         config:
           type: array
           items:
-            $ref: '#/components/schemas/TypedAgentConfigEntry'
+            $ref: '#/components/schemas/ConfigBinding'
         plugins:
           type: array
           items:
@@ -26172,7 +26177,7 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
+            $ref: '#/components/schemas/ConfigBindingDto'
         pluginInstallations:
           default: []
           type: array
@@ -26201,7 +26206,7 @@ components:
         config:
           type: array
           items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
+            $ref: '#/components/schemas/ConfigBindingDto'
         pluginUpdates:
           default: []
           type: array
@@ -26455,15 +26460,6 @@ components:
           format: uint32
       required:
       - declaration
-    ComponentConfigSchema:
-      type: object
-      properties:
-        schema:
-          $ref: '#/components/schemas/SchemaGraph'
-        declarations:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentConfigDeclarationSchema'
     ComponentCreation:
       title: ComponentCreation
       type: object
@@ -26472,24 +26468,8 @@ components:
           type: string
         packageMetadata:
           $ref: '#/components/schemas/ComponentPackageMetadata'
-        configSchema:
-          default:
-            schema:
-              root:
-                kind: record
-                value:
-                  fields: []
-          allOf:
-          - $ref: '#/components/schemas/ComponentConfigSchema'
-          - default:
-              schema:
-                root:
-                  kind: record
-                  value:
-                    fields: []
         componentProvisionConfig:
           default:
-            config: []
             env: {}
             files: {}
             initialPermissions:
@@ -26503,7 +26483,6 @@ components:
           allOf:
           - $ref: '#/components/schemas/ComponentProvisionConfigCreation'
           - default:
-              config: []
               env: {}
               files: {}
               initialPermissions:
@@ -26610,21 +26589,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
-        configSchema:
-          default:
-            schema:
-              root:
-                kind: record
-                value:
-                  fields: []
-          allOf:
-          - $ref: '#/components/schemas/ComponentConfigSchema'
-          - default:
-              schema:
-                root:
-                  kind: record
-                  value:
-                    fields: []
         componentProvisionConfig:
           $ref: '#/components/schemas/ComponentProvisionConfig'
         agentTypes:
@@ -26684,10 +26648,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        config:
-          type: array
-          items:
-            $ref: '#/components/schemas/TypedAgentConfigEntry'
         plugins:
           type: array
           items:
@@ -26699,7 +26659,6 @@ components:
       required:
       - initialPermissions
       - env
-      - config
       - plugins
       - files
     ComponentProvisionConfigCreation:
@@ -26713,11 +26672,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        config:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
         pluginInstallations:
           default: []
           type: array
@@ -26757,8 +26711,6 @@ components:
           allOf:
           - $ref: '#/components/schemas/ComponentPackageMetadata'
           - description: Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
-        configSchema:
-          $ref: '#/components/schemas/ComponentConfigSchema'
         componentProvisionConfig:
           $ref: '#/components/schemas/ComponentProvisionConfigCreation'
         agentTypes:
@@ -26790,6 +26742,81 @@ components:
           type: boolean
       required:
       - currentRevision
+    ConfigBinding:
+      title: ConfigBinding
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        valueSource:
+          $ref: '#/components/schemas/ConfigBindingSource'
+        origins:
+          description: Audit information, not an input to value resolution, authorization or deployment hashing.
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBindingOrigin'
+      required:
+      - path
+      - valueSource
+    ConfigBindingDto:
+      title: ConfigBindingDto
+      description: Provisioning input; the owner schema determines the stored value's type.
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+        origins:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBindingOrigin'
+      required:
+      - path
+      - value
+    ConfigBindingOrigin:
+      title: ConfigBindingOrigin
+      type: object
+      properties:
+        valuePath:
+          description: Relative to the binding's value; an empty path addresses the whole value.
+          type: array
+          items:
+            type: string
+        location:
+          $ref: '#/components/schemas/ConfigOriginLocation'
+        sourcePath:
+          description: Position in the supplying document or component metadata.
+          type: array
+          items:
+            type: string
+        layer:
+          description: Display label only; consumers must not parse it to recover layer semantics.
+          type: string
+      required:
+      - valuePath
+      - location
+      - sourcePath
+      - layer
+    ConfigBindingSource:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - static
+          value:
+            $ref: '#/components/schemas/TypedSchemaValue'
+        required:
+        - kind
+        - value
     ConfigKeyScope:
       type: object
       oneOf:
@@ -26817,6 +26844,49 @@ components:
         required:
         - kind
         - keys
+    ConfigOriginLocation:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - manifest
+          file:
+            type: string
+        required:
+        - kind
+        - file
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - componentMetadata
+        required:
+        - kind
+      - type: object
+        allOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+              - package
+          required:
+          - kind
+        - $ref: '#/components/schemas/ConfigPackageOrigin'
+    ConfigPackageOrigin:
+      type: object
+      properties:
+        source:
+          type: string
+        packageDigest:
+          type: string
+      required:
+      - source
+      - packageDigest
     CorsOptions:
       title: CorsOptions
       type: object

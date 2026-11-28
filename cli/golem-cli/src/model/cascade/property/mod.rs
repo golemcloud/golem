@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::layer::Layer;
-
 pub mod json;
 pub mod map;
 pub mod optional;
 pub mod tool_bindings;
 pub mod vec;
+
+use crate::model::cascade::layer::Layer;
 
 pub trait Property<L: Layer> {
     type Value;

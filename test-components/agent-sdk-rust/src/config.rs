@@ -2,12 +2,108 @@ use golem_rust::agentic::{Config, Secret};
 use golem_rust::bindings::golem::secrets::{reveal, types};
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
-    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, agent_definition,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, Schema, WireSchema, agent_definition,
     agent_implementation, decode_schema_value, encode_schema_graph,
 };
 use golem_rust::{PromiseId, blocking_await_promise, create_promise};
 use serde::Serialize;
 use serde_json::json;
+
+#[derive(Clone, Schema, Serialize)]
+pub struct StaticDefaultSettings {
+    pub label: String,
+    pub count: u32,
+}
+
+#[derive(Clone, Schema, Serialize)]
+#[schema(union)]
+pub enum StaticDefaultChoice {
+    #[schema(prefix = "selected:")]
+    Text(String),
+    #[schema(prefix = "other:")]
+    Other(String),
+}
+
+#[derive(ConfigSchema, Serialize)]
+pub struct StaticDefaultFields {
+    pub settings: StaticDefaultSettings,
+    pub choice: StaticDefaultChoice,
+    pub slots: (Option<i32>, Option<i32>, String),
+    pub omitted: Option<String>,
+}
+
+pub struct StaticDefaults(StaticDefaultFields);
+
+fn static_default(path: &[String]) -> Option<String> {
+    match path.last()?.as_str() {
+        "settings" => Some(r#"{"label":"code-default","count":31}"#),
+        "choice" => Some(r#""selected:value""#),
+        "slots" => Some(r#"[null,7,"retained"]"#),
+        _ => None,
+    }
+    .map(str::to_string)
+}
+
+impl golem_rust::agentic::ConfigSchema for StaticDefaults {
+    type RpcType = StaticDefaultFieldsRpc;
+
+    fn describe_config(
+        path: &[String],
+    ) -> Vec<golem_rust::agentic::ExtendedAgentConfigDeclaration> {
+        let mut declarations = StaticDefaultFields::describe_config(path);
+        for declaration in &mut declarations {
+            declaration.default_value = static_default(&declaration.path).map(|default| {
+                golem_rust::schema::render::from_json_value(
+                    &declaration.value_type,
+                    &declaration.value_type.root,
+                    &serde_json::from_str(&default).unwrap(),
+                )
+                .unwrap()
+            });
+        }
+        declarations
+    }
+
+    fn describe_wire_config(
+        path: &[String],
+        builder: &mut golem_rust::schema::wit::direct::WireSchemaBuilder,
+    ) -> Vec<golem_rust::golem_agentic::golem::agent::common::AgentConfigDeclaration> {
+        let mut declarations = StaticDefaultFields::describe_wire_config(path, builder);
+        for (declaration, native) in declarations.iter_mut().zip(Self::describe_config(path)) {
+            declaration.default_value = native
+                .default_value
+                .as_ref()
+                .map(|value| golem_rust::schema::wit::encode_value(value).unwrap());
+        }
+        declarations
+    }
+
+    fn load(path: &[String]) -> Result<Self, golem_rust::agentic::ConfigValueError> {
+        StaticDefaultFields::load(path).map(Self)
+    }
+}
+
+#[agent_definition]
+pub trait StaticDefaultsAgent {
+    fn new(name: String, #[agent_config] config: Config<StaticDefaults>) -> Self;
+
+    fn read(&self) -> String;
+}
+
+struct StaticDefaultsAgentImpl {
+    config: Config<StaticDefaults>,
+}
+
+#[agent_implementation]
+impl StaticDefaultsAgent for StaticDefaultsAgentImpl {
+    fn new(_name: String, #[agent_config] config: Config<StaticDefaults>) -> Self {
+        Self { config }
+    }
+
+    fn read(&self) -> String {
+        serde_json::to_string(&self.config.get().expect("static config is stored").0).unwrap()
+    }
+}
 
 #[derive(ConfigSchema)]
 pub struct NestedConfig {

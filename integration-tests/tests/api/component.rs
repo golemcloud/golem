@@ -27,9 +27,10 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, ComponentCreation, ComponentName, ComponentUpdate,
-    PluginInstallation, PluginInstallationAction, PluginInstallationUpdate, PluginPriority,
-    PluginUninstallation,
+    ConfigBindingDto, PluginInstallation, PluginInstallationAction, PluginInstallationUpdate,
+    PluginPriority, PluginUninstallation,
 };
+use golem_common::model::component_metadata::ConfigBindingSource;
 use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
@@ -421,10 +422,13 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.as_slice())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![(
             vec!["var1".to_string()],
@@ -441,13 +445,15 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 AgentTypeName("CounterAgent".to_string()),
                 AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["var1".to_string()],
                             value: serde_json::Value::String("value11".to_string()).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["var2".to_string()],
                             value: serde_json::Value::String("value2".to_string()).into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()
@@ -462,10 +468,13 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.as_slice())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![
             (
@@ -522,7 +531,6 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: Some(vec![other_agent]),
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -598,7 +606,6 @@ async fn component_update_rejects_new_agent_type_without_initial_permissions(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: Some(vec![
                     component.metadata.agent_types[0].declaration.clone(),
@@ -656,7 +663,6 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -685,10 +691,13 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.as_slice())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![(
             vec!["var1".to_string()],
@@ -728,7 +737,6 @@ async fn component_update_with_wrong_revision_is_rejected(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision.next()?,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
@@ -787,7 +795,6 @@ async fn component_update_rejects_reset_override_when_compatibility_check_enable
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
@@ -846,7 +853,6 @@ async fn component_update_allows_reset_override_when_compatibility_check_disable
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
@@ -983,7 +989,6 @@ async fn create_component_with_plugins_and_update_installations(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -1030,7 +1035,6 @@ async fn create_component_with_plugins_and_update_installations(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component_v2.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -1118,7 +1122,6 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -1278,7 +1281,6 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             &ComponentCreation {
                 package_metadata: None,
                 component_name: ComponentName("it:agent-counters".to_string()),
-                config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 agent_types: vec![agent_type_schema.clone()],
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
@@ -1406,7 +1408,6 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
             &ComponentCreation {
                 package_metadata: None,
                 component_name: ComponentName("duplicate-priority".to_string()),
-                config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
@@ -1505,7 +1506,6 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
             &ComponentCreation {
                 package_metadata: None,
                 component_name: ComponentName("duplicate-grant".to_string()),
-                config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
@@ -1635,7 +1635,6 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -1728,7 +1727,6 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -1898,13 +1896,15 @@ async fn add_new_agent_config_entry_during_update(
             AgentTypeName("ConfigAgent".to_string()),
             AgentTypeProvisionConfigUpdate {
                 config: Some(vec![
-                    AgentConfigEntryDto {
+                    ConfigBindingDto {
                         path: vec!["foo".to_string()],
                         value: json!(2).into(),
+                        origins: None,
                     },
-                    AgentConfigEntryDto {
+                    ConfigBindingDto {
                         path: vec!["bar".to_string()],
                         value: json!("value").into(),
+                        origins: None,
                     },
                 ]),
                 ..Default::default()
@@ -1947,13 +1947,15 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
                 AgentTypeName("ConfigAgent".to_string()),
                 AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["foo".to_string()],
                             value: json!(2).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["bar".to_string()],
                             value: json!(1).into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()

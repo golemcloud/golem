@@ -33,11 +33,11 @@ use crate::services::registry_change_notifier::{
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
 use golem_common::base_model::component_metadata::{
-    AgentTypeProvisionConfig, ComponentProvisionConfig,
+    AgentTypeProvisionConfig, ComponentProvisionConfig, ConfigBinding, ConfigBindingOrigin,
+    ConfigBindingSource, ConfigBindings,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName, InitialAgentFileUpload};
@@ -49,9 +49,10 @@ use golem_common::model::card::{
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
-    ComponentPackageMetadata, ComponentRevision, ComponentUpdate, InitialAgentFile,
-    InstalledPlugin, PluginInstallation, PluginInstallationAction, ToolDeploymentConfigCreation,
-    ToolDeploymentConfigUpdate, ToolProvisionConfigCreation, ToolProvisionConfigUpdate,
+    ComponentPackageMetadata, ComponentRevision, ComponentUpdate, ConfigBindingDto,
+    InitialAgentFile, InstalledPlugin, PluginInstallation, PluginInstallationAction,
+    ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate, ToolProvisionConfigCreation,
+    ToolProvisionConfigUpdate,
 };
 use golem_common::model::component::{
     AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
@@ -62,13 +63,12 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
 use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use golem_common::schema::SchemaValue;
-use golem_common::schema::agent::{
-    AgentTypeSchema, ComponentConfigSchema, typed_schema_value_with_projected_defs,
-};
+use golem_common::schema::agent::{AgentTypeSchema, typed_schema_value_with_projected_defs};
+use golem_common::schema::config::{ConfigOrigin, ConfigSchema};
 use golem_common::schema::tool::Tool;
 use golem_common::schema::tool::ToolMiddleware;
 use golem_common::schema::tool::validation::{validate_tool, validate_tool_middleware};
-use golem_common::schema::validation::{is_equivalent_cross_graph, validate_graph, validate_value};
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
@@ -366,14 +366,6 @@ impl ComponentWriteService {
             BTreeMap::new();
         let mut cards_to_create = Vec::new();
 
-        validate_component_config_schema(
-            &component_creation.config_schema,
-            &component_creation.agent_types,
-        )?;
-        let component_config = validate_and_transform_component_config_entries(
-            &component_creation.config_schema,
-            component_creation.component_provision_config.config.clone(),
-        )?;
         let component_files = resolve_component_files_for_creation(
             &component_creation.component_provision_config.files,
             &uploaded_files,
@@ -398,7 +390,6 @@ impl ComponentWriteService {
         let component_provision_config = ComponentProvisionConfig {
             initial_permissions: component_initial_permissions,
             env: component_creation.component_provision_config.env.clone(),
-            config: component_config,
             plugins: component_plugins,
             files: component_files,
         };
@@ -458,7 +449,6 @@ impl ComponentWriteService {
             )?;
 
         let component_metadata = analyze_and_validate_component_wasm(
-            component_creation.config_schema,
             component_provision_config,
             component_creation.agent_types,
             wasm.clone(),
@@ -565,7 +555,6 @@ impl ComponentWriteService {
         let ComponentUpdate {
             current_revision,
             package_metadata,
-            config_schema,
             component_provision_config,
             agent_types: agent_type_update,
             agent_type_provision_config_updates,
@@ -609,9 +598,6 @@ impl ComponentWriteService {
             Some(agent_types) => agent_types,
             None => component.metadata.agent_types().to_vec(),
         };
-        let final_config_schema =
-            config_schema.unwrap_or_else(|| component.metadata.config_schema().clone());
-        validate_component_config_schema(&final_config_schema, &agent_types)?;
         let pending_component_provision_config = component_provision_config;
         let mut final_component_provision_config =
             component.metadata.component_provision_config().clone();
@@ -682,10 +668,6 @@ impl ComponentWriteService {
             final_component_provision_config = ComponentProvisionConfig {
                 initial_permissions,
                 env: config.env,
-                config: validate_and_transform_component_config_entries(
-                    &final_config_schema,
-                    config.config,
-                )?,
                 plugins: resolve_plugins_for_creation(
                     &config.plugin_installations,
                     &grants,
@@ -693,16 +675,6 @@ impl ComponentWriteService {
                 )?,
                 files: resolve_component_files_for_creation(&config.files, &uploaded_files)?,
             };
-        } else {
-            final_component_provision_config.config =
-                validate_and_transform_component_config_entries(
-                    &final_config_schema,
-                    final_component_provision_config
-                        .config
-                        .into_iter()
-                        .map(AgentConfigEntryDto::from)
-                        .collect(),
-                )?;
         }
 
         let mut provision_configs_changed = false;
@@ -847,7 +819,6 @@ impl ComponentWriteService {
 
             component.package_metadata = package_metadata;
             let metadata = analyze_and_validate_component_wasm(
-                final_config_schema.clone(),
                 final_component_provision_config.clone(),
                 agent_types,
                 new_wasm.clone(),
@@ -865,7 +836,6 @@ impl ComponentWriteService {
                 .await?;
 
             let metadata = analyze_and_validate_component_wasm(
-                final_config_schema.clone(),
                 final_component_provision_config.clone(),
                 agent_types,
                 Arc::from(old_data),
@@ -878,7 +848,7 @@ impl ComponentWriteService {
         } else {
             component.metadata = component
                 .metadata
-                .with_component_config(final_config_schema, final_component_provision_config);
+                .with_component_provision_config(final_component_provision_config);
             if provision_configs_changed {
                 component.metadata = component
                     .metadata
@@ -1863,122 +1833,38 @@ fn resolve_component_files_for_creation(
         .collect()
 }
 
-fn validate_component_config_schema(
-    schema: &ComponentConfigSchema,
-    agent_types: &[AgentTypeSchema],
-) -> Result<(), ComponentError> {
-    validate_graph(&schema.schema).map_err(|errors| {
-        ComponentError::InvalidComponentConfig(
-            errors.into_iter().map(|error| error.to_string()).join("; "),
-        )
-    })?;
-    let mut declarations = BTreeMap::new();
-    for declaration in &schema.declarations {
-        if declaration.path.is_empty()
-            || declaration
-                .path
-                .iter()
-                .any(|segment| segment.is_empty() || segment.contains('.'))
-        {
-            return Err(ComponentError::InvalidComponentConfig(format!(
-                "invalid declaration path '{}'",
-                declaration.path.join(".")
-            )));
-        }
-        let mut graph = schema.schema.clone();
-        graph.root = declaration.value_type.clone();
-        validate_graph(&graph).map_err(|errors| {
-            ComponentError::InvalidComponentConfig(
-                errors.into_iter().map(|error| error.to_string()).join("; "),
-            )
-        })?;
-        if declarations
-            .insert(&declaration.path, declaration)
-            .is_some()
-        {
-            return Err(ComponentError::InvalidComponentConfig(format!(
-                "duplicate declaration path '{}'",
-                declaration.path.join(".")
-            )));
-        }
-        for agent in agent_types {
-            if let Some(agent_declaration) = agent
-                .config
-                .iter()
-                .find(|candidate| candidate.path == declaration.path)
-                && (agent_declaration.source != declaration.source
-                    || !is_equivalent_cross_graph(
-                        &schema.schema,
-                        &declaration.value_type,
-                        &agent.schema,
-                        &agent_declaration.value_type,
-                    ))
-            {
-                return Err(ComponentError::InvalidComponentConfig(format!(
-                    "declaration '{}' conflicts with agent '{}'",
-                    declaration.path.join("."),
-                    agent.type_name
-                )));
-            }
-        }
-    }
-    Ok(())
+fn config_bindings_with_origins(
+    entries: Vec<TypedAgentConfigEntry>,
+    mut origins: HashMap<Vec<String>, Vec<ConfigBindingOrigin>>,
+) -> ConfigBindings {
+    entries
+        .into_iter()
+        .map(|entry| ConfigBinding {
+            origins: origins.remove(&entry.path).unwrap_or_default(),
+            ..ConfigBinding::from(entry)
+        })
+        .collect()
 }
 
-fn validate_and_transform_component_config_entries(
-    schema: &ComponentConfigSchema,
-    config_entries: Vec<AgentConfigEntryDto>,
-) -> Result<Vec<TypedAgentConfigEntry>, ComponentError> {
-    let mut results = Vec::new();
-    let mut seen = HashSet::new();
-    for entry in config_entries {
-        let declaration = schema
-            .declarations
-            .iter()
-            .find(|declaration| declaration.path == entry.path)
-            .ok_or_else(|| {
-                ComponentError::InvalidComponentConfig(format!(
-                    "config '{}' is not declared",
-                    entry.path.join(".")
-                ))
-            })?;
-        if declaration.source != AgentConfigSource::Local {
-            return Err(ComponentError::InvalidComponentConfig(format!(
-                "secret config '{}' cannot be provided locally",
-                entry.path.join(".")
-            )));
-        }
-        if !seen.insert(entry.path.clone()) {
-            return Err(ComponentError::InvalidComponentConfig(format!(
-                "config '{}' was provided more than once",
-                entry.path.join(".")
-            )));
-        }
-        let value =
-            from_untrusted_json_value(&schema.schema, &declaration.value_type, &entry.value.0)
-                .map_err(|error| {
-                    ComponentError::InvalidComponentConfig(format!(
-                        "config '{}': {error}",
-                        entry.path.join(".")
-                    ))
-                })?;
-        validate_value(&schema.schema, &declaration.value_type, &value).map_err(|errors| {
-            ComponentError::InvalidComponentConfig(format!(
-                "config '{}': {}",
-                entry.path.join("."),
-                errors.iter().map(ToString::to_string).join(", ")
-            ))
-        })?;
-        results.push(TypedAgentConfigEntry {
-            path: entry.path,
-            value: typed_schema_value_with_projected_defs(
-                &schema.schema,
-                declaration.value_type.clone(),
-                value,
-            ),
-        });
-    }
-    Ok(results)
+fn apply_config_defaults(
+    graph: &golem_common::schema::SchemaGraph,
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    owner: &str,
+    entries: &mut Vec<TypedAgentConfigEntry>,
+) -> Result<(), ComponentError> {
+    let schema = ConfigSchema::from_declarations(
+        graph,
+        declarations,
+        &ConfigOrigin {
+            file: owner.into(),
+            path: vec!["config".into()],
+            layer: "code".into(),
+            package: None,
+        },
+    )
+    .map_err(|error| ComponentError::InvalidComponentConfig(error.to_string()))?;
+    schema.apply_missing_defaults(entries);
+    Ok(())
 }
 
 fn resolve_plugins_for_creation(
@@ -2032,11 +1918,12 @@ fn resolve_plugins_for_creation(
 
 fn validate_and_transform_config_entries(
     agent_type: &AgentTypeSchema,
-    config_entries: Vec<AgentConfigEntryDto>,
-) -> Result<Vec<TypedAgentConfigEntry>, ComponentError> {
+    config_entries: Vec<ConfigBindingDto>,
+) -> Result<ConfigBindings, ComponentError> {
     validate_agent_config_declarations(agent_type)?;
 
     let mut results = Vec::new();
+    let mut origins = HashMap::new();
     let mut seen_keys = HashSet::new();
 
     for config_value in config_entries {
@@ -2094,22 +1981,33 @@ fn validate_and_transform_config_entries(
             schema_value,
         );
 
+        origins.insert(
+            config_value.path.clone(),
+            config_value.origins.unwrap_or_default(),
+        );
         results.push(TypedAgentConfigEntry {
             path: config_value.path,
             value,
         });
     }
 
-    Ok(results)
+    apply_config_defaults(
+        &agent_type.schema,
+        &agent_type.config,
+        &agent_type.type_name.0,
+        &mut results,
+    )?;
+    Ok(config_bindings_with_origins(results, origins))
 }
 
 fn check_config_entries_match(
     agent_type: &AgentTypeSchema,
-    config: &[TypedAgentConfigEntry],
+    config: &[ConfigBinding],
 ) -> Result<(), ComponentError> {
     validate_agent_config_declarations(agent_type)?;
 
     for entry in config {
+        let ConfigBindingSource::Static(value) = &entry.value_source;
         let matching_declaration = agent_type
             .config
             .iter()
@@ -2142,8 +2040,8 @@ fn check_config_entries_match(
         // resolves refs through `defs` and never reads `graph.root`, so there is
         // no need to clone the agent's whole `defs` into a temporary graph.
         if !is_equivalent_cross_graph(
-            entry.value.graph(),
-            entry.value.root_type(),
+            value.graph(),
+            value.root_type(),
             &agent_type.schema,
             &matching_declaration.value_type,
         ) {
@@ -2176,7 +2074,6 @@ fn validate_package_metadata(
 }
 
 async fn analyze_and_validate_component_wasm(
-    config_schema: ComponentConfigSchema,
     component_provision_config: ComponentProvisionConfig,
     agent_types: Vec<AgentTypeSchema>,
     wasm: Arc<[u8]>,
@@ -2197,7 +2094,6 @@ async fn analyze_and_validate_component_wasm(
     let component_metadata = run_cpu_bound_work(move || {
         ComponentMetadata::analyse_component_with_config(
             &wasm,
-            config_schema,
             component_provision_config,
             agent_types,
             agent_type_provision_configs,
@@ -2523,8 +2419,8 @@ mod tests {
         resolve_tool_deployment_metadata_for_creation, resolve_tool_files_for_update,
         resolve_tool_middleware_deployment_metadata_for_creation, tool_definitions_by_name,
         tool_middleware_definitions_by_name, tool_middleware_state_for_update,
-        tool_state_for_update, validate_and_transform_component_config_entries,
-        validate_component_config_schema, validate_component_metadata_invariants,
+        tool_state_for_update, validate_and_transform_config_entries,
+        validate_component_metadata_invariants,
     };
     use crate::services::component::ComponentError;
     use golem_common::model::account::AccountId;
@@ -2536,62 +2432,129 @@ mod tests {
     };
     use golem_common::model::component::{
         AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeInitialPermissions,
-        ArchiveFilePath, ToolDeploymentConfigCreation, ToolProvisionConfigCreation,
+        ArchiveFilePath, ConfigBindingDto, ToolDeploymentConfigCreation,
+        ToolProvisionConfigCreation,
     };
-    use golem_common::model::component_metadata::{ComponentMetadata, KnownExports};
+    use golem_common::model::component_metadata::{
+        ComponentMetadata, ConfigBinding, ConfigBindingSource, KnownExports,
+    };
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
     use golem_common::model::tool_middleware::{
         ToolMiddlewareDeploymentMetadata, ToolMiddlewareName,
     };
-    use golem_common::schema::agent::{AgentConfigDeclarationSchema, ComponentConfigSchema};
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
     use golem_common::schema::tool::{
         CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
     };
-    use golem_common::schema::{MetadataEnvelope, SchemaGraph, SchemaType};
+    use golem_common::schema::{SchemaGraph, SchemaType};
     use std::collections::{BTreeMap, HashMap};
     use test_r::test;
 
-    fn bool_component_schema(source: AgentConfigSource) -> ComponentConfigSchema {
-        ComponentConfigSchema {
-            schema: SchemaGraph::empty(),
-            declarations: vec![AgentConfigDeclarationSchema {
-                source,
-                path: vec!["feature".to_string(), "enabled".to_string()],
-                value_type: SchemaType::Bool {
-                    metadata: MetadataEnvelope::default(),
-                },
-            }],
-        }
+    fn binding_value(binding: &ConfigBinding) -> &golem_common::schema::SchemaValue {
+        let ConfigBindingSource::Static(value) = &binding.value_source;
+        value.value()
     }
 
     #[test]
-    fn standalone_component_config_accepts_typed_local_value_without_agents() {
-        let schema = bool_component_schema(AgentConfigSource::Local);
-        validate_component_config_schema(&schema, &[]).unwrap();
-        let values = validate_and_transform_component_config_entries(
+    fn staged_defaults_preserve_supplied_values_and_required_groups() {
+        use golem_common::model::agent::{AgentMode, Snapshotting};
+        use golem_common::schema::agent::{AgentConstructorSchema, AgentTypeKind, InputSchema};
+        use golem_common::schema::{AgentTypeSchema, SchemaValue};
+        use golem_schema::Empty;
+
+        let mut schema = AgentTypeSchema {
+            kind: AgentTypeKind::Regular,
+            type_name: AgentTypeName("Owner".into()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["feature".into(), "enabled".into()],
+                value_type: SchemaType::bool(),
+                default_value: Some(SchemaValue::Bool(false)),
+            }],
+        };
+        let mut supplied = schema.config[0].clone();
+        supplied.path = vec!["feature".into(), "other".into()];
+        supplied.default_value = None;
+        schema.config.push(supplied);
+        assert!(
+            validate_and_transform_config_entries(&schema, vec![])
+                .unwrap()
+                .is_empty()
+        );
+        let entries = validate_and_transform_config_entries(
             &schema,
-            vec![golem_common::model::agent::AgentConfigEntryDto {
-                path: vec!["feature".to_string(), "enabled".to_string()],
+            vec![ConfigBindingDto {
+                path: vec!["feature".into(), "other".into()],
                 value: NormalizedJsonValue::new(serde_json::json!(true)),
+                origins: None,
             }],
         )
         .unwrap();
-        assert_eq!(values.len(), 1);
-    }
+        assert_eq!(entries.len(), 2);
+        let default = entries
+            .iter()
+            .find(|entry| entry.path == schema.config[0].path)
+            .unwrap();
+        assert_eq!(binding_value(default), &SchemaValue::Bool(false));
 
-    #[test]
-    fn standalone_component_secret_cannot_be_supplied_as_local_value() {
-        let schema = bool_component_schema(AgentConfigSource::Secret);
-        let error = validate_and_transform_component_config_entries(
+        // Explicitly resubmitted values take precedence over changed code defaults.
+        schema.config[0].default_value = Some(SchemaValue::Bool(true));
+        let retained = validate_and_transform_config_entries(
             &schema,
-            vec![golem_common::model::agent::AgentConfigEntryDto {
-                path: vec!["feature".to_string(), "enabled".to_string()],
+            entries.into_iter().map(ConfigBindingDto::from).collect(),
+        )
+        .unwrap();
+        assert_eq!(
+            binding_value(
+                retained
+                    .iter()
+                    .find(|entry| entry.path == schema.config[0].path)
+                    .unwrap()
+            ),
+            &SchemaValue::Bool(false)
+        );
+
+        let fresh = validate_and_transform_config_entries(
+            &schema,
+            vec![ConfigBindingDto {
+                path: vec!["feature".into(), "other".into()],
                 value: NormalizedJsonValue::new(serde_json::json!(true)),
+                origins: None,
             }],
         )
-        .unwrap_err();
-        assert!(matches!(error, ComponentError::InvalidComponentConfig(_)));
+        .unwrap();
+        assert_eq!(
+            binding_value(
+                fresh
+                    .iter()
+                    .find(|entry| entry.path == schema.config[0].path)
+                    .unwrap()
+            ),
+            &SchemaValue::Bool(true)
+        );
+
+        schema.config[0].path = vec!["enabled".into()];
+        let reapplied = validate_and_transform_config_entries(&schema, vec![]).unwrap();
+        assert_eq!(reapplied.len(), 1);
+        assert_eq!(binding_value(&reapplied[0]), &SchemaValue::Bool(true));
+
+        schema.config[0].default_value = Some(SchemaValue::String("not a bool".into()));
+        assert!(validate_and_transform_config_entries(&schema, vec![]).is_err());
     }
 
     fn parent_surface(parent_id: CardId) -> DelegationSurface {

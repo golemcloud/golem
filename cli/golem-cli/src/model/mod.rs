@@ -19,6 +19,7 @@ pub mod app_raw;
 pub mod card;
 pub mod cascade;
 pub mod cli_command_metadata;
+pub mod cli_config;
 pub mod cli_output;
 pub mod component;
 pub mod config;

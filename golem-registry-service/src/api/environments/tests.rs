@@ -385,7 +385,6 @@ mod stored_invalid_binding_name {
         ComponentCreation {
             package_metadata: None,
             component_name: ComponentName("probe-tools".into()),
-            config_schema: Default::default(),
             component_provision_config: Default::default(),
             agent_types: Vec::new(),
             agent_type_provision_configs: BTreeMap::new(),
@@ -588,7 +587,6 @@ mod stored_invalid_binding_name {
                 ComponentUpdate {
                     package_metadata: None,
                     current_revision: component.revision,
-                    config_schema: None,
                     component_provision_config: None,
                     agent_types: None,
                     agent_type_provision_config_updates: None,

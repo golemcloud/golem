@@ -5,6 +5,7 @@ declare module 'golem:agent/common@2.0.0' {
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type MetadataEnvelope = golemCore200Types.MetadataEnvelope;
   export type AgentId = golemCore200Types.AgentId;
   export type AccountId = golemCore200Types.AccountId;
@@ -266,6 +267,8 @@ declare module 'golem:agent/common@2.0.0' {
     path: string[];
     /** Index into the owning agent-type `schema` graph. */
     valueType: TypeNodeIndex;
+    /** Static data in the declared value type. Absence differs from an option-none value. */
+    defaultValue?: SchemaValueTree;
   };
   /**
    * Full agent type declaration.

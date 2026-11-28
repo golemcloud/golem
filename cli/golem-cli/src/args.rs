@@ -17,6 +17,7 @@ use crate::model::agent::AgentListCursor;
 use anyhow::anyhow;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent_secret::AgentSecretPath;
+use golem_common::model::split_config_path;
 use jiff::Timestamp;
 
 pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
@@ -76,58 +77,37 @@ fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)
 }
 
 pub(crate) fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
-    let mut keys = Vec::new();
-    let mut buf = String::new();
-
-    let mut chars = input.chars().peekable();
+    let mut normalized = String::new();
+    let mut chars = input.chars();
     let mut in_quotes = false;
-
+    let mut literal_dot = false;
     while let Some(c) = chars.next() {
         match c {
             '\\' => {
-                // escape next char
                 let next = chars.next().ok_or_else(|| anyhow!("dangling escape"))?;
-                buf.push(next);
+                literal_dot |= next == '.';
+                normalized.push(next);
             }
-
-            '"' => {
-                in_quotes = !in_quotes;
+            '"' => in_quotes = !in_quotes,
+            '.' => {
+                literal_dot |= in_quotes;
+                normalized.push(c);
             }
-
-            '.' if !in_quotes => {
-                push_agent_config_path_segment(&mut keys, &mut buf)?;
-            }
-
-            _ => buf.push(c),
+            _ => normalized.push(c),
         }
     }
-
     if in_quotes {
-        return Err(anyhow!("unterminated quote"));
+        anyhow::bail!("unterminated quote");
     }
-
-    push_agent_config_path_segment(&mut keys, &mut buf)?;
-
-    Ok(keys)
-}
-
-fn push_agent_config_path_segment(keys: &mut Vec<String>, buf: &mut String) -> anyhow::Result<()> {
-    let segment = buf.trim();
-
-    if segment.is_empty() {
-        return Err(anyhow!("empty path segment"));
+    if literal_dot {
+        anyhow::bail!("path segments must not contain '.'; use separate segments instead");
     }
-
-    if segment.contains('.') {
-        return Err(anyhow!(
-            "path segments must not contain '.'; use separate segments instead"
-        ));
-    }
-
-    keys.push(segment.to_string());
-    buf.clear();
-
-    Ok(())
+    let normalized = normalized
+        .split('.')
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(".");
+    split_config_path(&normalized)
 }
 
 pub fn parse_cursor(cursor: &str) -> anyhow::Result<AgentListCursor> {

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use serde::Serialize;
-use std::fmt::Debug;
-use std::hash::Hash;
+use std::{fmt::Debug, hash::Hash};
 
+/// One manifest layer applied after its parents.
 pub trait Layer {
     type Id: Debug + Eq + Hash + Clone + Serialize;
     type Value: Debug + Default + Clone + Serialize;

@@ -195,6 +195,7 @@ fn[T : @schema.IntoSchema] local_entry(
       source: @common.AgentConfigSource::LOCAL,
       path,
       value_type: schema_graph_of(tag),
+      default_value: None,
     },
   ]
 }
@@ -211,6 +212,7 @@ fn[T : @schema.IntoSchema] shared_entry(
       source: @common.AgentConfigSource::SECRET,
       path,
       value_type: secret_schema_graph_of(tag),
+      default_value: None,
     },
   ]
 }

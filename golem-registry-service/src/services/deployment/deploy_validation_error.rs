@@ -28,6 +28,14 @@ use golem_service_base::custom_api::PathSegment;
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployValidationError {
     #[error(
+        "Invalid static config in component {component_name} for agent {agent_type_name}: {message}"
+    )]
+    InvalidStaticConfig {
+        component_name: ComponentName,
+        agent_type_name: AgentTypeName,
+        message: String,
+    },
+    #[error(
         "Agent type {agent_type} changes its constructor in a way that changes the key of existing agents, at {path}: {reason}. Disable the environment's compatibility check to deploy it anyway; existing keyed agents are then no longer reachable by their key"
     )]
     IncompatibleConstructorChange {

@@ -260,7 +260,6 @@ async fn upload_or_update_component(
             ComponentCreation {
                 package_metadata: None,
                 component_name: component_name.clone(),
-                config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: BTreeMap::new(),
@@ -297,7 +296,6 @@ async fn upload_or_update_component(
                         ComponentUpdate {
                             package_metadata: None,
                             current_revision: existing.revision,
-                            config_schema: None,
                             component_provision_config: None,
                             agent_types: None,
                             agent_type_provision_config_updates: None,

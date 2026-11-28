@@ -1,0 +1,239 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::app::build::extract_component_metadata::extract_and_store_agent_types;
+use crate::app::context::BuildContext;
+use crate::command::config::ConfigSubcommand;
+use crate::command_handler::Handlers;
+use crate::command_handler::template::EnvVarRenderer;
+use crate::context::Context;
+use crate::model::app::{Application, ApplicationComponentSelectMode, BuildConfig};
+use crate::model::config::resolver::{
+    ConfigLayer, ConfigSchemaResolution, ConfigSourcePlan, validate_fills,
+};
+use crate::model::config::{
+    ConfigGetView, ConfigListView, StaticConfigFieldView, StaticConfigSource,
+};
+use anyhow::{Context as _, bail};
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
+use golem_common::model::component::ComponentName;
+use golem_common::schema::agent::{
+    AgentConfigDeclarationSchema, typed_schema_value_with_projected_defs,
+};
+use golem_common::schema::config::{ConfigError, ConfigOrigin, ConfigSchema};
+use golem_common::schema::render::to_json_value;
+use golem_common::schema::{AgentTypeSchema, SchemaGraph};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+pub struct ConfigCommandHandler {
+    ctx: Arc<Context>,
+}
+
+impl ConfigCommandHandler {
+    pub fn new(ctx: Arc<Context>) -> Self {
+        Self { ctx }
+    }
+
+    pub async fn handle_command(&self, command: ConfigSubcommand) -> anyhow::Result<()> {
+        match command {
+            ConfigSubcommand::List {
+                component,
+                agent_type,
+            } => self.cmd_list(component, agent_type).await,
+            ConfigSubcommand::Get { field, component } => self.cmd_get(field, component).await,
+        }
+    }
+
+    async fn cmd_list(
+        &self,
+        component: Option<ComponentName>,
+        agent_type: Option<AgentTypeName>,
+    ) -> anyhow::Result<()> {
+        let fields = self.prepare_fields(component, agent_type).await?;
+        self.ctx
+            .log_handler()
+            .log_output(ConfigListView { fields })?;
+        Ok(())
+    }
+
+    async fn cmd_get(&self, field: String, component: Option<ComponentName>) -> anyhow::Result<()> {
+        let Some((owner, path)) = field.split_once('.') else {
+            bail!("Use an exact agent-type.field path");
+        };
+        let agent_type = Some(AgentTypeName(owner.into()));
+        let path = crate::args::parse_agent_config_path(path)?;
+        let fields = self.prepare_fields(component, agent_type).await?;
+        let mut matches = fields.into_iter().filter(|field| field.path == path);
+        let Some(field) = matches.next() else {
+            bail!("No static config declaration at '{}'", path.join("."));
+        };
+        if matches.next().is_some() {
+            bail!("Config path is ambiguous; select its component explicitly");
+        }
+        self.ctx.log_handler().log_output(ConfigGetView { field })?;
+        Ok(())
+    }
+
+    async fn prepare_fields(
+        &self,
+        component_name: Option<ComponentName>,
+        agent_type_name: Option<AgentTypeName>,
+    ) -> anyhow::Result<Vec<StaticConfigFieldView>> {
+        self.ctx
+            .app_handler()
+            .must_select_components(
+                component_name.into_iter().collect(),
+                &ApplicationComponentSelectMode::All,
+            )
+            .await?;
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
+        let components = app_ctx
+            .selected_component_names()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut fields = Vec::new();
+        let mut owner_found = agent_type_name.is_none();
+        for name in &components {
+            let agent_types = extract_and_store_agent_types(
+                &BuildContext::new(app_ctx, &BuildConfig::new()),
+                name,
+            )
+            .await?;
+            owner_found |= agent_types
+                .iter()
+                .any(|agent| Some(&agent.type_name) == agent_type_name.as_ref());
+            fields.extend(prepare_static_config(
+                app_ctx.application(),
+                name,
+                &agent_types,
+                |owner| match agent_type_name.as_ref() {
+                    Some(selected) => owner == selected,
+                    None => true,
+                },
+            )?);
+        }
+        if !owner_found {
+            bail!("Agent type '{}' is not declared", agent_type_name.unwrap());
+        }
+        Ok(fields)
+    }
+}
+
+/// Shared by inspection and staging so a displayed fill is the value sent to the registry.
+pub(crate) fn prepare_static_config(
+    app: &Application,
+    component_name: &ComponentName,
+    agent_types: &[AgentTypeSchema],
+    include_owner: impl Fn(&AgentTypeName) -> bool,
+) -> anyhow::Result<Vec<StaticConfigFieldView>> {
+    let component = app.component(component_name);
+    let renderer = EnvVarRenderer::new();
+    let empty_catalog = Default::default();
+    let catalog = app.config_catalog().unwrap_or(&empty_catalog);
+    let mut fields = Vec::new();
+    let mut resolve = |agent_type: &AgentTypeName,
+                       graph: &SchemaGraph,
+                       declarations: &[AgentConfigDeclarationSchema],
+                       layers: &[ConfigLayer]|
+     -> anyhow::Result<()> {
+        if !include_owner(agent_type) {
+            return Ok(());
+        }
+        let code_origin = ConfigOrigin {
+            file: component.wasm(),
+            path: vec!["config".into()],
+            layer: "code".into(),
+            package: None,
+        };
+        let mut schema = ConfigSchema::from_declarations(graph, declarations, &code_origin)?;
+        for layer in layers {
+            validate_fills(
+                &layer.value,
+                &[],
+                &schema.fields,
+                &layer.origin,
+                catalog,
+                layer.project_to_owner,
+            )?;
+        }
+        schema.fields.retain(|field| {
+            declarations.iter().any(|declaration| {
+                declaration.path == field.path && declaration.source == AgentConfigSource::Local
+            })
+        });
+        if schema.fields.is_empty() {
+            return Ok(());
+        }
+        let layers = layers
+            .iter()
+            .map(|layer| ConfigLayer {
+                origin: layer.origin.clone(),
+                value: layer.value.clone(),
+                // Declared non-static fields are handled by their own provisioning path.
+                project_to_owner: true,
+            })
+            .collect::<Vec<_>>();
+        let plans = schema.resolve_with(catalog, &layers, &code_origin, &|value, origin| {
+            renderer
+                .render_json_value(value)
+                .map_err(|error| ConfigError {
+                    origin: origin.clone(),
+                    message: format!("cannot evaluate static config: {error}"),
+                })
+        })?;
+        for (declaration, plan) in schema.fields.iter().zip(plans) {
+            let ConfigSourcePlan::Static(value) = plan.source else {
+                bail!("Static data config cannot materialize managed descriptors");
+            };
+            let fill = to_json_value(&schema.graph, &declaration.value_type, &value)?;
+            let value = typed_schema_value_with_projected_defs(
+                &schema.graph,
+                declaration.value_type.clone(),
+                value,
+            );
+            fields.push(StaticConfigFieldView {
+                component: component_name.clone(),
+                agent_type: agent_type.clone(),
+                path: plan.path,
+                schema: value.graph().clone(),
+                fill: fill.into(),
+                sources: plan
+                    .origins
+                    .into_iter()
+                    .map(|(path, origin)| StaticConfigSource { path, origin })
+                    .collect(),
+                catalog_origin: plan.catalog_origin,
+            });
+        }
+        Ok(())
+    };
+    let mapping = agent_types
+        .iter()
+        .map(|agent| (agent.type_name.clone(), component_name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let agents = app.resolve_agents(&mapping)?;
+    for agent in agent_types {
+        resolve(
+            &agent.type_name,
+            &agent.schema,
+            &agent.config,
+            agents.agent(&agent.type_name).unwrap().config_layers(),
+        )
+        .with_context(|| format!("Invalid static config for agent {}", agent.type_name))?;
+    }
+    Ok(fields)
+}

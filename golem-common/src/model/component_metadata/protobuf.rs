@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::base_model::component_metadata::{
-    AgentTypeProvisionConfig, ComponentProvisionConfig, KnownExports,
+    AgentTypeProvisionConfig, ComponentProvisionConfig, ConfigBinding, ConfigBindingOrigin,
+    ConfigBindingSource, ConfigOriginLocation, KnownExports,
 };
 use crate::base_model::json::NormalizedJsonValue;
 use crate::model::account::{AccountEmail, AccountId};
@@ -153,11 +154,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata>
                 .into_iter()
                 .map(|(name, id)| Ok((ToolName::try_from(name)?, id.try_into()?)))
                 .collect::<Result<_, String>>()?,
-            config_schema: value
-                .config_schema
-                .map(TryInto::try_into)
-                .transpose()?
-                .unwrap_or_default(),
             component_provision_config: value
                 .component_provision_config
                 .map(TryInto::try_into)
@@ -273,7 +269,6 @@ impl TryFrom<ComponentMetadataInnerData>
                 .into_iter()
                 .map(|(name, id)| (name.into_inner(), id.get()))
                 .collect(),
-            config_schema: Some(value.config_schema.into()),
             component_provision_config: Some(value.component_provision_config.try_into()?),
             agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
             agent_method_streams: value
@@ -681,6 +676,94 @@ impl From<SecretKeyScope> for golem_api_grpc::proto::golem::component::SecretKey
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::component::ConfigBinding> for ConfigBinding {
+    type Error = String;
+
+    fn try_from(
+        proto: golem_api_grpc::proto::golem::component::ConfigBinding,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::config_binding::ValueSource;
+        Ok(Self {
+            path: proto.path,
+            value_source: match proto
+                .value_source
+                .ok_or("Missing config binding value source")?
+            {
+                ValueSource::Static(value) => ConfigBindingSource::Static(value.try_into()?),
+            },
+            origins: proto
+                .origins
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, String>>()?,
+        })
+    }
+}
+
+impl TryFrom<ConfigBinding> for golem_api_grpc::proto::golem::component::ConfigBinding {
+    type Error = String;
+
+    fn try_from(binding: ConfigBinding) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::config_binding::ValueSource;
+        Ok(Self {
+            path: binding.path,
+            value_source: Some(match binding.value_source {
+                ConfigBindingSource::Static(value) => ValueSource::Static(value.try_into()?),
+            }),
+            origins: binding.origins.into_iter().map(Into::into).collect(),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::ConfigBindingOrigin> for ConfigBindingOrigin {
+    type Error = String;
+
+    fn try_from(
+        origin: golem_api_grpc::proto::golem::component::ConfigBindingOrigin,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::config_binding_origin::Location;
+        Ok(Self {
+            value_path: origin.value_path,
+            location: match origin
+                .location
+                .ok_or("Missing config binding origin location")?
+            {
+                Location::ManifestFile(file) => ConfigOriginLocation::Manifest { file },
+                Location::ComponentMetadata(_) => ConfigOriginLocation::ComponentMetadata,
+                Location::Package(package) => ConfigOriginLocation::Package(
+                    crate::model::component_metadata::ConfigPackageOrigin {
+                        source: package.source,
+                        package_digest: package.package_digest,
+                    },
+                ),
+            },
+            source_path: origin.source_path,
+            layer: origin.layer,
+        })
+    }
+}
+
+impl From<ConfigBindingOrigin> for golem_api_grpc::proto::golem::component::ConfigBindingOrigin {
+    fn from(origin: ConfigBindingOrigin) -> Self {
+        use golem_api_grpc::proto::golem::component::config_binding_origin::Location;
+        Self {
+            value_path: origin.value_path,
+            location: Some(match origin.location {
+                ConfigOriginLocation::Manifest { file } => Location::ManifestFile(file),
+                ConfigOriginLocation::ComponentMetadata => Location::ComponentMetadata(true),
+                ConfigOriginLocation::Package(package) => Location::Package(
+                    golem_api_grpc::proto::golem::component::ConfigPackageOrigin {
+                        source: package.source,
+                        package_digest: package.package_digest,
+                    },
+                ),
+            }),
+            source_path: origin.source_path,
+            layer: origin.layer,
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig>
     for AgentTypeProvisionConfig
 {
@@ -690,13 +773,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig>
         proto: golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig,
     ) -> Result<Self, Self::Error> {
         use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
-        use crate::base_model::worker::TypedAgentConfigEntry;
-
         let config = proto
             .config
             .into_iter()
-            .map(TypedAgentConfigEntry::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(TryInto::try_into)
+            .collect::<Result<_, _>>()?;
 
         let plugins = proto
             .plugins
@@ -731,11 +812,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentProvisionConfig>
         Ok(Self {
             initial_permissions: crate::serialization::deserialize(&proto.initial_permissions)?,
             env: proto.env.into_iter().collect(),
-            config: proto
-                .config
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
             plugins: proto
                 .plugins
                 .into_iter()
@@ -759,11 +835,6 @@ impl TryFrom<ComponentProvisionConfig>
             initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                 .expect("failed to serialize component initial permission card"),
             env: config.env.into_iter().collect(),
-            config: config
-                .config
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
             plugins: config.plugins.into_iter().map(Into::into).collect(),
             files: config.files.into_iter().map(Into::into).collect(),
         })

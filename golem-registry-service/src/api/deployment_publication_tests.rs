@@ -414,3 +414,269 @@ async fn a_deploy_blocked_by_a_strict_following_grant_names_the_grant() {
     assert_eq!(zeta[0].lifecycle, ToolReleaseLifecycle::Published);
     assert_eq!(zeta[0].definition, zeta_tool(None));
 }
+
+#[test]
+#[timeout("120s")]
+async fn agent_config_defaults_are_resolved_only_when_config_is_supplied() {
+    use golem_common::model::agent::{
+        AgentConfigSource, AgentMode, AgentTypeName, Snapshotting, TypedAgentConfigEntry,
+    };
+    use golem_common::model::component::{
+        AgentTypeProvisionConfigUpdate, ComponentId, ComponentRevision, ComponentUpdate,
+        ConfigBindingDto,
+    };
+    use golem_common::model::component_metadata::{
+        AgentTypeProvisionConfig, ConfigBindingOrigin, ConfigOriginLocation,
+    };
+    use golem_common::model::json::NormalizedJsonValue;
+    use golem_common::schema::agent::{
+        AgentConfigDeclarationSchema, AgentConstructorSchema, AgentTypeKind, AgentTypeSchema,
+        InputSchema, typed_schema_value_with_projected_defs,
+    };
+    use golem_common::schema::{SchemaType, SchemaValue};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (config, db) = registry_config(directory.path());
+    let root = &config.initial_accounts["root"];
+    let mut tasks = JoinSet::new();
+    let services = Services::new_without_component_builtins(&config, &mut tasks)
+        .await
+        .unwrap();
+    let auth = services
+        .auth_service
+        .authenticate_token(root.token.clone().unwrap())
+        .await
+        .unwrap();
+    let app = services
+        .application_service
+        .create(
+            root.id,
+            ApplicationCreation {
+                name: ApplicationName("config-default-revisions".into()),
+            },
+            &auth,
+        )
+        .await
+        .unwrap();
+    let env = services
+        .environment_service
+        .create(
+            app.id,
+            EnvironmentCreation {
+                name: EnvironmentName("test".into()),
+                compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
+                version_check: false,
+                security_overrides: false,
+            },
+            &auth,
+        )
+        .await
+        .unwrap();
+    let declaration = |name: &str, default: &str| AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: vec![name.into()],
+        value_type: SchemaType::u32(),
+        default_value: Some(SchemaValue::U32(default.parse().unwrap())),
+    };
+    let agent_type_name = AgentTypeName("ConfigOwner".into());
+    let mut schema = AgentTypeSchema {
+        kind: AgentTypeKind::Regular,
+        type_name: agent_type_name.clone(),
+        description: String::new(),
+        source_language: String::new(),
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([]),
+        },
+        methods: vec![],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![declaration("timeout", "10")],
+    };
+    let initial_config = vec![
+        golem_common::model::component_metadata::ConfigBinding::from(TypedAgentConfigEntry {
+            path: vec!["timeout".into()],
+            value: typed_schema_value_with_projected_defs(
+                &schema.schema,
+                SchemaType::u32(),
+                SchemaValue::U32(10),
+            ),
+        }),
+    ];
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        vec![schema.clone()],
+        BTreeMap::from([(
+            agent_type_name.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions:
+                    golem_common::model::component::AgentTypeInitialPermissions::default()
+                        .to_polymorphic_card(),
+                env: BTreeMap::new(),
+                config: initial_config.clone(),
+                plugins: vec![],
+                files: vec![],
+            },
+        )]),
+    );
+    let component_id = ComponentId(Uuid::new_v4());
+    let pool = SqlitePool::configured(&db).await.unwrap();
+    let repo = DbComponentRepo::logged(pool.clone());
+    repo.create(
+        env.id.0,
+        "app:config",
+        ComponentRevisionRecord {
+            component_id: component_id.0,
+            revision_id: 0,
+            hash: SqlBlake3Hash::empty(),
+            audit: DeletableRevisionAuditFields::new(root.id.0),
+            size: 0.into(),
+            metadata: Blob::new(metadata),
+            object_store_key: String::new(),
+            binary_hash: SqlBlake3Hash::empty(),
+            package_metadata: None,
+        },
+        vec![],
+    )
+    .await
+    .unwrap();
+    pool.close().await;
+
+    schema.config = vec![declaration("timeout", "20"), declaration("attempts", "3")];
+    let update =
+        |current_revision, schema, config: Option<Vec<ConfigBindingDto>>| ComponentUpdate {
+            current_revision,
+            component_provision_config: None,
+            agent_types: Some(vec![schema]),
+            agent_type_provision_config_updates: config.map(|config| {
+                BTreeMap::from([(
+                    agent_type_name.clone(),
+                    AgentTypeProvisionConfigUpdate {
+                        config: Some(config),
+                        ..Default::default()
+                    },
+                )])
+            }),
+            tools: None,
+            tool_deployment_config_updates: None,
+            tool_middlewares: None,
+            tool_middleware_provision_config_updates: None,
+            allow_incompatible_config: false,
+            package_metadata: None,
+        };
+    let retained = services
+        .component_write_service
+        .update(
+            component_id,
+            update(ComponentRevision::INITIAL, schema.clone(), None),
+            Some(b"\0asm\r\0\x01\0".to_vec()),
+            None,
+            &auth,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        retained.metadata.agent_type_provision_configs()[&agent_type_name].config,
+        initial_config
+    );
+
+    // A type-compatible JSON number must not silently retype a retained u32 value.
+    let mut incompatible = schema.clone();
+    incompatible.config[0].value_type = SchemaType::u64();
+    assert!(
+        services
+            .component_write_service
+            .update(
+                component_id,
+                update(retained.revision, incompatible, None),
+                None,
+                None,
+                &auth,
+            )
+            .await
+            .is_err()
+    );
+
+    let origins = vec![ConfigBindingOrigin {
+        value_path: vec![],
+        location: ConfigOriginLocation::Manifest {
+            file: "config/golem.yaml".into(),
+        },
+        source_path: vec![
+            "components".into(),
+            "app:config".into(),
+            "config".into(),
+            "timeout".into(),
+        ],
+        layer: "component".into(),
+    }];
+    let mut revision = retained.revision;
+    for (config, expected_timeout) in [
+        (vec![], 20),
+        (
+            vec![ConfigBindingDto {
+                path: vec!["timeout".into()],
+                value: NormalizedJsonValue::new(json!(15)),
+                origins: Some(origins.clone()),
+            }],
+            15,
+        ),
+    ] {
+        let staged = services
+            .component_write_service
+            .update(
+                component_id,
+                update(revision, schema.clone(), Some(config)),
+                None,
+                None,
+                &auth,
+            )
+            .await
+            .unwrap();
+        let stored = staged.metadata.agent_type_provision_configs()[&agent_type_name]
+            .config
+            .iter()
+            .map(|entry| {
+                let golem_common::model::component_metadata::ConfigBindingSource::Static(value) =
+                    &entry.value_source;
+                (entry.path.join("."), value.value().clone())
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            stored,
+            BTreeMap::from([
+                ("timeout".into(), SchemaValue::U32(expected_timeout)),
+                ("attempts".into(), SchemaValue::U32(3)),
+            ])
+        );
+        let persisted = services
+            .component_service
+            .get_component_revision(component_id, staged.revision, &auth)
+            .await
+            .unwrap();
+        for binding in &persisted.metadata.agent_type_provision_configs()[&agent_type_name].config {
+            if binding.path == ["timeout"] && expected_timeout == 15 {
+                assert_eq!(binding.origins, origins);
+            } else {
+                assert!(binding.origins.is_empty());
+            }
+        }
+        revision = staged.revision;
+    }
+    let original = services
+        .component_service
+        .get_component_revision(component_id, ComponentRevision::INITIAL, &auth)
+        .await
+        .unwrap();
+    assert_eq!(
+        original.metadata.agent_type_provision_configs()[&agent_type_name].config,
+        initial_config
+    );
+}

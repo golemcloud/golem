@@ -534,28 +534,10 @@ pub struct AgentConfigDeclarationSchema {
     pub source: AgentConfigSource,
     pub path: Vec<String>,
     pub value_type: SchemaType,
-}
-
-/// Component-owned configuration declarations. Unlike an agent schema this contract can be
-/// declared and provisioned even when the component exports no agent types.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
-pub struct ComponentConfigSchema {
-    #[serde(default = "SchemaGraph::empty")]
-    pub schema: SchemaGraph,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub declarations: Vec<AgentConfigDeclarationSchema>,
-}
-
-impl Default for ComponentConfigSchema {
-    fn default() -> Self {
-        Self {
-            schema: SchemaGraph::empty(),
-            declarations: Vec::new(),
-        }
-    }
+    /// Static data in `value_type`. `Some(SchemaValue::Option { inner: None })` is an
+    /// explicit optional default; `None` means that no default was declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<SchemaValue>,
 }
 
 /// ID-free projection of an agent declaration and its implementer for discovery
@@ -635,6 +617,18 @@ impl AgentTypeSchema {
                 &dependency.methods,
             )?;
         }
+        #[cfg(feature = "full")]
+        crate::schema::config::ConfigSchema::from_declarations(
+            &self.schema,
+            &self.config,
+            &crate::schema::config::ConfigOrigin {
+                file: format!("<{}>", self.type_name).into(),
+                path: vec!["config".into()],
+                layer: "code".into(),
+                package: None,
+            },
+        )
+        .map_err(|error| error.to_string())?;
         Ok(())
     }
 }

@@ -69,6 +69,24 @@ impl<L: Layer, T: Serialize> Default for VecProperty<L, T> {
 }
 
 impl<L: Layer, T: Serialize> VecProperty<L, T> {
+    pub fn for_each_value_mut(&mut self, mut visit: impl FnMut(&mut T)) {
+        for value in &mut self.value {
+            visit(value);
+        }
+        for element in &mut self.trace {
+            let values = match element {
+                VecPropertyTraceElem::Append { appended_elems, .. } => appended_elems,
+                VecPropertyTraceElem::Prepend {
+                    prepended_elems, ..
+                } => prepended_elems,
+                VecPropertyTraceElem::Replace { new_elems, .. } => new_elems,
+            };
+            for value in values {
+                visit(value);
+            }
+        }
+    }
+
     pub fn new(vec: Vec<T>) -> Self {
         Self {
             value: vec,

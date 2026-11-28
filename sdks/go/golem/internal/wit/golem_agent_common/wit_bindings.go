@@ -42,6 +42,7 @@ import (
 type SchemaGraph = golem_core_types.SchemaGraph
 type TypeNodeIndex = int32
 type TypedSchemaValue = golem_core_types.TypedSchemaValue
+type SchemaValueTree = golem_core_types.SchemaValueTree
 type MetadataEnvelope = golem_core_types.MetadataEnvelope
 type AgentId = golem_core_types.AgentId
 type AccountId = golem_core_types.AccountId
@@ -557,6 +558,8 @@ type AgentConfigDeclaration struct {
 	Path   []string
 	// Index into the owning agent-type `schema` graph.
 	ValueType int32
+	// Static data in the declared value type. Absence differs from an option-none value.
+	DefaultValue witTypes.Option[golem_core_types.SchemaValueTree]
 }
 
 // Full agent type declaration.

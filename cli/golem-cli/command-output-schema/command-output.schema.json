@@ -199,6 +199,12 @@
       "$ref": "#/definitions/clean"
     },
     {
+      "$ref": "#/definitions/config.list"
+    },
+    {
+      "$ref": "#/definitions/config.get"
+    },
+    {
       "$ref": "#/definitions/deploy.plan"
     },
     {
@@ -4485,6 +4491,73 @@
       },
       "additionalProperties": false
     },
+    "ConfigOrigin": {
+      "type": "object",
+      "required": ["file", "path", "layer", "package"],
+      "properties": {
+        "file": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "layer": { "type": "string" },
+        "package": { "oneOf": [{ "$ref": "#/definitions/ConfigPackageOrigin" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "ConfigPackageOrigin": {
+      "type": "object",
+      "required": ["source", "packageDigest"],
+      "properties": {
+        "source": { "type": "string" },
+        "packageDigest": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "StaticConfigSource": {
+      "type": "object",
+      "required": ["path", "origin"],
+      "properties": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "origin": { "$ref": "#/definitions/ConfigOrigin" }
+      },
+      "additionalProperties": false
+    },
+    "StaticConfigFieldView": {
+      "type": "object",
+      "required": ["component", "agentType", "path", "schema", "fill", "sources", "catalogOrigin"],
+      "properties": {
+        "component": { "type": "string" },
+        "agentType": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "fill": {},
+        "sources": { "type": "array", "items": { "$ref": "#/definitions/StaticConfigSource" } },
+        "catalogOrigin": { "oneOf": [{ "$ref": "#/definitions/ConfigOrigin" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "config.list": {
+      "type": "object",
+      "description": "Static declarations, effective fills and source layers from the local manifest and built component metadata. This is not deployed-state inspection.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "config list",
+      "required": ["$type", "fields"],
+      "properties": {
+        "$type": { "const": "config.list" },
+        "fields": { "type": "array", "items": { "$ref": "#/definitions/StaticConfigFieldView" } }
+      },
+      "additionalProperties": false
+    },
+    "config.get": {
+      "type": "object",
+      "description": "One exact static declaration with its effective local fill and source layers. Secret values are excluded.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "config get",
+      "required": ["$type", "field"],
+      "properties": {
+        "$type": { "const": "config.get" },
+        "field": { "$ref": "#/definitions/StaticConfigFieldView" }
+      },
+      "additionalProperties": false
+    },
     "deploy.plan": {
       "type": "object",
       "description": "May be emitted by `golem deploy` when planning includes deployment or environment setup changes. Other deploy output documents may also appear in the same command run.",
@@ -4723,14 +4796,10 @@
     },
     "component.manifest-trace": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem component manifest-trace`.",
-      "x-golem-output-mode": "single",
+      "description": "Manifest property traces. manifestOnly is true by default, and no existing Wasm is inspected. --build incrementally builds components and adds agent traces, schema-validated static values and provenance from local component metadata, not deployed state.",
+      "x-golem-output-mode": "stream",
       "x-golem-command": "component manifest-trace",
-      "required": [
-        "$type",
-        "componentName",
-        "properties"
-      ],
+      "required": ["$type", "componentName", "manifestOnly", "properties", "resolvedConfig"],
       "properties": {
         "$type": {
           "const": "component.manifest-trace"
@@ -4738,12 +4807,24 @@
         "componentName": {
           "type": "string"
         },
+        "manifestOnly": {
+          "type": "boolean"
+        },
         "properties": {
           "$ref": "#/definitions/ComponentLayerProperties"
         },
+        "resolvedConfig": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/StaticConfigFieldView" }
+            }
+          ]
+        },
         "agents": {
           "type": "object",
-          "description": "The resolved layers of each agent type, keyed by agent type name. Absent when the component is not built.",
+          "description": "The resolved layers of each agent type, keyed by agent type name. Absent in manifest-only mode.",
           "additionalProperties": { "$ref": "#/definitions/AgentLayerProperties" }
         }
       },
@@ -4759,7 +4840,6 @@
         "build",
         "customCommands",
         "clean",
-        "configSchema",
         "nodeHttpRouters",
         "config",
         "env",
@@ -4777,7 +4857,6 @@
         "build": { "$ref": "#/definitions/ComponentLayerBuildCommandVecProperty" },
         "customCommands": { "$ref": "#/definitions/ComponentLayerCustomCommandsMapProperty" },
         "clean": { "$ref": "#/definitions/ComponentLayerStringVecProperty" },
-        "configSchema": { "$ref": "#/definitions/ComponentLayerConfigSchemaProperty" },
         "nodeHttpRouters": { "$ref": "#/definitions/ComponentLayerNodeHttpRoutersProperty" },
         "config": { "$ref": "#/definitions/ComponentLayerJsonProperty" },
         "envMergeMode": { "$ref": "#/definitions/MapMergeMode" },
@@ -4845,6 +4924,12 @@
         },
         {
           "type": "object",
+          "required": ["agentPackage"],
+          "properties": { "agentPackage": { "type": "string" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
           "required": [
             "agentTemplate"
           ],
@@ -4893,6 +4978,57 @@
             "agentCustomPresets": {
               "type": "string"
             }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "JsonMergeMode": { "type": "string", "enum": ["merge-object-replace-other"] },
+    "ComponentLayerJsonProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "$ref": "#/definitions/JsonValue" },
+        "trace": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ComponentLayerJsonTraceElem" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerJsonTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "const": "object-merge" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "insertedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } },
+            "updatedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "id", "mode", "newValue"],
+          "properties": {
+            "type": { "const": "replace" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "mode": { "$ref": "#/definitions/JsonMergeMode" },
+            "newValue": { "$ref": "#/definitions/JsonValue" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "const": "skip" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" }
           },
           "additionalProperties": false
         }
@@ -5545,48 +5681,6 @@
       },
       "additionalProperties": false
     },
-    "ComponentLayerConfigSchemaProperty": {
-      "type": "object",
-      "required": ["value", "trace"],
-      "properties": {
-        "value": {
-          "oneOf": [
-            { "type": "null" },
-            { "$ref": "#/definitions/ComponentConfigSchema" }
-          ]
-        },
-        "trace": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/ComponentLayerConfigSchemaTraceElem" }
-        }
-      },
-      "additionalProperties": false
-    },
-    "ComponentLayerConfigSchemaTraceElem": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": ["type", "id", "value"],
-          "properties": {
-            "type": { "const": "override" },
-            "id": { "$ref": "#/definitions/ComponentLayerId" },
-            "selection": { "type": "string" },
-            "value": { "$ref": "#/definitions/ComponentConfigSchema" }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["type", "id"],
-          "properties": {
-            "type": { "const": "skip" },
-            "id": { "$ref": "#/definitions/ComponentLayerId" },
-            "selection": { "type": "string" }
-          },
-          "additionalProperties": false
-        }
-      ]
-    },
     "ComponentLayerNodeHttpRoutersProperty": {
       "type": "object",
       "required": ["value", "trace"],
@@ -5649,25 +5743,14 @@
       },
       "additionalProperties": false
     },
-    "ComponentConfigSchema": {
-      "type": "object",
-      "required": ["schema"],
-      "properties": {
-        "schema": { "$ref": "#/definitions/SchemaGraph" },
-        "declarations": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/AgentConfigDeclarationSchema" }
-        }
-      },
-      "additionalProperties": false
-    },
     "AgentConfigDeclarationSchema": {
       "type": "object",
       "required": ["source", "path", "value_type"],
       "properties": {
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
-        "value_type": { "$ref": "#/definitions/SchemaType" }
+        "value_type": { "$ref": "#/definitions/SchemaType" },
+        "default_value": { "$ref": "#/definitions/SchemaValue", "description": "Native schema value for a static declaration default." }
       },
       "additionalProperties": false
     },
@@ -6314,59 +6397,8 @@
         { "type": "array", "items": { "type": "string" } }
       ]
     },
-    "ComponentLayerJsonProperty": {
-      "type": "object",
-      "required": ["value", "trace"],
-      "properties": {
-        "value": { "$ref": "#/definitions/JsonValue" },
-        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerJsonTraceElem" } }
-      },
-      "additionalProperties": false
-    },
-    "ComponentLayerJsonTraceElem": {
-      "oneOf": [
-        { "$ref": "#/definitions/ComponentLayerJsonObjectMergeTraceElem" },
-        { "$ref": "#/definitions/ComponentLayerJsonReplaceTraceElem" },
-        { "$ref": "#/definitions/ComponentLayerJsonSkipTraceElem" }
-      ]
-    },
-    "ComponentLayerJsonObjectMergeTraceElem": {
-      "type": "object",
-      "required": ["type", "id"],
-      "properties": {
-        "type": { "const": "object-merge" },
-        "id": { "$ref": "#/definitions/ComponentLayerId" },
-        "selection": { "type": "string" },
-        "insertedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } },
-        "updatedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } }
-      },
-      "additionalProperties": false
-    },
-    "ComponentLayerJsonReplaceTraceElem": {
-      "type": "object",
-      "required": ["type", "id", "mode", "newValue"],
-      "properties": {
-        "type": { "const": "replace" },
-        "id": { "$ref": "#/definitions/ComponentLayerId" },
-        "selection": { "type": "string" },
-        "mode": { "$ref": "#/definitions/JsonMergeMode" },
-        "newValue": { "$ref": "#/definitions/JsonValue" }
-      },
-      "additionalProperties": false
-    },
-    "ComponentLayerJsonSkipTraceElem": {
-      "type": "object",
-      "required": ["type", "id"],
-      "properties": {
-        "type": { "const": "skip" },
-        "id": { "$ref": "#/definitions/ComponentLayerId" },
-        "selection": { "type": "string" }
-      },
-      "additionalProperties": false
-    },
     "VecMergeMode": { "type": "string", "enum": ["append", "prepend", "replace"] },
     "MapMergeMode": { "type": "string", "enum": ["upsert", "replace", "remove"] },
-    "JsonMergeMode": { "type": "string", "enum": ["merge-object-replace-other"] },
     "StringMap": {
       "type": "object",
       "additionalProperties": { "type": "string" }
@@ -7227,13 +7259,84 @@
       "type": "object",
       "required": ["env", "config", "plugins", "files", "initialPermissions"],
       "properties": {
-        "env": { "type": "object", "additionalProperties": { "type": "string" } },
-        "config": { "type": "array", "items": { "$ref": "#/definitions/TypedAgentConfigEntry" } },
-        "plugins": { "type": "array", "items": { "$ref": "#/definitions/InstalledPlugin" } },
-        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "config": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ConfigBinding" }
+        },
+        "plugins": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/InstalledPlugin" }
+        },
+        "files": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/InitialAgentFile" }
+        },
         "initialPermissions": { "$ref": "#/definitions/PolymorphicCard" }
       },
       "additionalProperties": false
+    },
+    "ConfigBinding": {
+      "type": "object",
+      "required": ["path", "valueSource"],
+      "properties": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "valueSource": { "$ref": "#/definitions/ConfigBindingSource" },
+        "origins": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ConfigBindingOrigin" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConfigBindingSource": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "static" },
+        "value": { "$ref": "#/definitions/TypedSchemaValue" }
+      },
+      "additionalProperties": false
+    },
+    "ConfigBindingOrigin": {
+      "type": "object",
+      "required": ["valuePath", "location", "sourcePath", "layer"],
+      "properties": {
+        "valuePath": { "type": "array", "items": { "type": "string" } },
+        "location": { "$ref": "#/definitions/ConfigOriginLocation" },
+        "sourcePath": { "type": "array", "items": { "type": "string" } },
+        "layer": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ConfigOriginLocation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "file"],
+          "properties": { "kind": { "const": "manifest" }, "file": { "type": "string" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "componentMetadata" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "source", "packageDigest"],
+          "properties": {
+            "kind": { "const": "package" },
+            "source": { "type": "string" },
+            "packageDigest": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "TypedAgentConfigEntry": {
       "type": "object",
@@ -9266,7 +9369,8 @@
       "properties": {
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
-        "value_type": { "$ref": "#/definitions/SchemaType" }
+        "value_type": { "$ref": "#/definitions/SchemaType" },
+        "default_value": { "$ref": "#/definitions/SchemaValue", "description": "Native schema value for a static declaration default." }
       },
       "additionalProperties": false
     },
@@ -12211,6 +12315,14 @@
     {
       "type": "clean",
       "rustType": "CleanResult"
+    },
+    {
+      "type": "config.list",
+      "rustType": "ConfigListView"
+    },
+    {
+      "type": "config.get",
+      "rustType": "ConfigGetView"
     },
     {
       "type": "deploy.plan",

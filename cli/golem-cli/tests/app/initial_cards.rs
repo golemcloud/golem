@@ -176,6 +176,10 @@ async fn manifest_trace_with_build_shows_the_component_initial_card_of_the_agent
         serde_json::json!({ "component": component_name }),
         "the trace does not name the component as the source of the card: {trace}"
     );
+
+    let manifest_only = manifest_trace(&ctx, &component_name, false).await;
+    assert_eq!(manifest_only["manifestOnly"], true);
+    assert!(manifest_only.get("agents").is_none());
 }
 
 /// Returns the JSON manifest trace of the component.

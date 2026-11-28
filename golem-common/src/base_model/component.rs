@@ -15,7 +15,7 @@
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentFileContentHash;
 use crate::base_model::application::ApplicationId;
-use crate::base_model::component_metadata::ComponentMetadataDto;
+use crate::base_model::component_metadata::{ComponentMetadataDto, ConfigBindingOrigin};
 use crate::base_model::diff;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -25,13 +25,12 @@ use crate::base_model::path::{AgentFilePath, ArchiveFilePath};
 use crate::base_model::plugin_registration::PluginRegistrationId;
 use crate::base_model::tool::{ToolBindingInput, ToolName};
 use crate::base_model::validate_lower_kebab_case_identifier;
-use crate::base_model::worker::AgentConfigEntryDto;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::recipient::RecipientPattern;
 use crate::model::card::{
     PolymorphicCard, PolymorphicPermissionPattern, default_agent_initial_permission_grants,
 };
-use crate::schema::agent::{AgentTypeSchema, ComponentConfigSchema};
+use crate::schema::agent::AgentTypeSchema;
 use crate::schema::tool::Tool;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -49,6 +48,22 @@ newtype_uuid!(
 );
 
 declare_revision!(ComponentRevision);
+
+#[cfg(feature = "full")]
+impl From<crate::base_model::component_metadata::ConfigBinding> for ConfigBindingDto {
+    fn from(binding: crate::base_model::component_metadata::ConfigBinding) -> Self {
+        let crate::base_model::component_metadata::ConfigBindingSource::Static(value) =
+            binding.value_source;
+        let json =
+            crate::schema::render::to_json_value(value.graph(), value.root_type(), value.value())
+                .expect("stored config binding must render to JSON");
+        Self {
+            path: binding.path,
+            value: json.into(),
+            origins: (!binding.origins.is_empty()).then_some(binding.origins),
+        }
+    }
+}
 
 declare_transparent_newtypes! {
     #[derive(Display, Eq, Hash, PartialOrd, Ord)]
@@ -155,9 +170,6 @@ declare_structs! {
         pub package_metadata: Option<ComponentPackageMetadata>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub config_schema: ComponentConfigSchema,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
         pub component_provision_config: ComponentProvisionConfigCreation,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -184,7 +196,6 @@ declare_structs! {
         /// Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub package_metadata: Option<ComponentPackageMetadata>,
-        pub config_schema: Option<ComponentConfigSchema>,
         pub component_provision_config: Option<ComponentProvisionConfigCreation>,
         pub agent_types: Option<Vec<AgentTypeSchema>>,
         #[serde(default)]
@@ -207,6 +218,15 @@ declare_structs! {
         pub allow_incompatible_config: bool,
     }
 
+    /// Provisioning input; the owner schema determines the stored value's type.
+    pub struct ConfigBindingDto {
+        pub path: Vec<String>,
+        pub value: NormalizedJsonValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
+        pub origins: Option<Vec<ConfigBindingOrigin>>,
+    }
+
     pub struct AgentTypeProvisionConfigCreation {
         pub initial_permissions: AgentTypeInitialPermissions,
         #[serde(default)]
@@ -214,7 +234,7 @@ declare_structs! {
         pub env: BTreeMap<String, String>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub config: Vec<AgentConfigEntryDto>,
+        pub config: Vec<ConfigBindingDto>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub plugin_installations: Vec<PluginInstallation>,
@@ -230,9 +250,6 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub env: BTreeMap<String, String>,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
-        pub config: Vec<AgentConfigEntryDto>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub plugin_installations: Vec<PluginInstallation>,
@@ -298,7 +315,7 @@ declare_structs! {
         #[cfg_attr(feature = "full", oai(default))]
         pub initial_permissions: Option<AgentTypeInitialPermissions>,
         pub env: Option<BTreeMap<String, String>>,
-        pub config: Option<Vec<AgentConfigEntryDto>>,
+        pub config: Option<Vec<ConfigBindingDto>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub plugin_updates: Vec<PluginInstallationAction>,
@@ -475,10 +492,14 @@ impl AgentFilePermissions {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation, ComponentCreation};
+    use super::{
+        AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation, ComponentCreation,
+        ComponentProvisionConfigCreation, ConfigBindingDto,
+    };
     use crate::model::agent::AgentTypeName;
     use crate::model::card::recipient::RecipientPattern;
     use crate::model::component::ComponentName;
+    use crate::model::component_metadata::ConfigBindingOrigin;
     use std::collections::BTreeMap;
     use test_r::test;
 
@@ -515,11 +536,18 @@ mod tests {
     #[cfg(feature = "full")]
     #[test]
     fn component_creation_with_initial_permission_parses_from_openapi_json() {
+        let origin = ConfigBindingOrigin {
+            value_path: vec!["timeout".into()],
+            location: crate::base_model::component_metadata::ConfigOriginLocation::Manifest {
+                file: "config/golem.yaml".into(),
+            },
+            source_path: vec!["config".into(), "local".into(), "timeout".into()],
+            layer: "application".into(),
+        };
         let creation = ComponentCreation {
             package_metadata: None,
             component_name: ComponentName("counter:ts-main".to_string()),
-            config_schema: Default::default(),
-            component_provision_config: Default::default(),
+            component_provision_config: ComponentProvisionConfigCreation::default(),
             agent_types: Vec::new(),
             agent_type_provision_configs: BTreeMap::from([(
                 AgentTypeName("CounterAgent".to_string()),
@@ -538,7 +566,18 @@ mod tests {
                         },
                     ),
                     env: BTreeMap::new(),
-                    config: Vec::new(),
+                    config: vec![
+                        ConfigBindingDto {
+                            path: vec!["attempts".into()],
+                            value: serde_json::json!(3).into(),
+                            origins: None,
+                        },
+                        ConfigBindingDto {
+                            path: vec!["settings".into()],
+                            value: serde_json::json!({"timeout": 1500}).into(),
+                            origins: Some(vec![origin]),
+                        },
+                    ],
                     plugin_installations: Vec::new(),
                     files: BTreeMap::new(),
                 },
@@ -548,9 +587,29 @@ mod tests {
             tool_middlewares: Vec::new(),
             tool_middleware_provision_configs: BTreeMap::new(),
         };
-        let value = serde_json::to_value(&creation).unwrap();
-
-        <ComponentCreation as poem_openapi::types::ParseFromJSON>::parse_from_json(Some(value))
-            .unwrap();
+        for value in [
+            serde_json::to_value(&creation).unwrap(),
+            poem_openapi::types::ToJSON::to_json(&creation).unwrap(),
+        ] {
+            assert!(
+                value["agentTypeProvisionConfigs"]["CounterAgent"]["config"][0]
+                    .get("origins")
+                    .is_none()
+            );
+            assert!(value.get("configSchema").is_none());
+            assert!(value["componentProvisionConfig"].get("config").is_none());
+            let parsed =
+                <ComponentCreation as poem_openapi::types::ParseFromJSON>::parse_from_json(Some(
+                    value.clone(),
+                ))
+                .unwrap();
+            let serde_parsed: ComponentCreation = serde_json::from_value(value).unwrap();
+            for parsed in [parsed, serde_parsed] {
+                assert_eq!(
+                    parsed.agent_type_provision_configs,
+                    creation.agent_type_provision_configs
+                );
+            }
+        }
     }
 }

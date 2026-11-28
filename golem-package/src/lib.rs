@@ -19,7 +19,7 @@ use golem_common::model::agent::{
 use golem_common::model::component::{AgentFilePath, AgentFilePermissions, ComponentName};
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::ToolMiddlewareName;
-use golem_common::schema::agent::{AgentConfigDeclarationSchema, ComponentConfigSchema};
+use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::{SchemaGraph, SchemaType};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -102,7 +102,6 @@ pub struct PackageConfig {
 pub struct PackageComponent {
     pub wasm: String,
     pub metadata: ExtractedComponentMetadata,
-    pub config_schema: ComponentConfigSchema,
     pub provision: PackageProvision,
     pub agents: BTreeMap<AgentTypeName, PackageProvision>,
     pub tools: BTreeMap<ToolName, PackageProvision>,
@@ -596,26 +595,20 @@ fn layers_for(config: &PackageConfig) -> anyhow::Result<Vec<(&str, String)>> {
     let mut middlewares = BTreeSet::new();
     for (name, component) in &config.components {
         layers.push((WASM, component.wasm.clone()));
-        layers.extend(file_layers(
-            &component.provision,
-            file_default_paths(
-                &component.provision.config,
-                &component.config_schema.schema,
-                &component.config_schema.declarations,
-            )?,
-        )?);
-        reject_secret_defaults(
-            &component.provision.config,
-            &component.config_schema.schema,
-            &component.config_schema.declarations,
-        )
-        .with_context(|| format!("Invalid default in component {name}"))?;
+        layers.extend(file_layers(&component.provision, BTreeSet::new())?);
         for agent in &component.metadata.agent_types {
             ensure!(
                 agents.insert(&agent.type_name),
                 "Duplicate agent type {} in component {name}",
                 agent.type_name
             );
+            reject_secret_defaults(&component.provision.config, &agent.schema, &agent.config)
+                .with_context(|| {
+                    format!(
+                        "Invalid inherited default in agent {} of {name}",
+                        agent.type_name
+                    )
+                })?;
             if let Some(provision) = component.agents.get(&agent.type_name) {
                 layers.extend(file_layers(
                     provision,

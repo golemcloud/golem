@@ -18,7 +18,7 @@ use crate::base_model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolM
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicCard;
-use crate::schema::{AgentTypeSchema, ComponentConfigSchema};
+use crate::schema::{AgentTypeSchema, TypedSchemaValue};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -192,10 +192,6 @@ pub struct ComponentMetadataInnerData {
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
 
-    #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
-    pub config_schema: ComponentConfigSchema,
-
     pub component_provision_config: ComponentProvisionConfig,
 
     #[serde(default)]
@@ -232,9 +228,6 @@ crate::declare_structs! {
         pub known_exports: KnownExports,
         pub producers: Vec<Producers>,
         pub memories: Vec<LinearMemory>,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
-        pub config_schema: ComponentConfigSchema,
         pub component_provision_config: ComponentProvisionConfig,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -273,7 +266,6 @@ impl From<ComponentMetadata> for ComponentMetadataDto {
             known_exports: data.known_exports,
             producers: data.producers,
             memories: data.memories,
-            config_schema: data.config_schema,
             component_provision_config: data.component_provision_config,
             agent_types: data
                 .agent_types
@@ -333,7 +325,6 @@ impl From<ComponentMetadataDto> for ComponentMetadata {
                 known_exports: value.known_exports,
                 producers: value.producers,
                 memories: value.memories,
-                config_schema: value.config_schema,
                 component_provision_config: value.component_provision_config,
                 agent_types,
                 agent_type_ids,
@@ -343,6 +334,95 @@ impl From<ComponentMetadataDto> for ComponentMetadata {
                 tools,
                 tool_middlewares: value.tool_middlewares,
             }),
+        }
+    }
+}
+
+pub type ConfigBindings = Vec<ConfigBinding>;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigBinding {
+    pub path: Vec<String>,
+    pub value_source: ConfigBindingSource,
+    /// Audit information, not an input to value resolution, authorization or deployment hashing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "full", oai(default, skip_serializing_if_is_empty))]
+    pub origins: Vec<ConfigBindingOrigin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+/// How a field obtains its value. Managed Shared and Secret sources and unbound
+/// optional Shared fields require distinct variants rather than static payloads.
+pub enum ConfigBindingSource {
+    Static(TypedSchemaValue),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigBindingOrigin {
+    /// Relative to the binding's value; an empty path addresses the whole value.
+    pub value_path: Vec<String>,
+    pub location: ConfigOriginLocation,
+    /// Position in the supplying document or component metadata.
+    pub source_path: Vec<String>,
+    /// Display label only; consumers must not parse it to recover layer semantics.
+    pub layer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigPackageOrigin {
+    pub source: String,
+    pub package_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConfigOriginLocation {
+    Manifest {
+        /// Portable manifest path, never a build-machine absolute path.
+        file: String,
+    },
+    /// Identified by the component revision that contains the binding.
+    ComponentMetadata,
+    Package(ConfigPackageOrigin),
+}
+
+impl From<TypedAgentConfigEntry> for ConfigBinding {
+    fn from(entry: TypedAgentConfigEntry) -> Self {
+        Self {
+            path: entry.path,
+            value_source: ConfigBindingSource::Static(entry.value),
+            origins: Vec::new(),
         }
     }
 }
@@ -360,8 +440,6 @@ pub struct ComponentProvisionConfig {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    pub config: Vec<TypedAgentConfigEntry>,
-    #[serde(default)]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]
     pub files: Vec<InitialAgentFile>,
@@ -373,7 +451,6 @@ impl Default for ComponentProvisionConfig {
             initial_permissions: crate::model::component::AgentTypeInitialPermissions::default()
                 .to_polymorphic_card(),
             env: BTreeMap::new(),
-            config: Vec::new(),
             plugins: Vec::new(),
             files: Vec::new(),
         }
@@ -415,7 +492,7 @@ pub struct AgentTypeProvisionConfig {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    pub config: Vec<TypedAgentConfigEntry>,
+    pub config: ConfigBindings,
     #[serde(default)]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]

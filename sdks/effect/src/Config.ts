@@ -194,6 +194,7 @@ export const compileConfig = (
           source: leaf.source,
           path: [...leaf.path],
           valueType: indices[i]!,
+          defaultValue: undefined,
         }))
       },
       buildShape: compiledConfigRuntime(

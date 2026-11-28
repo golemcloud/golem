@@ -15,8 +15,11 @@
 #[cfg(feature = "full")]
 use crate::base_model::canonicalize_agent_path;
 use crate::base_model::render_config_path;
-use crate::declare_transparent_newtypes;
+use crate::{declare_revision, declare_transparent_newtypes, newtype_uuid};
 use std::fmt::Display;
+
+newtype_uuid!(SharedConfigId);
+declare_revision!(SharedConfigRevision);
 
 declare_transparent_newtypes! {
     /// Canonical representation of an agent config path (segments are each camelCase)

@@ -49,6 +49,7 @@ impl RecordConfigComponentService {
                         "optionalField",
                         SchemaType::option(SchemaType::string()),
                     )])),
+                    default_value: None,
                 });
             }
         }
