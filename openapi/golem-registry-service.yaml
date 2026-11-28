@@ -12725,6 +12725,11 @@ components:
           $ref: '#/components/schemas/SchemaGraph'
         secretValue:
           $ref: '#/components/schemas/ExternalSchemaValue'
+        destinations:
+          type: array
+          default: []
+          items:
+            type: string
     AgentSecretDto:
       type: object
       title: AgentSecretDto
@@ -12734,6 +12739,8 @@ components:
       - path
       - revision
       - secretType
+      - hasValue
+      - destinations
       properties:
         id:
           type: string
@@ -12751,8 +12758,12 @@ components:
           format: uint64
         secretType:
           $ref: '#/components/schemas/SchemaGraph'
-        secretValue:
-          $ref: '#/components/schemas/ExternalSchemaValue'
+        hasValue:
+          type: boolean
+        destinations:
+          type: array
+          items:
+            type: string
     AgentSecretUpdate:
       type: object
       title: AgentSecretUpdate
@@ -12763,7 +12774,14 @@ components:
           type: integer
           format: uint64
         secretValue:
-          $ref: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue'
+          default: null
+          allOf:
+          - $ref: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue'
+          - default: null
+        destinations:
+          type: array
+          items:
+            type: string
     AgentTypeInitialPermissions:
       type: object
       title: AgentTypeInitialPermissions

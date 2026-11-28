@@ -337,7 +337,8 @@ declare_structs! {
         pub path: CanonicalAgentSecretPath,
         pub revision: AgentSecretRevision,
         pub secret_type: SchemaGraph,
-        pub secret_value: Option<SchemaValue>,
+        pub has_value: bool,
+        pub destinations: Vec<String>,
     }
 
     pub struct AgentSecretCreation {

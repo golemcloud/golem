@@ -26043,6 +26043,11 @@ components:
           $ref: '#/components/schemas/SchemaGraph'
         secretValue:
           $ref: '#/components/schemas/ExternalSchemaValue'
+        destinations:
+          default: []
+          type: array
+          items:
+            type: string
       required:
       - path
       - secretType
@@ -26066,14 +26071,20 @@ components:
           format: uint64
         secretType:
           $ref: '#/components/schemas/SchemaGraph'
-        secretValue:
-          $ref: '#/components/schemas/ExternalSchemaValue'
+        hasValue:
+          type: boolean
+        destinations:
+          type: array
+          items:
+            type: string
       required:
       - id
       - environmentId
       - path
       - revision
       - secretType
+      - hasValue
+      - destinations
     AgentSecretUpdate:
       title: AgentSecretUpdate
       type: object
@@ -26082,7 +26093,13 @@ components:
           type: integer
           format: uint64
         secretValue:
-          $ref: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue'
+          allOf:
+          - $ref: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue'
+          - {}
+        destinations:
+          type: array
+          items:
+            type: string
       required:
       - currentRevision
     AgentTypeInitialPermissions:

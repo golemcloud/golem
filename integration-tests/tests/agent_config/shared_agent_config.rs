@@ -130,6 +130,7 @@ async fn agent_reads_secret_updated_from_default(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
+                destinations: Vec::new(),
                 path: AgentSecretPath(vec!["secret".into()]),
                 secret_type: SchemaGraph::anonymous(SchemaType::string()),
                 secret_value: None,

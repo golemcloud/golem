@@ -337,6 +337,7 @@ async fn prepare_consumer(
         .create_agent_secret(
             &environment.id.0,
             &AgentSecretCreation {
+                destinations: Vec::new(),
                 path: AgentSecretPath(vec!["secret".to_string()]),
                 secret_type: SchemaGraph::anonymous(SchemaType::string()),
                 secret_value: Some(

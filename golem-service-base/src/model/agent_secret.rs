@@ -50,7 +50,12 @@ impl From<AgentSecret> for golem_common::model::agent_secret::AgentSecretDto {
             path: value.path,
             revision: value.revision,
             secret_type: value.secret_type,
-            secret_value: value.secret_value,
+            has_value: value.secret_value.is_some(),
+            destinations: value
+                .destinations
+                .into_iter()
+                .map(|d| d.to_string())
+                .collect(),
         }
     }
 }
@@ -129,6 +134,41 @@ mod tests {
     use golem_common::model::{AgentFingerprint, AgentId};
     use golem_common::schema::SchemaType;
     use test_r::test;
+
+    #[test]
+    fn management_projection_reports_presence_without_values() {
+        for value in [
+            None,
+            Some(SchemaValue::Bool(false)),
+            Some(SchemaValue::String(String::new())),
+            Some(SchemaValue::Option { inner: None }),
+            Some(SchemaValue::String("private-marker".to_string())),
+        ] {
+            let has_value = value.is_some();
+            let secret = AgentSecret {
+                id: AgentSecretId::new(),
+                owner: AgentSecretOwner::Environment,
+                destinations: vec!["https://*.example.com:8443".parse().unwrap()],
+                environment_id: EnvironmentId::new(),
+                path: CanonicalAgentSecretPath(vec!["credential".to_string()]),
+                revision: AgentSecretRevision::INITIAL,
+                secret_type: SchemaGraph::anonymous(SchemaType::string()),
+                secret_value: value,
+            };
+            let domain = golem_common::model::agent_secret::AgentSecretDto::from(secret);
+            let domain_json = serde_json::to_value(&domain).unwrap();
+            let external = golem_common::model::external_agent_secret::AgentSecretDto::from(domain);
+            for json in [domain_json, serde_json::to_value(external).unwrap()] {
+                assert_eq!(json["hasValue"], has_value);
+                assert_eq!(
+                    json["destinations"],
+                    serde_json::json!(["https://*.example.com:8443"])
+                );
+                assert!(json.get("secretValue").is_none());
+                assert!(!json.to_string().contains("private-marker"));
+            }
+        }
+    }
 
     #[test]
     fn agent_secret_wire_preserves_owner_and_destinations() {

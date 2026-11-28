@@ -406,7 +406,7 @@ pub fn build_environment_setup_plan(
             continue;
         };
         match current_secrets_by_path.get(&key) {
-            Some(current) if current.secret_value.is_some() => {
+            Some(current) if current.has_value => {
                 display
                     .skipped_already_exists
                     .secret_values

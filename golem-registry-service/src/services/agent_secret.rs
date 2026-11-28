@@ -470,6 +470,7 @@ impl AgentSecretService {
         &self,
         agent_secret_id: AgentSecretId,
         update: AgentSecretUpdate,
+        destinations: Option<Vec<SecretDestination>>,
         auth: &AuthCtx,
     ) -> Result<AgentSecret, AgentSecretError> {
         let (mut agent_secret, owner) = self.get_with_environment(agent_secret_id, auth).await?;
@@ -501,10 +502,14 @@ impl AgentSecretService {
         }
 
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
+        let mut revision = AgentSecretRevisionRecord::from_model(agent_secret, audit);
+        if let Some(destinations) = destinations {
+            revision.destinations = AgentSecretDestinations::Set(destinations);
+        }
 
         let stored_agent_secret = self
             .agent_secret_repo
-            .update(AgentSecretRevisionRecord::from_model(agent_secret, audit))
+            .update(revision)
             .await
             .map_err(|err| match err {
                 AgentSecretRepoError::ConcurrentModification => {
@@ -525,36 +530,16 @@ impl AgentSecretService {
         destinations: Vec<SecretDestination>,
         auth: &AuthCtx,
     ) -> Result<AgentSecret, AgentSecretError> {
-        let (mut agent_secret, owner) = self.get_with_environment(agent_secret_id, auth).await?;
-
-        authorize_agent_secret_permission_for_owner(
+        self.update(
+            agent_secret_id,
+            AgentSecretUpdate {
+                current_revision,
+                secret_value: OptionalFieldUpdate::NoChange,
+            },
+            Some(destinations),
             auth,
-            owner,
-            Some(&agent_secret.path),
-            EnvironmentAgentSecretVerb::Update,
-        )?;
-
-        if current_revision != agent_secret.revision {
-            return Err(AgentSecretError::ConcurrentModification);
-        }
-        agent_secret.revision = current_revision.next()?;
-
-        let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
-        let mut revision = AgentSecretRevisionRecord::from_model(agent_secret, audit);
-        revision.destinations = AgentSecretDestinations::Set(destinations);
-
-        self.agent_secret_repo
-            .update(revision)
-            .await
-            .map_err(|err| match err {
-                AgentSecretRepoError::ConcurrentModification => {
-                    AgentSecretError::ConcurrentModification
-                }
-                other => other.into(),
-            })?
-            .signal_new_events_available(&self.registry_change_notifier)
-            .try_into()
-            .map_err(Into::into)
+        )
+        .await
     }
 
     pub async fn delete(

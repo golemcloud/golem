@@ -123,6 +123,7 @@ async fn agent_reads_updated_environment_secret(
         .update_agent_secret(
             &secret.id.0,
             &AgentSecretUpdate {
+                destinations: None,
                 current_revision: secret.revision,
                 secret_value: OptionalFieldUpdate::Set(
                     ExternalSchemaValue::try_from(SchemaValue::String("bar".to_string())).unwrap(),
@@ -245,6 +246,7 @@ async fn repeated_secret_reveal_invocation_replays_pinned_original_value(
         .update_agent_secret(
             &secret.id.0,
             &AgentSecretUpdate {
+                destinations: None,
                 current_revision: secret.revision,
                 secret_value: OptionalFieldUpdate::Set(
                     ExternalSchemaValue::try_from(SchemaValue::String("bar".to_string())).unwrap(),
@@ -552,6 +554,7 @@ async fn agent_reads_recreated_environment_secret(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
+                destinations: Vec::new(),
                 path: AgentSecretPath(secret_path.clone()),
                 secret_type: SchemaGraph::anonymous(SchemaType::string()),
                 secret_value: Some(
@@ -631,6 +634,7 @@ async fn agent_reads_secret_after_canonicalized_update(
         .update_agent_secret(
             &secret.id.0,
             &AgentSecretUpdate {
+                destinations: None,
                 current_revision: secret.revision,
                 secret_value: OptionalFieldUpdate::Set(
                     ExternalSchemaValue::try_from(SchemaValue::String("bar".to_string())).unwrap(),

@@ -2092,7 +2092,7 @@ impl AppCommandHandler {
             .values;
         let secret_paths_with_value = current_agent_secrets
             .iter()
-            .filter(|secret| secret.secret_value.is_some())
+            .filter(|secret| secret.has_value)
             .map(|secret| secret.path.to_string())
             .collect::<BTreeSet<_>>();
         let agent_secret_defaults = resolve_agent_secret_defaults_without_value(

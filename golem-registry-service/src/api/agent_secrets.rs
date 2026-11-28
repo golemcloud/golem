@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ApiResult;
+use super::{ApiError, ApiResult};
 use crate::services::agent_secret::AgentSecretService;
 use crate::services::auth::AuthService;
 use golem_common::model::Page;
 use golem_common::model::agent_secret::{
     AgentSecretDto as DomainAgentSecretDto, AgentSecretId, AgentSecretRevision,
-    CanonicalAgentSecretPath,
+    CanonicalAgentSecretPath, SecretDestination,
 };
+use golem_common::model::api::error_code;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::external_agent_secret::{
     AgentSecretCreation, AgentSecretDto, AgentSecretUpdate,
@@ -37,6 +38,20 @@ use tracing::Instrument;
 pub struct AgentSecretsApi {
     agent_secret_service: Arc<AgentSecretService>,
     auth_service: Arc<AuthService>,
+}
+
+fn parse_destinations(destinations: &[String]) -> ApiResult<Vec<SecretDestination>> {
+    destinations
+        .iter()
+        .map(|destination| {
+            destination.parse().map_err(|_| {
+                ApiError::bad_request(
+                    error_code::AGENT_SECRET_INVALID_DESTINATION,
+                    format!("Invalid secret destination: {destination}"),
+                )
+            })
+        })
+        .collect()
 }
 
 #[OpenApi(
@@ -89,13 +104,13 @@ impl AgentSecretsApi {
         payload: AgentSecretCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<AgentSecretDto>> {
+        let destinations = parse_destinations(&payload.destinations)?;
         let result = self
             .agent_secret_service
-            .create(environment_id, payload.into(), vec![], &auth)
+            .create(environment_id, payload.into(), destinations, &auth)
             .await?;
 
-        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
-            .map_err(anyhow::Error::msg)?;
+        let result = AgentSecretDto::from(DomainAgentSecretDto::from(result));
         Ok(Json(result))
     }
 
@@ -138,9 +153,8 @@ impl AgentSecretsApi {
 
         let converted = result
             .into_iter()
-            .map(|value| AgentSecretDto::try_from(DomainAgentSecretDto::from(value)))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(anyhow::Error::msg)?;
+            .map(|value| AgentSecretDto::from(DomainAgentSecretDto::from(value)))
+            .collect();
 
         Ok(Json(Page { values: converted }))
     }
@@ -177,8 +191,7 @@ impl AgentSecretsApi {
             .get_in_environment(environment_id, path, &auth)
             .await?;
 
-        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
-            .map_err(anyhow::Error::msg)?;
+        let result = AgentSecretDto::from(DomainAgentSecretDto::from(result));
         Ok(Json(result))
     }
 
@@ -217,8 +230,7 @@ impl AgentSecretsApi {
             .agent_secret_service
             .get(agent_secret_id, &auth)
             .await?;
-        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
-            .map_err(anyhow::Error::msg)?;
+        let result = AgentSecretDto::from(DomainAgentSecretDto::from(result));
         Ok(Json(result))
     }
 
@@ -255,12 +267,16 @@ impl AgentSecretsApi {
         data: AgentSecretUpdate,
         auth: AuthCtx,
     ) -> ApiResult<Json<AgentSecretDto>> {
+        let destinations = data
+            .destinations
+            .as_deref()
+            .map(parse_destinations)
+            .transpose()?;
         let result = self
             .agent_secret_service
-            .update(agent_secret_id, data.into(), &auth)
+            .update(agent_secret_id, data.into(), destinations, &auth)
             .await?;
-        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
-            .map_err(anyhow::Error::msg)?;
+        let result = AgentSecretDto::from(DomainAgentSecretDto::from(result));
         Ok(Json(result))
     }
 
@@ -301,8 +317,7 @@ impl AgentSecretsApi {
             .agent_secret_service
             .delete(agent_secret_id, current_revision, &auth)
             .await?;
-        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
-            .map_err(anyhow::Error::msg)?;
+        let result = AgentSecretDto::from(DomainAgentSecretDto::from(result));
         Ok(Json(result))
     }
 }

@@ -11780,7 +11780,9 @@
         "environmentId",
         "path",
         "revision",
-        "secretType"
+        "secretType",
+        "hasValue",
+        "destinations"
       ],
       "properties": {
         "$type": {
@@ -11796,12 +11798,8 @@
         "path": { "type": "array", "items": { "type": "string" } },
         "revision": { "type": "integer", "minimum": 0 },
         "secretType": { "$ref": "#/definitions/SchemaGraph" },
-        "secretValue": {
-          "oneOf": [
-            { "$ref": "#/definitions/SchemaValue" },
-            { "type": "null" }
-          ]
-        }
+        "hasValue": { "type": "boolean" },
+        "destinations": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false
     },
@@ -11841,7 +11839,9 @@
         "environmentId",
         "path",
         "revision",
-        "secretType"
+        "secretType",
+        "hasValue",
+        "destinations"
       ],
       "properties": {
         "$type": {
@@ -11852,12 +11852,8 @@
         "path": { "type": "array", "items": { "type": "string" } },
         "revision": { "type": "integer", "minimum": 0 },
         "secretType": { "$ref": "#/definitions/SchemaGraph" },
-        "secretValue": {
-          "oneOf": [
-            { "$ref": "#/definitions/SchemaValue" },
-            { "type": "null" }
-          ]
-        }
+        "hasValue": { "type": "boolean" },
+        "destinations": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false
     },
@@ -11894,7 +11890,9 @@
         "environmentId",
         "path",
         "revision",
-        "secretType"
+        "secretType",
+        "hasValue",
+        "destinations"
       ],
       "properties": {
         "$type": {
@@ -11905,12 +11903,8 @@
         "path": { "type": "array", "items": { "type": "string" } },
         "revision": { "type": "integer", "minimum": 0 },
         "secretType": { "$ref": "#/definitions/SchemaGraph" },
-        "secretValue": {
-          "oneOf": [
-            { "$ref": "#/definitions/SchemaValue" },
-            { "type": "null" }
-          ]
-        }
+        "hasValue": { "type": "boolean" },
+        "destinations": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false
     },
@@ -11921,7 +11915,9 @@
         "environmentId",
         "path",
         "revision",
-        "secretType"
+        "secretType",
+        "hasValue",
+        "destinations"
       ],
       "properties": {
         "id": {
@@ -11941,12 +11937,8 @@
           "minimum": 0
         },
         "secretType": { "$ref": "#/definitions/SchemaGraph" },
-        "secretValue": {
-          "oneOf": [
-            { "$ref": "#/definitions/SchemaValue" },
-            { "type": "null" }
-          ]
-        }
+        "hasValue": { "type": "boolean" },
+        "destinations": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false
     }

@@ -16,7 +16,9 @@ use crate::log::LogColorize;
 use crate::model::agent::AgentListCursor;
 use anyhow::anyhow;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent_secret::AgentSecretPath;
+use golem_common::model::agent_secret::{
+    AgentSecretPath, SecretDestination, SecretDestinationParseError,
+};
 use jiff::Timestamp;
 
 pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
@@ -47,6 +49,12 @@ pub fn parse_agent_config(s: &str) -> anyhow::Result<AgentConfigEntryDto> {
 
 pub fn parse_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
     Ok(AgentSecretPath(parse_agent_config_path(input)?))
+}
+
+pub fn parse_secret_destination(input: &str) -> Result<String, SecretDestinationParseError> {
+    input
+        .parse::<SecretDestination>()
+        .map(|destination| destination.to_string())
 }
 
 fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
