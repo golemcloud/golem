@@ -1,18 +1,42 @@
 import { readFileSync } from "node:fs"
-import { Effect, Option } from "effect"
-import { Cookies, HttpEffect, HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
-import { Auth } from "./Auth.ts"
+import { ByteSize, Effect, Option } from "effect"
+import {
+  Cookies,
+  HttpEffect,
+  HttpIncomingMessage,
+  HttpMiddleware,
+  HttpRouter,
+  HttpServerError,
+  HttpServerRequest,
+  HttpServerResponse
+} from "effect/http"
+import { Auth, type SignedIn } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Database } from "./Database.ts"
-import { cliBootstrapCommand, type SafeHtml, signedInPage, signedOutPage } from "./Page.ts"
-import { type Account, Registry } from "./Registry.ts"
+import {
+  canCheckOut,
+  canSettle,
+  cliBootstrapCommand,
+  type OverageNotice,
+  type PlanState,
+  type SafeHtml,
+  signedInPage,
+  signedOutPage
+} from "./Page.ts"
+import { Polar } from "./Polar.ts"
+import { type Account, type AccountLimits, Registry } from "./Registry.ts"
+import { make as makeSettlement, pastDueGraceEnd, planFor, type SettlementOffer, settlementFor } from "./Settlement.ts"
+import { type Subscription, Subscriptions } from "./Subscriptions.ts"
+import * as Webhooks from "./Webhooks.ts"
 
 const securityHeaders = {
-  // The sign-in form posts to /sign-in/github, which redirects to GitHub; `form-action` also
-  // applies to that redirect.
+  // The sign-in form posts to /sign-in/github, which redirects to GitHub, and the billing forms
+  // redirect to the checkout and the customer portal of Polar; `form-action` also applies to
+  // these redirects.
   "content-security-policy":
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
-    "form-action 'self' https://github.com; frame-ancestors 'none'; base-uri 'none'",
+    "form-action 'self' https://github.com https://polar.sh https://*.polar.sh; frame-ancestors 'none'; " +
+    "base-uri 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "same-origin",
   "cache-control": "no-store"
@@ -25,7 +49,14 @@ const page = (body: SafeHtml, status = 200) =>
     headers: securityHeaders
   })
 
-const errorPage = HttpServerResponse.text("Something went wrong. Reload the page to try again.", {
+/**
+ * How long an open checkout must still take payments for the checkout route to send the person
+ * back to it, in place of a new checkout. A second click then does not make the deletion hold of
+ * the checkout longer.
+ */
+export const CHECKOUT_REUSE_MS = 60 * 60 * 1000
+
+const errorPage = HttpServerResponse.text("An error occurred. Reload the page.", {
   status: 500,
   headers: securityHeaders
 })
@@ -41,6 +72,51 @@ const asset = (name: string, contentType: string) =>
 const toWebHeaders = (request: HttpServerRequest.HttpServerRequest): Headers =>
   new globalThis.Headers(Object.entries(request.headers))
 
+const crossOrigin = () => HttpServerResponse.text("Cross-origin request", { status: 403 })
+
+/** The Standard Webhooks headers that Polar sends with every delivery. */
+const webhookSignatureHeaders = ["webhook-id", "webhook-timestamp", "webhook-signature"] as const
+
+/**
+ * The largest webhook body that the app reads. A delivery of Polar is a few kilobytes: one
+ * subscription or order with its product and customer.
+ */
+export const webhookBodyLimit = ByteSize.mebibytes(1)
+
+const isBodyTooLarge = (error: unknown): boolean =>
+  error instanceof HttpServerError.HttpServerError &&
+  error.reason._tag === "RequestParseError" &&
+  error.reason.reason === "BodyTooLarge"
+
+const overageNoticeOf = (value: string | null): OverageNotice | undefined =>
+  value === "on" || value === "off" || value === "not-eligible" ? value : undefined
+
+/**
+ * The IP address of the client: the last address of `x-forwarded-for`, or the address of the
+ * connection when the request has no such header. The app has one proxy hop in front of it, the
+ * gateway, which appends the address that it sees to `x-forwarded-for`. So the last address is the
+ * client, and every address to the left of it comes from the client, which can send any value.
+ * The gateway sees the address of the client only while its load balancer keeps that address (on
+ * AWS, an NLB with instance targets and `externalTrafficPolicy: Local`).
+ */
+export const clientAddress = (request: HttpServerRequest.HttpServerRequest): string | undefined => {
+  const last = request.headers["x-forwarded-for"]?.split(",").at(-1)?.trim()
+  return last !== undefined && last !== "" ? last : Option.getOrUndefined(request.remoteAddress)
+}
+
+/**
+ * Sets `x-forwarded-for` to the client address alone, for a request to `auth.handler`. Better
+ * Auth trusts the header only when it has one address, and else counts the request in one rate
+ * limit that all such requests share, so a client could fill that limit for the others.
+ */
+const withClientAddress = (headers: Headers, address: string | undefined): Headers => {
+  headers.delete("x-forwarded-for")
+  if (address !== undefined) {
+    headers.set("x-forwarded-for", address)
+  }
+  return headers
+}
+
 const redirectWithCookies = (location: string, headers: Headers) =>
   HttpServerResponse.redirect(location, {
     status: 303,
@@ -51,22 +127,82 @@ export const routes = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const { auth, getSignedIn } = yield* Auth
     const registry = yield* Registry
+    const polar = yield* Polar
+    const subscriptions = yield* Subscriptions
     const config = yield* BillingConfig
     const { pool } = yield* Database
+    const handleWebhook = yield* Webhooks.makeHandler
+    const settlement = yield* makeSettlement
     const cliCommand = cliBootstrapCommand(config.publicApiUrl)
+    const home = new URL("/", config.baseUrl).href
+    // The query parameter of the page after a settlement: the IDs of the orders that it pays.
+    const settlementOrdersParam = "settlement_orders"
 
-    // The billing app's own form posts carry no CSRF token; a browser sends `Origin` on every
-    // POST, so a cross-site post is rejected here.
-    const isSameOrigin = (request: HttpServerRequest.HttpServerRequest) => {
-      const origin = request.headers["origin"]
-      return origin === undefined || origin === config.baseUrl.origin
+    // The settlement that the account can pay, from the subscriptions and unpaid orders in the
+    // database, never from the request, and the IDs of the unpaid orders.
+    const settlementOf = (accountId: string) =>
+      Effect.gen(function* () {
+        const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
+        const unpaidOrders = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
+        return {
+          offer: settlementFor(accountSubscriptions, unpaidOrders),
+          unpaidOrderIds: unpaidOrders.map((order) => order.orderId),
+          // Without unpaid orders, `planFor` gives the plan of the subscriptions alone: paid with a
+          // new active subscription, else free.
+          planAfterSettlement:
+            planFor(accountSubscriptions, [], new Date(), config.pastDueGraceMs) === "paid" ? "paid" : "free"
+        } as const
+      })
+
+    const planOf = (account: Account | undefined): PlanState => {
+      if (account === undefined) return "unknown"
+      if (account.planId === config.plans.paid) return "paid"
+      if (account.planId === config.plans.suspended) return "suspended"
+      if (account.planId === config.plans.free) return "free"
+      if (account.planId === config.defaultPlanId) return "default"
+      return "other"
     }
 
+    // The billing app's own form posts carry no CSRF token. A browser sends `Origin` on every
+    // form post, so a post without `Origin`, with `Origin: null`, or from another origin is
+    // rejected here, also when the browser sends the session cookie.
+    const isSameOrigin = (request: HttpServerRequest.HttpServerRequest) =>
+      request.headers["origin"] === config.baseUrl.origin
+
     // The browser reaches Better Auth only for the OAuth callback. The pages call the other
-    // endpoints on the server through `auth.api`. The rest of /api/auth stays unrouted: it
-    // includes get-access-token, which returns the decrypted GitHub access token, and
-    // link-social and update-user, which change the user.
-    yield* router.add("GET", "/api/auth/callback/github", HttpEffect.fromWebHandler(auth.handler))
+    // endpoints on the server, through `auth.api` or, for the sign-in, `auth.handler`. The rest
+    // of /api/auth stays unrouted: it includes get-access-token, which returns the decrypted
+    // GitHub access token, and link-social and update-user, which change the user.
+    yield* router.add("GET", "/api/auth/callback/github", (request) =>
+      HttpEffect.fromWebHandler((web) => {
+        const headers = withClientAddress(new Headers(web.headers), clientAddress(request))
+        return auth.handler(new Request(web, { headers }))
+      })
+    )
+
+    // Polar delivers the webhooks here. The handler is the app's own, not a Better Auth endpoint;
+    // the path is the one that the Polar organization has configured. Polar signs every
+    // delivery, so a request without the signature headers is rejected before the app reads its
+    // body, and the app reads at most `webhookBodyLimit` of a body.
+    yield* router.add("POST", "/api/auth/polar/webhooks", (request) =>
+      webhookSignatureHeaders.every((name) => request.headers[name] !== undefined)
+        ? request.text.pipe(
+            Effect.provideService(HttpIncomingMessage.MaxBodySize, webhookBodyLimit),
+            Effect.flatMap((body) => handleWebhook(body, request.headers)),
+            Effect.map((response) => HttpServerResponse.text(response.body, { status: response.status })),
+            Effect.catch((error) =>
+              Effect.succeed(
+                isBodyTooLarge(error)
+                  ? HttpServerResponse.text("the body is too large", { status: 413 })
+                  : HttpServerResponse.text("cannot read the body", { status: 400 })
+              )
+            )
+          )
+        : Effect.logWarning("Rejected a webhook").pipe(
+            Effect.annotateLogs({ status: 403, reason: "no signature headers" }),
+            Effect.as(HttpServerResponse.text("rejected", { status: 403 }))
+          )
+    )
 
     yield* router.add("GET", "/", (request) =>
       Effect.gen(function* () {
@@ -84,8 +220,70 @@ export const routes = HttpRouter.use((router) =>
             )
           )
         )
+        const subscription: Subscription | undefined = yield* subscriptions
+          .latest(user.golemAccountId, config.polar.productId)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Cannot read the subscription").pipe(
+                Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                Effect.as(undefined)
+              )
+            )
+          )
+        const plan = planOf(account)
+        const params = new URL(request.url, config.baseUrl).searchParams
+        // Polar redirects here with the checkout ID after a payment; the webhook that changes the
+        // plan can arrive a few seconds later.
+        const checkoutPending =
+          params.has("checkout_id") && (plan === "free" || plan === "default" || plan === "suspended")
+        const debt =
+          plan === "suspended"
+            ? yield* settlementOf(user.golemAccountId).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Cannot read the unpaid orders").pipe(
+                    Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                    Effect.as(undefined)
+                  )
+                )
+              )
+            : undefined
+        const settlement: SettlementOffer | undefined = debt?.offer
+        // After the payment of a settlement, Polar redirects here with the orders that it pays. The
+        // webhook that records the settlement can arrive a few seconds later, so the page waits
+        // only while one of those orders is unpaid. Then it shows the plan and any remaining debt.
+        const paidOrderIds = (params.get(settlementOrdersParam) ?? "").split(",").filter((id) => id !== "")
+        const settlementPending = debt !== undefined && paidOrderIds.some((id) => debt.unpaidOrderIds.includes(id))
+        const limits: AccountLimits | undefined =
+          plan === "paid"
+            ? yield* registry.getLimits(user.golemToken, user.golemAccountId).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Cannot read the monthly usage mode").pipe(
+                    Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                    Effect.as(undefined)
+                  )
+                )
+              )
+            : undefined
         return page(
-          signedInPage({ email: user.email, golemAccountId: user.golemAccountId, account, cliCommand })
+          signedInPage({
+            email: user.email,
+            golemAccountId: user.golemAccountId,
+            account,
+            plan,
+            subscription,
+            pastDueGraceEnd:
+              plan === "paid" && subscription !== undefined
+                ? pastDueGraceEnd(subscription, config.pastDueGraceMs)
+                : undefined,
+            checkoutPending,
+            settlement,
+            planAfterSettlement: debt?.planAfterSettlement,
+            settlementPending,
+            cliCommand,
+            limits,
+            overagePrices: config.overagePrices,
+            overageNotice: overageNoticeOf(params.get("overage"))
+          })
         )
       }).pipe(
         Effect.catch((error) =>
@@ -97,20 +295,42 @@ export const routes = HttpRouter.use((router) =>
       )
     )
 
+    // The form calls the sign-in endpoint through `auth.handler`, not `auth.api`, so that the rate
+    // limit of Better Auth applies to it (`rateLimit` in `authOptions`).
+    const signInSocial = (request: HttpServerRequest.HttpServerRequest) => {
+      const headers = withClientAddress(toWebHeaders(request), clientAddress(request))
+      headers.delete("content-length")
+      headers.delete("transfer-encoding")
+      headers.set("content-type", "application/json")
+      return auth.handler(
+        new Request(new URL("/api/auth/sign-in/social", config.baseUrl), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ provider: "github", callbackURL: "/", errorCallbackURL: "/" })
+        })
+      )
+    }
+
     yield* router.add("POST", "/sign-in/github", (request) =>
       isSameOrigin(request)
-        ? Effect.tryPromise(() =>
-            auth.api.signInSocial({
-              body: { provider: "github", callbackURL: "/", errorCallbackURL: "/" },
-              headers: toWebHeaders(request),
-              returnHeaders: true
-            })
-          ).pipe(
-            Effect.flatMap(({ headers, response }) =>
-              response.url === undefined
-                ? Effect.fail(new Error("Better Auth returned no GitHub authorization URL"))
-                : Effect.succeed(redirectWithCookies(response.url, headers))
-            ),
+        ? Effect.tryPromise(() => signInSocial(request)).pipe(
+            Effect.flatMap((response) => {
+              if (response.status === 429) {
+                return Effect.logWarning("Refused a GitHub sign-in over the rate limit").pipe(
+                  Effect.as(HttpServerResponse.redirect("/?error=too_many_requests", { status: 303 }))
+                )
+              }
+              if (!response.ok) {
+                return Effect.fail(new Error(`Better Auth answered ${response.status}`))
+              }
+              return Effect.tryPromise(() => response.json() as Promise<{ readonly url?: unknown }>).pipe(
+                Effect.flatMap((body) =>
+                  typeof body.url === "string"
+                    ? Effect.succeed(redirectWithCookies(body.url, response.headers))
+                    : Effect.fail(new Error("Better Auth returned no GitHub authorization URL"))
+                )
+              )
+            }),
             Effect.catch((error) =>
               Effect.logError("Cannot start the GitHub sign-in").pipe(
                 Effect.annotateLogs({ error: String(error) }),
@@ -118,7 +338,260 @@ export const routes = HttpRouter.use((router) =>
               )
             )
           )
-        : Effect.succeed(HttpServerResponse.text("Cross-origin request", { status: 403 }))
+        : Effect.succeed(crossOrigin())
+    )
+
+    yield* router.add("POST", "/billing/checkout", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            // The route accepts only a checkout that the page offers. When the registry or the
+            // database fails, the session or the plan is not known, so the route refuses the
+            // checkout, as it refuses a request without a sign-in.
+            const signedIn = yield* getSignedIn(toWebHeaders(request)).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the session for the checkout").pipe(
+                  Effect.annotateLogs({ error: error.message }),
+                  Effect.as(Option.none<SignedIn>())
+                )
+              )
+            )
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const user = signedIn.value
+            const offered = yield* Effect.gen(function* () {
+              const account = yield* registry.getAccount(user.golemToken, user.golemAccountId)
+              const subscription = yield* subscriptions.latest(user.golemAccountId, config.polar.productId)
+              const plan = planOf(account)
+              if (!canCheckOut(plan, subscription)) {
+                yield* Effect.logWarning("Refused a checkout that the page does not offer").pipe(
+                  Effect.annotateLogs({
+                    golemAccountId: user.golemAccountId,
+                    plan,
+                    subscriptionStatus: subscription?.status
+                  })
+                )
+                return false
+              }
+              return true
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the plan for the checkout").pipe(
+                  Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                  Effect.as(false)
+                )
+              )
+            )
+            if (!offered) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            // The URL of a checkout holds the client secret that pays it. The route sends it to
+            // the browser only after the deletion hold of the checkout is in the registry, so the
+            // registry never deletes an account while Polar can take a payment for it. A checkout
+            // whose route fails before then can never be paid; its row holds the account until it
+            // expires (`Subscriptions.holdCandidates`).
+            //
+            // First the route reads from Polar each unfinished checkout of the account whose status
+            // can change. While Polar has the payment of a checkout, each click goes to the payment
+            // notice and starts no new checkout. A failed payment makes the checkout `open` again.
+            const accountId = user.golemAccountId
+            const started = yield* subscriptions.withAccountLock(
+              accountId,
+              Effect.gen(function* () {
+                const now = new Date()
+                const unfinished = yield* subscriptions.unfinishedCheckouts(accountId)
+                const read = yield* Effect.forEach(
+                  unfinished.filter((checkout) => checkout.status !== "succeeded"),
+                  (checkout) =>
+                    polar.getCheckout(checkout.checkoutId).pipe(
+                      Effect.tap((session) =>
+                        session.status === checkout.status
+                          ? Effect.void
+                          : subscriptions.recordCheckoutStatus(checkout.checkoutId, session.status, now)
+                      )
+                    )
+                )
+                const paid =
+                  unfinished.find((checkout) => checkout.status === "succeeded")?.checkoutId ??
+                  read.find((session) => session.status === "confirmed" || session.status === "succeeded")?.id
+                if (paid !== undefined) {
+                  return { paid, reasons: yield* settlement.reconcile(accountId, now) }
+                }
+                // `read` keeps the order of `unfinished`, by expiry.
+                let session = read
+                  .filter(
+                    (candidate) =>
+                      candidate.status === "open" && candidate.expiresAt.getTime() > now.getTime() + CHECKOUT_REUSE_MS
+                  )
+                  .at(-1)
+                if (session === undefined) {
+                  session = yield* polar.createCheckout({
+                    productId: config.polar.productId,
+                    externalCustomerId: accountId,
+                    customerEmail: user.email,
+                    customerName: user.name === "" ? undefined : user.name,
+                    customerIpAddress: clientAddress(request),
+                    successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
+                    returnUrl: home
+                  })
+                  yield* subscriptions.recordCheckout({
+                    checkoutId: session.id,
+                    accountId,
+                    expiresAt: session.expiresAt
+                  })
+                }
+                return { session, reasons: yield* settlement.reconcile(accountId, now) }
+              })
+            )
+            if (started.paid !== undefined) {
+              // The person paid a checkout, also in another tab; the page waits for the subscription.
+              const notice = new URL(home)
+              notice.searchParams.set("checkout_id", started.paid)
+              return HttpServerResponse.redirect(notice.href, { status: 303 })
+            }
+            const { session, reasons } = started
+            if (reasons === "deleted" || !reasons.includes("openCheckout")) {
+              yield* Effect.logWarning("Refused a checkout that no deletion hold covers").pipe(
+                Effect.annotateLogs({ golemAccountId: accountId, checkoutId: session.id, reasons: String(reasons) })
+              )
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            return HttpServerResponse.redirect(session.url, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot start the checkout").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
+    )
+
+    // A settlement pays the paid overage of the orders that Polar no longer collects. The route
+    // reads the amount and the orders from the database, and accepts only a settlement that the
+    // page offers. When the registry or the database fails, it refuses, as for a checkout.
+    yield* router.add("POST", "/billing/settle", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            const signedIn = yield* getSignedIn(toWebHeaders(request)).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the session for the settlement").pipe(
+                  Effect.annotateLogs({ error: error.message }),
+                  Effect.as(Option.none<SignedIn>())
+                )
+              )
+            )
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const user = signedIn.value
+            const offered = yield* Effect.gen(function* () {
+              const plan = planOf(yield* registry.getAccount(user.golemToken, user.golemAccountId))
+              const settlement = plan === "suspended" ? (yield* settlementOf(user.golemAccountId)).offer : undefined
+              if (settlement === undefined || !canSettle(plan, settlement)) {
+                yield* Effect.logWarning("Refused a settlement that the page does not offer").pipe(
+                  Effect.annotateLogs({ golemAccountId: user.golemAccountId, plan })
+                )
+                return undefined
+              }
+              return settlement
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the unpaid orders for the settlement").pipe(
+                  Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                  Effect.as(undefined)
+                )
+              )
+            )
+            if (offered === undefined) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const successUrl = new URL(home)
+            successUrl.searchParams.set(settlementOrdersParam, offered.orders.map((order) => order.orderId).join(","))
+            const url = yield* polar.createSettlementCheckout({
+              productId: config.polar.settlementProductId,
+              externalCustomerId: user.golemAccountId,
+              customerEmail: user.email,
+              customerName: user.name === "" ? undefined : user.name,
+              customerIpAddress: clientAddress(request),
+              amount: offered.amount,
+              orderIds: offered.orders.map((order) => order.orderId),
+              successUrl: successUrl.href,
+              returnUrl: home
+            })
+            yield* Effect.logInfo("Started a settlement of paid overage").pipe(
+              Effect.annotateLogs({
+                golemAccountId: user.golemAccountId,
+                amount: offered.amount,
+                orderIds: offered.orders.map((order) => order.orderId).join(",")
+              })
+            )
+            return HttpServerResponse.redirect(url, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot start the settlement").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
+    )
+
+    // The registry accepts the change of the monthly usage mode only with the token of the owner,
+    // and records it as the consent of the owner, so the form uses the token of the session.
+    yield* router.add("POST", "/billing/overage", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            const signedIn = yield* getSignedIn(toWebHeaders(request))
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const mode = new URLSearchParams(yield* request.text).get("mode")
+            if (mode !== "allowOverage" && mode !== "hardLimit") {
+              return HttpServerResponse.text("Unknown mode", { status: 400, headers: securityHeaders })
+            }
+            const user = signedIn.value
+            const change = yield* registry.setMonthlyUsageMode(user.golemToken, user.golemAccountId, mode)
+            yield* Effect.logInfo("Changed the monthly usage mode").pipe(
+              Effect.annotateLogs({ golemAccountId: user.golemAccountId, mode, change })
+            )
+            const notice: OverageNotice =
+              change === "notEligible" ? "not-eligible" : mode === "allowOverage" ? "on" : "off"
+            return HttpServerResponse.redirect(`/?overage=${notice}`, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot change the monthly usage mode").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
+    )
+
+    yield* router.add("POST", "/billing/portal", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            const signedIn = yield* getSignedIn(toWebHeaders(request))
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const url = yield* polar.createCustomerPortalUrl({
+              externalCustomerId: signedIn.value.golemAccountId,
+              returnUrl: home
+            })
+            return HttpServerResponse.redirect(url, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot open the customer portal").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
     )
 
     yield* router.add("POST", "/sign-out", (request) =>
@@ -129,7 +602,7 @@ export const routes = HttpRouter.use((router) =>
             Effect.map(({ headers }) => redirectWithCookies("/", headers)),
             Effect.catch(() => Effect.succeed(HttpServerResponse.redirect("/", { status: 303 })))
           )
-        : Effect.succeed(HttpServerResponse.text("Cross-origin request", { status: 403 }))
+        : Effect.succeed(crossOrigin())
     )
 
     yield* router.add("GET", "/assets/app.css", asset("app.css", "text/css; charset=utf-8"))

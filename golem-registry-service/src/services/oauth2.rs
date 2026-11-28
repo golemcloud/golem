@@ -116,6 +116,13 @@ impl OAuth2Service {
             .map(TryInto::<OAuth2Token>::try_into)
             .transpose()?;
 
+        // A deleted account keeps the link to the external identity. The login then creates a
+        // new account, and `make_token` links the identity to it.
+        let existing_data = match existing_data {
+            Some(data) if self.is_live_account(data.account_id).await? => Some(data),
+            _ => None,
+        };
+
         let token = match existing_data {
             Some(OAuth2Token {
                 account_id,
@@ -289,6 +296,18 @@ impl OAuth2Service {
     ) -> Result<ExternalLogin, OAuth2Error> {
         match provider {
             OAuth2Provider::Github => Ok(self.client.get_external_login(access_token).await?),
+        }
+    }
+
+    async fn is_live_account(&self, account_id: AccountId) -> Result<bool, OAuth2Error> {
+        match self
+            .account_service
+            .get(account_id, &AuthCtx::system())
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(AccountError::AccountNotFound(_)) => Ok(false),
+            Err(other) => Err(other.into()),
         }
     }
 

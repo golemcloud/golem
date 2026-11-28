@@ -15,7 +15,9 @@
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::card::CardRepoError;
 use golem_common::error_forwarding;
-use golem_common::model::account::{Account, AccountEmail, AccountId, AccountRevision};
+use golem_common::model::account::{
+    Account, AccountDeletionHold, AccountEmail, AccountId, AccountRevision,
+};
 use golem_common::model::auth::AccountRole;
 use golem_common::model::card::CardId;
 use golem_common::model::plan::PlanId;
@@ -31,6 +33,8 @@ pub enum AccountRepoError {
     AccountViolatesUniqueness,
     #[error("Concurrent modification")]
     ConcurrentModification,
+    #[error("The account has deletion holds")]
+    DeletionHeld(Vec<AccountDeletionHoldRecord>),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -124,6 +128,39 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
                 ))
             })?),
         })
+    }
+}
+
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct AccountDeletionHoldRecord {
+    pub account_id: Uuid,
+    pub holder_account_id: Uuid,
+    pub reason: String,
+    pub created_at: SqlDateTime,
+    pub updated_at: SqlDateTime,
+}
+
+impl AccountDeletionHoldRecord {
+    pub fn new(account_id: AccountId, holder_account_id: AccountId, reason: String) -> Self {
+        let now = SqlDateTime::now();
+        Self {
+            account_id: account_id.0,
+            holder_account_id: holder_account_id.0,
+            reason,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+}
+
+impl From<AccountDeletionHoldRecord> for AccountDeletionHold {
+    fn from(value: AccountDeletionHoldRecord) -> Self {
+        Self {
+            account_id: AccountId(value.account_id),
+            holder_account_id: AccountId(value.holder_account_id),
+            reason: value.reason,
+            created_at: value.created_at.into_utc(),
+        }
     }
 }
 

@@ -49,6 +49,7 @@ pub enum AccountVerb {
     Delete,
     SetPlan,
     ViewPlan,
+    HoldDeletion,
 }
 impl VerbPattern for AccountVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
@@ -58,6 +59,7 @@ impl VerbPattern for AccountVerb {
             "update" => Some(Self::Update),
             "delete" => Some(Self::Delete),
             "set-plan" => Some(Self::SetPlan),
+            "hold-deletion" => Some(Self::HoldDeletion),
             _ => None,
         }
     }

@@ -48,6 +48,7 @@ pub enum SystemVerb {
     ViewDefaultPlan,
     ViewAccountSummariesReport,
     ViewAccountCountsReport,
+    OverrideDeletionHold,
 }
 impl VerbPattern for SystemVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
@@ -57,6 +58,7 @@ impl VerbPattern for SystemVerb {
             "view-default-plan" => Some(Self::ViewDefaultPlan),
             "view-account-summaries-report" => Some(Self::ViewAccountSummariesReport),
             "view-account-counts-report" => Some(Self::ViewAccountCountsReport),
+            "override-deletion-hold" => Some(Self::OverrideDeletionHold),
             _ => None,
         }
     }

@@ -1,0 +1,255 @@
+import { createPolarCore } from "@polar-sh/sdk/2026-10"
+import { createCheckouts, getCheckouts } from "@polar-sh/sdk/2026-10/services/checkouts"
+import { createCustomerSessions } from "@polar-sh/sdk/2026-10/services/customer_sessions"
+import { Config, Context, Data, Effect, Layer, Redacted } from "effect"
+import { HttpBody, HttpClient, HttpClientError } from "effect/http"
+import type { CheckoutStatus } from "./Subscriptions.ts"
+
+export interface PolarConfigShape {
+  /** The base URL of the Polar API: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. */
+  readonly apiUrl: URL
+  /** An organization access token of Polar. */
+  readonly accessToken: Redacted.Redacted<string>
+}
+
+export class PolarConfig extends Context.Service<PolarConfig, PolarConfigShape>()(
+  "golem-cloud-billing/PolarConfig"
+) {}
+
+export const polarConfig: Config.Config<PolarConfigShape> = Config.all({
+  apiUrl: Config.URL("POLAR_API_URL"),
+  accessToken: Config.Redacted("POLAR_ACCESS_TOKEN")
+})
+
+export const configLayer: Layer.Layer<PolarConfig, Config.ConfigError> = Layer.effect(PolarConfig, polarConfig)
+
+/** A usage event for a meter of Polar. */
+export interface PolarEvent {
+  readonly name: string
+  /** The Golem account ID, which is the external ID of the Polar customer. */
+  readonly externalCustomerId: string
+  /** Polar skips an event whose external ID it has already. */
+  readonly externalId: string
+  readonly metadata: Readonly<Record<string, string | number>>
+}
+
+/** A failed Polar call. It carries no request body or access token. */
+export class PolarError extends Data.TaggedError("PolarError")<{
+  readonly operation: string
+  readonly reason: string
+  readonly status: number | undefined
+}> {
+  override get message(): string {
+    return `Polar call ${this.operation} failed: ${this.reason}`
+  }
+}
+
+const toPolarError =
+  (operation: string) =>
+  (error: HttpClientError.HttpClientError): PolarError => {
+    const reason = error.reason
+    return reason._tag === "StatusCodeError"
+      ? new PolarError({ operation, reason: "unexpected status", status: reason.response.status })
+      : new PolarError({ operation, reason: reason._tag, status: undefined })
+  }
+
+/** A checkout of a product for a Golem account: the paid plan, or a settlement. */
+export interface CheckoutRequest {
+  readonly productId: string
+  /** The Golem account ID. Polar creates the customer with this external ID, or reuses it. */
+  readonly externalCustomerId: string
+  readonly customerEmail: string
+  readonly customerName: string | undefined
+  /** The IP address of the browser, from which Polar shows prices in the local currency. */
+  readonly customerIpAddress: string | undefined
+  /** Polar replaces `{CHECKOUT_ID}` in the URL with the ID of the checkout. */
+  readonly successUrl: string
+  /** The back button of the checkout page goes here. */
+  readonly returnUrl: string
+}
+
+/**
+ * The metadata key of a checkout of the settlement product, and of its order: the IDs of the
+ * orders that the settlement pays, separated by commas.
+ */
+export const SETTLED_ORDERS_METADATA_KEY = "golem_settled_order_ids"
+
+/**
+ * A checkout of the settlement product for a Golem account: an ad-hoc fixed price that the
+ * customer cannot change, with no discount codes. The price is what the invoices charged for the
+ * paid overage, tax included, and it includes tax whatever the default tax behavior of the
+ * organization: Polar takes the tax out of it, and adds none.
+ */
+export interface SettlementCheckoutRequest extends CheckoutRequest {
+  /** The price in USD cents. */
+  readonly amount: number
+  /** The orders that the settlement pays. */
+  readonly orderIds: ReadonlyArray<string>
+}
+
+/** The fields of a checkout session for the customer and the redirects, the same for each product. */
+const customerFields = (request: CheckoutRequest) => ({
+  external_customer_id: request.externalCustomerId,
+  customer_email: request.customerEmail,
+  customer_name: request.customerName ?? null,
+  customer_ip_address: request.customerIpAddress ?? null,
+  success_url: request.successUrl,
+  return_url: request.returnUrl
+})
+
+/**
+ * A checkout session of Polar. `url` is the checkout page; it holds the client secret of the
+ * session, which is the only way to pay it.
+ */
+export interface CheckoutSession {
+  readonly id: string
+  readonly url: string
+  readonly status: CheckoutStatus
+  /** When Polar stops taking the payment of the open checkout: 24 hours after its creation. */
+  readonly expiresAt: Date
+}
+
+const toCheckoutSession = (checkout: {
+  readonly id: string
+  readonly url: string
+  readonly status: CheckoutStatus
+  readonly expires_at: string
+}): CheckoutSession => ({
+  id: checkout.id,
+  url: checkout.url,
+  status: checkout.status,
+  expiresAt: new Date(checkout.expires_at)
+})
+
+/** The SDK errors with an HTTP status: `PolarClientError` and `PolarServerError`. */
+const statusOf = (error: unknown): number | undefined =>
+  typeof error === "object" && error !== null && "statusCode" in error && typeof error.statusCode === "number"
+    ? error.statusCode
+    : undefined
+
+const sdkCall = <A>(operation: string, call: () => Promise<A>): Effect.Effect<A, PolarError> =>
+  Effect.tryPromise({
+    try: call,
+    catch: (error) => {
+      const status = statusOf(error)
+      return new PolarError({
+        operation,
+        reason: status === undefined ? "request failed" : "unexpected status",
+        status
+      })
+    }
+  })
+
+export interface PolarShape {
+  /** Sends usage events to `POST /v1/events/ingest`. */
+  readonly ingestEvents: (events: ReadonlyArray<PolarEvent>) => Effect.Effect<void, PolarError>
+  /** Creates a checkout session (scope `checkouts:write`). */
+  readonly createCheckout: (request: CheckoutRequest) => Effect.Effect<CheckoutSession, PolarError>
+  /** Reads a checkout session (`checkouts:read` or `checkouts:write`). */
+  readonly getCheckout: (checkoutId: string) => Effect.Effect<CheckoutSession, PolarError>
+  /** Creates a checkout session of a settlement and returns the URL of its checkout page. */
+  readonly createSettlementCheckout: (request: SettlementCheckoutRequest) => Effect.Effect<string, PolarError>
+  /**
+   * Creates a customer session for the Polar customer with the external ID, and returns the
+   * URL of its customer portal: payment method, invoices, cancellation.
+   */
+  readonly createCustomerPortalUrl: (request: {
+    readonly externalCustomerId: string
+    readonly returnUrl: string
+  }) => Effect.Effect<string, PolarError>
+  /**
+   * Deletes the Polar customer with the external ID, through
+   * `DELETE /v1/customers/external/{external_id}` (scope `customers:write`). Polar cancels its
+   * subscriptions at once, revokes its benefits and clears its external ID. `missing`: Polar has no
+   * customer with the external ID, also after an earlier delete.
+   */
+  readonly deleteCustomer: (externalCustomerId: string) => Effect.Effect<"deleted" | "missing", PolarError>
+}
+
+export class Polar extends Context.Service<Polar, PolarShape>()("golem-cloud-billing/Polar") {}
+
+export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClient> = Layer.effect(
+  Polar,
+  Effect.gen(function* () {
+    const { apiUrl, accessToken } = yield* PolarConfig
+    const baseUrl = apiUrl.href.replace(/\/$/, "")
+    const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk)
+
+    const ingestEvents = (events: ReadonlyArray<PolarEvent>) =>
+      client
+        .post(`${baseUrl}/v1/events/ingest`, {
+          headers: { authorization: `Bearer ${Redacted.value(accessToken)}` },
+          acceptJson: true,
+          body: HttpBody.jsonUnsafe({
+            events: events.map((event) => ({
+              name: event.name,
+              external_customer_id: event.externalCustomerId,
+              external_id: event.externalId,
+              metadata: event.metadata
+            }))
+          })
+        })
+        .pipe(Effect.asVoid, Effect.mapError(toPolarError("ingest_events")))
+
+    const core = createPolarCore({ accessToken: Redacted.value(accessToken), baseUrl })
+    const checkouts = createCheckouts(core)
+    const checkout = getCheckouts(core)
+    const customerSessions = createCustomerSessions(core)
+
+    const createCheckout = (request: CheckoutRequest) =>
+      sdkCall("create_checkout", () =>
+        checkouts({
+          products: [request.productId],
+          ...customerFields(request),
+          allow_discount_codes: true
+        })
+      ).pipe(Effect.map(toCheckoutSession))
+
+    const getCheckout = (checkoutId: string) =>
+      sdkCall("get_checkout", () => checkout(checkoutId)).pipe(Effect.map(toCheckoutSession))
+
+    const createSettlementCheckout = (request: SettlementCheckoutRequest) =>
+      sdkCall("create_settlement_checkout", () =>
+        checkouts({
+          products: [request.productId],
+          prices: {
+            [request.productId]: [
+              { amount_type: "fixed", price_amount: request.amount, price_currency: "usd", tax_behavior: "inclusive" }
+            ]
+          },
+          ...customerFields(request),
+          allow_discount_codes: false,
+          metadata: { [SETTLED_ORDERS_METADATA_KEY]: request.orderIds.join(",") }
+        })
+      ).pipe(Effect.map((checkout) => checkout.url))
+
+    const createCustomerPortalUrl = (request: { readonly externalCustomerId: string; readonly returnUrl: string }) =>
+      sdkCall("create_customer_session", () =>
+        customerSessions({ external_customer_id: request.externalCustomerId, return_url: request.returnUrl })
+      ).pipe(Effect.map((session) => session.customer_portal_url))
+
+    const deleteCustomer = (externalCustomerId: string) =>
+      client
+        .del(`${baseUrl}/v1/customers/external/${encodeURIComponent(externalCustomerId)}`, {
+          headers: { authorization: `Bearer ${Redacted.value(accessToken)}` },
+          acceptJson: true
+        })
+        .pipe(
+          Effect.as<"deleted" | "missing">("deleted"),
+          Effect.catchIf(
+            (error) => error.reason._tag === "StatusCodeError" && error.reason.response.status === 404,
+            () => Effect.succeed<"deleted" | "missing">("missing")
+          ),
+          Effect.mapError(toPolarError("delete_customer"))
+        )
+
+    return {
+      ingestEvents,
+      createCheckout,
+      getCheckout,
+      createSettlementCheckout,
+      createCustomerPortalUrl,
+      deleteCustomer
+    }
+  })
+)
