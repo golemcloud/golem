@@ -5,8 +5,8 @@ import * as Oplog from "../src/Oplog.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as OplogMock from "./mocks/golem-api-oplog.js"
 
-const mkEntry = (tag: string): Oplog.PublicOplogEntry =>
-  ({ tag }) as unknown as Oplog.PublicOplogEntry
+const mkEntry = (tag: string): Oplog.AttributedPublicOplogEntry =>
+  ({ attribution: { tag: "agent" }, entry: { tag } }) as unknown as Oplog.AttributedPublicOplogEntry
 const mkRawEntry = (tag: string): Oplog.OplogEntry => ({ tag }) as unknown as Oplog.OplogEntry
 
 const sampleAgent: Oplog.AgentId = { uuid: { highBits: 0x1n, lowBits: 0x8000000000000001n } }
@@ -30,7 +30,7 @@ describe("Oplog — read stream", () => {
       ])
 
       const arr = yield* Stream.runCollect(Oplog.read({ agentId: sampleAgent, start: 0n }))
-      expect(arr.map((e) => (e as { tag: string }).tag)).toEqual([
+      expect(arr.map((e) => e.entry.tag)).toEqual([
         "create",
         "host-call",
         "agent-invocation-started",
@@ -45,8 +45,8 @@ describe("Oplog — read stream", () => {
       const first = yield* r.next
       const second = yield* r.next
       const third = yield* r.next
-      expect(first?.map((e) => (e as { tag: string }).tag)).toEqual(["log"])
-      expect(second?.map((e) => (e as { tag: string }).tag)).toEqual(["suspend"])
+      expect(first?.map((e) => e.entry.tag)).toEqual(["log"])
+      expect(second?.map((e) => e.entry.tag)).toEqual(["suspend"])
       expect(third).toBeUndefined()
     }).pipe(Effect.provide(OplogLive)),
   )
@@ -70,7 +70,7 @@ describe("Oplog — search stream", () => {
         [[20n, mkEntry("log")]],
       ])
       const arr = yield* Stream.runCollect(Oplog.search({ agentId: sampleAgent, text: "boom" }))
-      expect(arr.map(([i, e]) => [i, (e as { tag: string }).tag])).toEqual([
+      expect(arr.map(([i, e]) => [i, e.entry.tag])).toEqual([
         [10n, "error"],
         [11n, "log"],
         [20n, "log"],
@@ -86,9 +86,9 @@ describe("Oplog — enrich", () => {
         entries.map(
           ([i, e]) =>
             ({
-              tag: `enriched:${(e as { tag: string }).tag}`,
-              idx: i,
-            }) as unknown as Oplog.PublicOplogEntry,
+              attribution: { tag: "agent" },
+              entry: { tag: `enriched:${e.tag}`, idx: i },
+            }) as unknown as Oplog.AttributedPublicOplogEntry,
         ),
       )
       const out = yield* Oplog.enrich({
@@ -100,10 +100,7 @@ describe("Oplog — enrich", () => {
         ],
         componentRevision: 0n,
       })
-      expect(out.map((e) => (e as { tag: string }).tag)).toEqual([
-        "enriched:create",
-        "enriched:log",
-      ])
+      expect(out.map((e) => e.entry.tag)).toEqual(["enriched:create", "enriched:log"])
     }).pipe(Effect.provide(OplogLive)),
   )
 

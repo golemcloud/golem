@@ -381,7 +381,7 @@ func init() {
 	ops.Handle(Invocations, func(*golem.Context[opsState], golem.Unit) int64 {
 		var n int64
 		for e := range oplog.MustGet(golem.MustGetSelfMetadata().AgentID, 0) {
-			if e.Tag() == oplog.AgentInvocationStarted {
+			if e.Entry.Tag() == oplog.AgentInvocationStarted {
 				n++
 			}
 		}

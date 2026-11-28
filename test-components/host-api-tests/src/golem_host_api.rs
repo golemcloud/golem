@@ -81,6 +81,39 @@ fn lookup_agent_id(
     .map_err(|error| format!("{error:?}"))
 }
 
+/// The values of the expected request of a failed update, or `None` for another entry.
+fn divergence_request(
+    entry: &golem_rust::bindings::golem::api::oplog::PublicOplogEntry,
+) -> Option<Option<Vec<u64>>> {
+    use golem_rust::bindings::golem::api::oplog::{PublicOplogEntry, ReplayStep};
+
+    let PublicOplogEntry::FailedUpdate(update) = entry else {
+        return None;
+    };
+    Some(
+        match update
+            .divergence
+            .as_ref()
+            .map(|divergence| &divergence.expected)
+        {
+            Some(ReplayStep::HostCall(call)) => call.request.as_ref().map(|request| {
+                request
+                    .value
+                    .value_nodes
+                    .iter()
+                    .filter_map(|node| match node {
+                        golem_rust::schema::wit::wire::SchemaValueNode::U64Value(value) => {
+                            Some(*value)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            }),
+            _ => None,
+        },
+    )
+}
+
 fn encode_tool_input(
     _input: String,
 ) -> Result<golem_rust::schema::wit::wire::TypedSchemaValue, String> {
@@ -213,11 +246,50 @@ pub trait GolemHostApi {
     /// Fails when the search has not ended after `max_batches` batches.
     fn continue_kept_oplog_search(&self, max_batches: u64) -> Result<Vec<u64>, String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
+    /// Reads the first batch of the agent's oplog from `start`, and gives the number of its
+    /// entries.
+    fn read_oplog_batch_size(&self, agent_id: AgentId, start: u64) -> Result<Option<u64>, String>;
+    /// Reads the first batch of the agent's oplog from `start`, and gives the name of each agent
+    /// method invocation in it with the `u64` values of its decoded input.
+    fn read_oplog_method_inputs(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Vec<(String, Vec<u64>)>, String>;
+    /// Reads the first batch of the agent's oplog from `start`, and gives the method name of each
+    /// finished agent method invocation in it with the `u64` values of its decoded output.
+    fn read_oplog_method_outputs(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Vec<(String, Vec<u64>)>, String>;
+    /// The number of entries in the first batch from `start`, and the values of the expected
+    /// request of each failed update in it.
+    fn read_oplog_divergence_requests(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Option<(u64, Vec<Option<Vec<u64>>>)>, String>;
+    /// The index of each failed update in the first batch of a search, with the values of its
+    /// expected request.
+    fn search_oplog_divergence_requests(
+        &self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<(u64, Option<Vec<u64>>)>>, String>;
     fn search_oplog_result(
         &mut self,
         agent_id: AgentId,
         query: String,
     ) -> Result<Option<Vec<u64>>, String>;
+    /// The index of each entry in the first batch of a search, with the start indexes of the
+    /// entity invocations that executed it, from the root to the immediate one; none for an entry
+    /// that the agent itself executed.
+    fn search_oplog_attributions(
+        &self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<(u64, Vec<u64>)>>, String>;
     /// Enriches a forged raw failed update at `entry_index` of the agent's own oplog, whose
     /// divergence names `divergence_index` with an expected host call of unknown request.
     fn enrich_forged_failed_update_result(
@@ -955,6 +1027,129 @@ impl GolemHostApi for GolemHostApiImpl {
             .map_err(|error| format!("{error:?}"))
     }
 
+    fn read_oplog_batch_size(&self, agent_id: AgentId, start: u64) -> Result<Option<u64>, String> {
+        GetOplog::new(wire_agent_id(agent_id), start)
+            .get_next()
+            .map(|batch| batch.map(|entries| entries.len() as u64))
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn read_oplog_method_inputs(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Vec<(String, Vec<u64>)>, String> {
+        use golem_rust::bindings::golem::api::oplog::{AgentInvocation, PublicOplogEntry};
+
+        let entries = GetOplog::new(wire_agent_id(agent_id), start)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .unwrap_or_default();
+        Ok(entries
+            .into_iter()
+            .filter_map(|entry| match entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
+                    AgentInvocation::AgentMethodInvocation(method) => Some(method),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .map(|method| {
+                let values = method
+                    .function_input
+                    .value
+                    .value_nodes
+                    .iter()
+                    .filter_map(|node| match node {
+                        golem_rust::schema::wit::wire::SchemaValueNode::U64Value(value) => {
+                            Some(*value)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                (method.method_name, values)
+            })
+            .collect())
+    }
+
+    fn read_oplog_method_outputs(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Vec<(String, Vec<u64>)>, String> {
+        use golem_rust::bindings::golem::api::oplog::{AgentInvocationResult, PublicOplogEntry};
+
+        let entries = GetOplog::new(wire_agent_id(agent_id), start)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .unwrap_or_default();
+        Ok(entries
+            .into_iter()
+            .filter_map(|entry| match entry.entry {
+                PublicOplogEntry::AgentInvocationFinished(finished) => {
+                    match (finished.method_name, finished.result) {
+                        (Some(method_name), AgentInvocationResult::AgentMethod(output)) => {
+                            Some((method_name, output.output))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .map(|(method_name, output)| {
+                let values = output
+                    .value
+                    .value_nodes
+                    .iter()
+                    .filter_map(|node| match node {
+                        golem_rust::schema::wit::wire::SchemaValueNode::U64Value(value) => {
+                            Some(*value)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                (method_name, values)
+            })
+            .collect())
+    }
+
+    fn read_oplog_divergence_requests(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Option<(u64, Vec<Option<Vec<u64>>>)>, String> {
+        let batch = GetOplog::new(wire_agent_id(agent_id), start)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(batch.map(|entries| {
+            (
+                entries.len() as u64,
+                entries
+                    .iter()
+                    .filter_map(|entry| divergence_request(&entry.entry))
+                    .collect(),
+            )
+        }))
+    }
+
+    fn search_oplog_divergence_requests(
+        &self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<(u64, Option<Vec<u64>>)>>, String> {
+        let batch = SearchOplog::new(wire_agent_id(agent_id), &query)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(batch.map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(index, entry)| {
+                    divergence_request(&entry.entry).map(|request| (*index, request))
+                })
+                .collect()
+        }))
+    }
+
     fn search_oplog_result(
         &mut self,
         agent_id: AgentId,
@@ -964,6 +1159,35 @@ impl GolemHostApi for GolemHostApiImpl {
         let batch = search.get_next().map_err(|error| format!("{error:?}"))?;
         self.kept_search = Some(search);
         Ok(batch.map(|entries| entries.into_iter().map(|(index, _)| index).collect()))
+    }
+
+    fn search_oplog_attributions(
+        &self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<(u64, Vec<u64>)>>, String> {
+        use golem_rust::bindings::golem::api::oplog::PublicOplogEntryAttribution;
+
+        let batch = SearchOplog::new(wire_agent_id(agent_id), &query)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(batch.map(|entries| {
+            entries
+                .into_iter()
+                .map(|(index, entry)| {
+                    let starts = match entry.attribution {
+                        PublicOplogEntryAttribution::Agent => Vec::new(),
+                        PublicOplogEntryAttribution::Entity(context) => context
+                            .ancestors
+                            .iter()
+                            .chain([&context.invocation])
+                            .map(|invocation| invocation.start_index)
+                            .collect(),
+                    };
+                    (index, starts)
+                })
+                .collect()
+        }))
     }
 
     fn enrich_forged_failed_update_result(

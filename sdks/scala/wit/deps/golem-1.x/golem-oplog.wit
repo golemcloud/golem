@@ -1507,9 +1507,78 @@ interface oplog {
         span-closed(span-closed-parameters)
     }
 
+    /// The kind of an entity that runs inside an agent
+    enum public-agent-entity-kind {
+        tool,
+        tool-middleware,
+    }
+
+    /// An entity that runs inside an agent
+    record public-agent-entity {
+        kind: public-agent-entity-kind,
+        name: string,
+    }
+
+    /// How the agent called an entity
+    enum public-entity-call-mode {
+        synchronous,
+        asynchronous,
+        fire-and-forget,
+    }
+
+    /// The tool command that an entity invocation ran
+    record public-tool-invocation-operation {
+        command-path: list<string>,
+        /// Whether a live stdin attachment was requested
+        has-stdin: bool,
+        /// Whether a live stdout attachment was requested. Stdout bytes are not recorded in the oplog.
+        has-stdout: bool,
+        /// Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+        declares-stdout: bool,
+        /// Whether a live stderr attachment was requested. Stderr bytes are not recorded in the oplog.
+        has-stderr: bool,
+        /// Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+        declares-stderr: bool,
+    }
+
+    /// The operation that an entity invocation ran
+    variant public-entity-invocation-operation {
+        tool(public-tool-invocation-operation),
+    }
+
+    /// One entity invocation in an owner-oplog execution chain
+    record public-entity-invocation {
+        entity: public-agent-entity,
+        /// The index of the `start` entry of the invocation
+        start-index: oplog-index,
+        call-mode: public-entity-call-mode,
+        operation: option<public-entity-invocation-operation>,
+    }
+
+    /// The entity invocation that executed an entry, and its ancestors, ordered from the root
+    /// entity invocation to the immediate parent of `invocation`
+    record public-entity-invocation-context {
+        invocation: public-entity-invocation,
+        ancestors: list<public-entity-invocation>,
+    }
+
+    /// What executed an oplog entry: the agent itself, or an entity that runs inside it
+    variant public-oplog-entry-attribution {
+        agent,
+        entity(public-entity-invocation-context),
+    }
+
+    /// A public oplog entry with what executed it
+    record attributed-public-oplog-entry {
+        attribution: public-oplog-entry-attribution,
+        entry: public-oplog-entry,
+    }
+
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads
-    /// and augmenting entries with component metadata.
-    enrich-oplog-entries: func(environment-id: environment-id, agent-id: agent-id, entries: list<tuple<oplog-index, oplog-entry>>, component-revision: component-revision) -> result<list<public-oplog-entry>, string>;
+    /// and augmenting entries with component metadata and attribution. The attribution can read
+    /// the `start` entries of the entity invocations that own an entry, also when they are not
+    /// in `entries`, so the oplog grant of the caller must cover them.
+    enrich-oplog-entries: func(environment-id: environment-id, agent-id: agent-id, entries: list<tuple<oplog-index, oplog-entry>>, component-revision: component-revision) -> result<list<attributed-public-oplog-entry>, string>;
 
     variant oplog-read-error {
         permission-denied,
@@ -1518,11 +1587,15 @@ interface oplog {
 
     resource get-oplog {
         constructor(agent-id: agent-id, start: oplog-index);
-        get-next: func() -> result<option<list<public-oplog-entry>>, oplog-read-error>;
+        /// A batch is refused with `permission-denied` when the oplog grant of the caller does
+        /// not cover an entry that the batch reads, also a `start` entry outside the batch that
+        /// the attribution of an entry reads.
+        get-next: func() -> result<option<list<attributed-public-oplog-entry>>, oplog-read-error>;
     }
 
     resource search-oplog {
         constructor(agent-id: agent-id, text: string);
-        get-next: func() -> result<option<list<tuple<oplog-index, public-oplog-entry>>>, oplog-read-error>;
+        /// A batch is refused with `permission-denied` like a batch of `get-oplog`.
+        get-next: func() -> result<option<list<tuple<oplog-index, attributed-public-oplog-entry>>>, oplog-read-error>;
     }
 }

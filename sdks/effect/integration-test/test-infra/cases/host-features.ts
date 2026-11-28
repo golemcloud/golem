@@ -89,8 +89,8 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   const readOplog = yield* liftCliError(cli.invoke(r, "readOplog", ["5"]))
   yield* expectMatch(
     readOplog.stdout,
-    /create|initialize|invoke|exported|imported/i,
-    "HostFeatures.readOplog returns recognizable tag names",
+    /agent:(create|initialize|invoke|exported|imported)/i,
+    "HostFeatures.readOplog returns recognizable tag names with the agent attribution",
   )
 
   // Search oplog for the preceding increment invocation.

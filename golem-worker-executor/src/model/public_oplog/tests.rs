@@ -712,6 +712,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         None,
         source_revision,
         ClaimVisibility::Hidden,
+        None,
     )
     .await
     .unwrap();
@@ -741,6 +742,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         None,
         updated_revision,
         ClaimVisibility::Hidden,
+        None,
     )
     .await
     .unwrap();
@@ -914,6 +916,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
             None,
             revision,
             ClaimVisibility::Hidden,
+            None,
         )
         .await
         .unwrap();
@@ -947,6 +950,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
             None,
             revision,
             ClaimVisibility::Hidden,
+            None,
         )
         .await;
         assert_eq!(
@@ -988,6 +992,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         None,
         ComponentRevision::new(9).unwrap(),
         ClaimVisibility::Hidden,
+        None,
     )
     .await
     .unwrap();
@@ -1852,9 +1857,9 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     assert_eq!(page_context.invocation.start_index, tool_start);
     assert_eq!(page_context.ancestors[0].start_index, middleware_start);
 
-    let search = search_public_oplog(
-        components,
-        oplog_service,
+    let search = search_public_oplog_page(
+        components.clone(),
+        oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
         test_component_id(),
@@ -1862,21 +1867,196 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         None,
         ComponentRevision::INITIAL,
         OplogIndex::INITIAL,
-        None,
-        1,
+        PublicOplogPageLimits {
+            count: 1,
+            max_bytes: 1_000_000,
+            max_entry_bytes: 1_000_000,
+        },
         "last-entity-attribution-needle",
         ScanBudget::default(),
         ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
-    assert_eq!(search.entries.len(), 1);
-    assert_eq!(search.entries[0].oplog_index, final_log);
-    let PublicOplogEntryAttribution::Entity(search_context) = &search.entries[0].attribution else {
+    let [PublicOplogPageEntry::Included(search_entry)] = &public_page_entries(&search.entries)[..]
+    else {
+        panic!("expected one included search result");
+    };
+    assert_eq!(search_entry.oplog_index, final_log);
+    let PublicOplogEntryAttribution::Entity(search_context) = &search_entry.attribution else {
         panic!("search result without its Start must retain entity attribution");
     };
     assert_eq!(search_context.invocation.start_index, tool_start);
     assert_eq!(search_context.ancestors[0].start_index, middleware_start);
+
+    // A guest batch that starts inside the nested tool gets the same attribution. The owning
+    // `Start` entries of the log entry are outside the batch: the tool, the custom child of the
+    // middleware, and the middleware. The batch reads each of them only after its access allows
+    // it, and fails at the first one that the access refuses, without reading further owners.
+    let nested_tool = |attribution: &PublicOplogEntryAttribution| {
+        let PublicOplogEntryAttribution::Entity(context) = attribution else {
+            panic!("expected the nested tool, got {attribution:?}");
+        };
+        (
+            context.invocation.start_index,
+            context
+                .ancestors
+                .iter()
+                .map(|ancestor| ancestor.start_index)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let owners = vec![tool_start, child_start, middleware_start];
+    let guest_chunk = async |access: &mut RecordingOwnerStarts| {
+        get_guest_oplog_chunk(
+            components.clone(),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            log_index,
+            1,
+            ClaimVisibility::Hidden,
+            access,
+        )
+        .await
+    };
+    let mut access = RecordingOwnerStarts::default();
+    let chunk = guest_chunk(&mut access).await.unwrap();
+    assert_eq!(chunk.entries.len(), 1);
+    assert_eq!(
+        nested_tool(&chunk.entries[0].attribution),
+        (tool_start, vec![middleware_start])
+    );
+    assert_eq!(access.checked, owners);
+    let mut access = RecordingOwnerStarts::denying(child_start);
+    assert_eq!(
+        guest_chunk(&mut access).await.err(),
+        Some(RecordingOwnerStarts::DENIED.to_string())
+    );
+    assert_eq!(access.checked, vec![tool_start, child_start]);
+
+    let guest_search = async |access: &mut RecordingOwnerStarts| {
+        search_guest_oplog(
+            components.clone(),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            final_log,
+            None,
+            1,
+            "last-entity-attribution-needle",
+            ScanBudget::default(),
+            ClaimVisibility::Hidden,
+            access,
+        )
+        .await
+    };
+    let mut access = RecordingOwnerStarts::default();
+    let search = guest_search(&mut access).await.unwrap();
+    assert_eq!(search.entries.len(), 1);
+    assert_eq!(search.entries[0].oplog_index, final_log);
+    assert_eq!(
+        nested_tool(&search.entries[0].attribution),
+        (tool_start, vec![middleware_start])
+    );
+    assert_eq!(access.checked, owners);
+    let mut access = RecordingOwnerStarts::denying(middleware_start);
+    assert_eq!(
+        guest_search(&mut access).await.err(),
+        Some(RecordingOwnerStarts::DENIED.to_string())
+    );
+    assert_eq!(access.checked, owners);
+
+    // Enrichment takes the entries that the guest passes in place of the oplog at their indexes,
+    // and reads only the owners outside them.
+    let log_entry = oplog_service
+        .read_exact(&owned_agent_id, AgentMode::Durable, log_index, 1)
+        .await
+        .unwrap()
+        .remove(&log_index)
+        .unwrap();
+    let tool_entry = oplog_service
+        .read_exact(&owned_agent_id, AgentMode::Durable, tool_start, 1)
+        .await
+        .unwrap()
+        .remove(&tool_start)
+        .unwrap();
+    let entries = vec![
+        (
+            tool_start.as_u64(),
+            golem_common::model::oplog::OplogEnrichmentEntry::Other(tool_entry),
+        ),
+        (
+            log_index.as_u64(),
+            golem_common::model::oplog::OplogEnrichmentEntry::Other(log_entry),
+        ),
+    ];
+    let mut access = RecordingOwnerStarts::default();
+    let attributions = enrichment_attributions(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        &entries,
+        &mut access,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        attributions.iter().map(nested_tool).collect::<Vec<_>>(),
+        vec![(tool_start, vec![middleware_start]); 2]
+    );
+    assert_eq!(access.checked, vec![child_start, middleware_start]);
+    let mut access = RecordingOwnerStarts::denying(middleware_start);
+    assert_eq!(
+        enrichment_attributions(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            &entries,
+            &mut access,
+        )
+        .await
+        .err(),
+        Some(RecordingOwnerStarts::DENIED.to_string())
+    );
+}
+
+/// Allows the reads of owning `Start` entries other than `denied`, and records each index that it
+/// checks.
+#[derive(Default)]
+struct RecordingOwnerStarts {
+    denied: Option<OplogIndex>,
+    checked: Vec<OplogIndex>,
+}
+
+impl RecordingOwnerStarts {
+    const DENIED: &str = "owner start denied";
+
+    fn denying(index: OplogIndex) -> Self {
+        Self {
+            denied: Some(index),
+            checked: Vec::new(),
+        }
+    }
+}
+
+impl OwnerStartAccess for RecordingOwnerStarts {
+    async fn check(&mut self, index: OplogIndex) -> Result<(), String> {
+        self.checked.push(index);
+        if self.denied == Some(index) {
+            Err(Self::DENIED.to_string())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[test]
@@ -2392,6 +2572,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             None,
             ComponentRevision::new(1).unwrap(),
             ClaimVisibility::Hidden,
+            None,
         )
         .await
         .unwrap_or_else(|err| panic!("rendering oplog entry {index} failed: {err}"));
@@ -2677,6 +2858,7 @@ async fn pending_and_started_methods_expose_original_input_without_component_met
             None,
             ComponentRevision::INITIAL,
             ClaimVisibility::Hidden,
+            None,
         )
         .await
         .unwrap();
@@ -3027,8 +3209,8 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
     );
 
     // A guest search has the same limit, and still reads no entry after its pinned end.
-    let guest = |from: OplogIndex| {
-        search_public_oplog(
+    let guest = async |from: OplogIndex| {
+        search_guest_oplog(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
             &owned_agent_id,
@@ -3043,7 +3225,9 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             "needle",
             ScanBudget::default(),
             ClaimVisibility::Hidden,
+            &mut UnrestrictedOwnerStarts,
         )
+        .await
     };
     let first = guest(OplogIndex::INITIAL).await.unwrap();
     let indices = |entries: &[PublicOplogEntryWithIndex]| {
@@ -4002,6 +4186,7 @@ async fn the_public_enrich_request_holds_no_raw_entries() {
             None,
             ComponentRevision::INITIAL,
             ClaimVisibility::Hidden,
+            None,
         )
         .await
         .unwrap();
@@ -4229,4 +4414,173 @@ fn a_range_read_never_gets_more_than_the_configured_allowance() {
             millis: 0
         }
     );
+}
+
+/// The public form of a `FailedUpdate` reads the recorded `Start` at the index of its divergence
+/// for the expected request. A guest batch reads that request itself only when the batch covers
+/// the index of the divergence. It names a divergence outside it, so that the caller can check
+/// the grant for the index before it reads the request. A remote reader always holds it.
+#[test]
+async fn a_guest_batch_names_the_divergences_outside_it_and_reads_their_requests_on_demand() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("divergence-window").await;
+    let function_name = HostFunctionName::Custom("divergent-call".to_string());
+    let divergence_start = oplog
+        .add(OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: function_name.clone(),
+            invocation_id: None,
+            observational_owner: None,
+            driver: None,
+            request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
+            durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
+            denial: None,
+        })
+        .await
+        .unwrap();
+    let after_start = oplog.add(log_entry(0)).await.unwrap();
+    let failed_update = oplog
+        .add(OplogEntry::FailedUpdate {
+            timestamp: Timestamp::now_utc(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            snapshot_fault: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: divergence_start,
+                expected: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: function_name.to_string(),
+                        durable_function_type: DurableFunctionType::ReadLocal.into(),
+                        parent_start_index: None,
+                        invocation_id: None,
+                        observational_owner: None,
+                        driver: None,
+                        carries_request: true,
+                        request: None,
+                    },
+                ),
+                actual: golem_common::model::oplog::ReplayStep::EndOfHistory(
+                    golem_schema::Empty {},
+                ),
+                mismatched: vec![],
+                replay_start: None,
+            })),
+        })
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let has_expected_request = |entry: &PublicOplogEntry| {
+        let PublicOplogEntry::FailedUpdate(params) = entry else {
+            panic!("expected a failed update, got {entry:?}");
+        };
+        let divergence = params
+            .divergence
+            .as_ref()
+            .expect("the failed update keeps its divergence");
+        assert_eq!(divergence.oplog_index, divergence_start);
+        match &divergence.expected {
+            golem_common::model::oplog::ReplayStep::HostCall(call) => call.request.is_some(),
+            other => panic!("expected a host call, got {other:?}"),
+        }
+    };
+    let guest_chunk = async |from: OplogIndex, count: usize| {
+        get_guest_oplog_chunk(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            count,
+            ClaimVisibility::Hidden,
+            &mut UnrestrictedOwnerStarts,
+        )
+        .await
+    };
+    let failed_update_of = |entries: &[PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .find(|entry| entry.oplog_index == failed_update)
+            .map(|entry| entry.entry.clone())
+            .expect("the batch holds the failed update")
+    };
+
+    let mut outside = guest_chunk(after_start, 2).await.unwrap();
+    assert!(!has_expected_request(&failed_update_of(&outside.entries)));
+    let unread = unread_expected_requests(&outside.entries, after_start, 2);
+    assert_eq!(unread, vec![divergence_start]);
+    read_expected_requests(
+        &mut outside.entries,
+        &unread,
+        &(oplog_service.clone() as Arc<dyn OplogService>),
+        &owned_agent_id,
+        AgentMode::Durable,
+    )
+    .await;
+    assert!(has_expected_request(&failed_update_of(&outside.entries)));
+    let inside = guest_chunk(divergence_start, 3).await.unwrap();
+    assert!(has_expected_request(&failed_update_of(&inside.entries)));
+    assert!(unread_expected_requests(&inside.entries, divergence_start, 3).is_empty());
+
+    let search = async |from: OplogIndex, count: usize| {
+        search_guest_oplog(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            None,
+            count,
+            "failed-update",
+            ScanBudget::default(),
+            ClaimVisibility::Hidden,
+            &mut UnrestrictedOwnerStarts,
+        )
+        .await
+    };
+    let mut outside = search(after_start, 2).await.unwrap();
+    assert!(!has_expected_request(&failed_update_of(&outside.entries)));
+    let unread = unread_expected_requests(&outside.entries, after_start, 2);
+    assert_eq!(unread, vec![divergence_start]);
+    read_expected_requests(
+        &mut outside.entries,
+        &unread,
+        &(oplog_service.clone() as Arc<dyn OplogService>),
+        &owned_agent_id,
+        AgentMode::Durable,
+    )
+    .await;
+    assert!(has_expected_request(&failed_update_of(&outside.entries)));
+    let inside = search(divergence_start, 3).await.unwrap();
+    assert!(has_expected_request(&failed_update_of(&inside.entries)));
+    assert!(unread_expected_requests(&inside.entries, divergence_start, 3).is_empty());
+
+    let remote = get_public_oplog_chunk(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        ComponentRevision::INITIAL,
+        failed_update,
+        1,
+        ClaimVisibility::Hidden,
+    )
+    .await
+    .unwrap();
+    assert!(has_expected_request(&remote.entries[0].entry));
 }

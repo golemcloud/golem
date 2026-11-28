@@ -11,6 +11,9 @@ import { OplogClient } from "./host/OplogClient.js"
  * - {@link search} — paged full-text search of a specific agent's oplog
  * - {@link enrich} — resolve raw entries into public-shape entries
  *
+ * Every public entry comes with its attribution: the agent itself, or the
+ * entity invocation that executed it, with the entity invocations around it.
+ *
  * Streaming variants (`read`, `search`) drive the host's pager classes
  * via `Stream.unfoldEffect` so callers can pipeline arbitrarily large
  * oplogs without buffering everything in memory.
@@ -30,18 +33,27 @@ import { OplogClient } from "./host/OplogClient.js"
  */
 export type {
   AgentId,
+  AttributedPublicOplogEntry,
   ComponentRevision,
   EnvironmentId,
   OplogEntry,
   OplogIndex,
+  PublicAgentEntity,
+  PublicAgentEntityKind,
+  PublicEntityCallMode,
+  PublicEntityInvocation,
+  PublicEntityInvocationContext,
+  PublicEntityInvocationOperation,
   PublicOplogEntry,
+  PublicOplogEntryAttribution,
+  PublicToolInvocationOperation,
 } from "golem:api/oplog@1.5.0"
 
 type RawOplogIndex = OplogHost.OplogIndex
 type RawAgentId = OplogHost.AgentId
 type RawEnvironmentId = OplogHost.EnvironmentId
 type RawComponentRevision = OplogHost.ComponentRevision
-type RawPublicOplogEntry = OplogHost.PublicOplogEntry
+type RawAttributedPublicOplogEntry = OplogHost.AttributedPublicOplogEntry
 type RawOplogEntry = OplogHost.OplogEntry
 
 // ---------------------------------------------------------------------------
@@ -78,7 +90,7 @@ export const enrich = (input: {
   readonly agentId: RawAgentId
   readonly entries: ReadonlyArray<readonly [RawOplogIndex, RawOplogEntry]>
   readonly componentRevision: RawComponentRevision
-}): Effect.Effect<ReadonlyArray<RawPublicOplogEntry>, OplogHostError, OplogClient> =>
+}): Effect.Effect<ReadonlyArray<RawAttributedPublicOplogEntry>, OplogHostError, OplogClient> =>
   Effect.gen(function* () {
     const client = yield* OplogClient
     return yield* Effect.try({
@@ -107,7 +119,10 @@ export const enrich = (input: {
  */
 export interface OplogReader {
   /** Fetch the next chunk of entries, or `undefined` when exhausted. */
-  readonly next: Effect.Effect<ReadonlyArray<RawPublicOplogEntry> | undefined, OplogHostError>
+  readonly next: Effect.Effect<
+    ReadonlyArray<RawAttributedPublicOplogEntry> | undefined,
+    OplogHostError
+  >
 }
 
 /**
@@ -130,7 +145,9 @@ export const reader = (input: {
       next: Effect.try({
         try: () => {
           const out = handle.getNext()
-          return out === undefined ? undefined : ([...out] as ReadonlyArray<RawPublicOplogEntry>)
+          return out === undefined
+            ? undefined
+            : ([...out] as ReadonlyArray<RawAttributedPublicOplogEntry>)
         },
         catch: (e) => new OplogHostError(e),
       }),
@@ -148,10 +165,10 @@ export const reader = (input: {
 export const read = (input: {
   readonly agentId: RawAgentId
   readonly start: RawOplogIndex
-}): Stream.Stream<RawPublicOplogEntry, OplogHostError, OplogClient> =>
+}): Stream.Stream<RawAttributedPublicOplogEntry, OplogHostError, OplogClient> =>
   Stream.unwrap(
     Effect.map(reader(input), (r) =>
-      Stream.paginate<OplogReader, RawPublicOplogEntry, OplogHostError>(r, (state) =>
+      Stream.paginate<OplogReader, RawAttributedPublicOplogEntry, OplogHostError>(r, (state) =>
         Effect.map(state.next, (chunk) =>
           chunk === undefined
             ? ([[], Option.none()] as const)
@@ -175,7 +192,7 @@ export const read = (input: {
  */
 export interface OplogSearchReader {
   readonly next: Effect.Effect<
-    ReadonlyArray<readonly [RawOplogIndex, RawPublicOplogEntry]> | undefined,
+    ReadonlyArray<readonly [RawOplogIndex, RawAttributedPublicOplogEntry]> | undefined,
     OplogHostError
   >
 }
@@ -202,9 +219,9 @@ export const searchReader = (input: {
           const out = handle.getNext()
           return out === undefined
             ? undefined
-            : (out.map(([i, e]) => [i, e] as [RawOplogIndex, RawPublicOplogEntry]) as ReadonlyArray<
-                readonly [RawOplogIndex, RawPublicOplogEntry]
-              >)
+            : (out.map(
+                ([i, e]) => [i, e] as [RawOplogIndex, RawAttributedPublicOplogEntry],
+              ) as ReadonlyArray<readonly [RawOplogIndex, RawAttributedPublicOplogEntry]>)
         },
         catch: (e) => new OplogHostError(e),
       }),
@@ -221,12 +238,16 @@ export const searchReader = (input: {
 export const search = (input: {
   readonly agentId: RawAgentId
   readonly text: string
-}): Stream.Stream<readonly [RawOplogIndex, RawPublicOplogEntry], OplogHostError, OplogClient> =>
+}): Stream.Stream<
+  readonly [RawOplogIndex, RawAttributedPublicOplogEntry],
+  OplogHostError,
+  OplogClient
+> =>
   Stream.unwrap(
     Effect.map(searchReader(input), (r) =>
       Stream.paginate<
         OplogSearchReader,
-        readonly [RawOplogIndex, RawPublicOplogEntry],
+        readonly [RawOplogIndex, RawAttributedPublicOplogEntry],
         OplogHostError
       >(r, (state) =>
         Effect.map(state.next, (chunk) =>

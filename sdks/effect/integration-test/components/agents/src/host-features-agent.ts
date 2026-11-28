@@ -139,7 +139,7 @@ const hostFeatureMethods = (state: Ref.Ref<{ count: number }>) => ({
       const self = yield* selfRawAgentId
       const tags = yield* Stream.runCollect(
         Oplog.read({ agentId: self, start: 0n }).pipe(
-          Stream.map((entry) => entry.tag),
+          Stream.map(({ attribution, entry }) => `${attribution.tag}:${entry.tag}`),
           Stream.take(count),
         ),
       )
@@ -151,7 +151,7 @@ const hostFeatureMethods = (state: Ref.Ref<{ count: number }>) => ({
       const self = yield* selfRawAgentId
       const tags = yield* Stream.runCollect(
         Oplog.search({ agentId: self, text: query }).pipe(
-          Stream.map(([, entry]) => entry.tag),
+          Stream.map(([, { attribution, entry }]) => `${attribution.tag}:${entry.tag}`),
           Stream.take(count),
         ),
       )

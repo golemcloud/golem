@@ -35,6 +35,9 @@ type Divergence struct {
 	Mismatched   []uint8
 	// Whether the requests of the two host calls are different values.
 	RequestsDiffer bool
+	// The case tag of the attribution of the FailedUpdate entry: 0 the agent
+	// itself, 1 an entity inside it.
+	Attribution uint8
 }
 
 // Report holds the divergences that each oplog reader returned.

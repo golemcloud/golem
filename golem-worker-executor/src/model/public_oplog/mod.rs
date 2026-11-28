@@ -21,6 +21,7 @@ mod reading;
 mod snapshots;
 
 use attribution::PublicOplogAttributionResolver;
+pub(crate) use attribution::{OwnerStartAccess, UnrestrictedOwnerStarts, enrichment_attributions};
 #[cfg(test)]
 use conversion::host_response_to_public_value;
 pub(crate) use conversion::with_expected_request;
@@ -29,8 +30,9 @@ pub use reading::{
     PublicOplogRangePage, check_oplog_cursor_query, find_component_revision_at,
     get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
     get_public_oplog_range_page, oplog_page_cursor, oplog_page_start, oplog_range_allowance,
-    search_public_oplog, search_public_oplog_page,
+    read_expected_requests, search_public_oplog_page, unread_expected_requests,
 };
+pub(crate) use reading::{get_guest_oplog_chunk, search_guest_oplog};
 use snapshots::raw_snapshot_to_public;
 
 #[cfg(test)]
@@ -102,6 +104,7 @@ use golem_common::schema::{
 use golem_schema::Empty;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 pub struct PublicOplogChunk<E = PublicOplogEntryWithIndex> {
     pub entries: Vec<E>,
@@ -135,6 +138,10 @@ pub struct PublicOplogSearchResult<E = PublicOplogEntryWithIndex> {
 /// entries hold the users' verified claims.
 #[async_trait]
 pub trait PublicOplogEntryOps: Sized {
+    /// Converts the entry at `oplog_index`. The expected request of a replay divergence reads the
+    /// recorded `Start` at the index of the divergence; `expected_request_window` limits that
+    /// read to its indexes, and the request stays unknown for a divergence outside it. `None`
+    /// reads the `Start` at any index.
     async fn from_oplog_entry(
         oplog_index: OplogIndex,
         value: OplogEntry,
@@ -147,6 +154,7 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
+        expected_request_window: Option<&RangeInclusive<OplogIndex>>,
     ) -> Result<Self, String> {
         Self::from_enrichment_entry(
             oplog_index,
@@ -160,6 +168,7 @@ pub trait PublicOplogEntryOps: Sized {
             agent_type,
             component_revision,
             claims,
+            expected_request_window,
         )
         .await
     }
@@ -176,6 +185,7 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
+        expected_request_window: Option<&RangeInclusive<OplogIndex>>,
     ) -> Result<Self, String>;
 }
 

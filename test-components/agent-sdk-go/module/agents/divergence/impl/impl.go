@@ -21,8 +21,8 @@ func init() {
 		report := divergence.Report{FromGet: []divergence.Divergence{}, FromSearch: []divergence.Divergence{}}
 		index := uint64(1)
 		for e := range oplog.MustGet(self, 1) {
-			if e.Tag() == oplog.FailedUpdate {
-				if d, ok := view(index, e); ok {
+			if e.Entry.Tag() == oplog.FailedUpdate {
+				if d, ok := view(index, e.Entry, e.Attribution); ok {
 					report.FromGet = append(report.FromGet, d)
 				}
 			}
@@ -30,7 +30,7 @@ func init() {
 		}
 		for hit := range oplog.MustSearch(self, "failed-update") {
 			if hit.Entry.Tag() == oplog.FailedUpdate {
-				if d, ok := view(hit.Index, hit.Entry); ok {
+				if d, ok := view(hit.Index, hit.Entry, hit.Attribution); ok {
 					report.FromSearch = append(report.FromSearch, d)
 				}
 			}
@@ -42,7 +42,7 @@ func init() {
 // hostCallTag is the case tag of a host call step of replay-step.
 const hostCallTag = 0
 
-func view(index uint64, e oplog.Entry) (divergence.Divergence, bool) {
+func view(index uint64, e oplog.Entry, attribution oplog.Attribution) (divergence.Divergence, bool) {
 	params := e.FailedUpdate()
 	if params.Divergence.IsNone() {
 		return divergence.Divergence{}, false
@@ -85,6 +85,7 @@ func view(index uint64, e oplog.Entry) (divergence.Divergence, bool) {
 		Actual:         steps[1],
 		Mismatched:     mismatched,
 		RequestsDiffer: !reflect.DeepEqual(requests[0], requests[1]),
+		Attribution:    attribution.Tag(),
 	}, true
 }
 

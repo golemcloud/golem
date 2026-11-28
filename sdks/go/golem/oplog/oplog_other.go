@@ -28,8 +28,8 @@ import (
 
 var errNoHost = errors.New("golem: oplogs can only be read inside a component")
 
-func hostGet(golem.AgentID, uint64) iter.Seq2[Entry, error] {
-	return func(yield func(Entry, error) bool) { yield(Entry{}, errNoHost) }
+func hostGet(golem.AgentID, uint64) iter.Seq2[AttributedEntry, error] {
+	return func(yield func(AttributedEntry, error) bool) { yield(AttributedEntry{}, errNoHost) }
 }
 
 func hostSearch(golem.AgentID, string) iter.Seq2[SearchHit, error] {

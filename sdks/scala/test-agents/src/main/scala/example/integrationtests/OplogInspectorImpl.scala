@@ -41,7 +41,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         sb.append("No entries found.\n")
       case Some(entries) =>
         entries.zipWithIndex.foreach { case (entry, i) =>
-          sb.append(s"[$i] ${describeEntry(entry)}\n")
+          sb.append(s"[$i] ${describeAttribution(entry.attribution)} ${describeEntry(entry.entry)}\n")
         }
     }
     sb.toString()
@@ -60,11 +60,19 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         sb.append("No matching entries.\n")
       case Some(results) =>
         results.foreach { case (idx, entry) =>
-          sb.append(s"  [oplog#$idx] ${describeEntry(entry)}\n")
+          sb.append(s"  [oplog#$idx] ${describeAttribution(entry.attribution)} ${describeEntry(entry.entry)}\n")
         }
     }
     sb.toString()
   }
+
+  private def describeAttribution(attribution: OplogApi.Attribution): String =
+    attribution match {
+      case OplogApi.Attribution.Agent           => "by=agent"
+      case OplogApi.Attribution.Entity(context) =>
+        val chain = (context.ancestors :+ context.invocation).map(i => s"${i.entity.name}#${i.startIndex}")
+        s"by=entity(${chain.mkString(">")})"
+    }
 
   private def describeEntry(e: OplogApi.OplogEntry): String = {
     val ts = s"${e.timestamp.seconds}s"
