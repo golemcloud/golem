@@ -1329,7 +1329,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::TooLarge as i32),
         "{rejected:?}"
     );
-    executor.interrupt(&source).await?;
+    // A management interrupt would finish the source session, which must stay writable.
     executor.append_after_next_oplog_commit(&source.agent_id);
     let lost = executor
         .client
@@ -1369,10 +1369,13 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .append_to_stream_slot(source_append)
         .await?
         .into_inner();
-    assert!(matches!(
-        accepted.result,
-        Some(append_to_stream_slot_response::Result::Accepted(_))
-    ));
+    assert!(
+        matches!(
+            accepted.result,
+            Some(append_to_stream_slot_response::Result::Accepted(_))
+        ),
+        "source must remain writable after the fork: {accepted:?}"
+    );
     // Live admission must be folded before any status-cache eviction or full oplog refold.
     let live_admissions = executor.export_fork_admissions(&source.agent_id).await?;
     assert_eq!(live_admissions.reservations.len(), 1);
