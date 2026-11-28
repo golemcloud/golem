@@ -18,8 +18,8 @@ use super::{
     InvocationResponse, InvocationSessionResult, InvocationSessionState, InvocationStart,
     PersistedInvocationTarget, ResponseLease, ResumeAttach, SessionError, SessionStreamRole,
     UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, build_resume_attempt,
-    durable_stream_mapping_to_proto, ends_only_the_attachment, invocation_response,
-    is_attachment_termination, mpsc, persisted_result_and_finished,
+    durable_stream_mapping_to_proto, ends_only_the_attachment, forward_validated_responses,
+    invocation_response, is_attachment_termination, mpsc, persisted_result_and_finished,
     pre_acceptance_rejection_reason, resumed_input_schema, route_durable_request,
     send_attachment_revocation, send_protocol_failure, send_resumed_finished,
     until_response_closed, with_input_server_terminals,
@@ -270,25 +270,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         let state = Arc::new(tokio::sync::Mutex::new(protocol_state));
-        let (responses, mut response_rx) = mpsc::channel(32);
+        let (responses, response_rx) = mpsc::channel(32);
         let response_state = state.clone();
         let outward_forwarder = outward.clone();
         let forwarder_guard = forwarder_stopped.clone().drop_guard();
         let forwarder = tokio::spawn(async move {
             let _guard = forwarder_guard;
-            while let Some(response) = response_rx.recv().await {
-                if let Err(error) = response_state.lock().await.validate_response(&response) {
-                    tracing::error!(
-                        error,
-                        ?response,
-                        "Invalid resumed invocation session response"
-                    );
-                    return;
-                }
-                if outward_forwarder.send(response).await.is_err() {
-                    return;
-                }
-            }
+            forward_validated_responses(response_state, response_rx, outward_forwarder, || {})
+                .await;
         });
         let streams = acceptance.streams;
         let known_output_mapping_ids = acceptance

@@ -185,7 +185,10 @@ mod tests {
         let WorkerExecutorError::RecoveryRequired { cause, details, .. } = &error else {
             panic!("expected an unavailable read, got {error:?}");
         };
-        assert_eq!(*cause, RecoveryCause::OplogReadUnavailable);
+        assert!(
+            matches!(cause, RecoveryCause::OplogReadUnavailable { .. }),
+            "{cause:?}"
+        );
         assert!(details.contains("prefix-7"), "{details}");
         assert!(details.contains("injected outage"), "{details}");
         assert_eq!(attempts.load(Ordering::SeqCst), 2);

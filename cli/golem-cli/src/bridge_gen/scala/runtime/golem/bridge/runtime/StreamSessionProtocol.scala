@@ -52,6 +52,7 @@ private[runtime] object StreamSessionProtocol {
       case "stream-end" => serverStreamEnd(json)
       case "inputStreamAck" => validate(json, kind, Set("channel", "highestContiguousSequence", "mappings", "terminal"))
       case "attachmentRevoked" => validate(json, kind, Set("reason"))
+      case "attachmentObservationFailed" => validate(json, kind, Set("agentId", "message"))
       case "invocationFinished" => validate(json, kind, Set("outcome"))
       case _ => throw BridgeException(s"unsupported stream session message: $kind")
     }

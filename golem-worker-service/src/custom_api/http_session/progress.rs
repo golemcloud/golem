@@ -300,6 +300,9 @@ pub(super) enum ExecutorEnd {
     /// The executor refused the session because it cannot read the history of the agent for a
     /// time. The refusal does not end the invocation, and it is not an outcome.
     ReadRefused,
+    /// The executor ended the attachment because a stored history that the session reads does
+    /// not read for good. It does not end the invocation, and it is not an outcome.
+    ObservationFailed,
 }
 
 impl ExecutorEnd {

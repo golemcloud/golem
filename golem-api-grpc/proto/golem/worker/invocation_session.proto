@@ -305,6 +305,18 @@ message AttachmentRevoked {
   string details = 1;
 }
 
+// The attachment cannot observe the session: the stored history of an agent that the session
+// reads does not read, for good. It ends only this attachment. It is not an outcome of the
+// invocation and not a terminal of a durable stream, and a client does not attach again
+// automatically because of it.
+message AttachmentObservationFailed {
+  // The agent whose stored history does not read.
+  golem.worker.AgentId agent_id = 1;
+  // A diagnostic that names the agent and the kind of the failed read, and no stored data.
+  string message = 2;
+  golem.worker.v1.WorkerExecutionError worker_error = 3;
+}
+
 enum InvocationFailureKind {
   INVOCATION_FAILURE_KIND_UNSPECIFIED = 0;
   INVOCATION_FAILURE_KIND_EXECUTION = 1;
@@ -348,5 +360,6 @@ message InvocationResponse {
     InvocationSessionCompletion finished = 10;
     // Selected revision and bindings, after a queued acceptance without a revision.
     InvocationAccepted ready = 11;
+    AttachmentObservationFailed observation_failed = 12;
   }
 }

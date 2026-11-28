@@ -310,6 +310,9 @@ impl SessionCheckpoint {
             invocation_response::Response::AttachmentRevoked(revoked) => {
                 bail!("attachment revoked: {revoked:?}")
             }
+            invocation_response::Response::ObservationFailed(failed) => {
+                bail!("attachment observation failed: {failed:?}")
+            }
             invocation_response::Response::InputAck(_) => bail!("unexpected input acknowledgement"),
         }
         Ok(())

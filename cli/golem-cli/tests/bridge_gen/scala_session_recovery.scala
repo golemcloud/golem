@@ -210,6 +210,16 @@ class StreamRuntimeTest extends munit.FunSuite {
     assertEquals(error, AgentStreamError("invocation-failed", "agent panicked", Some("panic output\n")))
   }
 
+  test("an observation failure ends the call without reconnecting") {
+    val error = answered { (p, start) =>
+      accept(p, start)
+      p.send(message("attachmentObservationFailed", "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
+        "message" -> Json.string("the stored history of agent 0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d does not read: the stored data is corrupt")))
+    }
+    assertEquals(error.getMessage,
+      "attachment-observation-failed: the invocation session cannot observe agent 0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d: the stored history of agent 0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d does not read: the stored data is corrupt")
+  }
+
   test("an unknown member beside stderr is still rejected") {
     val rejection = answered((p, start) => p.send(message("invocationRejected", "attemptId" -> field(start, "attemptId"),
       "code" -> Json.string("invocation-failed"), "message" -> Json.string("agent panicked"),

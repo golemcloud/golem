@@ -693,6 +693,12 @@ impl Peer {
             return self.terminal().await;
         }
         accepted(&mut conn, &start, "original-session", json!([])).await?;
+        if mode == "observation-failed" {
+            send(&mut conn, json!({"type":"attachmentObservationFailed",
+                "agentId":"00000000-0000-8000-8000-000000000abc",
+                "message":"the stored history of agent 00000000-0000-8000-8000-000000000abc does not read: the stored data is corrupt"})).await?;
+            return self.terminal().await;
+        }
         let cancelling = matches!(
             mode,
             "output-cancel-race"

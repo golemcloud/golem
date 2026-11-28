@@ -427,6 +427,12 @@ impl TestWorkerExecutor {
                 Some(invocation_response::Response::AttachmentRevoked(_)) => {
                     unreachable!("response validation rejects attachment revocation")
                 }
+                Some(invocation_response::Response::ObservationFailed(failed)) => {
+                    return Err(anyhow!(
+                        "invocation attachment observation failed: {}",
+                        failed.message
+                    ));
+                }
                 None => unreachable!("response validation rejects empty frames"),
             }
         }

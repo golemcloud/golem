@@ -77,6 +77,19 @@ func (e *StreamItemError) Error() string { return e.Err.Error() }
 
 func (e *StreamItemError) Unwrap() error { return e.Err }
 
+// ObservationError is a streaming call whose session cannot observe the
+// invocation: the stored history of the agent AgentID does not read, for good.
+// The invocation keeps what it committed. The call does not attach again,
+// because another attachment gives the same answer.
+type ObservationError struct {
+	AgentID string
+	Message string
+}
+
+func (e *ObservationError) Error() string {
+	return fmt.Sprintf("golem: the invocation session cannot observe agent %s: %s", e.AgentID, e.Message)
+}
+
 // UnreachableError is a streaming call that could not reach the server within
 // its reconnect window: the server accepted neither the start nor a resume. Endpoint
 // is the WebSocket URL, or the server's WebSocket URL when the environment

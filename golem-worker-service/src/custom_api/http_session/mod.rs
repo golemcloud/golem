@@ -54,6 +54,9 @@ pub enum HttpSessionError {
     RetainedInputLimit,
     ResumeExhausted,
     Cancelled,
+    /// The session cannot observe the invocation: the stored history of an agent that it reads
+    /// does not read, for good. The invocation keeps what it committed.
+    ObservationFailed(String),
 }
 
 impl HttpSessionError {
@@ -68,6 +71,7 @@ impl HttpSessionError {
             Self::RetainedInputLimit => "frame_limit",
             Self::ResumeExhausted => "resume_exhausted",
             Self::Cancelled => "cancelled",
+            Self::ObservationFailed(_) => "observation_failed",
         }
     }
 }

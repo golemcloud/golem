@@ -3361,6 +3361,12 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         ("success-key-known", "", window, STABLE),
         ("resume-retryable", "", window, STABLE),
         ("initial", "terminal rejection", window, STABLE),
+        (
+            "observation-failed",
+            "attachment-observation-failed: the invocation session cannot observe agent 00000000-0000-8000-8000-000000000abc: the stored history of agent 00000000-0000-8000-8000-000000000abc does not read: the stored data is corrupt",
+            window,
+            STABLE,
+        ),
         ("other", "terminal rejection", window, STABLE),
         (
             "mismatch",

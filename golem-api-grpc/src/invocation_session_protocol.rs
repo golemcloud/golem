@@ -443,6 +443,19 @@ impl InvocationSessionState {
                 self.phase = SessionPhase::Complete;
                 Ok(())
             }
+            // The stored history of an agent that the session reads does not read for good. The
+            // frame ends only this attachment: it needs no terminal of an input or an output, and
+            // it is not a completion of the invocation.
+            (SessionPhase::Active, invocation_response::Response::ObservationFailed(failed)) => {
+                if failed.agent_id.is_none() {
+                    return Err("an observation failure names no agent".to_string());
+                }
+                if failed.worker_error.is_none() {
+                    return Err("an observation failure has no worker error".to_string());
+                }
+                self.phase = SessionPhase::Complete;
+                Ok(())
+            }
             (SessionPhase::Active, invocation_response::Response::Finished(finished)) => {
                 self.finish(finished)
             }
@@ -2538,6 +2551,81 @@ mod tests {
                     .unwrap();
                 assert!(state.is_complete());
             }
+        }
+
+        /// An observation failure ends the attachment while an output has no terminal, where a
+        /// completion of the invocation is rejected. It must name the agent and carry the worker
+        /// error, and nothing follows it.
+        #[test]
+        fn an_observation_failure_ends_the_attachment_with_an_open_output() {
+            let observation_failed = |agent_id: Option<AgentId>, worker_error: bool| {
+                response(invocation_response::Response::ObservationFailed(
+                    crate::proto::golem::worker::AttachmentObservationFailed {
+                        agent_id,
+                        message: "the stored history of the producer does not read".to_string(),
+                        worker_error: worker_error.then(WorkerExecutionError::default),
+                    },
+                ))
+            };
+            let producer = Some(agent_id());
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&trusted_start(record(vec![stream(7)])))
+                .unwrap();
+            let Some(invocation_response::Response::Accepted(mut queued)) = accepted().response
+            else {
+                unreachable!()
+            };
+            queued.component_revision = None;
+            state
+                .validate_response(&response(invocation_response::Response::Accepted(
+                    queued.clone(),
+                )))
+                .unwrap();
+            queued.component_revision = Some(12);
+            queued.stream_mappings = vec![
+                mapping(7, StreamMappingRole::Input),
+                mapping(8, StreamMappingRole::Output),
+            ];
+            let epoch = queued.epoch;
+            state
+                .validate_response(&response(invocation_response::Response::Ready(queued)))
+                .unwrap();
+            let mut input_terminal = consumer_end(7, StreamDirection::Input, 0, true);
+            input_terminal.epoch = epoch;
+            state
+                .validate_response(&response(invocation_response::Response::StreamEnd(
+                    input_terminal,
+                )))
+                .unwrap();
+            assert!(
+                state
+                    .validate_response(&failure(InvocationFailureKind::Execution))
+                    .is_err(),
+                "a completion still needs the output terminal"
+            );
+            assert!(
+                state
+                    .validate_response(&observation_failed(None, true))
+                    .is_err()
+            );
+            assert!(
+                state
+                    .validate_response(&observation_failed(producer, false))
+                    .is_err()
+            );
+            assert!(!state.is_complete());
+
+            state
+                .validate_response(&observation_failed(producer, true))
+                .unwrap();
+
+            assert!(state.is_complete());
+            assert!(
+                state
+                    .validate_response(&failure(InvocationFailureKind::Execution))
+                    .is_err()
+            );
         }
 
         #[test]
@@ -4699,7 +4787,7 @@ mod tests {
                 details: "primary storage of agent 7 did not answer".to_string(),
                 oplog_read: Some(OplogReadFailure {
                     kind: Some(oplog_read_failure::Kind::Unavailable(
-                        OplogReadUnavailable {},
+                        OplogReadUnavailable { agent_id: None },
                     )),
                 }),
             })),

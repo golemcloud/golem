@@ -988,6 +988,69 @@ async fn sender_eof_is_not_cancellation() {
         .unwrap();
 }
 
+/// An observation failure ends the session with its diagnostic after the committed result. The
+/// session does not attach again and does not clean up the invocation.
+#[test]
+#[test_timeout("10s")]
+async fn an_observation_failure_ends_the_session_without_reattachment_or_cleanup() {
+    let mut h = harness(2);
+    let mut session =
+        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+    let Call::Start(_, _tail) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(&h.response_txs[0], accepted(1, None)).await;
+    let _ = event(&mut session).await;
+    let result = golem_api_grpc::proto::golem::worker::InvocationSessionResult {
+        result: Some(invocation_session_result::Result::MethodResult(
+            SchemaValue {
+                value: Some(schema_value::Value::U8Value(1)),
+            },
+        )),
+        agent_id: Some(proto_agent()),
+        idempotency_key: Some(key()),
+        component_revision: Some(12),
+        ..Default::default()
+    };
+    send(
+        &h.response_txs[0],
+        response(invocation_response::Response::Result(result)),
+    )
+    .await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Result(_)
+    ));
+    let diagnostic = "the stored history of agent 7 does not read: the stored data is corrupt";
+    send(
+        &h.response_txs[0],
+        response(invocation_response::Response::ObservationFailed(
+            golem_api_grpc::proto::golem::worker::AttachmentObservationFailed {
+                agent_id: Some(proto_agent()),
+                message: diagnostic.into(),
+                worker_error: Some(Default::default()),
+            },
+        )),
+    )
+    .await;
+
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Error(HttpSessionError::ObservationFailed(message)) if message == diagnostic
+    ));
+    assert!(
+        timeout(Duration::from_millis(50), h.calls.recv())
+            .await
+            .is_err(),
+        "the session must not attach again"
+    );
+    assert!(
+        timeout(Duration::from_millis(50), h.cleanups.recv())
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 #[test_timeout("10s")]
 async fn explicit_success_does_not_cleanup() {
@@ -1226,7 +1289,7 @@ async fn resume_refused_on_an_unreadable_oplog_neither_cancels_nor_interrupts() 
     use golem_api_grpc::proto::golem::worker::v1::{OplogReadUnavailable, oplog_read_failure};
     let unavailable = || {
         read_failure(oplog_read_failure::Kind::Unavailable(
-            OplogReadUnavailable {},
+            OplogReadUnavailable { agent_id: None },
         ))
     };
     let refusals = [

@@ -1274,10 +1274,10 @@ mod tests {
     };
     use golem_api_grpc::proto::golem::worker::v1::{ForkWorkerResponse, InvokeAgentSuccess};
     use golem_api_grpc::proto::golem::worker::{
-        AttachmentRevoked, DurableStreamHandle, DurableStreamMapping, InvocationAccepted,
-        InvocationRejected, InvocationRejectionReason, InvocationSessionResult, ResumeOperation,
-        StreamInvocationIdentity, StreamMappingRole, invocation_request, invocation_response,
-        invocation_session_result,
+        AttachmentObservationFailed, AttachmentRevoked, DurableStreamHandle, DurableStreamMapping,
+        InvocationAccepted, InvocationRejected, InvocationRejectionReason, InvocationSessionResult,
+        ResumeOperation, StreamInvocationIdentity, StreamMappingRole, invocation_request,
+        invocation_response, invocation_session_result,
     };
     use golem_common::model::InvocationId;
     use golem_common::model::component::ComponentId;
@@ -1414,6 +1414,8 @@ mod tests {
         reject_takeover: bool,
         detach_before_takeover: bool,
         joined_origin_observer: bool,
+        /// The accepted Start is followed by an observation failure that names `AgentId(7, 8)`.
+        fail_observation: bool,
         scope_card_payloads: Arc<Mutex<Vec<Vec<u8>>>>,
         segment_requests: Arc<Mutex<Vec<DurableStreamSegmentReadRequest>>>,
         segment_responses: Arc<
@@ -1567,7 +1569,11 @@ mod tests {
                 requests.len()
             };
             let responses = match request.request {
-                Some(invocation_request::Request::Start(_)) if request_number == 1 => Vec::new(),
+                Some(invocation_request::Request::Start(_))
+                    if request_number == 1 && !self.fail_observation =>
+                {
+                    Vec::new()
+                }
                 Some(invocation_request::Request::Start(start)) => {
                     let accepted = InvocationResponse {
                         response: Some(invocation_response::Response::Accepted(
@@ -1590,6 +1596,30 @@ mod tests {
                             },
                         )),
                     };
+                    if self.fail_observation {
+                        let producer = AgentId::from_parts(7, 8);
+                        let failed = InvocationResponse {
+                            response: Some(invocation_response::Response::ObservationFailed(
+                                AttachmentObservationFailed {
+                                    agent_id: Some(producer.into()),
+                                    message: format!(
+                                        "the stored history of agent {producer} does not read: the stored data is corrupt"
+                                    ),
+                                    worker_error: Some(
+                                        WorkerExecutorError::oplog_failed(
+                                            producer,
+                                            "entry 4 is corrupt",
+                                        )
+                                        .into(),
+                                    ),
+                                },
+                            )),
+                        };
+                        return Ok(Response::new(Box::pin(tokio_stream::iter(vec![
+                            Ok(accepted),
+                            Ok(failed),
+                        ]))));
+                    }
                     if self.joined_origin_observer {
                         let result = InvocationResponse {
                             response: Some(invocation_response::Response::Result(
@@ -2030,6 +2060,21 @@ mod tests {
                 Err(DurableStreamRemoteError::Unreadable(unreadable))
                     if unreadable.agent_id == identity.agent_id && unreadable.is_transient()
             ));
+            // The consumer whose history authorizes the read did not read: the error names it,
+            // not the producer that the request reads.
+            let consumer = AgentId::from_parts(7, 0xc0);
+            responses.lock().unwrap().push_back(producer_read(
+                WorkerExecutorError::oplog_read_unavailable_of(
+                    consumer,
+                    "consumer oplog storage did not answer",
+                ),
+            ));
+            assert!(matches!(
+                rpc.read_durable_stream_segment(request.clone(), &AuthCtx::System)
+                    .await,
+                Err(DurableStreamRemoteError::Unreadable(unreadable))
+                    if unreadable.agent_id == consumer && unreadable.is_transient()
+            ));
             responses
                 .lock()
                 .unwrap()
@@ -2460,6 +2505,97 @@ mod tests {
     #[test_r::timeout("30s")]
     async fn cross_shard_streaming_rpc_preserves_observer_acceptance_without_authority() {
         check_streaming_attachment_retry(false, false, false, true).await;
+    }
+
+    /// An observation failure of the target ends the cross-shard call with the failed read of the
+    /// agent that it names, and the call does not attach again.
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cross_shard_streaming_rpc_ends_on_an_observation_failure_without_reattaching() {
+        let service = FlakyWorkerService {
+            fail_observation: true,
+            ..Default::default()
+        };
+        let streaming_requests = service.streaming_requests.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerServiceServer::new(service)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+        let proxy = Arc::new(RemoteWorkerProxy::new(&WorkerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            ..Default::default()
+        }));
+        let rpc = RemoteInvocationRpc::new(proxy, Arc::new(ShardServiceDefault::new()));
+        let caller = AgentId::from_parts(7, 7);
+        let caller_environment = EnvironmentId::new();
+        let (accepted_sender, _accepted_receiver) = tokio::sync::oneshot::channel();
+
+        let result = rpc
+            .invoke_and_await_streaming(
+                ResolvedTarget::existing(OwnedAgentId::new(
+                    EnvironmentId::new(),
+                    &AgentId::from_parts(7, 6),
+                )),
+                IdempotencyKey::fresh(),
+                "streaming-method".to_string(),
+                ProtoSchemaValue::try_from(SchemaValue::Tuple { elements: vec![] }).unwrap(),
+                Vec::new(),
+                AgentFingerprint::new(),
+                uuid::Uuid::new_v4(),
+                StreamInvocationIdentity {
+                    callee_environment_id: Some(caller_environment.into()),
+                    callee: Some(caller.into()),
+                    callee_fingerprint: Some(AgentFingerprint::new().0.into()),
+                    idempotency_key: Some(InvocationId(Uuid::from_u128(1)).into()),
+                },
+                accepted_sender,
+                AccountId::new(),
+                &caller,
+                &[],
+                InvocationContextStack::fresh(),
+                &golem_common::model::caller::Caller::anonymous(),
+                Vec::new(),
+                &AuthCtx::System,
+                None,
+            )
+            .await;
+
+        let producer = AgentId::from_parts(7, 8);
+        match result {
+            Err(crate::services::rpc::RpcAwaitError::FailedRead(error)) => match *error {
+                WorkerExecutorError::OplogFailed {
+                    agent_id,
+                    details,
+                    cause: golem_service_base::error::worker_executor::OplogFailureCause::Read,
+                } => {
+                    assert_eq!(agent_id, producer);
+                    assert_eq!(
+                        details,
+                        format!(
+                            "the stored history of agent {producer} does not read: the stored data is corrupt"
+                        )
+                    );
+                }
+                other => panic!("the failed read is not the read of the producer: {other:?}"),
+            },
+            Err(other) => panic!("the call did not end with the failed read: {other:?}"),
+            Ok(_) => panic!("the call returned a result"),
+        }
+        assert_eq!(
+            streaming_requests.lock().unwrap().len(),
+            1,
+            "the call does not attach again"
+        );
     }
 
     async fn check_streaming_attachment_retry(

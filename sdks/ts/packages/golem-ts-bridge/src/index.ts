@@ -4323,6 +4323,20 @@ class StreamingSession {
           throw new StreamingProtocolError('malformed-message', 'invalid revocation reason');
         void this.reconnect(true);
         break;
+      case 'attachmentObservationFailed':
+        // A stored history that the session reads does not read, for good. The invocation keeps
+        // what it committed; another attachment gives the same answer, so there is no reconnect.
+        object(message, ['version', 'type', 'agentId', 'message']);
+        if (typeof message.agentId !== 'string' || typeof message.message !== 'string')
+          throw new StreamingProtocolError('malformed-message', 'invalid observation failure');
+        this.fail(
+          new StreamingProtocolError(
+            'attachment-observation-failed',
+            `the invocation session cannot observe agent ${message.agentId}: ${message.message}`,
+          ),
+        );
+        this.socket?.close(1000);
+        break;
       case 'invocationFinished':
         object(message, ['version', 'type', 'outcome']);
         if (!isRecord(message.outcome) || typeof message.outcome.kind !== 'string')

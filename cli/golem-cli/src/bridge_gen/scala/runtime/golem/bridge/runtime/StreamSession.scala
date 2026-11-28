@@ -779,6 +779,12 @@ object StreamSession {
             try prepareResumeDescriptor()
             catch { case error: Throwable => fatal(error); return }
             reconnectAction.get()()
+          case "attachmentObservationFailed" =>
+            // A stored history that the session reads does not read, for good. The invocation keeps
+            // what it committed; another attachment gives the same answer, so there is no reconnect.
+            val agent = Json.requireField(json, "agentId").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+            val text = Json.requireField(json, "message").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+            fatal(BridgeException(s"attachment-observation-failed: the invocation session cannot observe agent $agent: $text"))
           case other => result.tryFailure(BridgeException(s"unsupported stream session message: $other"))
         }
       }

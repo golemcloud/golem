@@ -200,8 +200,9 @@ pub enum RecoveryCause {
     /// A cause that is not an oplog read.
     Other,
     /// An oplog read failed for a time. A later read can pass. The failed read is not an outcome
-    /// of the agent, and it does not permit a write to the oplog.
-    OplogReadUnavailable,
+    /// of the agent, and it does not permit a write to the oplog. `agent_id` names the agent
+    /// whose oplog did not read, when the error that caused it names one.
+    OplogReadUnavailable { agent_id: Option<AgentId> },
 }
 
 /// What failed in an oplog that fails its agent.
@@ -304,7 +305,7 @@ impl WorkerExecutorError {
     pub fn is_oplog_read_failure(&self) -> bool {
         match self {
             Self::RecoveryRequired {
-                cause: RecoveryCause::OplogReadUnavailable,
+                cause: RecoveryCause::OplogReadUnavailable { .. },
                 ..
             } => true,
             Self::FailedToResumeAgent { reason, .. } => reason.is_oplog_read_failure(),
@@ -400,7 +401,19 @@ impl WorkerExecutorError {
         Self::RecoveryRequired {
             details: details.into(),
             retry_from: None,
-            cause: RecoveryCause::OplogReadUnavailable,
+            cause: RecoveryCause::OplogReadUnavailable { agent_id: None },
+        }
+    }
+
+    /// A recovery that a read of the oplog of `agent_id`, which failed for a time, makes
+    /// necessary.
+    pub fn oplog_read_unavailable_of(agent_id: AgentId, details: impl Into<String>) -> Self {
+        Self::RecoveryRequired {
+            details: details.into(),
+            retry_from: None,
+            cause: RecoveryCause::OplogReadUnavailable {
+                agent_id: Some(agent_id),
+            },
         }
     }
 
@@ -1133,10 +1146,12 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                         details,
                         oplog_read: match cause {
                             RecoveryCause::Other => None,
-                            RecoveryCause::OplogReadUnavailable => {
+                            RecoveryCause::OplogReadUnavailable { agent_id } => {
                                 Some(golem::worker::v1::OplogReadFailure {
                                     kind: Some(golem::worker::v1::oplog_read_failure::Kind::Unavailable(
-                                        golem::worker::v1::OplogReadUnavailable {},
+                                        golem::worker::v1::OplogReadUnavailable {
+                                            agent_id: agent_id.map(Into::into),
+                                        },
                                     )),
                                 })
                             }
@@ -1532,9 +1547,15 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 match runtime_error.oplog_read.map(|failure| failure.kind) {
                     None => Ok(Self::Runtime { details }),
                     Some(None) => Err("Missing oplog read failure kind".to_string()),
-                    Some(Some(golem::worker::v1::oplog_read_failure::Kind::Unavailable(_))) => {
-                        Ok(Self::oplog_read_unavailable(details))
-                    }
+                    Some(Some(golem::worker::v1::oplog_read_failure::Kind::Unavailable(
+                        unavailable,
+                    ))) => Ok(Self::RecoveryRequired {
+                        details,
+                        retry_from: None,
+                        cause: RecoveryCause::OplogReadUnavailable {
+                            agent_id: unavailable.agent_id.map(TryInto::try_into).transpose()?,
+                        },
+                    }),
                 }
             }
             Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(
@@ -1843,9 +1864,9 @@ mod read_only_violation_trap_tests {
         );
     }
 
-    /// A read that failed for a time keeps its kind through gRPC as a recovery that the read
-    /// caused. An oplog that failed for good crosses as a runtime error whose text names the
-    /// agent. Other runtime errors and recoveries stay plain runtime errors.
+    /// A read that failed for a time keeps its kind, and the agent it names, through gRPC as a
+    /// recovery that the read caused. An oplog that failed for good crosses as a runtime error
+    /// whose text names the agent. Other runtime errors and recoveries stay plain runtime errors.
     #[test]
     fn oplog_read_failures_keep_their_kind_through_grpc() {
         let agent_id = AgentId::from_parts(7, 1628);
@@ -1855,6 +1876,10 @@ mod read_only_violation_trap_tests {
         );
         let unavailable = WorkerExecutorError::oplog_read_unavailable(
             "oplog of agent-7 is unreadable: primary storage did not answer",
+        );
+        let owned_unavailable = WorkerExecutorError::oplog_read_unavailable_of(
+            agent_id,
+            "primary storage did not answer",
         );
         let other_recovery = WorkerExecutorError::recovery_required_from(
             "trapped body cleanup failed",
@@ -1885,6 +1910,10 @@ mod read_only_violation_trap_tests {
         assert_eq!(
             round_trip(&unavailable),
             (tonic::Code::Internal, Ok(unavailable))
+        );
+        assert_eq!(
+            round_trip(&owned_unavailable),
+            (tonic::Code::Internal, Ok(owned_unavailable))
         );
         assert_eq!(
             round_trip(&other_recovery),

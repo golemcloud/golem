@@ -200,6 +200,12 @@
       "type": "attachmentRevoked"
     },
     {
+      "canonical": "{\"agentId\":\"00000007-0000-8000-8000-000000000004\",\"message\":\"the stored history of agent 00000007-0000-8000-8000-000000000004 does not read: the stored data is corrupt\",\"type\":\"attachmentObservationFailed\",\"version\":1}",
+      "direction": "server",
+      "name": "attachment-observation-failed",
+      "type": "attachmentObservationFailed"
+    },
+    {
       "canonical": "{\"outcome\":{\"kind\":\"success\"},\"type\":\"invocationFinished\",\"version\":1}",
       "direction": "server",
       "name": "invocation-finished-success",

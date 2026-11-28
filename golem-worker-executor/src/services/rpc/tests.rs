@@ -529,6 +529,13 @@ fn a_failed_history_read_keeps_its_agent_and_whether_it_can_pass_later() {
 
     let read = unreadable_history(&transient, &owner).unwrap();
     assert_eq!((read.agent_id, read.is_transient()), (owner, true));
+    // A read that failed for a time and names its agent keeps that agent, not the owner.
+    let read = unreadable_history(
+        &WorkerExecutorError::oplog_read_unavailable_of(named, "storage did not answer"),
+        &owner,
+    )
+    .unwrap();
+    assert_eq!((read.agent_id, read.is_transient()), (named, true));
     let read = unreadable_history(
         &WorkerExecutorError::failed_to_resume_worker(resumed, transient),
         &owner,

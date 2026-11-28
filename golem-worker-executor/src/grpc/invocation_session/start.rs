@@ -18,7 +18,7 @@ use super::{
     InvocationSessionCompletion, InvocationSessionResult, InvocationSessionState, ResponseLease,
     SessionError, SessionStreamRole, StreamSession, UsesAllDeps, WorkerCtx, WorkerExecutorError,
     WorkerExecutorImpl, durable_stream_mapping_to_proto, end_attachment_on_failure,
-    ends_only_the_attachment, invocation_request, invocation_response,
+    ends_only_the_attachment, forward_validated_responses, invocation_request, invocation_response,
     invocation_session_completion, invocation_session_result, mpsc, persisted_invocation_result,
     pre_acceptance_rejection_reason, proto_agent_id_string, race_invocation_acceptance,
     rejection_worker_error, request_agent_id, request_idempotency_key, route_durable_request,
@@ -152,7 +152,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         let state = Arc::new(tokio::sync::Mutex::new(state));
-        let (responses, mut response_rx) = mpsc::channel(32);
+        let (responses, response_rx) = mpsc::channel(32);
         let response_state = state.clone();
         let response_state_changed = Arc::new(tokio::sync::Notify::new());
         let forwarder_state_changed = response_state_changed.clone();
@@ -161,16 +161,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let forwarder_guard = forwarder_stopped.clone().drop_guard();
         tokio::spawn(async move {
             let _guard = forwarder_guard;
-            while let Some(response) = response_rx.recv().await {
-                if let Err(error) = response_state.lock().await.validate_response(&response) {
-                    tracing::error!(error, ?response, "Invalid invocation session response");
-                    return;
-                }
-                forwarder_state_changed.notify_waiters();
-                if outward_forwarder.send(response).await.is_err() {
-                    return;
-                }
-            }
+            forward_validated_responses(response_state, response_rx, outward_forwarder, || {
+                forwarder_state_changed.notify_waiters()
+            })
+            .await;
         });
 
         let (acceptance_committed_tx, mut acceptance_committed_rx) =

@@ -510,9 +510,13 @@ fn a_rejection_for_an_unreadable_oplog_carries_the_agent_failure() {
     );
 }
 
+/// A producer history that does not read for good ends the attachment while the output has no
+/// terminal. The response validator rejects a completion there, so the attachment sends an
+/// observation failure, and the forwarder passes it to the client with the producer and a message
+/// without stored data. The session records nothing.
 #[test]
-async fn an_unreadable_oplog_ends_observation_with_the_failure_of_its_agent() {
-    let (streams, _state, handle) = routed_stream_session(SessionStreamRole::Output).await;
+async fn an_unreadable_producer_ends_the_attachment_with_an_observation_failure() {
+    let (streams, state, handle) = routed_stream_session(SessionStreamRole::Output).await;
     let unreadable = UnreadableOplog {
         agent_id: handle.producer,
         error: OplogReadError::corruption(
@@ -520,8 +524,27 @@ async fn an_unreadable_oplog_ends_observation_with_the_failure_of_its_agent() {
             "oplog entry 43 has unknown serialization version 255",
         ),
     };
+    let (completion_tx, mut completion_rx) = mpsc::channel(1);
+    send_worker_failure(
+        &completion_tx,
+        WorkerExecutorError::from(unreadable.clone()),
+    )
+    .await;
+    let completion = completion_rx.recv().await.unwrap();
+    assert!(
+        state.lock().await.validate_response(&completion).is_err(),
+        "a completion still needs the output terminal"
+    );
     let mut detach = AttachmentCleanup::new(Some(streams.clone()));
-    let (responses, mut received) = mpsc::channel(2);
+    let (responses, received) = mpsc::channel(2);
+    let (outward, mut delivered) = mpsc::channel(2);
+    let forwarder = tokio::spawn(forward_validated_responses(
+        state.clone(),
+        received,
+        outward,
+        || {},
+    ));
+
     end_attachment_on_failure(
         &streams,
         &responses,
@@ -532,18 +555,28 @@ async fn an_unreadable_oplog_ends_observation_with_the_failure_of_its_agent() {
     )
     .await;
     drop(responses);
+    forwarder.await.unwrap();
 
-    let expected = WorkerExecutorError::from(unreadable);
-    let frame = received
+    let frame = delivered
         .recv()
         .await
-        .expect("the attachment must emit a failure");
-    let failure = failure_of(std::slice::from_ref(&frame));
-    assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
-    assert_eq!(failure.message, expected.to_string());
-    assert_eq!(failure.worker_error, Some(expected.into()));
-    assert!(received.recv().await.is_none());
-    // A read that fails for good fails the agent. It does not keep the attachment from its detach.
+        .expect("the client must receive the observation failure");
+    let failed = observation_failure_of(std::slice::from_ref(&frame));
+    assert_eq!(failed.agent_id, Some(handle.producer.into()));
+    assert_eq!(
+        failed.message,
+        format!(
+            "the stored history of agent {} does not read: the stored data is corrupt",
+            handle.producer
+        )
+    );
+    assert_eq!(
+        failed.worker_error,
+        Some(WorkerExecutorError::from(unreadable).into())
+    );
+    assert!(delivered.recv().await.is_none());
+    assert!(state.lock().await.is_complete());
+    // A read that fails for good does not keep the attachment from its detach.
     assert_eq!(detach.phase(), CleanupPhase::Held);
     assert_eq!(streams.persisted_finished().await.unwrap(), None);
 }
@@ -627,6 +660,20 @@ fn failure_of(responses: &[InvocationResponse]) -> &InvocationFailure {
     failure
 }
 
+fn observation_failure_of(
+    responses: &[InvocationResponse],
+) -> &golem_api_grpc::proto::golem::worker::AttachmentObservationFailed {
+    let [
+        InvocationResponse {
+            response: Some(invocation_response::Response::ObservationFailed(failed)),
+        },
+    ] = responses
+    else {
+        panic!("the attachment must end with one observation failure, got {responses:?}");
+    };
+    failed
+}
+
 #[test]
 async fn only_a_protocol_violation_records_a_failed_session_terminal() {
     let transient = UnreadableOplog {
@@ -649,10 +696,10 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
     let permanent = unreadable();
     let (sent, drained, terminal, detach) =
         end_attachment(SessionError::Unreadable(permanent.clone())).await;
-    let failure = failure_of(&sent);
-    assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
+    let failed = observation_failure_of(&sent);
+    assert_eq!(failed.agent_id, Some(permanent.agent_id.into()));
     assert_eq!(
-        failure.worker_error,
+        failed.worker_error,
         Some(WorkerExecutorError::from(permanent).into())
     );
     assert!(!drained);
@@ -800,7 +847,7 @@ async fn an_undecodable_output_value_fails_its_agent_at_its_entry_without_a_term
     }))
     .await;
     assert_eq!(
-        failure_of(&sent).worker_error,
+        observation_failure_of(&sent).worker_error,
         Some(WorkerExecutorError::from(unreadable.clone()).into())
     );
     assert_eq!(detach.phase(), CleanupPhase::Held);
@@ -810,9 +857,9 @@ async fn an_undecodable_output_value_fails_its_agent_at_its_entry_without_a_term
 
 /// A session whose invocation result is committed forwards an output of another producer, and an
 /// item of that output does not decode. The error is the failure of the read of the other
-/// producer's history: it names that producer and the item, the attachment sends it as the worker
-/// error it is, and the session records nothing. The committed result stays, and the session is
-/// not failed as a protocol violation.
+/// producer's history: it names that producer and the item, the attachment ends with an
+/// observation failure that names that producer, and the session records nothing. The committed
+/// result stays, and the session is not failed as a protocol violation.
 #[test]
 async fn an_undecodable_item_of_another_producer_fails_the_read_and_keeps_the_committed_result() {
     use crate::durable_host::durable_session::tests::AttachedProducerRpc;
@@ -1060,10 +1107,10 @@ async fn an_undecodable_item_of_another_producer_fails_the_read_and_keeps_the_co
         received.poll_recv(context)
     }))
     .await;
-    let failure = failure_of(&sent);
-    assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
+    let failed = observation_failure_of(&sent);
+    assert_eq!(failed.agent_id, Some(foreign.agent_id.into()));
     assert_eq!(
-        failure.worker_error,
+        failed.worker_error,
         Some(WorkerExecutorError::from(unreadable).into())
     );
     assert_eq!(detach.phase(), CleanupPhase::Held);

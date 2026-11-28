@@ -25,6 +25,9 @@ use crate::storage::keyvalue::KeyValueStorageError;
 use crate::storage::keyvalue::fault_injecting::{
     FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
+use golem_common::base_model::durable_stream::{
+    DURABLE_STREAM_FORMAT_VERSION, StreamRegistrationInvocation, StreamSessionCancelRequestedRecord,
+};
 use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
@@ -246,7 +249,7 @@ async fn an_exact_lookup_over_corrupt_coverage_reads_its_own_horizon_below_an_un
 
 /// The coverage probe of an exact lookup is a standalone coverage read, so it has the label and
 /// entity of that read, `read / metadata`: an exact lookup over a healthy index makes the same
-/// `lookup` reads as a latest lookup and one more `read`.
+/// reads as a latest lookup and one more `read / metadata`.
 #[test]
 #[test_r::timeout("30s")]
 async fn the_coverage_probe_of_an_exact_lookup_is_a_coverage_read() {
@@ -261,19 +264,21 @@ async fn the_coverage_probe_of_an_exact_lookup_is_a_coverage_read() {
         .lookup_latest(&fixture.id, AgentMode::Durable, fixture.fingerprint, &key)
         .await
         .unwrap();
+    let counts = || {
+        (
+            fixture.faults.attempts(),
+            fixture.faults.entity_calls("read", "metadata"),
+        )
+    };
 
-    let latest = (fixture.faults.calls("lookup"), fixture.faults.calls("read"));
+    let before = counts();
     fixture
         .index
         .lookup_latest(&fixture.id, AgentMode::Durable, fixture.fingerprint, &key)
         .await
         .unwrap();
-    let latest = (
-        fixture.faults.calls("lookup") - latest.0,
-        fixture.faults.calls("read") - latest.1,
-    );
-    let exact = (fixture.faults.calls("lookup"), fixture.faults.calls("read"));
-    let coverage_reads = coverage_read_metric();
+    let after = counts();
+    let latest = (after.0 - before.0, after.1 - before.1);
     fixture
         .index
         .lookup_persisted(
@@ -285,28 +290,9 @@ async fn the_coverage_probe_of_an_exact_lookup_is_a_coverage_read() {
         )
         .await
         .unwrap();
-    let exact = (
-        fixture.faults.calls("lookup") - exact.0,
-        fixture.faults.calls("read") - exact.1,
-    );
-    let coverage_reads = coverage_read_metric() - coverage_reads;
+    let exact = (counts().0 - after.0, counts().1 - after.1);
 
-    assert_eq!(exact, (latest.0, latest.1 + 1));
-    // The probe and the catch-up each count one `read / metadata` operation. Other tests in the
-    // process can only add to the shared counter.
-    assert!(coverage_reads >= 2, "{coverage_reads}");
-}
-
-fn coverage_read_metric() -> u64 {
-    golem_service_base::metrics::storage::LOGICAL_OPERATIONS_TOTAL
-        .with_label_values(&[
-            "keyvalue",
-            "get",
-            "stream_session_index",
-            "read",
-            "metadata",
-        ])
-        .get()
+    assert_eq!(exact, (latest.0 + 1, latest.1 + 1));
 }
 
 async fn prepare_horizon(
@@ -375,7 +361,23 @@ async fn an_exact_lookup_answers_its_horizon_when_another_writer_advances_absent
     let oplog = open_oplog(&fixture).await;
     let key = session_key(&fixture, 0x0016_28a1);
     let horizon = prepare_horizon(&fixture, &oplog, &key).await;
-    oplog.add(OplogEntry::grow_memory(7)).await.unwrap();
+    // A record above the horizon that changes the session, so the state at the horizon differs
+    // from the newer state that the other writer publishes.
+    oplog
+        .add(
+            DurableStreamOplogRecord::Session(
+                None,
+                Box::new(StreamSessionRecord::CancelRequested(
+                    StreamSessionCancelRequestedRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
+                    },
+                )),
+            )
+            .into_inline_entry(),
+        )
+        .await
+        .unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
     let writer =
         StreamSessionIndexService::new(fixture.kv.clone(), Arc::downgrade(&fixture.oplog_service));
@@ -397,6 +399,10 @@ async fn an_exact_lookup_answers_its_horizon_when_another_writer_advances_absent
         .expect("the session is prepared at the horizon");
 
     assert_eq!(status.first_prepared, Some(horizon));
+    assert!(
+        !status.cancellation_requested,
+        "the lookup answers with the session at its horizon, not with the newer session"
+    );
 }
 
 /// The coverage can become unreadable after the probe of an exact lookup read it within the

@@ -1404,8 +1404,10 @@ kind. An invocation session attachment records a failed session terminal (`fail_
 for a violation of the session protocol (`grpc/invocation_session/mod.rs::end_attachment_on_failure`).
 When a read of the session history meets storage that did not answer (including a stream payload
 download), the attachment ends without a terminal frame, and the client reattaches from its
-durable cursors. A fence or an oplog that failed for good goes out as its worker error and
-records nothing. An ephemeral oplog whose writer task cannot store a batch in the first
+durable cursors. A fence goes out as its worker error and records nothing. An oplog that failed
+for good ends the attachment with `AttachmentObservationFailed`, which names the agent and the kind
+of the failed read, records nothing, cancels no input and sends no stream terminal; the response
+validator accepts it while streams are open, and no client attaches again. An ephemeral oplog whose writer task cannot store a batch in the first
 archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
 refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
 (`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write

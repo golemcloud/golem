@@ -1975,6 +1975,43 @@ test('acceptance keeps the final identity separate from a non-UUID request seed'
   }
 });
 
+test('an observation failure fails the call with its diagnostic and does not reconnect', async () => {
+  let connections = 0;
+  const local = await server((socket) => {
+    connections += 1;
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      socket.send(JSON.stringify(accepted(start)));
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'attachmentObservationFailed',
+          agentId: '00000007-0000-8000-8000-000000000004',
+          message: 'the stored history of the producer does not read',
+        }),
+      );
+    });
+  });
+  try {
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => descriptor,
+      () => ({}),
+      (value) => value.value.value,
+    );
+    await assert.rejects(method(), (error) => {
+      assert.equal(error.code, 'attachment-observation-failed');
+      assert.match(error.message, /00000007-0000-8000-8000-000000000004/);
+      assert.match(error.message, /the stored history of the producer does not read/);
+      return true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(connections, 1);
+  } finally {
+    await local.close();
+  }
+});
+
 test('uncertain pre-acceptance close exact-retries the frozen start', async () => {
   const starts = [];
   const local = await server((socket) => {

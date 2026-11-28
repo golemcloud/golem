@@ -1162,6 +1162,12 @@ pub(super) async fn invoke_scalar(
             PublicServerMessage::AttachmentRevoked { reason, .. } => {
                 bail!("invocation attachment was revoked: {reason:?}");
             }
+            PublicServerMessage::AttachmentObservationFailed {
+                agent_id, message, ..
+            } => {
+                let _ = session.close().await;
+                bail!(observation_failure_text(&agent_id, &message));
+            }
             PublicServerMessage::OutputStreamItem { .. }
             | PublicServerMessage::StreamEnd { .. }
             | PublicServerMessage::InputStreamAck { .. } => {
@@ -1169,6 +1175,14 @@ pub(super) async fn invoke_scalar(
             }
         }
     }
+}
+
+/// The error text of an attachment that cannot observe the invocation. The invocation keeps what
+/// it committed, so the text says that a later lookup can still read its result.
+fn observation_failure_text(agent_id: &golem_common::model::AgentId, message: &str) -> String {
+    format!(
+        "the invocation session cannot observe the stored history of agent {agent_id}: {message}. The invocation keeps what it committed; attaching again gives the same answer"
+    )
 }
 
 fn load_checkpoint(path: &Path) -> anyhow::Result<InvocationSessionCheckpoint> {
@@ -1963,6 +1977,7 @@ async fn cancel_before_close(
                     PublicServerMessage::InvocationFinished { .. }
                         | PublicServerMessage::InvocationRejected { .. }
                         | PublicServerMessage::AttachmentRevoked { .. }
+                        | PublicServerMessage::AttachmentObservationFailed { .. }
                 )
             );
             if frame.mark_delivered().is_err() || terminal {
@@ -2016,6 +2031,7 @@ async fn await_input_cancellation(
                     PublicServerMessage::InvocationFinished { .. }
                         | PublicServerMessage::InvocationRejected { .. }
                         | PublicServerMessage::AttachmentRevoked { .. }
+                        | PublicServerMessage::AttachmentObservationFailed { .. }
                 )
             );
         frame.mark_delivered()?;
@@ -2291,6 +2307,13 @@ async fn handle_response(
         }
         ServerFrame::Message(PublicServerMessage::AttachmentRevoked { reason, .. }) => {
             bail!("invocation attachment was revoked: {reason:?}");
+        }
+        ServerFrame::Message(PublicServerMessage::AttachmentObservationFailed {
+            agent_id,
+            message,
+            ..
+        }) => {
+            bail!(observation_failure_text(&agent_id, &message));
         }
         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
             let (outcome, error, stderr) = match outcome {

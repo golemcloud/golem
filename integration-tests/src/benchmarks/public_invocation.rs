@@ -221,6 +221,11 @@ impl SessionCheckpoint {
             PublicServerMessage::AttachmentRevoked { reason, .. } => {
                 anyhow::bail!("attachment revoked: {reason:?}")
             }
+            PublicServerMessage::AttachmentObservationFailed {
+                agent_id, message, ..
+            } => {
+                anyhow::bail!("attachment observation of agent {agent_id} failed: {message}")
+            }
             PublicServerMessage::InputStreamAck { .. } => {
                 anyhow::bail!("unexpected input or cancellation response")
             }

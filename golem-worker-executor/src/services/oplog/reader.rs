@@ -203,7 +203,7 @@ impl UnreadableOplog {
 impl From<UnreadableOplog> for WorkerExecutorError {
     fn from(value: UnreadableOplog) -> Self {
         if value.is_transient() {
-            WorkerExecutorError::oplog_read_unavailable(value.to_string())
+            WorkerExecutorError::oplog_read_unavailable_of(value.agent_id, value.to_string())
         } else {
             WorkerExecutorError::oplog_failed(value.agent_id, value.error.to_string())
         }

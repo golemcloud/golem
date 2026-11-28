@@ -530,6 +530,11 @@ where
             Some(invocation_response::Response::AttachmentRevoked(_)) => {
                 unreachable!("response validation rejects attachment revocation")
             }
+            Some(invocation_response::Response::ObservationFailed(failed)) => {
+                // The invocation keeps what it committed; this call cannot observe it, and
+                // another call gives the same answer.
+                terminal_outcome = Some(Err(Status::internal(failed.message)));
+            }
             None => unreachable!("response validation rejects empty frames"),
         }
     }

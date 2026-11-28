@@ -2426,6 +2426,28 @@ async fn translate_private_response(
                 version: 1,
             })?,
         )]),
+        invocation_response::Response::ObservationFailed(failed) => {
+            tracing::warn!(
+                attempt_id = %attempt_id,
+                message = %failed.message,
+                worker_error = ?failed.worker_error,
+                "Invocation session attachment cannot observe a stored history"
+            );
+            let agent_id = failed
+                .agent_id
+                .ok_or_else(|| AdapterError::protocol("observation failure names no agent"))?
+                .try_into()
+                .map_err(|_| {
+                    AdapterError::protocol("observation failure names an invalid agent")
+                })?;
+            Ok(vec![frame(text_message(
+                &PublicServerMessage::AttachmentObservationFailed {
+                    agent_id,
+                    message: failed.message,
+                    version: 1,
+                },
+            )?)])
+        }
         invocation_response::Response::Finished(finished) => {
             let outcome = match finished.outcome {
                 Some(invocation_session_completion::Outcome::Success(_)) => {
@@ -4454,6 +4476,62 @@ mod tests {
             long.stderr.unwrap(),
             "x".repeat(MAX_FAILURE_STDERR_BYTES - 1)
         );
+    }
+
+    /// An observation failure reaches the client with the agent and the diagnostic while an
+    /// input is still open, where a completion is rejected, and it ends the session.
+    #[test]
+    async fn an_observation_failure_reaches_the_client_with_its_agent_and_diagnostic() {
+        let state = active_input_state();
+        let producer = golem_common::model::AgentId::from_parts(7, 0x1628);
+        let message = format!(
+            "the stored history of agent {producer} does not read: the stored data is corrupt"
+        );
+        let observation_failed =
+            |agent_id: Option<golem_common::model::AgentId>| InvocationResponse {
+                response: Some(invocation_response::Response::ObservationFailed(
+                    golem_api_grpc::proto::golem::worker::AttachmentObservationFailed {
+                        agent_id: agent_id.map(Into::into),
+                        message: message.clone(),
+                        worker_error: Some(
+                            WorkerExecutorError::oplog_failed(producer, "entry 4 is corrupt")
+                                .into(),
+                        ),
+                    },
+                )),
+            };
+        let ring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        let translate = |response| {
+            translate_private_response(
+                response,
+                &state,
+                &ring,
+                &bindings,
+                ring.active_key_id(),
+                Uuid::from_u128(2),
+            )
+        };
+        assert!(translate(observation_failed(None)).await.is_err());
+
+        let frames = translate(observation_failed(Some(producer))).await.unwrap();
+
+        let [frame] = frames.as_slice() else {
+            panic!("expected one frame, got {}", frames.len())
+        };
+        let Message::Text(text) = &frame.message else {
+            panic!("the observation failure was not text")
+        };
+        assert_eq!(
+            golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                .unwrap(),
+            PublicServerMessage::AttachmentObservationFailed {
+                agent_id: producer,
+                message: message.clone(),
+                version: 1,
+            }
+        );
+        assert!(state.lock().await.protocol_state.is_complete());
     }
 
     #[test]

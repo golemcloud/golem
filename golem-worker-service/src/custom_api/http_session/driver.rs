@@ -566,6 +566,18 @@ pub(super) async fn run_session(
                             debug!(reason = "attachment_revoked", "HTTP session requires reattachment");
                             continue 'attempts;
                         }
+                        invocation_response::Response::ObservationFailed(failed) => {
+                            // Another attachment gives the same answer, and the invocation keeps
+                            // what it committed: no reattachment and no cleanup.
+                            cleanup.observe(ExecutorEnd::ObservationFailed);
+                            tracing::warn!(
+                                error = %failed.message,
+                                worker_error = ?failed.worker_error,
+                                "HTTP invocation session cannot observe a stored history"
+                            );
+                            send_error(&events, HttpSessionError::ObservationFailed(failed.message)).await;
+                            return;
+                        }
                         invocation_response::Response::Accepted(_) | invocation_response::Response::Ready(_) | invocation_response::Response::Rejected(_) => unreachable!(),
                     }
                 }

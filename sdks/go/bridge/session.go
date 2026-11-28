@@ -905,6 +905,22 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 		}
 		s.lost(c, errors.New("the attachment was replaced"))
 		return nil
+	case "attachmentObservationFailed":
+		if err := m.members(kind, []string{"agentId", "message"}); err != nil {
+			return err
+		}
+		agent, err := m.str("agentId")
+		if err != nil {
+			return err
+		}
+		text, err := m.str("message")
+		if err != nil {
+			return err
+		}
+		// Another attachment gives the same answer, so the call ends here and
+		// keeps a result it already delivered.
+		s.fail(&ObservationError{AgentID: agent, Message: text})
+		return nil
 	case "invocationFinished":
 		if err := m.members(kind, []string{"outcome"}); err != nil {
 			return err

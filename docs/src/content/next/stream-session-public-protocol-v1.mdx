@@ -562,6 +562,29 @@ cancellation.
 The sole v1 reason is `replaced`. No application message follows. The server
 closes the old transport after this message.
 
+### 6.8.1 `attachmentObservationFailed`
+
+```json
+{
+  "agentId":"00000007-0000-8000-8000-000000000004",
+  "message":"the stored history of agent 00000007-0000-8000-8000-000000000004 does not read: the stored data is corrupt",
+  "type":"attachmentObservationFailed",
+  "version":1
+}
+```
+
+The server cannot observe the invocation, because the stored history of the
+agent `agentId` does not read and a later read gives the same answer. This
+ends only the attachment. The invocation and its durable streams keep what
+they committed: the server does not cancel inputs, does not record stream
+terminals, and sends no `invocationFinished`. A result or item that the
+client already received stays valid.
+
+`message` names the agent and the kind of read failure. It holds no stored
+data. No application message follows, and the server closes the transport
+after this message. A client runtime fails the call with the message and does
+not resume, because another attachment gives the same answer.
+
 ### 6.9 `invocationFinished`
 
 Success:

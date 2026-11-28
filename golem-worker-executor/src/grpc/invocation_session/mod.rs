@@ -187,10 +187,10 @@ use request::{effective_session_identity, require_expected_callee_fingerprint};
 
 mod response;
 use response::{
-    persisted_invocation_result, persisted_result_and_finished, pre_acceptance_rejection_reason,
-    rejection_worker_error, send_attachment_revocation, send_protocol_failure, send_rejection,
-    send_rejection_with_worker_error, send_resumed_finished, send_unvalidated_rejection,
-    send_worker_failure,
+    forward_validated_responses, persisted_invocation_result, persisted_result_and_finished,
+    pre_acceptance_rejection_reason, rejection_worker_error, send_attachment_revocation,
+    send_protocol_failure, send_rejection, send_rejection_with_worker_error, send_resumed_finished,
+    send_unvalidated_rejection, send_worker_failure,
 };
 
 mod attachment;

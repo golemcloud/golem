@@ -455,6 +455,9 @@ impl Rpc for RemoteInvocationRpc {
                                             response.response,
                                             Some(invocation_response::Response::Finished(_))
                                                 | Some(invocation_response::Response::Rejected(_))
+                                                | Some(
+                                                    invocation_response::Response::ObservationFailed(_)
+                                                )
                                         ) {
                                             break;
                                         }
@@ -484,6 +487,12 @@ impl Rpc for RemoteInvocationRpc {
                     Some(invocation_response::Response::AttachmentRevoked(_)) => {
                         retry_reason = Some("attachment revoked".to_string());
                         break;
+                    }
+                    Some(invocation_response::Response::ObservationFailed(failed)) => {
+                        // A stored history that does not read for good: another attachment
+                        // gives the same answer, so the call does not attach again.
+                        confirm_terminal_response_is_last(&mut inbound, &state).await?;
+                        return Err(await_error_from_observation_failure(failed));
                     }
                     Some(invocation_response::Response::OutputItem(_))
                     | Some(invocation_response::Response::StreamEnd(_))
@@ -656,6 +665,23 @@ pub(super) fn await_error_from_invocation_finished(
     match unread {
         Some(error) => RpcAwaitError::FailedRead(Box::new(error)),
         None => rpc_error_from_invocation_finished(finished).into(),
+    }
+}
+
+/// The failed read that an observation failure of the target reports: the stored history of the
+/// agent that the frame names does not read for good. [`super::rpc_await_outcome`] decides
+/// whether it is the failure of the call.
+pub(super) fn await_error_from_observation_failure(
+    failed: golem_api_grpc::proto::golem::worker::AttachmentObservationFailed,
+) -> RpcAwaitError {
+    match failed.agent_id.map(AgentId::try_from) {
+        Some(Ok(agent_id)) => RpcAwaitError::FailedRead(Box::new(
+            WorkerExecutorError::oplog_failed(agent_id, failed.message),
+        )),
+        _ => RpcError::ProtocolError {
+            details: "an observation failure names no agent".to_string(),
+        }
+        .into(),
     }
 }
 

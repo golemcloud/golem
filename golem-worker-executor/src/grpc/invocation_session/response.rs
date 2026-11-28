@@ -19,6 +19,8 @@ use super::{
     WorkerExecutionError, WorkerExecutorError, decode_recursive_stream_value, invocation_response,
     invocation_session_completion, invocation_session_result, mpsc,
 };
+use crate::services::oplog::{OplogReadError, UnreadableOplog};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 
 pub(super) async fn persisted_invocation_result(
     streams: &StreamSession,
@@ -293,6 +295,9 @@ pub(super) async fn send_protocol_failure(
             )
             .await
         }
+        SessionError::Unreadable(unreadable) if !unreadable.is_transient() => {
+            send_observation_failure(responses, unreadable).await
+        }
         SessionError::Unreadable(unreadable) => {
             send_worker_failure(responses, WorkerExecutorError::from(unreadable)).await
         }
@@ -314,6 +319,63 @@ pub(super) async fn send_protocol_failure(
             .await
         }
     }
+}
+
+/// Sends each response that the session validator accepts to the transport, in order, and calls
+/// `validated` after each validation. It stops at the first response that the validator rejects,
+/// or when the transport closes.
+pub(super) async fn forward_validated_responses(
+    state: std::sync::Arc<tokio::sync::Mutex<InvocationSessionState>>,
+    mut responses: mpsc::Receiver<InvocationResponse>,
+    outward: mpsc::Sender<InvocationResponse>,
+    validated: impl Fn(),
+) {
+    while let Some(response) = responses.recv().await {
+        if let Err(error) = state.lock().await.validate_response(&response) {
+            tracing::error!(error, ?response, "Invalid invocation session response");
+            return;
+        }
+        validated();
+        if outward.send(response).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Ends the attachment because the stored history of an agent that the session reads does not
+/// read for good. The session keeps what it committed: nothing is recorded, no input is cancelled
+/// and no stream gets a terminal. The message names the agent and the kind of the failed read, and
+/// no stored data.
+pub(super) async fn send_observation_failure(
+    responses: &mpsc::Sender<InvocationResponse>,
+    unreadable: UnreadableOplog,
+) {
+    let kind = match &unreadable.error {
+        OplogReadError::InvalidRange { .. } => "an invalid range was requested",
+        OplogReadError::Gap { .. } => "entries are missing",
+        OplogReadError::Corruption { .. } => "the stored data is corrupt",
+        OplogReadError::SourceFailure { .. } => "the storage failed",
+        OplogReadError::SourceUnavailable { .. } => "the storage did not answer",
+    };
+    let message = format!(
+        "the stored history of agent {} does not read: {kind}",
+        unreadable.agent_id
+    );
+    tracing::warn!(
+        error = %unreadable,
+        "Ending the invocation session attachment because a stored history does not read"
+    );
+    let _ = responses
+        .send(InvocationResponse {
+            response: Some(invocation_response::Response::ObservationFailed(
+                golem_api_grpc::proto::golem::worker::AttachmentObservationFailed {
+                    agent_id: Some(unreadable.agent_id.into()),
+                    message,
+                    worker_error: Some(WorkerExecutorError::from(unreadable).into()),
+                },
+            )),
+        })
+        .await;
 }
 
 pub(super) async fn send_worker_failure(

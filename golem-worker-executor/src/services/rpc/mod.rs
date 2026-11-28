@@ -438,8 +438,8 @@ pub(crate) fn is_failed_history_read(error: &WorkerExecutorError) -> bool {
 }
 
 /// The failed read of a stored history that `error` gives, see [`is_failed_history_read`], with
-/// the agent whose history it is. A read that failed for a time does not name its agent, so it is
-/// the read of `owner`.
+/// the agent whose history it is. A read that failed for a time and names no agent is the read of
+/// `owner`.
 pub(crate) fn unreadable_history(
     error: &WorkerExecutorError,
     owner: &AgentId,
@@ -459,10 +459,10 @@ pub(crate) fn unreadable_history(
         )),
         WorkerExecutorError::RecoveryRequired {
             details,
-            cause: RecoveryCause::OplogReadUnavailable,
+            cause: RecoveryCause::OplogReadUnavailable { agent_id },
             ..
         } => Some(UnreadableOplog::new(
-            owner,
+            agent_id.as_ref().unwrap_or(owner),
             OplogReadError::source_unavailable(SOURCE, details.clone()),
         )),
         _ => None,

@@ -883,6 +883,7 @@ fn validate_message_fields(
         "version", "type", "channel", "highestContiguousSequence", "mappings", "terminal",
       ]
     "attachmentRevoked" => ["version", "type", "reason"]
+    "attachmentObservationFailed" => ["version", "type", "agentId", "message"]
     "invocationFinished" => ["version", "type", "outcome"]
     _ => raise BridgeError("malformed-message: unknown protocol variant")
   }
@@ -2136,6 +2137,16 @@ async fn dispatch_server_message(
         raise BridgeError("malformed-message: invalid revocation reason")
       }
       resume_session(session)
+    }
+    "attachmentObservationFailed" => {
+      // A stored history that the session reads does not read, for good. The
+      // invocation keeps what it committed; another attachment gives the same
+      // answer, so the session does not resume.
+      let agent = expect_string(get_field(message, "agentId"))
+      let text = expect_string(get_field(message, "message"))
+      raise BridgeError(
+        "attachment-observation-failed: the invocation session cannot observe agent \{agent}: \{text}",
+      )
     }
     "invocationRejected" => {
       match field_opt(message, "attemptId") {

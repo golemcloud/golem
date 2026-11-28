@@ -1393,6 +1393,44 @@ func TestARefusedTakeoverEndsTheSession(t *testing.T) {
 	}
 }
 
+// An observation failure ends the call with the agent and the diagnostic. The
+// call keeps the result and the items it delivered, and it does not connect
+// again.
+func TestAnObservationFailureEndsTheCallWithoutReconnecting(t *testing.T) {
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		accept(c, start, "sess")
+		streamResult(c, 2, "out", u32StreamGraph)
+		outputItem(c, 2, 0, "c0", 10)
+		c.send("attachmentObservationFailed", map[string]any{
+			"agentId": "00000007-0000-8000-8000-000000000004",
+			"message": "the stored history of the producer does not read",
+		})
+		c.waitClose()
+	})
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "produce", schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := out.Next(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err = out.Collect(ctx)
+	var failed *ObservationError
+	if !errors.As(err, &failed) || failed.AgentID != "00000007-0000-8000-8000-000000000004" ||
+		failed.Message != "the stored history of the producer does not read" {
+		t.Fatalf("got %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	server.mu.Lock()
+	conns := server.conns
+	server.mu.Unlock()
+	if conns != 1 {
+		t.Fatalf("the call connected %d times", conns)
+	}
+}
+
 // The schedule a slow reader allows: the old connection's reader binds an
 // item's inner stream and pauses before it queues the item, the session moves
 // to a new connection, and the new reader gets the replayed item first. The

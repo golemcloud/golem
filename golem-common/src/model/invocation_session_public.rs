@@ -849,6 +849,16 @@ pub enum PublicServerMessage {
         reason: PublicAttachmentRevokedReason,
         version: u8,
     },
+    /// The attachment cannot observe the session: the stored history of `agent_id` does not read,
+    /// for good. It ends only this attachment. It is not an outcome of the invocation and not a
+    /// terminal of a stream, and a client does not attach again automatically because of it.
+    #[serde(rename = "attachmentObservationFailed")]
+    AttachmentObservationFailed {
+        #[serde(rename = "agentId")]
+        agent_id: AgentId,
+        message: String,
+        version: u8,
+    },
     #[serde(rename = "invocationFinished")]
     InvocationFinished {
         outcome: PublicInvocationOutcome,
@@ -1492,6 +1502,7 @@ fn validate_server_message(message: &PublicServerMessage) -> Result<(), PublicPr
             }
         }
         PublicServerMessage::AttachmentRevoked { .. }
+        | PublicServerMessage::AttachmentObservationFailed { .. }
         | PublicServerMessage::InvocationFinished { .. } => {}
     }
     Ok(())

@@ -130,6 +130,11 @@ pub enum SessionTransportError {
     MissingSessionToken,
     #[error("invocation session attachment is terminal")]
     AttachmentTerminated,
+    /// The server ended the attachment because the stored history of `agent_id` does not read,
+    /// for good. The invocation keeps what it committed. Another attachment gives the same
+    /// answer, so the session does not attach again.
+    #[error("the invocation session cannot observe agent {agent_id}: {message}")]
+    ObservationFailed { agent_id: AgentId, message: String },
     #[error("the server rejected the invocation ({}): {message}", .code.as_str())]
     Rejected {
         code: PublicErrorCode,
@@ -2233,6 +2238,9 @@ impl InvocationSession {
                 PublicServerMessage::AttachmentRevoked { .. } => {
                     self.attachment_state = AttachmentState::Terminal;
                 }
+                PublicServerMessage::AttachmentObservationFailed { .. } => {
+                    self.attachment_state = AttachmentState::Terminal;
+                }
                 PublicServerMessage::InvocationFinished { .. } => {
                     self.attachment_state = AttachmentState::Terminal;
                 }
@@ -4189,6 +4197,30 @@ where
         }
         ServerFrame::Message(PublicServerMessage::AttachmentRevoked { .. }) => {
             Err(SessionTransportError::AttachmentTerminated)
+        }
+        ServerFrame::Message(PublicServerMessage::AttachmentObservationFailed {
+            agent_id,
+            message,
+            ..
+        }) => {
+            for task in input_tasks.values() {
+                task.abort();
+            }
+            input_tasks.clear();
+            inputs.clear();
+            let error = SessionTransportError::ObservationFailed {
+                agent_id: *agent_id,
+                message: message.clone(),
+            };
+            fail_generated_outputs(output_context, &error.to_string()).await;
+            send_generated_result(
+                result_tx,
+                Err(SessionTransportError::ObservationFailed {
+                    agent_id: *agent_id,
+                    message: message.clone(),
+                }),
+            );
+            Err(error)
         }
         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
             for task in input_tasks.values() {
@@ -9506,6 +9538,101 @@ mod tests {
         ));
         assert_eq!(session.attachment_state, AttachmentState::Terminal);
         server.await.unwrap();
+    }
+
+    /// An observation failure after the result ends the attachment: the session keeps the
+    /// result, reports the agent and the diagnostic, and does not attach again.
+    #[test]
+    async fn an_observation_failure_ends_the_attachment_without_reattachment() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = start_request(attempt_id);
+        let server_initial = initial.clone();
+        let producer = golem_common::model::AgentId::from_parts(7, 0x1628);
+        let diagnostic = "the stored history of the producer does not read".to_string();
+        let server_diagnostic = diagnostic.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            for message in [
+                PublicServerMessage::InvocationAccepted {
+                    attempt_id,
+                    agent_id: accepted_agent_id(),
+                    invocation_id: OwnedInvocationId::new(
+                        accepted_agent_id(),
+                        InvocationId(uuid::Uuid::from_u128(1)),
+                    ),
+                    idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
+                    mappings: Vec::new(),
+                    session_token: "session-token".to_string(),
+                    version: 1,
+                },
+                PublicServerMessage::InvocationResult {
+                    mappings: Vec::new(),
+                    result: Box::new(PublicInvocationResult::None),
+                    version: 1,
+                },
+                PublicServerMessage::AttachmentObservationFailed {
+                    agent_id: producer,
+                    message: server_diagnostic,
+                    version: 1,
+                },
+            ] {
+                socket
+                    .send(Message::Text(encode_text(&message).unwrap().into()))
+                    .await
+                    .unwrap();
+            }
+            // A second connection would be a reattachment.
+            tokio::time::timeout(Duration::from_millis(300), listener.accept())
+                .await
+                .is_err()
+        });
+
+        let mut session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            ReconnectPolicy::Unlimited,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+                accepted_invocation: None,
+            },
+            true,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        session.receive().await.unwrap();
+        assert!(matches!(
+            session.receive().await.unwrap().frame(),
+            ServerFrame::Message(PublicServerMessage::InvocationResult { .. })
+        ));
+
+        let frame = session.receive().await.unwrap();
+
+        assert_eq!(
+            frame.frame(),
+            &ServerFrame::Message(PublicServerMessage::AttachmentObservationFailed {
+                agent_id: producer,
+                message: diagnostic,
+                version: 1,
+            })
+        );
+        assert_eq!(session.attachment_state, AttachmentState::Terminal);
+        assert!(matches!(
+            session.receive().await,
+            Err(SessionTransportError::AttachmentTerminated)
+        ));
+        assert!(server.await.unwrap(), "the session attached again");
     }
 
     #[test]

@@ -94,7 +94,7 @@ fn a_payload_that_does_not_download_passes_its_read_error_through_every_start() 
         matches!(
             error,
             WorkerExecutorError::RecoveryRequired {
-                cause: RecoveryCause::OplogReadUnavailable,
+                cause: RecoveryCause::OplogReadUnavailable { .. },
                 ..
             }
         )
