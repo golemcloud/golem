@@ -542,6 +542,40 @@ pub trait TestDsl {
         .await
     }
 
+    /// Invokes an agent method, waits for its result and decodes the returned value into `T`
+    /// with [`AgentResult::into_typed`].
+    async fn invoke_and_await_typed<T: FromSchema + Send>(
+        &self,
+        component: &ComponentDto,
+        agent_id: &ParsedAgentKey,
+        method_name: &str,
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<T> {
+        self.invoke_and_await_agent(component, agent_id, method_name, params)
+            .await?
+            .into_typed()
+    }
+
+    /// As [`TestDsl::invoke_and_await_typed`], with the idempotency key of the invocation.
+    async fn invoke_and_await_typed_with_key<T: FromSchema + Send>(
+        &self,
+        component: &ComponentDto,
+        agent_id: &ParsedAgentKey,
+        idempotency_key: &IdempotencyKey,
+        method_name: &str,
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<T> {
+        self.invoke_and_await_agent_with_key(
+            component,
+            agent_id,
+            idempotency_key,
+            method_name,
+            params,
+        )
+        .await?
+        .into_typed()
+    }
+
     /// Invokes an agent as the given caller, as the read-only cache tests do: two callers
     /// never share a cached result.
     async fn invoke_and_await_agent_as_caller(

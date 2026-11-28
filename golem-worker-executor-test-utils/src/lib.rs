@@ -3090,6 +3090,14 @@ pub struct TestExecutorOverrides {
 }
 
 impl TestExecutorOverrides {
+    /// Overrides that only change the executor configuration with `configure`.
+    pub fn configured(configure: impl Fn(&mut GolemConfig) + Send + Sync + 'static) -> Self {
+        Self {
+            configure: Some(Arc::new(configure)),
+            ..Default::default()
+        }
+    }
+
     /// Overrides that turn on `wasi:sockets` for agents, which the executor refuses by default.
     pub fn agent_sockets_enabled() -> Self {
         Self::default().with_agent_sockets()
