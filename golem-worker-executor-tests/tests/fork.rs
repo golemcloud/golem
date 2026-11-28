@@ -32,12 +32,12 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, PromiseId,
+    AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, IdempotencyKey,
+    InvocationStatus, OwnedAgentId, PromiseId, Timestamp,
 };
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor::services::rpc::{
@@ -55,6 +55,7 @@ use golem_worker_executor_test_utils::{
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
@@ -1329,7 +1330,24 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::TooLarge as i32),
         "{rejected:?}"
     );
-    // A management interrupt would finish the source session, which must stay writable.
+    // Keep the session writable, but unload its guest so no guest commit can consume the
+    // hook or flush the injected entry before the fork commits its captured horizon.
+    let suspend_timeout = Duration::from_secs(30);
+    executor
+        .interrupt_loaded_worker(
+            &source.agent_id,
+            InterruptKind::Suspend(Timestamp::now_utc()),
+        )
+        .await?;
+    executor
+        .wait_for_status(&source, AgentStatus::Suspended, suspend_timeout)
+        .await?;
+    tokio::time::timeout(suspend_timeout, async {
+        while executor.worker_is_loaded(&source).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     executor.append_after_next_oplog_commit(&source.agent_id);
     let lost = executor
         .client
