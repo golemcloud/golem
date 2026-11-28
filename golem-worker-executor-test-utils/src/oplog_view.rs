@@ -71,6 +71,10 @@ pub trait OplogView {
     /// The `Start` entries of the host function with this name, in oplog order.
     fn starts_of(&self, function_name: &str) -> Vec<&PublicOplogEntryWithIndex>;
 
+    /// The `AgentInvocationStarted` entries of the agent method invocations of `method_name`, in
+    /// oplog order.
+    fn method_starts(&self, method_name: &str) -> Vec<&PublicOplogEntryWithIndex>;
+
     /// The `Start` and the terminals and completion markers of the call that starts at `start`.
     fn call(&self, start: OplogIndex) -> CallRecord<'_>;
 
@@ -90,6 +94,17 @@ impl OplogView for [PublicOplogEntryWithIndex] {
             .filter(|entry| {
                 matches!(&entry.entry, PublicOplogEntry::Start(start)
                     if start.function_name == function_name)
+            })
+            .collect()
+    }
+
+    fn method_starts(&self, method_name: &str) -> Vec<&PublicOplogEntryWithIndex> {
+        self.iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(&started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == method_name))
             })
             .collect()
     }

@@ -15,6 +15,9 @@
 pub mod debug_render;
 pub mod invocation_error;
 pub mod invocation_session;
+pub mod output_ledger;
+
+pub use output_ledger::OutputLedger;
 
 use self::debug_render::debug_render_oplog_entry;
 use crate::components::redis::Redis;

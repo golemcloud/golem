@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The setup most executor tests start with, background invocations and oplog polling.
+//! The setup most executor tests start with, background invocations, oplog polling and
+//! waits for unloading.
 
 use crate::{
     LastUniqueId, OplogView, PrecompiledComponent, TestContext, TestExecutorOverrides,
     TestWorkerExecutor, WorkerExecutorTestDependencies, start, start_with_overrides,
 };
-use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
+use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::TypedSchemaValue;
-use golem_test_framework::dsl::{AgentResult, TestDsl};
+use golem_test_framework::dsl::{AgentResult, TestDsl, within};
 use std::fmt::Display;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
-/// How often [`TestWorkerExecutor::wait_for_oplog`] reads the oplog again.
+/// How often [`TestWorkerExecutor::wait_for_oplog`] reads the oplog again, and
+/// [`TestWorkerExecutor::wait_for_suspended_unload`] checks whether the agent is loaded.
 const OPLOG_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// A fresh context, an executor on it and a component stored in its default environment.
@@ -159,6 +161,28 @@ impl TestWorkerExecutor {
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         self.poll_oplog(agent_id, true, timeout, what, predicate)
             .await
+    }
+
+    /// Waits until the agent's status is `Suspended` and the executor has unloaded it. Fails
+    /// after `timeout`, which covers both waits.
+    pub async fn wait_for_suspended_unload(
+        &self,
+        agent_id: &OwnedAgentId,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        within(
+            timeout,
+            format!("{agent_id} to suspend and unload"),
+            async {
+                self.wait_for_status(agent_id, AgentStatus::Suspended, timeout)
+                    .await?;
+                while self.worker_is_loaded(agent_id).await {
+                    tokio::time::sleep(OPLOG_POLL_INTERVAL).await;
+                }
+                anyhow::Ok(())
+            },
+        )
+        .await?
     }
 
     async fn poll_oplog(

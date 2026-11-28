@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use axum::Router;
 use axum::routing::post;
@@ -21,49 +22,62 @@ use golem_api_grpc::proto::golem::worker::{
     InvocationResponse, InvocationStart, ResumeAttach, ResumeOperation, StreamCursor,
     StreamDirection, StreamEnd, StreamInvocationIdentity, StreamTerminalAuthor, input_stream_item,
     invocation_request, invocation_response, invocation_session_completion,
-    invocation_session_result, stream_terminal,
+    invocation_session_result, log_event, stream_terminal,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
-use golem_common::model::component::ComponentDto;
+use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::durable_stream::{
     SessionStreamRole, StreamAttachmentFinalizationReason, StreamEndpointSide, StreamError,
-    StreamItemsRecord, StreamSessionRecord, StreamTerminal, StreamTerminalOrigin,
+    StreamId, StreamItemsPayload, StreamItemsRecord, StreamRecordReference, StreamSessionRecord,
+    StreamTerminal, StreamTerminalAuthor as RecordedTerminalAuthor, StreamTerminalOrigin,
     StreamTerminalRecord,
 };
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+    PublicSpanOutcome,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
     PromiseId,
 };
+use golem_common::retriable_error::is_grpc_message_size_limit;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
-use golem_schema::proto::golem::schema::{RecordValue, schema_value};
+use golem_schema::proto::golem::schema::{
+    RecordValue, SchemaValue as ProtoSchemaValue, schema_value,
+};
 use golem_service_base::model::auth::AuthCtx;
-use golem_test_framework::dsl::{AgentResult, TestDsl};
+use golem_test_framework::dsl::{
+    AgentResult, GATE_TIMEOUT, OutputLedger, SETTLE_TIMEOUT, TestDsl, within,
+};
+use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::direct_invocation_auth::{
     DirectInvocationAuthService, EnvironmentOwnerAccountId,
 };
+use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
+    ExecutorTest, LastUniqueId, OplogView, PrecompiledComponent, RecordingRpc, RpcCheckpoint,
+    Teardown, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit_and_overrides,
+    start_with_overrides,
+};
+use golem_worker_executor_test_utils::{
     InvocationError, InvocationSession, InvocationSessionResultExt, LocalHttpServer,
     SessionTerminal, id_target, resume_attach, stream_reference,
 };
-use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, RecordingRpc, RpcCheckpoint, TestContext,
-    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, start,
-    start_with_concurrent_agent_limit_and_overrides, start_with_overrides,
-};
 use pretty_assertions::assert_eq;
-use std::collections::{BTreeMap, BTreeSet};
+use prost::Message;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -109,6 +123,24 @@ inherit_test_dep!(
 );
 inherit_test_dep!(Tracing);
 
+/// How long a caller whose RPC waits may take to suspend and unload.
+const SUSPEND_UNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a resumed or replayed invocation may take to return its result.
+const RESULT_TIMEOUT: Duration = Duration::from_secs(45);
+/// How long an agent may take to recover and finish after an autonomous resume.
+const RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a short step, such as an interrupt or a first stream frame, may take.
+const SHORT_TIMEOUT: Duration = Duration::from_secs(5);
+/// The pause between two polls of an agent, oplog or counter condition.
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Suspends an RPC caller after 1 s and resumes it after 3 s, checking every 100 ms.
+fn fast_rpc_suspension(config: &mut GolemConfig) {
+    config.suspend.rpc_suspend_after = Duration::from_secs(1);
+    config.suspend.rpc_resume_after = Duration::from_secs(3);
+    config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+}
+
 #[test]
 #[timeout("2 minutes")]
 async fn oversized_invocation_opening_frame_preserves_the_transport_error(
@@ -120,12 +152,9 @@ async fn oversized_invocation_opening_frame_preserves_the_transport_error(
     let executor = start_with_overrides(
         deps,
         &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.grpc.max_message_size = 1024;
-            })),
-            ..Default::default()
-        },
+        TestExecutorOverrides::configured(|config| {
+            config.grpc.max_message_size = 1024;
+        }),
     )
     .await?;
     let client = executor
@@ -155,27 +184,32 @@ async fn oversized_invocation_opening_frame_preserves_the_transport_error(
             Err(status) => status,
             Ok(response) => response.into_inner().message().await.unwrap_err(),
         };
+        // The oversized frame fails with the transport's own size-limit error.
         assert_eq!(
             status.code(),
             if compressed {
                 tonic::Code::ResourceExhausted
             } else {
                 tonic::Code::OutOfRange
-            }
+            },
+            "compressed: {compressed}"
         );
         assert!(
-            golem_common::retriable_error::is_grpc_message_size_limit(&status),
+            is_grpc_message_size_limit(&status),
             "expected the original gRPC size-limit error, got {status}"
         );
-        assert!(status.message().contains("1024"));
+        assert!(
+            status.message().contains("1024"),
+            "the error names the configured limit: {status}"
+        );
     }
 
     // A decodable but invalid opening frame is rejected without waiting for request EOF.
-    let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
+    let (request_tx, request_rx) = mpsc::channel(1);
     request_tx.send(InvocationRequest::default()).await?;
     let mut responses = client
         .clone()
-        .invoke_agent_session(tokio_stream::wrappers::ReceiverStream::new(request_rx))
+        .invoke_agent_session(ReceiverStream::new(request_rx))
         .await?
         .into_inner();
     assert!(matches!(
@@ -194,32 +228,29 @@ async fn unobserved_async_rpc_suspends_with_timer_and_resumes(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start_with_overrides(
         deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.suspend.rpc_suspend_after = Duration::from_secs(1);
-                config.suspend.rpc_resume_after = Duration::from_secs(3);
-                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
-            })),
-            ..Default::default()
-        },
+        last_unique_id,
+        fixture,
+        TestExecutorOverrides::configured(fast_rpc_suspension),
     )
     .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
     let target_id = agent_key!("RpcBlockingCounter", "unobserved-target");
     executor
         .start_agent(&component.id, target_id.clone())
         .await?;
     let promise = executor
-        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
-        .await?
-        .into_typed::<PromiseId>()?;
+        .invoke_and_await_typed::<PromiseId>(
+            &component,
+            &target_id,
+            "create_promise",
+            data_value!(),
+        )
+        .await?;
     let caller_id = agent_key!("CancelTester", "unobserved-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
@@ -234,31 +265,29 @@ async fn unobserved_async_rpc_suspends_with_timer_and_resumes(
     tokio::pin!(invocation);
     tokio::select! {
         result = &mut invocation => panic!("caller finished before suspension: {result:?}"),
-        unloaded = tokio::time::timeout(Duration::from_secs(15), async {
-            executor.wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(10)).await?;
-            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &caller.agent_id)).await {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok::<(), anyhow::Error>(())
-        }) => { unloaded??; }
+        unloaded = executor.wait_for_suspended_unload(&caller, SUSPEND_UNLOAD_TIMEOUT) => unloaded?,
     }
     executor
         .complete_promise(&executor.context.default_environment_id, &promise, vec![])
         .await?;
-    let value = tokio::time::timeout(Duration::from_secs(45), invocation)
+    let value = within(RESULT_TIMEOUT, "the resumed caller's result", invocation)
         .await??
         .into_typed::<u64>()?;
+
+    // The caller resumed in a new instance and returned the target's counter.
     assert_eq!(value, 7);
-    assert!(executor.instance_load_count(&caller.agent_id) > loads);
+    assert!(
+        executor.instance_load_count(&caller.agent_id) > loads,
+        "the caller was loaded again after its suspension"
+    );
+    // The target and the caller still answer with their state.
     let count = executor
-        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
-        .await?
-        .into_typed::<u64>()?;
+        .invoke_and_await_typed::<u64>(&component, &target_id, "get_value", data_value!())
+        .await?;
     assert_eq!(count, 7);
     let name = executor
-        .invoke_and_await_agent(&component, &caller_id, "name", data_value!())
-        .await?
-        .into_typed::<String>()?;
+        .invoke_and_await_typed::<String>(&component, &caller_id, "name", data_value!())
+        .await?;
     assert_eq!(name, "unobserved-caller");
     Ok(())
 }
@@ -271,18 +300,18 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
     let attempts = Arc::new(Mutex::new(Vec::new()));
     let recorded_attempts = attempts.clone();
-    let executor = start_with_overrides(
+    let ExecutorTest {
+        context,
+        executor,
+        component,
+    } = ExecutorTest::start_with_overrides(
         deps,
-        &context,
+        last_unique_id,
+        fixture,
         TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.suspend.rpc_suspend_after = Duration::from_secs(1);
-                config.suspend.rpc_resume_after = Duration::from_secs(3);
-                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
-            })),
+            configure: Some(Arc::new(fast_rpc_suspension)),
             wrap_rpc: Some(Arc::new(move |rpc| {
                 Arc::new(RecordingRpc::new(
                     rpc,
@@ -294,19 +323,19 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
         },
     )
     .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
     let target_name = "sync-timer-target";
     let target_id = agent_key!("RpcBlockingCounter", target_name);
     let target = executor
         .start_agent(&component.id, target_id.clone())
         .await?;
     let promise = executor
-        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
-        .await?
-        .into_typed::<PromiseId>()?;
+        .invoke_and_await_typed::<PromiseId>(
+            &component,
+            &target_id,
+            "create_promise",
+            data_value!(),
+        )
+        .await?;
     let caller_id = agent_key!("CancelTester", "sync-timer-caller");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
@@ -321,60 +350,59 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
     // Dispatch is the deterministic marker: the guest has already polled its timer.
     tokio::select! {
         result = &mut invocation => panic!("caller returned before dispatch: {result:?}"),
-        dispatched = tokio::time::timeout(Duration::from_secs(10), async {
+        dispatched = within(GATE_TIMEOUT, "the RPC dispatch", async {
             while attempts.lock().unwrap().is_empty() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
-        }) => { dispatched?; }
+        }) => dispatched?,
     }
     let loads = executor.instance_load_count(&caller.agent_id);
     let owned_caller = OwnedAgentId::new(context.default_environment_id, &caller.agent_id);
     tokio::select! {
         result = &mut invocation => panic!("caller returned before promise release: {result:?}"),
         resident = async {
+            // While the borrowed call runs past the suspension grace, the caller stays resident.
             let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
             while tokio::time::Instant::now() < deadline {
-                assert!(executor.worker_is_loaded(&owned_caller).await);
+                assert!(executor.worker_is_loaded(&owned_caller).await, "the caller stays loaded");
                 assert_eq!(executor.get_worker_metadata(&caller).await?.status, AgentStatus::Running);
-                assert_eq!(executor.instance_load_count(&caller.agent_id), loads);
+                assert_eq!(executor.instance_load_count(&caller.agent_id), loads, "the caller is not reloaded");
                 assert!(!executor.get_oplog(&caller, OplogIndex::INITIAL).await?.iter()
-                    .any(|entry| matches!(&entry.entry, PublicOplogEntry::Suspend(_))));
+                    .any(|entry| matches!(&entry.entry, PublicOplogEntry::Suspend(_))),
+                    "the caller records no Suspend while the call is borrowed");
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             Ok::<(), anyhow::Error>(())
         } => { resident?; }
     }
-    assert_eq!(attempts.lock().unwrap().len(), 1);
+    assert_eq!(
+        attempts.lock().unwrap().len(),
+        1,
+        "the RPC was dispatched once"
+    );
     executor
         .complete_promise(&executor.context.default_environment_id, &promise, vec![])
         .await?;
     // Once the borrowed call returns, the same long timer may release the Store.
     tokio::select! {
         result = &mut invocation => panic!("timer finished before suspension: {result:?}"),
-        unloaded = tokio::time::timeout(Duration::from_secs(10), async {
-            executor.wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(8)).await?;
-            while executor.worker_is_loaded(&owned_caller).await {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok::<(), anyhow::Error>(())
-        }) => { unloaded??; }
+        unloaded = executor.wait_for_suspended_unload(&caller, SUSPEND_UNLOAD_TIMEOUT) => unloaded?,
     }
-    let value = tokio::time::timeout(Duration::from_secs(45), invocation)
+    let value = within(RESULT_TIMEOUT, "the resumed caller's result", invocation)
         .await??
         .into_typed::<u64>()?;
+
+    // The caller resumed after its timer and returned the counter of the one RPC.
     assert_eq!(value, 7);
-    assert!(executor.instance_load_count(&caller.agent_id) > loads);
+    assert!(
+        executor.instance_load_count(&caller.agent_id) > loads,
+        "the caller was loaded again after its suspension"
+    );
     let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
     assert_eq!(
-        target_oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
-            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.method_name == "inc_after_promise"))
-            })
-            .count(),
-        1
+        target_oplog.method_starts("inc_after_promise").len(),
+        1,
+        "the target ran inc_after_promise once, although the caller suspended and resumed"
     );
     {
         let attempts = attempts.lock().unwrap();
@@ -383,39 +411,40 @@ async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
             1,
             "completed borrowed RPC must not redispatch on timer replay"
         );
-        assert!(attempts[0].is_some());
+        assert!(
+            attempts[0].is_some(),
+            "the attempt carried an idempotency key"
+        );
     }
+
+    // Both agents keep working, and a fresh RPC continues from the counter.
     assert_eq!(
         executor
-            .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
-            .await?
-            .into_typed::<u64>()?,
+            .invoke_and_await_typed::<u64>(&component, &target_id, "get_value", data_value!())
+            .await?,
         7
     );
     assert_eq!(
         executor
-            .invoke_and_await_agent(&component, &caller_id, "name", data_value!())
-            .await?
-            .into_typed::<String>()?,
+            .invoke_and_await_typed::<String>(&component, &caller_id, "name", data_value!())
+            .await?,
         "sync-timer-caller"
     );
     assert_eq!(
         executor
-            .invoke_and_await_agent(
+            .invoke_and_await_typed::<u64>(
                 &component,
                 &caller_id,
                 "await_counter",
                 data_value!(target_name, promise, false)
             )
-            .await?
-            .into_typed::<u64>()?,
+            .await?,
         14
     );
     assert_eq!(
         executor
-            .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
-            .await?
-            .into_typed::<u64>()?,
+            .invoke_and_await_typed::<u64>(&component, &target_id, "get_value", data_value!())
+            .await?,
         14
     );
     Ok(())
@@ -493,7 +522,7 @@ async fn raw_sync_rpc_local_denial_replays_without_span_or_dispatch(
         })),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .without_default_host_permissions("RpcAuthTester")
@@ -506,21 +535,30 @@ async fn raw_sync_rpc_local_denial_replays_without_span_or_dispatch(
     let first = executor
         .invoke_and_await_agent(&component, &caller_id, "try_ephemeral_call", data_value!())
         .await?;
+    let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+
+    // The call was denied locally: the guest got the denial case, the call's Start has its End,
+    // and nothing was dispatched.
     assert!(
         matches!(first.value(), Some(SchemaValue::Variant(value)) if value.case == 1),
         "{first:?}"
     );
-    let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-    let start = prefix.iter().find(|entry| matches!(&entry.entry, PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::invoke_and_await")).expect("invocation denial, not activation denial").oplog_index;
-    assert!(prefix.iter().any(
-        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
-    ));
+    let start = prefix
+        .starts_of("golem::rpc::wasm-rpc::invoke_and_await")
+        .first()
+        .expect("invocation denial, not activation denial")
+        .oplog_index;
+    assert!(
+        !prefix.call(start).ends.is_empty(),
+        "the denied call has its End"
+    );
     assert!(attempts.lock().unwrap().is_empty());
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let executor = executor.restart(Teardown::Drop).await?;
     // A new invocation reconstructs the old denial instead of returning a cached result.
-    let second = tokio::time::timeout(
-        Duration::from_secs(30),
+    let second = within(
+        SETTLE_TIMEOUT,
+        "the invocation after the restart",
         executor.invoke_and_await_agent(
             &component,
             &caller_id,
@@ -530,7 +568,10 @@ async fn raw_sync_rpc_local_denial_replays_without_span_or_dispatch(
     )
     .await??;
     assert_eq!(second.value(), first.value());
-    assert!(attempts.lock().unwrap().is_empty());
+    assert!(
+        attempts.lock().unwrap().is_empty(),
+        "the replayed denial dispatches nothing"
+    );
     Ok(())
 }
 
@@ -542,7 +583,6 @@ async fn invalid_async_rpc_closes_span_before_unused_future_is_dropped(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
     let attempts = Arc::new(Mutex::new(Vec::new()));
     let overrides = TestExecutorOverrides {
         wrap_rpc: Some(Arc::new({
@@ -557,71 +597,69 @@ async fn invalid_async_rpc_closes_span_before_unused_future_is_dropped(
         })),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start_with_overrides(deps, last_unique_id, fixture, overrides).await?;
     let caller_id = agent_key!("RpcAuthTester", "invalid-async-unused");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
     let key = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_typed::<Option<String>>(
             &component,
             &caller_id,
             "invalid_async_call_without_get",
             data_value!(),
         )
-        .await?
-        .into_typed::<Option<String>>()?;
+        .await?;
+    let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+
+    // The rejected call has no identity, dispatched nothing, and its durable rejection closed
+    // its span as failed.
     assert_eq!(key, None, "a rejected call has no invocation identity");
     assert!(attempts.lock().unwrap().is_empty());
-
-    let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-    let rejection = oplog
-        .iter()
-        .find(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::Start(start)
-            if start.function_name == "golem::rpc::wasm-rpc::async-invoke-rejection")
-        })
+    let rejection = *oplog
+        .starts_of("golem::rpc::wasm-rpc::async-invoke-rejection")
+        .first()
         .expect("missing durable validation rejection");
     let span_id = match &rejection.entry {
         PublicOplogEntry::Start(start) => start.span_started.as_ref().unwrap().span_id.clone(),
         _ => unreachable!(),
     };
-    assert!(oplog.iter().any(|entry| matches!(&entry.entry,
-        PublicOplogEntry::End(end)
-            if end.start_index == rejection.oplog_index
-                && end.span_finished.as_ref().is_some_and(|span|
-                    span.span_id == span_id
-                        && span.outcome == golem_common::model::oplog::PublicSpanOutcome::Failed)
-    )));
+    assert!(
+        oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::End(end)
+                if end.start_index == rejection.oplog_index
+                    && end.span_finished.as_ref().is_some_and(|span|
+                        span.span_id == span_id
+                            && span.outcome == PublicSpanOutcome::Failed)
+        )),
+        "the rejection's End closes its span as failed"
+    );
 
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     let second_key = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_typed::<Option<String>>(
             &component,
             &caller_id,
             "invalid_async_call_without_get",
             data_value!(),
         )
-        .await?
-        .into_typed::<Option<String>>()?;
+        .await?;
+    let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+
+    // After the restart the rejection replays: no identity, no dispatch, and still one End.
     assert_eq!(
         second_key, None,
         "a rejected call has no invocation identity"
     );
     assert!(attempts.lock().unwrap().is_empty());
-    let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
     assert_eq!(
-        recovered
-            .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end)
-                if end.start_index == rejection.oplog_index))
-            .count(),
-        1
+        recovered.call(rejection.oplog_index).ends.len(),
+        1,
+        "replay does not record the rejection's End again"
     );
     Ok(())
 }
@@ -671,7 +709,7 @@ async fn rpc_local_denial_prefix_case(
         })),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .without_default_host_permissions("RpcAuthTester")
@@ -685,32 +723,24 @@ async fn rpc_local_denial_prefix_case(
     let mut gate = executor
         .gate_next_rpc_commit(&caller.agent_id, RpcCheckpoint::Start)
         .await;
-    let invocation = {
-        let executor = executor.clone();
-        let component = component.clone();
-        let caller_id = caller_id.clone();
-        let key = key.clone();
-        tokio::spawn(async move {
-            executor
-                .invoke_and_await_agent_with_key(
-                    &component,
-                    &caller_id,
-                    &key,
-                    method,
-                    data_value!(),
-                )
-                .await
-        })
-    };
-    tokio::time::timeout(Duration::from_secs(30), gate.committed()).await?;
+    let invocation = executor.spawn_invoke_and_await_with_key(
+        &component,
+        &caller_id,
+        &key,
+        method,
+        data_value!(),
+    );
+    within(
+        SETTLE_TIMEOUT,
+        "the committed denial Start",
+        gate.committed(),
+    )
+    .await?;
 
     let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-    let start = prefix
-        .iter()
-        .find(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::Start(start)
-            if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
-        })
+    let start = *prefix
+        .starts_of("golem::rpc::wasm-rpc::invoke_and_await")
+        .first()
         .expect("invocation denial, not activation denial");
     let PublicOplogEntry::Start(start_entry) = &start.entry else {
         unreachable!()
@@ -719,22 +749,30 @@ async fn rpc_local_denial_prefix_case(
         .span_started
         .as_ref()
         .map(|span| span.span_id.clone());
-    assert_eq!(span_id.is_some(), has_span);
-    assert!(!prefix.iter().any(
-        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start.oplog_index)
-    ));
-    assert!(attempts.lock().unwrap().is_empty());
     let start_index = start.oplog_index;
+
+    // The crash prefix holds the denial's Start, with a span for an async call only, and no End;
+    // nothing was dispatched.
+    assert_eq!(
+        span_id.is_some(),
+        has_span,
+        "the Start embeds a span: {has_span}"
+    );
+    assert!(
+        prefix.call(start_index).ends.is_empty(),
+        "the prefix ends before the denial's End"
+    );
+    assert!(attempts.lock().unwrap().is_empty());
 
     gate.abort_return();
     invocation.abort();
     let _ = invocation.await;
     drop(gate);
-    drop(executor);
 
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    let denied = tokio::time::timeout(
-        Duration::from_secs(30),
+    let executor = executor.restart(Teardown::Drop).await?;
+    let denied = within(
+        SETTLE_TIMEOUT,
+        "the recovered denial",
         executor.invoke_and_await_agent_with_key(
             &component,
             &caller_id,
@@ -744,56 +782,49 @@ async fn rpc_local_denial_prefix_case(
         ),
     )
     .await??;
+    let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+
+    // Recovery completed the recorded Start with the denial, closed the same span as denied,
+    // and dispatched nothing.
     assert!(
         matches!(denied.value(), Some(SchemaValue::Variant(value)) if value.case == 1),
         "{denied:?}"
     );
-    let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-    let terminal = recovered
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) if end.start_index == start_index => Some(end),
-            _ => None,
-        })
-        .expect("the recorded denial must be completed");
+    let ends = recovered.call(start_index).ends;
+    let PublicOplogEntry::End(terminal) = &ends
+        .first()
+        .expect("the recorded denial must be completed")
+        .entry
+    else {
+        unreachable!()
+    };
     assert_eq!(
         terminal
             .span_finished
             .as_ref()
             .map(|span| span.span_id.clone()),
-        span_id
+        span_id,
+        "the End closes the span the Start opened"
     );
     if let Some(span) = &terminal.span_finished {
-        assert_eq!(
-            span.outcome,
-            golem_common::model::oplog::PublicSpanOutcome::Denied
-        );
+        assert_eq!(span.outcome, PublicSpanOutcome::Denied);
     }
-    assert_eq!(
-        recovered
-            .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start_index))
-            .count(),
-        1
-    );
+    assert_eq!(ends.len(), 1, "the recovered Start has one End");
     assert!(attempts.lock().unwrap().is_empty());
 
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    // A second restart replays the completed denial without dispatching or another End.
+    let executor = executor.restart(Teardown::Drop).await?;
     let replayed = executor
         .invoke_and_await_agent(&component, &caller_id, method, data_value!())
         .await?;
+    let replayed_oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
     assert_eq!(replayed.value(), denied.value());
     assert!(
         attempts.lock().unwrap().is_empty(),
         "neither incomplete nor completed denial replay may dispatch RPC"
     );
-    let replayed_oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
     assert_eq!(
-        replayed_oplog
-            .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start_index))
-            .count(),
+        replayed_oplog.call(start_index).ends.len(),
         1,
         "completed denial replay must retain exactly one terminal for the recovered Start"
     );
@@ -810,7 +841,6 @@ async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     for checkpoint in [RpcCheckpoint::Start, RpcCheckpoint::End] {
-        let context = TestContext::new(last_unique_id);
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let overrides = TestExecutorOverrides {
             wrap_rpc: Some(Arc::new({
@@ -819,11 +849,11 @@ async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
             })),
             ..Default::default()
         };
-        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-        let component = executor
-            .component_dep(&context.default_environment_id, fixture)
-            .store()
-            .await?;
+        let ExecutorTest {
+            executor,
+            component,
+            ..
+        } = ExecutorTest::start_with_overrides(deps, last_unique_id, fixture, overrides).await?;
         let caller_id = agent_key!("CancelTester", "sync-prefix-caller");
         let caller = executor
             .start_agent(&component.id, caller_id.clone())
@@ -832,65 +862,48 @@ async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
         let mut gate = executor
             .gate_next_rpc_commit(&caller.agent_id, checkpoint)
             .await;
-        let invocation = {
-            let executor = executor.clone();
-            let component = component.clone();
-            let caller_id = caller_id.clone();
-            let key = key.clone();
-            tokio::spawn(async move {
-                executor
-                    .invoke_and_await_agent_with_key(
-                        &component,
-                        &caller_id,
-                        &key,
-                        "grow_memory_before_rpc_activation",
-                        data_value!("sync-prefix-target"),
-                    )
-                    .await
-            })
-        };
-        tokio::time::timeout(Duration::from_secs(30), gate.committed()).await?;
+        let invocation = executor.spawn_invoke_and_await_with_key(
+            &component,
+            &caller_id,
+            &key,
+            "grow_memory_before_rpc_activation",
+            data_value!("sync-prefix-target"),
+        );
+        within(
+            SETTLE_TIMEOUT,
+            format!("the committed {checkpoint:?}"),
+            gate.committed(),
+        )
+        .await?;
         let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-        let starts: Vec<_> = prefix
-            .iter()
-            .filter_map(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::Start(start)
-                if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
-                .then_some(entry.oplog_index)
-            })
-            .collect();
-        assert_eq!(starts.len(), 1);
-        let start = starts[0];
-        let invocation_span = prefix
-            .iter()
-            .find_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(entry)
-                    if entry.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
-                {
-                    entry.span_started.as_ref().map(|span| span.span_id.clone())
-                }
-                _ => None,
-            })
-            .expect("sync RPC Start must embed its invocation span");
+        let starts = prefix.starts_of("golem::rpc::wasm-rpc::invoke_and_await");
+
+        // The crash prefix holds the RPC's Start with its span, and its End only when the
+        // crash comes after it.
+        assert_eq!(starts.len(), 1, "{checkpoint:?}");
+        let start = starts[0].oplog_index;
+        let invocation_span = match &starts[0].entry {
+            PublicOplogEntry::Start(entry) => {
+                entry.span_started.as_ref().map(|span| span.span_id.clone())
+            }
+            _ => None,
+        }
+        .expect("sync RPC Start must embed its invocation span");
         assert_eq!(
-            prefix
-                .iter()
-                .filter(
-                    |e| matches!(&e.entry, PublicOplogEntry::End(end) if end.start_index == start)
-                )
-                .count(),
-            usize::from(checkpoint == RpcCheckpoint::End)
+            prefix.call(start).ends.len(),
+            usize::from(checkpoint == RpcCheckpoint::End),
+            "{checkpoint:?}"
         );
         let attempts_before = attempts.lock().unwrap().clone();
         gate.abort_return();
         invocation.abort();
         let _ = invocation.await;
         drop(gate);
-        drop(executor);
 
-        let executor = start_with_overrides(deps, &context, overrides).await?;
-        tokio::time::timeout(
-            Duration::from_secs(30),
+        let executor = executor.restart(Teardown::Drop).await?;
+        within(
+            SETTLE_TIMEOUT,
+            format!("the recovered invocation after the {checkpoint:?} crash"),
             executor.invoke_and_await_agent_with_key(
                 &component,
                 &caller_id,
@@ -901,14 +914,16 @@ async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
         )
         .await??;
         let count = executor
-            .invoke_and_await_agent(
+            .invoke_and_await_typed::<u64>(
                 &component,
                 &agent_key!("RpcCounter", "sync-prefix-target"),
                 "get_value",
                 data_value!(),
             )
-            .await?
-            .into_typed::<u64>()?;
+            .await?;
+        let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+
+        // The target counted the call once, and the RPC was dispatched once with a key.
         assert_eq!(count, 1, "checkpoint {checkpoint:?}");
         {
             let attempts = attempts.lock().unwrap();
@@ -922,22 +937,23 @@ async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
                 assert_eq!(*attempts, attempts_before);
             }
         }
-        let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-        assert_eq!(recovered.iter().filter(|e| matches!(&e.entry, PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::invoke_and_await")).count(), 1);
+        // Recovery kept the one Start and gave it one End that closes its span.
         assert_eq!(
             recovered
-                .iter()
-                .filter(
-                    |e| matches!(&e.entry, PublicOplogEntry::End(end) if end.start_index == start)
-                )
-                .count(),
-            1
+                .starts_of("golem::rpc::wasm-rpc::invoke_and_await")
+                .len(),
+            1,
+            "{checkpoint:?}"
         );
-        assert!(recovered.iter().any(|entry| matches!(&entry.entry,
-            PublicOplogEntry::End(end)
-                if end.start_index == start
-                    && end.span_finished.as_ref().is_some_and(|span| span.span_id == invocation_span)
-        )));
+        let ends = recovered.call(start).ends;
+        assert_eq!(ends.len(), 1, "{checkpoint:?}");
+        assert!(
+            matches!(&ends[0].entry,
+                PublicOplogEntry::End(end)
+                    if end.span_finished.as_ref().is_some_and(|span| span.span_id == invocation_span)
+            ),
+            "the End closes the invocation span ({checkpoint:?})"
+        );
     }
     Ok(())
 }
@@ -950,7 +966,6 @@ async fn raw_rpc_suspension_case(
     suspend: bool,
     restart: bool,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
     let attempts = Arc::new(Mutex::new(Vec::new()));
     let recorded_attempts = attempts.clone();
     let overrides = TestExecutorOverrides {
@@ -967,20 +982,24 @@ async fn raw_rpc_suspension_case(
         })),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start_with_overrides(deps, last_unique_id, fixture, overrides).await?;
     let target_name = "raw-rpc-target";
     let target_id = agent_key!("RpcBlockingCounter", target_name);
     let target = executor
         .start_agent(&component.id, target_id.clone())
         .await?;
     let promise = executor
-        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
-        .await?
-        .into_typed::<PromiseId>()?;
+        .invoke_and_await_typed::<PromiseId>(
+            &component,
+            &target_id,
+            "create_promise",
+            data_value!(),
+        )
+        .await?;
     if !suspend {
         executor
             .complete_promise(&executor.context.default_environment_id, &promise, vec![])
@@ -991,31 +1010,22 @@ async fn raw_rpc_suspension_case(
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
-    let mut invocation = {
-        let executor = executor.clone();
-        let component = component.clone();
-        let caller_id = caller_id.clone();
-        let promise = promise.clone();
-        tokio::spawn(async move {
-            executor
-                .invoke_and_await_agent(
-                    &component,
-                    &caller_id,
-                    "await_counter",
-                    data_value!(target_name, promise, asynchronous),
-                )
-                .await
-        })
-    };
+    let mut invocation = executor.spawn_invoke_and_await(
+        &component,
+        &caller_id,
+        "await_counter",
+        data_value!(target_name, promise.clone(), asynchronous),
+    );
 
     if suspend {
         if asynchronous {
             executor
-                .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
+                .wait_for_status(&caller, AgentStatus::Suspended, SETTLE_TIMEOUT)
                 .await?;
         } else {
+            // A sync caller stays resident beyond the suspension grace while its target waits.
             executor
-                .wait_for_status(&target, AgentStatus::Suspended, Duration::from_secs(30))
+                .wait_for_status(&target, AgentStatus::Suspended, SETTLE_TIMEOUT)
                 .await?;
             tokio::time::sleep(Duration::from_secs(4)).await;
             assert!(!invocation.is_finished());
@@ -1027,19 +1037,11 @@ async fn raw_rpc_suspension_case(
         let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
         eprintln!("Pending caller (async={asynchronous}):");
         print_rpc_memory_oplog(&prefix);
-        let starts: Vec<_> = prefix
-            .iter()
-            .filter_map(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::Start(start)
-                if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
-                .then_some(entry.oplog_index)
-            })
-            .collect();
         if asynchronous {
+            // The suspended async caller recorded the RPC's Start and no End.
+            let starts = prefix.starts_of("golem::rpc::wasm-rpc::invoke_and_await");
             assert_eq!(starts.len(), 1);
-            assert!(!prefix.iter().any(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == starts[0])
-            }));
+            assert!(prefix.call(starts[0].oplog_index).ends.is_empty());
         } else {
             // The resident caller need not have flushed its buffered RPC Start yet.
             assert_eq!(attempts.lock().unwrap().len(), 1);
@@ -1049,7 +1051,7 @@ async fn raw_rpc_suspension_case(
             .await?;
     }
 
-    let result = tokio::time::timeout(Duration::from_secs(45), &mut invocation).await;
+    let result = within(RESULT_TIMEOUT, "the caller's result", &mut invocation).await;
     let caller_oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
     let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
     eprintln!("Caller after wait (async={asynchronous}, suspend={suspend}):");
@@ -1063,32 +1065,24 @@ async fn raw_rpc_suspension_case(
     }
 
     let count = executor
-        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
-        .await?
-        .into_typed::<u64>()?;
+        .invoke_and_await_typed::<u64>(&component, &target_id, "get_value", data_value!())
+        .await?;
+
+    // The target ran the call once, and every attempt carried the same key.
     assert_eq!(
         count, 7,
         "target must execute exactly once even if caller hangs"
     );
-    let target_calls = target_oplog
-        .iter()
-        .filter(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
-            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.method_name == "inc_after_promise"))
-        })
-        .count();
-    assert_eq!(target_calls, 1);
+    assert_eq!(target_oplog.method_starts("inc_after_promise").len(), 1);
     {
         let attempts = attempts.lock().unwrap();
         assert!(!attempts.is_empty());
         assert!(attempts[0].is_some());
         assert!(attempts.iter().all(|key| key == &attempts[0]));
     }
+    // The caller returned the count; only a suspended async caller recorded a Suspend.
     let value = result
-        .map_err(|_| {
-            anyhow::anyhow!("caller did not return (async={asynchronous}, suspend={suspend})")
-        })???
+        .map_err(|_| anyhow!("caller did not return (async={asynchronous}, suspend={suspend})"))???
         .into_typed::<u64>()?;
     assert_eq!(value, 7);
     assert_eq!(
@@ -1104,12 +1098,13 @@ async fn raw_rpc_suspension_case(
     if restart {
         let recorded_span_ids = asynchronous.then(|| converted_rpc_span_ids(&caller_oplog));
         let attempts_before = attempts.lock().unwrap().len();
-        drop(executor);
-        let executor = start_with_overrides(deps, &context, overrides).await?;
+
+        let executor = executor.restart(Teardown::Drop).await?;
         // A fresh invocation forces reconstruction; looking up the original key can return
         // its stored result without running the caller's guest again.
-        let result = tokio::time::timeout(
-            Duration::from_secs(45),
+        let result = within(
+            RESULT_TIMEOUT,
+            "the fresh invocation on the restarted executor",
             executor.invoke_and_await_agent(
                 &component,
                 &caller_id,
@@ -1124,15 +1119,20 @@ async fn raw_rpc_suspension_case(
         eprintln!("RPC attempts after restart: {:?}", attempts.lock().unwrap());
         let value = result
             .map_err(|_| {
-                anyhow::anyhow!("completed caller history did not replay (async={asynchronous})")
+                anyhow!("completed caller history did not replay (async={asynchronous})")
             })??
             .into_typed::<u64>()?;
-        assert_eq!(value, 14);
-        assert_eq!(attempts.lock().unwrap().len(), attempts_before + 1);
         let count = executor
-            .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
-            .await?
-            .into_typed::<u64>()?;
+            .invoke_and_await_typed::<u64>(&component, &target_id, "get_value", data_value!())
+            .await?;
+
+        // The replayed history dispatched only the fresh call, and kept its span identities.
+        assert_eq!(value, 14);
+        assert_eq!(
+            attempts.lock().unwrap().len(),
+            attempts_before + 1,
+            "only the fresh invocation dispatches"
+        );
         assert_eq!(
             count, 14,
             "replaying the completed call must not repeat its effect"
@@ -1152,9 +1152,7 @@ async fn raw_rpc_suspension_case(
     Ok(())
 }
 
-fn converted_rpc_span_ids(
-    oplog: &[PublicOplogEntryWithIndex],
-) -> Vec<golem_common::model::invocation_context::SpanId> {
+fn converted_rpc_span_ids(oplog: &[PublicOplogEntryWithIndex]) -> Vec<SpanId> {
     oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
@@ -1187,10 +1185,7 @@ fn assert_converted_rpc_span_lifecycle(
     let span_ids = converted_rpc_span_ids(oplog);
     assert_eq!(span_ids.len(), expected_rpc_count * 2, "{oplog:#?}");
     assert_eq!(
-        span_ids
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len(),
+        span_ids.iter().collect::<HashSet<_>>().len(),
         span_ids.len(),
         "each connection and invocation must retain a distinct span identity"
     );
@@ -1209,20 +1204,13 @@ fn assert_converted_rpc_span_lifecycle(
         assert_eq!(finishes, 1, "span {span_id} must close exactly once");
     }
 
-    for entry in oplog {
-        let PublicOplogEntry::Start(start) = &entry.entry else {
-            continue;
-        };
-        if start.function_name == "golem::rpc::wasm-rpc::upsert" {
-            let terminal = oplog.iter().find_map(|candidate| match &candidate.entry {
-                PublicOplogEntry::End(end) if end.start_index == entry.oplog_index => Some(end),
-                _ => None,
-            });
-            assert!(
-                terminal.is_some_and(|end| end.span_finished.is_none()),
-                "connection creation must leave its lifetime span open for resource cleanup"
-            );
-        }
+    for upsert in oplog.starts_of("golem::rpc::wasm-rpc::upsert") {
+        let call = oplog.call(upsert.oplog_index);
+        assert!(
+            matches!(call.ends.first().map(|end| &end.entry),
+                Some(PublicOplogEntry::End(end)) if end.span_finished.is_none()),
+            "connection creation must leave its lifetime span open for resource cleanup"
+        );
     }
 }
 
@@ -1254,12 +1242,11 @@ async fn memory_growth_before_rpc_activation(
     fixture: &PrecompiledComponent,
     inject_oom: bool,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, fixture).await?;
     let caller = agent_key!("CancelTester", "memory-growth");
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
     if inject_oom {
@@ -1287,9 +1274,8 @@ async fn memory_growth_before_rpc_activation(
     });
     eprintln!("Before restart: result={result:?}, injected={triggered}");
     print_rpc_memory_oplog(&oplog);
-    drop(executor);
 
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     let restarted = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -1302,25 +1288,27 @@ async fn memory_growth_before_rpc_activation(
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     eprintln!("After restart: result={restarted:?}");
     print_rpc_memory_oplog(&oplog);
-    assert_eq!(triggered, inject_oom);
+
+    // The injected OOM hit right after the RPC connection was created.
+    assert_eq!(triggered, inject_oom, "the OOM was injected: {inject_oom}");
     if inject_oom {
         assert!(
             boundary_matches,
             "OOM did not immediately follow RPC creation"
         );
     }
+    // Both invocations succeeded, and the target counted the call once.
     result?;
     restarted?;
     let count = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_typed::<u64>(
             &component,
             &agent_key!("RpcCounter", "memory-growth-target"),
             "get_value",
             data_value!(),
         )
-        .await?
-        .into_typed::<u64>()?;
-    assert_eq!(count, 1);
+        .await?;
+    assert_eq!(count, 1, "the RPC ran once across the OOM and the restart");
     Ok(())
 }
 
@@ -1419,12 +1407,11 @@ async fn rpc_memory_boundary(
     inject_oom: bool,
     expected: Option<u64>,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, fixture).await?;
     let caller = agent_key!("CancelTester", method);
     let target_name = format!("{method}-target");
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
@@ -1452,14 +1439,21 @@ async fn rpc_memory_boundary(
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     eprintln!("Before restart: result={result:?}, injected={triggered}");
     print_rpc_memory_oplog(&oplog);
+    // The injected OOM hit right after the boundary, and the invocation still returned.
     if inject_oom {
-        assert!(rpc_memory_boundary_matches(&oplog, boundary));
+        assert!(
+            rpc_memory_boundary_matches(&oplog, boundary),
+            "OOM did not immediately follow the RPC's {}",
+            match boundary {
+                RpcMemoryTestBoundary::Completion => "End",
+                RpcMemoryTestBoundary::Delivery => "CompletionDelivered",
+            }
+        );
     }
-    assert_eq!(triggered, inject_oom);
+    assert_eq!(triggered, inject_oom, "the OOM was injected: {inject_oom}");
     check_rpc_memory_result(result?, expected)?;
-    drop(executor);
 
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     let restarted = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -1469,17 +1463,18 @@ async fn rpc_memory_boundary(
             data_value!(target_name.clone()),
         )
         .await?;
+
+    // The replayed invocation returns the same result, and the target counted the call once.
     check_rpc_memory_result(restarted, expected)?;
     let count = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_typed::<u64>(
             &component,
             &agent_key!("RpcCounter", target_name),
             "get_value",
             data_value!(),
         )
-        .await?
-        .into_typed::<u64>()?;
-    assert_eq!(count, 1);
+        .await?;
+    assert_eq!(count, 1, "the RPC ran once across the OOM and the restart");
     Ok(())
 }
 
@@ -1494,14 +1489,10 @@ fn rpc_memory_boundary_matches(
     oplog: &[PublicOplogEntryWithIndex],
     boundary: RpcMemoryTestBoundary,
 ) -> bool {
-    let rpc_start = oplog.iter().find_map(|entry| match &entry.entry {
-        PublicOplogEntry::Start(start)
-            if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
-        {
-            Some(entry.oplog_index)
-        }
-        _ => None,
-    });
+    let rpc_start = oplog
+        .starts_of("golem::rpc::wasm-rpc::invoke_and_await")
+        .first()
+        .map(|entry| entry.oplog_index);
     match boundary {
         RpcMemoryTestBoundary::Completion => oplog.windows(2).any(|entries| {
             matches!(&entries[0].entry, PublicOplogEntry::End(end)
@@ -1561,12 +1552,11 @@ async fn durable_operation_after_rpc_delivery(
     fixture: &PrecompiledComponent,
     operation: &str,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, fixture).await?;
     let caller = agent_key!("CancelTester", format!("tail-{operation}"));
     let target_name = format!("tail-{operation}-target");
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
@@ -1587,9 +1577,8 @@ async fn durable_operation_after_rpc_delivery(
         "delivery fault did not trigger for {operation}: {:#?}",
         executor.get_oplog(&worker, OplogIndex::INITIAL).await?
     );
-    drop(executor);
 
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -1601,14 +1590,13 @@ async fn durable_operation_after_rpc_delivery(
         .await?;
 
     let count = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_typed::<u64>(
             &component,
             &agent_key!("RpcCounter", target_name.clone()),
             "get_value",
             data_value!(),
         )
-        .await?
-        .into_typed::<u64>()?;
+        .await?;
     let expected = if matches!(operation, "fire-and-forget-rpc" | "async-rpc") {
         8
     } else {
@@ -1660,8 +1648,8 @@ impl DirectInvocationAuthService for DenyDirectInvocationAuth {
         &self,
         _caller_account_id: AccountId,
         _owned_agent_id: &OwnedAgentId,
-        _component_id: golem_common::model::component::ComponentId,
-        _agent_type: Option<golem_common::model::agent::AgentTypeName>,
+        _component_id: ComponentId,
+        _agent_type: Option<AgentTypeName>,
         _verb: AgentVerb,
         _resource: AgentResourcePattern,
         _auth_ctx: &AuthCtx,
@@ -1720,12 +1708,11 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let agent_id = agent_key!("StreamingRpcTarget", "cancel-sibling-output");
     let worker_agent_id = executor
         .start_agent(&component.id, agent_id.clone())
@@ -1785,12 +1772,11 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let mut executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        mut executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, fixture).await?;
     let terminals = [
         StreamTerminal::Failed(StreamError::Cancelled),
         StreamTerminal::Failed(StreamError::Interrupted("input transport lost".into())),
@@ -1818,9 +1804,13 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         let metadata = executor.get_worker_metadata(&worker).await?;
         let gate = executor
-            .invoke_and_await_agent(&component, &agent, "create_output_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
+            .invoke_and_await_typed::<PromiseId>(
+                &component,
+                &agent,
+                "create_output_gate",
+                data_value!(),
+            )
+            .await?;
         let key = IdempotencyKey::fresh();
         let invocation = executor
             .invocation(&component, "observe_input_terminal")
@@ -1864,51 +1854,43 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         }
         let before =
             selected_stream_terminals(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?);
+
+        // The source selected the guest's terminal before the guest read it.
         assert_eq!(before.len(), 1);
         assert_eq!(before[0].terminal, terminal);
-        assert_eq!(
-            before[0].authored_by,
-            golem_common::model::durable_stream::StreamTerminalAuthor::Guest
-        );
+        assert_eq!(before[0].authored_by, RecordedTerminalAuthor::Guest);
         assert_eq!(before[0].origin, StreamTerminalOrigin::Source);
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-                if history.iter().any(|entry| matches!(&entry.entry,
-                    PublicOplogEntry::StreamSession(session)
-                        if matches!(StreamSessionRecord::from_value(session.record.value()).unwrap(),
-                            StreamSessionRecord::ConsumerItemValue(_)))) {
-                    assert!(!history.iter().any(|entry| matches!(&entry.entry,
-                        PublicOplogEntry::StreamSession(session)
-                            if matches!(StreamSessionRecord::from_value(session.record.value()).unwrap(),
-                                StreamSessionRecord::ConsumerTerminal(_)))));
-                    break Ok::<_, anyhow::Error>(());
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        }).await??;
+        let history = executor
+            .wait_for_oplog(
+                &worker,
+                SETTLE_TIMEOUT,
+                "the consumer's item value",
+                |history| {
+                    stream_session_records(history)
+                        .iter()
+                        .any(|record| matches!(record, StreamSessionRecord::ConsumerItemValue(_)))
+                },
+            )
+            .await?;
+        assert!(
+            !stream_session_records(&history)
+                .iter()
+                .any(|record| matches!(record, StreamSessionRecord::ConsumerTerminal(_))),
+            "the guest has not read the terminal while the promise gate holds it"
+        );
         if restart {
             // The selected terminal is durable, but the guest cannot read it before this crash.
             // Resume restarts the pending invocation, rather than looking up a failed result.
             drop(session);
-            tokio::time::timeout(Duration::from_secs(10), async {
-                loop {
-                    let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-                    if history.iter().any(|entry| {
-                        matches!(&entry.entry,
-                        PublicOplogEntry::StreamSession(session)
-                            if matches!(StreamSessionRecord::from_value(session.record.value()),
-                                Ok(StreamSessionRecord::Detached(record))
-                                    if record.epoch == accepted.epoch))
-                    }) {
-                        break anyhow::Ok(());
-                    }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            })
-            .await??;
-            drop(executor);
-            executor = start(deps, &context).await?;
+            executor
+                .wait_for_oplog(&worker, GATE_TIMEOUT, "the detached session", |history| {
+                    stream_session_records(history).iter().any(|record| {
+                        matches!(record, StreamSessionRecord::Detached(record)
+                            if record.epoch == accepted.epoch)
+                    })
+                })
+                .await?;
+            executor = executor.restart(Teardown::Drop).await?;
             let resume = ResumeAttach {
                 agent_id: Some(worker.agent_id.into()),
                 environment_id: Some(component.environment_id.into()),
@@ -1976,20 +1958,18 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                 other => anyhow::bail!("unexpected terminal observation frame: {other:?}"),
             }
         }
-        assert!(finished);
+        assert!(finished, "the session finished");
         drop(session);
         let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+
+        // The selected terminal is unchanged, the guest observed it once, and the invocation
+        // ran once, also across the restart.
         assert_eq!(selected_stream_terminals(&history), before);
-        let observed_terminals = history
-            .iter()
-            .filter_map(|entry| {
-                let PublicOplogEntry::StreamSession(session) = &entry.entry else {
-                    return None;
-                };
-                match StreamSessionRecord::from_value(session.record.value()).unwrap() {
-                    StreamSessionRecord::ConsumerTerminal(record) => Some(record),
-                    _ => None,
-                }
+        let observed_terminals = stream_session_records(&history)
+            .into_iter()
+            .filter_map(|record| match record {
+                StreamSessionRecord::ConsumerTerminal(record) => Some(record),
+                _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(observed_terminals.len(), 1);
@@ -2005,12 +1985,26 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                 "observe_input_terminal",
             )
             .await?;
-        assert_eq!(history.iter().filter(|entry| matches!(&entry.entry,
-            PublicOplogEntry::AgentInvocationStarted(started)
-                if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.invocation_id == invocation_id))).count(), 1);
+        assert_eq!(
+            history.invocation(&invocation_id).started.len(),
+            1,
+            "restart={restart}"
+        );
     }
     Ok(())
+}
+
+/// The decoded records of the `StreamSession` entries of `oplog`.
+fn stream_session_records(oplog: &[PublicOplogEntryWithIndex]) -> Vec<StreamSessionRecord> {
+    oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamSession(session) => {
+                Some(StreamSessionRecord::from_value(session.record.value()).unwrap())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
@@ -2021,54 +2015,54 @@ async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, fixture).await?;
     let target = agent_key!("StreamingRpcTarget", "guest-drop-probe");
     let caller = agent_key!("StreamingRpcCaller", "guest-drop-probe");
     let worker = executor.start_agent(&component.id, target.clone()).await?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let gate = executor
-        .invoke_and_await_agent(&component, &target, "create_output_gate", data_value!())
-        .await?
-        .into_typed::<PromiseId>()?;
+        .invoke_and_await_typed::<PromiseId>(
+            &component,
+            &target,
+            "create_output_gate",
+            data_value!(),
+        )
+        .await?;
     let caller_key = IdempotencyKey::fresh();
     assert_eq!(
         executor
-            .invoke_and_await_agent_with_key(
+            .invoke_and_await_typed_with_key::<u64>(
                 &component,
                 &caller,
                 &caller_key,
                 "drop_gated_output",
                 data_value!(gate.clone())
             )
-            .await?
-            .into_typed::<u64>()?,
+            .await?,
         42
     );
-    let before = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-            let terminals = selected_stream_terminals(&history);
-            if !terminals.is_empty() {
-                break Ok::<_, anyhow::Error>(terminals);
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await??;
+    let before = selected_stream_terminals(
+        &executor
+            .wait_for_oplog(
+                &worker,
+                SETTLE_TIMEOUT,
+                "the selected output terminal",
+                |history| !selected_stream_terminals(history).is_empty(),
+            )
+            .await?,
+    );
+
+    // The guest's reader drop selected one consumer-cancelled terminal through control.
     assert_eq!(before.len(), 1);
     assert!(matches!(
         before[0].terminal,
         StreamTerminal::ConsumerCancelled { .. }
     ));
-    assert_eq!(
-        before[0].authored_by,
-        golem_common::model::durable_stream::StreamTerminalAuthor::Guest
-    );
+    assert_eq!(before[0].authored_by, RecordedTerminalAuthor::Guest);
     assert_eq!(before[0].origin, StreamTerminalOrigin::Control);
     // Only release the next guest write once the real reader drop has committed.
     executor
@@ -2076,29 +2070,29 @@ async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
         .await?;
     assert_eq!(
         executor
-            .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
-            .await?
-            .into_typed::<u64>()?,
+            .invoke_and_await_typed::<u64>(&component, &target, "increment_scalar", data_value!())
+            .await?,
         2
     );
     let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-    assert_eq!(selected_stream_terminals(&history), before);
-    let rpc_request = executor
+    assert_eq!(
+        selected_stream_terminals(&history),
+        before,
+        "the released writer does not select another terminal"
+    );
+    let caller_prefix = executor
         .get_oplog(&caller_worker, OplogIndex::INITIAL)
-        .await?
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Start(start)
-                if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
-            {
-                Some(
-                    HostRequestGolemRpcInvoke::from_value(start.request.as_ref().unwrap().value())
-                        .unwrap(),
-                )
-            }
-            _ => None,
-        })
-        .expect("drop probe RPC Start");
+        .await?;
+    let PublicOplogEntry::Start(rpc_start) = &caller_prefix
+        .starts_of("golem::rpc::wasm-rpc::invoke_and_await")
+        .first()
+        .expect("drop probe RPC Start")
+        .entry
+    else {
+        unreachable!()
+    };
+    let rpc_request =
+        HostRequestGolemRpcInvoke::from_value(rpc_start.request.as_ref().unwrap().value()).unwrap();
     let rpc_key = executor
         .finalized_invocation_key(
             &worker.agent_id,
@@ -2116,13 +2110,12 @@ async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
             "drop_gated_output",
         )
         .await?;
-    drop(executor);
-    let executor = start(deps, &context).await?;
+
+    let executor = executor.restart(Teardown::Drop).await?;
     assert_eq!(
         executor
-            .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
-            .await?
-            .into_typed::<u64>()?,
+            .invoke_and_await_typed::<u64>(&component, &target, "increment_scalar", data_value!())
+            .await?,
         3
     );
     // Reconstruct the consumer too; returning its cached drop result would not replay the drop.
@@ -2130,49 +2123,36 @@ async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
         .invoke_and_await_agent(&component, &caller, "create_input_gate", data_value!())
         .await?;
     let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-    assert_eq!(selected_stream_terminals(&history), before);
-    assert_eq!(
-        history
-            .iter()
-            .filter(|entry| matches!(&entry.entry,
-        PublicOplogEntry::AgentInvocationStarted(started)
-            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.invocation_id == rpc_key)))
-            .count(),
-        1
-    );
-    assert_eq!(
-        history
-            .iter()
-            .filter(|entry| matches!(&entry.entry,
-        PublicOplogEntry::AgentInvocationFinished(finished)
-            if finished.method_name.as_deref() == Some("produce_drop_probe")))
-            .count(),
-        1
-    );
     let caller_history = executor
         .get_oplog(&caller_worker, OplogIndex::INITIAL)
         .await?;
+
+    // Replay keeps the one selected terminal, and neither the producer nor the consumer
+    // invocation runs again.
+    assert_eq!(selected_stream_terminals(&history), before);
+    assert_eq!(history.invocation(&rpc_key).started.len(), 1);
+    assert_eq!(finished_count(&history, "produce_drop_probe"), 1);
     assert_eq!(
         caller_history
-            .iter()
-            .filter(|entry| matches!(&entry.entry,
-        PublicOplogEntry::AgentInvocationStarted(started)
-            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.invocation_id == caller_invocation_id)))
-            .count(),
+            .invocation(&caller_invocation_id)
+            .started
+            .len(),
         1
     );
-    assert_eq!(
-        caller_history
-            .iter()
-            .filter(|entry| matches!(&entry.entry,
-        PublicOplogEntry::AgentInvocationFinished(finished)
-            if finished.method_name.as_deref() == Some("drop_gated_output")))
-            .count(),
-        1
-    );
+    assert_eq!(finished_count(&caller_history, "drop_gated_output"), 1);
     Ok(())
+}
+
+/// The number of `AgentInvocationFinished` entries of `method_name` in `oplog`.
+fn finished_count(oplog: &[PublicOplogEntryWithIndex], method_name: &str) -> usize {
+    oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationFinished(finished)
+                if finished.method_name.as_deref() == Some(method_name))
+        })
+        .count()
 }
 
 #[test]
@@ -2183,23 +2163,20 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
+    let ExecutorTest {
+        context,
+        executor,
+        component,
+    } = ExecutorTest::start_with_overrides(
         deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.suspend.suspend_after = Duration::from_secs(1);
-                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
-            })),
-            ..Default::default()
-        },
+        last_unique_id,
+        fixture,
+        TestExecutorOverrides::configured(|config| {
+            config.suspend.suspend_after = Duration::from_secs(1);
+            config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+        }),
     )
     .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
     let parsed_id = agent_key!("StreamingRpcTarget", "post-result-timer");
     let agent_id = executor
         .start_agent(&component.id, parsed_id.clone())
@@ -2218,12 +2195,13 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
         .input(data_value!())?
         .build()?;
     let mut session = executor.open_session(start).await?;
-    let stream_id = tokio::time::timeout(Duration::from_secs(5), async {
+    let mut ledger = OutputLedger::default();
+    let stream_id = within(SHORT_TIMEOUT, "the method result", async {
         loop {
             let response = session
                 .message()
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("closed before result"))?;
+                .ok_or_else(|| anyhow!("closed before result"))?;
             match response.response {
                 Some(invocation_response::Response::Accepted(_))
                 | Some(invocation_response::Response::Ready(_)) => {}
@@ -2242,13 +2220,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
                         anyhow::bail!("expected exactly one output mapping");
                     };
                     assert_eq!(mapping.transport_stream_id, stream_id);
-                    assert!(
-                        mapping
-                            .handle
-                            .as_ref()
-                            .and_then(|handle| handle.stream_id)
-                            .is_some()
-                    );
+                    ledger.mappings(&result.new_stream_mappings)?;
                     return Ok::<_, anyhow::Error>(stream_id);
                 }
                 other => anyhow::bail!("unexpected response before result: {other:?}"),
@@ -2271,26 +2243,18 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
     );
     tokio::select! {
         response = session.message() => anyhow::bail!("output advanced before observed unload: {response:?}"),
-        unloaded = tokio::time::timeout(Duration::from_secs(10), async {
-            executor.wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(8)).await?;
-            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &agent_id.agent_id)).await {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok::<(), anyhow::Error>(())
-        }) => { unloaded??; }
+        unloaded = executor.wait_for_suspended_unload(&agent_id, GATE_TIMEOUT) => unloaded?,
     }
     let mut values = Vec::new();
-    let mut offsets = BTreeSet::new();
     let mut ends = 0;
     let mut finishes = 0;
-    tokio::time::timeout(Duration::from_secs(60), async {
+    within(RECOVERY_TIMEOUT, "the resumed output", async {
         while let Some(response) = session.message().await? {
             match response.response {
                 Some(invocation_response::Response::OutputItem(item)) => {
                     assert_eq!(item.transport_stream_id, stream_id);
                     assert_eq!(item.producer_sequence, values.len() as u64);
-                    assert_eq!(ends, 0);
-                    assert!(offsets.insert(item.durable_offset));
+                    ledger.item(&item)?;
                     let value = match item.value.and_then(|value| value.value) {
                         Some(schema_value::Value::U32Value(value)) => value,
                         other => anyhow::bail!("expected u32 output: {other:?}"),
@@ -2306,7 +2270,7 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
                     ));
                     assert_eq!(end.transport_stream_id, stream_id);
                     assert_eq!(end.producer_sequence, 3);
-                    assert!(offsets.insert(end.durable_offset));
+                    ledger.end(&end)?;
                     assert_eq!(values, vec![23, 169, 7]);
                     ends += 1;
                 }
@@ -2324,12 +2288,21 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
         Ok::<(), anyhow::Error>(())
     })
     .await??;
+
+    // The resumed producer delivered the whole output once and the session finished.
     assert!(session.is_complete());
+    ledger.ensure_complete()?;
     assert_eq!(values, vec![23, 169, 7]);
     assert_eq!(ends, 1);
     assert_eq!(finishes, 1);
+    let offsets = wire_offsets(&ledger);
     assert_eq!(offsets.len(), 4);
-    assert!(executor.instance_load_count(&agent_id.agent_id) > loads);
+    assert!(
+        executor.instance_load_count(&agent_id.agent_id) > loads,
+        "the producer was loaded again after its suspension"
+    );
+
+    // The oplog records the same offsets, one Finished terminal and no error.
     let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
     let mut recorded_offsets = BTreeSet::new();
     let mut recorded_ends = 0;
@@ -2359,11 +2332,20 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
     assert_eq!(recorded_ends, 1);
     assert_eq!(offsets, recorded_offsets);
     let ping = executor
-        .invoke_and_await_agent(&component, &parsed_id, "ping", data_value!())
-        .await?
-        .into_typed::<u64>()?;
-    assert_eq!(ping, 42);
+        .invoke_and_await_typed::<u64>(&component, &parsed_id, "ping", data_value!())
+        .await?;
+    assert_eq!(ping, 42, "the agent still answers");
     Ok(())
+}
+
+/// The durable offsets of the items and ends the ledger recorded.
+fn wire_offsets(ledger: &OutputLedger) -> BTreeSet<Vec<u8>> {
+    ledger
+        .items()
+        .iter()
+        .map(|item| item.durable_offset.clone())
+        .chain(ledger.ends().iter().map(|end| end.durable_offset.clone()))
+        .collect()
 }
 
 #[test]
@@ -2405,34 +2387,31 @@ async fn output_prefix_survives_autonomous_suspension(
     fixture: &PrecompiledComponent,
     nested: bool,
 ) -> anyhow::Result<()> {
-    use golem_common::model::durable_stream::{
-        StreamId, StreamItemsPayload, StreamRecordReference,
-    };
-    use prost::Message;
-
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
+    let ExecutorTest {
+        context,
+        executor,
+        component,
+    } = ExecutorTest::start_with_overrides(
         deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.suspend.suspend_after = Duration::from_secs(1);
-                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
-            })),
-            ..Default::default()
-        },
+        last_unique_id,
+        fixture,
+        TestExecutorOverrides::configured(|config| {
+            config.suspend.suspend_after = Duration::from_secs(1);
+            config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+        }),
     )
     .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
     let parsed_id = agent_key!("StreamingRpcTarget", "prefix-timer");
     let agent_id = executor
         .start_agent(&component.id, parsed_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&agent_id).await?;
     let loads = executor.instance_load_count(&agent_id.agent_id);
+    let streams = ProducerStreams {
+        environment_id: context.default_environment_id,
+        agent_id: agent_id.agent_id,
+        fingerprint: metadata.fingerprint,
+    };
     let method = if nested {
         "produce_nested_after_prefix_timer"
     } else {
@@ -2448,18 +2427,16 @@ async fn output_prefix_survives_autonomous_suspension(
         .expect_fingerprint(metadata.fingerprint.0)
         .build()?;
     let mut session = executor.open_session(start).await?;
+
+    // Action: read the whole output. Once the prefix arrived, the producer suspends and
+    // unloads on its timer before it writes the rest.
+    let mut ledger = OutputLedger::default();
     let mut root = None;
     let mut nested_id = None;
-    let mut handles = BTreeMap::new();
-    let mut sequences = BTreeMap::<u64, u64>::new();
-    let mut offsets = BTreeSet::new();
     let mut values = Vec::new();
-    let mut ends = BTreeSet::new();
-    let mut wire_items = Vec::new();
-    let mut wire_ends = Vec::new();
     let mut finished = 0;
     let mut unloaded = false;
-    tokio::time::timeout(Duration::from_secs(60), async {
+    within(RECOVERY_TIMEOUT, "the whole output", async {
         while let Some(response) = session.message().await? {
             match response.response {
                 Some(invocation_response::Response::Accepted(_))
@@ -2478,22 +2455,20 @@ async fn output_prefix_survives_autonomous_suspension(
                         anyhow::bail!("missing root mapping")
                     };
                     assert_eq!(mapping.transport_stream_id, reference.stream_id);
-                    assert!(mapping.handle.as_ref().and_then(|h| h.stream_id).is_some());
-                    handles.insert(mapping.transport_stream_id, mapping.handle.clone());
+                    ledger.mappings(&result.new_stream_mappings)?;
                 }
                 Some(invocation_response::Response::OutputItem(item)) => {
-                    wire_items.push(item.clone());
-                    assert!(!ends.contains(&item.transport_stream_id));
-                    assert_eq!(
-                        item.durable_stream_id,
-                        handles[&item.transport_stream_id]
-                            .as_ref()
-                            .and_then(|h| h.stream_id)
+                    assert!(
+                        ledger.mapped_id(item.transport_stream_id).is_some(),
+                        "an item's stream is mapped before the item"
                     );
-                    let sequence = sequences.entry(item.transport_stream_id).or_default();
-                    assert_eq!(item.producer_sequence, *sequence);
-                    *sequence += item.logical_item_count;
-                    assert!(offsets.insert(item.durable_offset));
+                    for mapping in &item.new_stream_mappings {
+                        assert!(
+                            ledger.mapped_id(mapping.transport_stream_id).is_none(),
+                            "a stream is mapped once"
+                        );
+                    }
+                    ledger.item(&item)?;
                     match item.value.and_then(|v| v.value) {
                         Some(schema_value::Value::RecordValue(record)) if nested => {
                             assert_eq!(Some(item.transport_stream_id), root);
@@ -2514,12 +2489,6 @@ async fn output_prefix_survives_autonomous_suspension(
                                 anyhow::bail!("missing nested mapping")
                             };
                             assert_eq!(mapping.transport_stream_id, reference.stream_id);
-                            assert!(mapping.handle.as_ref().and_then(|h| h.stream_id).is_some());
-                            assert!(
-                                handles
-                                    .insert(mapping.transport_stream_id, mapping.handle.clone())
-                                    .is_none()
-                            );
                         }
                         Some(schema_value::Value::U32Value(value)) if nested => {
                             assert_eq!(Some(item.transport_stream_id), nested_id);
@@ -2549,20 +2518,14 @@ async fn output_prefix_survives_autonomous_suspension(
                         Some(stream_terminal::Terminal::Finished(_))
                     ));
                     assert!(unloaded, "terminal before suspension");
-                    wire_ends.push(end.clone());
-                    assert!(handles.contains_key(&end.transport_stream_id));
-                    assert_eq!(
-                        end.durable_stream_id,
-                        handles[&end.transport_stream_id]
-                            .as_ref()
-                            .and_then(|h| h.stream_id)
+                    assert!(
+                        ledger.mapped_id(end.transport_stream_id).is_some(),
+                        "an ended stream was mapped"
                     );
-                    assert_eq!(end.producer_sequence, sequences[&end.transport_stream_id]);
-                    assert!(offsets.insert(end.durable_offset));
-                    assert!(ends.insert(end.transport_stream_id));
+                    ledger.end(&end)?;
                 }
                 Some(invocation_response::Response::Finished(completion)) => {
-                    assert_eq!(ends.len(), handles.len());
+                    ledger.ensure_complete()?;
                     assert!(matches!(
                         completion.outcome,
                         Some(invocation_session_completion::Outcome::Success(_))
@@ -2571,13 +2534,12 @@ async fn output_prefix_survives_autonomous_suspension(
                 }
                 other => anyhow::bail!("unexpected output: {other:?}"),
             }
-            if !unloaded
-                && if nested {
-                    nested_id.is_some()
-                } else {
-                    values.len() == 2
-                }
-            {
+            let prefix_arrived = if nested {
+                nested_id.is_some()
+            } else {
+                values.len() == 2
+            };
+            if !unloaded && prefix_arrived {
                 assert_eq!(values, if nested { vec![] } else { vec![23, 169] });
                 assert!(
                     executor
@@ -2585,122 +2547,22 @@ async fn output_prefix_survives_autonomous_suspension(
                             context.default_environment_id,
                             &agent_id.agent_id
                         ))
-                        .await
+                        .await,
+                    "the producer is still loaded when the prefix arrives"
                 );
-                tokio::time::timeout(Duration::from_secs(10), async {
-                    executor
-                        .wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(8))
-                        .await?;
-                    while executor
-                        .worker_is_loaded(&OwnedAgentId::new(
-                            context.default_environment_id,
-                            &agent_id.agent_id,
-                        ))
-                        .await
-                    {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                    Ok::<(), anyhow::Error>(())
-                })
-                .await??;
-                let mut prefix = BTreeMap::new();
-                for entry in executor.get_oplog(&agent_id, OplogIndex::INITIAL).await? {
-                    match entry.entry {
-                        PublicOplogEntry::StreamItems(params) => {
-                            let record = StreamItemsRecord::from_value(params.record.value())
-                                .map_err(anyhow::Error::msg)?;
-                            let id = StreamId::derive(
-                                context.default_environment_id,
-                                &agent_id.agent_id,
-                                metadata.fingerprint,
-                                record.stream_id.0,
-                            );
-                            prefix.entry(id.0).or_insert_with(Vec::new).push(record);
-                        }
-                        PublicOplogEntry::StreamTerminal(_) | PublicOplogEntry::Error(_) => {
-                            anyhow::bail!("terminal or failure while unloaded")
-                        }
-                        _ => {}
-                    }
-                }
-                let leaf = if nested {
-                    nested_id.unwrap()
-                } else {
-                    root.unwrap()
-                };
-                let leaf_id: uuid::Uuid =
-                    handles[&leaf].as_ref().unwrap().stream_id.unwrap().into();
-                let records = &prefix[&leaf_id];
-                assert_eq!(
-                    records
-                        .iter()
-                        .map(|record| record.payload.logical_item_count())
-                        .sum::<usize>(),
-                    if nested { 1 } else { 2 }
-                );
-                if nested {
-                    assert_eq!(records.len(), 1);
-                    assert_eq!(records[0].first_sequence, 0);
-                    let StreamItemsPayload::Values(encoded) = &records[0].payload else {
-                        anyhow::bail!("child prefix is not a value");
-                    };
-                    assert_eq!(encoded.len(), 1);
-                    assert_eq!(
-                        golem_schema::proto::golem::schema::SchemaValue::decode(
-                            encoded[0].as_slice()
-                        )?
-                        .value,
-                        Some(schema_value::Value::U32Value(169))
-                    );
-                    let root_id: uuid::Uuid = handles[&root.unwrap()]
-                        .as_ref()
-                        .unwrap()
-                        .stream_id
-                        .unwrap()
-                        .into();
-                    assert_eq!(prefix[&root_id].len(), 1);
-                    assert_eq!(prefix[&root_id][0].first_sequence, 0);
-                    let parent = &prefix[&root_id][0];
-                    let StreamItemsPayload::Values(encoded) = &parent.payload else {
-                        anyhow::bail!("parent prefix is not a value");
-                    };
-                    assert_eq!(encoded.len(), 1);
-                    let value = golem_schema::proto::golem::schema::SchemaValue::decode(
-                        encoded[0].as_slice(),
-                    )?;
-                    let Some(schema_value::Value::RecordValue(record)) = value.value else {
-                        anyhow::bail!("parent prefix is not a record");
-                    };
-                    let [label, child] = record.fields.as_slice() else {
-                        anyhow::bail!("invalid persisted parent");
-                    };
-                    assert_eq!(
-                        label.value,
-                        Some(schema_value::Value::StringValue("asymmetric".to_string()))
-                    );
-                    let Some(schema_value::Value::StreamReference(reference)) = &child.value else {
-                        anyhow::bail!("persisted parent omitted child");
-                    };
-                    let child_id = match &parent.nested_stream_ids[reference.stream_id as usize] {
-                        StreamRecordReference::Local(local) => {
-                            StreamId::derive(
-                                context.default_environment_id,
-                                &agent_id.agent_id,
-                                metadata.fingerprint,
-                                local.0,
-                            )
-                            .0
-                        }
-                        StreamRecordReference::Foreign(handle) => handle.stream_id.0,
-                    };
-                    assert_eq!(child_id, leaf_id);
-                }
+                executor
+                    .wait_for_suspended_unload(&agent_id, GATE_TIMEOUT)
+                    .await?;
+                let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
+                check_suspended_prefix(&oplog, &streams, &ledger, root, nested_id)?;
                 unloaded = true;
             }
         }
         Ok::<(), anyhow::Error>(())
     })
     .await??;
+
+    // The producer resumed in a new instance and the session delivered the whole output.
     assert!(unloaded);
     assert!(session.is_complete());
     assert_eq!(finished, 1);
@@ -2712,127 +2574,44 @@ async fn output_prefix_survives_autonomous_suspension(
             vec![23, 169, 7, 201]
         }
     );
-    assert_eq!(handles.len(), if nested { 2 } else { 1 });
-    assert!(executor.instance_load_count(&agent_id.agent_id) > loads);
-    let mut recorded_offsets = BTreeSet::new();
-    let mut journal_items = BTreeMap::new();
-    let mut journal_ends = BTreeMap::new();
-    let mut recorded_ends = 0;
-    for entry in executor.get_oplog(&agent_id, OplogIndex::INITIAL).await? {
-        match entry.entry {
-            PublicOplogEntry::StreamItems(params) => {
-                let record = StreamItemsRecord::from_value(params.record.value())
-                    .map_err(anyhow::Error::msg)?;
-                let id = StreamId::derive(
-                    context.default_environment_id,
-                    &agent_id.agent_id,
-                    metadata.fingerprint,
-                    record.stream_id.0,
-                )
-                .0;
-                let decoded = match &record.payload {
-                    StreamItemsPayload::Values(values) => values
-                        .iter()
-                        .map(|encoded| {
-                            golem_schema::proto::golem::schema::SchemaValue::decode(
-                                encoded.as_slice(),
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                    StreamItemsPayload::PackedU8(bytes) => bytes
-                        .iter()
-                        .map(|byte| golem_schema::proto::golem::schema::SchemaValue {
-                            value: Some(schema_value::Value::U8Value(u32::from(*byte))),
-                        })
-                        .collect(),
-                };
-                assert_eq!(decoded.len(), record.offsets.len());
-                for (index, (mut value, offset)) in
-                    decoded.into_iter().zip(&record.offsets).enumerate()
-                {
-                    if let Some(schema_value::Value::RecordValue(fields)) = &mut value.value {
-                        let Some(schema_value::Value::StreamReference(reference)) =
-                            &mut fields.fields[1].value
-                        else {
-                            anyhow::bail!("persisted parent omitted child");
-                        };
-                        let child_id = match &record.nested_stream_ids[reference.stream_id as usize]
-                        {
-                            StreamRecordReference::Local(local) => {
-                                StreamId::derive(
-                                    context.default_environment_id,
-                                    &agent_id.agent_id,
-                                    metadata.fingerprint,
-                                    local.0,
-                                )
-                                .0
-                            }
-                            StreamRecordReference::Foreign(handle) => handle.stream_id.0,
-                        };
-                        let child = nested_id.unwrap();
-                        let announced: uuid::Uuid =
-                            handles[&child].as_ref().unwrap().stream_id.unwrap().into();
-                        assert_eq!(child_id, announced);
-                        reference.stream_id = child;
-                    }
-                    assert!(
-                        journal_items
-                            .insert(
-                                (id, record.first_sequence + index as u64),
-                                (value, offset.as_bytes().to_vec())
-                            )
-                            .is_none()
-                    );
-                    assert!(recorded_offsets.insert(offset.as_bytes().to_vec()));
-                }
-            }
-            PublicOplogEntry::StreamTerminal(params) => {
-                let record = StreamTerminalRecord::from_value(params.record.value())
-                    .map_err(anyhow::Error::msg)?;
-                let id = StreamId::derive(
-                    context.default_environment_id,
-                    &agent_id.agent_id,
-                    metadata.fingerprint,
-                    record.stream_id.0,
-                )
-                .0;
-                assert_eq!(record.terminal, StreamTerminal::Finished);
-                assert!(
-                    journal_ends
-                        .insert((id, record.sequence), record.offset.as_bytes().to_vec())
-                        .is_none()
-                );
-                assert!(recorded_offsets.insert(record.offset.as_bytes().to_vec()));
-                recorded_ends += 1;
-            }
-            PublicOplogEntry::Error(_) => {
-                anyhow::bail!("producer failed or cancelled")
-            }
-            _ => {}
-        }
-    }
-    assert_eq!(recorded_offsets.len(), if nested { 6 } else { 5 });
-    assert!(offsets.is_subset(&recorded_offsets));
+    assert_eq!(ledger.mapped_streams().count(), if nested { 2 } else { 1 });
+    assert!(
+        executor.instance_load_count(&agent_id.agent_id) > loads,
+        "the producer was loaded again after its suspension"
+    );
+
+    // The journal records each item and end once, with the offsets the wire carried.
+    let child = nested_id.map(|id| (id, ledger.mapped_id(id).unwrap().into()));
+    let journal = OutputJournal::read(
+        &executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?,
+        &streams,
+        child,
+    )?;
+    let offsets = wire_offsets(&ledger);
+    assert_eq!(journal.offsets.len(), if nested { 6 } else { 5 });
+    assert!(offsets.is_subset(&journal.offsets));
     if nested {
-        assert_eq!(recorded_offsets, offsets);
+        assert_eq!(journal.offsets, offsets);
     }
-    assert_eq!(recorded_ends, handles.len());
+    assert_eq!(journal.ends.len(), ledger.mapped_streams().count());
+
+    // Every wire item and end matches its journal record by stream and sequence.
     let mut covered = 0;
-    for item in wire_items {
+    for item in ledger.items() {
         let id: uuid::Uuid = item.durable_stream_id.unwrap().into();
-        let frame_values = if let Some(value) = item.value {
+        let frame_values = if let Some(value) = item.value.clone() {
             vec![value]
         } else {
             item.packed_u8
                 .iter()
-                .map(|byte| golem_schema::proto::golem::schema::SchemaValue {
+                .map(|byte| ProtoSchemaValue {
                     value: Some(schema_value::Value::U8Value(u32::from(*byte))),
                 })
                 .collect()
         };
         assert_eq!(frame_values.len() as u64, item.logical_item_count);
         for (index, value) in frame_values.into_iter().enumerate() {
-            let (recorded, offset) = &journal_items[&(id, item.producer_sequence + index as u64)];
+            let (recorded, offset) = &journal.items[&(id, item.producer_sequence + index as u64)];
             assert_eq!(&value, recorded);
             if index as u64 + 1 == item.logical_item_count {
                 assert_eq!(&item.durable_offset, offset);
@@ -2840,22 +2619,231 @@ async fn output_prefix_survives_autonomous_suspension(
             covered += 1;
         }
     }
-    assert_eq!(covered, journal_items.len());
-    for end in wire_ends {
+    assert_eq!(covered, journal.items.len());
+    for end in ledger.ends() {
         let id: uuid::Uuid = end.durable_stream_id.unwrap().into();
         assert_eq!(
             end.durable_offset,
-            journal_ends[&(id, end.producer_sequence)]
+            journal.ends[&(id, end.producer_sequence)]
         );
     }
     assert_eq!(
         executor
-            .invoke_and_await_agent(&component, &parsed_id, "ping", data_value!())
-            .await?
-            .into_typed::<u64>()?,
-        42
+            .invoke_and_await_typed::<u64>(&component, &parsed_id, "ping", data_value!())
+            .await?,
+        42,
+        "the agent still answers"
     );
     Ok(())
+}
+
+/// Derives the durable stream IDs of one producer's streams from its oplog records.
+struct ProducerStreams {
+    environment_id: EnvironmentId,
+    agent_id: AgentId,
+    fingerprint: AgentFingerprint,
+}
+
+impl ProducerStreams {
+    /// The ID of the stream the producer registered at `registration`.
+    fn id(&self, registration: OplogIndex) -> uuid::Uuid {
+        StreamId::derive(
+            self.environment_id,
+            &self.agent_id,
+            self.fingerprint,
+            registration,
+        )
+        .0
+    }
+
+    /// The ID of a stream a record refers to.
+    fn referenced(&self, reference: &StreamRecordReference) -> uuid::Uuid {
+        match reference {
+            StreamRecordReference::Local(local) => self.id(local.0),
+            StreamRecordReference::Foreign(handle) => handle.stream_id.0,
+        }
+    }
+}
+
+/// Checks the oplog of a producer that suspended after its output prefix: it holds the
+/// prefix items of the leaf stream (and for a nested output, the parent record that refers
+/// to the leaf), and no terminal or failure.
+fn check_suspended_prefix(
+    oplog: &[PublicOplogEntryWithIndex],
+    streams: &ProducerStreams,
+    ledger: &OutputLedger,
+    root: Option<u64>,
+    nested_id: Option<u64>,
+) -> anyhow::Result<()> {
+    let nested = nested_id.is_some();
+    let mut prefix = BTreeMap::new();
+    for entry in oplog {
+        match &entry.entry {
+            PublicOplogEntry::StreamItems(params) => {
+                let record = StreamItemsRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                prefix
+                    .entry(streams.id(record.stream_id.0))
+                    .or_insert_with(Vec::new)
+                    .push(record);
+            }
+            PublicOplogEntry::StreamTerminal(_) | PublicOplogEntry::Error(_) => {
+                anyhow::bail!("terminal or failure while unloaded")
+            }
+            _ => {}
+        }
+    }
+    let leaf = nested_id.or(root).unwrap();
+    let leaf_id: uuid::Uuid = ledger.mapped_id(leaf).unwrap().into();
+    let records = &prefix[&leaf_id];
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.payload.logical_item_count())
+            .sum::<usize>(),
+        if nested { 1 } else { 2 },
+        "the journal holds the leaf's prefix items"
+    );
+    if nested {
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].first_sequence, 0);
+        let StreamItemsPayload::Values(encoded) = &records[0].payload else {
+            anyhow::bail!("child prefix is not a value");
+        };
+        assert_eq!(encoded.len(), 1);
+        assert_eq!(
+            ProtoSchemaValue::decode(encoded[0].as_slice())?.value,
+            Some(schema_value::Value::U32Value(169))
+        );
+        let root_id: uuid::Uuid = ledger.mapped_id(root.unwrap()).unwrap().into();
+        assert_eq!(prefix[&root_id].len(), 1);
+        assert_eq!(prefix[&root_id][0].first_sequence, 0);
+        let parent = &prefix[&root_id][0];
+        let StreamItemsPayload::Values(encoded) = &parent.payload else {
+            anyhow::bail!("parent prefix is not a value");
+        };
+        assert_eq!(encoded.len(), 1);
+        let value = ProtoSchemaValue::decode(encoded[0].as_slice())?;
+        let Some(schema_value::Value::RecordValue(record)) = value.value else {
+            anyhow::bail!("parent prefix is not a record");
+        };
+        let [label, child] = record.fields.as_slice() else {
+            anyhow::bail!("invalid persisted parent");
+        };
+        assert_eq!(
+            label.value,
+            Some(schema_value::Value::StringValue("asymmetric".to_string()))
+        );
+        let Some(schema_value::Value::StreamReference(reference)) = &child.value else {
+            anyhow::bail!("persisted parent omitted child");
+        };
+        assert_eq!(
+            streams.referenced(&parent.nested_stream_ids[reference.stream_id as usize]),
+            leaf_id,
+            "the persisted parent refers to the leaf stream"
+        );
+    }
+    Ok(())
+}
+
+/// The output items and terminals a producer's oplog records, keyed by durable stream ID and
+/// sequence.
+struct OutputJournal {
+    /// The decoded value and the offset of each item. A nested stream reference names the
+    /// transport stream of the child, as on the wire.
+    items: BTreeMap<(uuid::Uuid, u64), (ProtoSchemaValue, Vec<u8>)>,
+    ends: BTreeMap<(uuid::Uuid, u64), Vec<u8>>,
+    offsets: BTreeSet<Vec<u8>>,
+}
+
+impl OutputJournal {
+    /// Reads the journal and checks that no key or offset repeats, every terminal is
+    /// `Finished`, and the oplog has no error. `child` is the transport stream and the
+    /// announced durable ID of the one nested stream, if any.
+    fn read(
+        oplog: &[PublicOplogEntryWithIndex],
+        streams: &ProducerStreams,
+        child: Option<(u64, uuid::Uuid)>,
+    ) -> anyhow::Result<Self> {
+        let mut journal = Self {
+            items: BTreeMap::new(),
+            ends: BTreeMap::new(),
+            offsets: BTreeSet::new(),
+        };
+        for entry in oplog {
+            match &entry.entry {
+                PublicOplogEntry::StreamItems(params) => {
+                    let record = StreamItemsRecord::from_value(params.record.value())
+                        .map_err(anyhow::Error::msg)?;
+                    let id = streams.id(record.stream_id.0);
+                    let decoded = match &record.payload {
+                        StreamItemsPayload::Values(values) => values
+                            .iter()
+                            .map(|encoded| ProtoSchemaValue::decode(encoded.as_slice()))
+                            .collect::<Result<Vec<_>, _>>()?,
+                        StreamItemsPayload::PackedU8(bytes) => bytes
+                            .iter()
+                            .map(|byte| ProtoSchemaValue {
+                                value: Some(schema_value::Value::U8Value(u32::from(*byte))),
+                            })
+                            .collect(),
+                    };
+                    assert_eq!(decoded.len(), record.offsets.len());
+                    for (index, (mut value, offset)) in
+                        decoded.into_iter().zip(&record.offsets).enumerate()
+                    {
+                        if let Some(schema_value::Value::RecordValue(fields)) = &mut value.value {
+                            let Some(schema_value::Value::StreamReference(reference)) =
+                                &mut fields.fields[1].value
+                            else {
+                                anyhow::bail!("persisted parent omitted child");
+                            };
+                            let (child, announced) =
+                                child.ok_or_else(|| anyhow!("unexpected nested record"))?;
+                            assert_eq!(
+                                streams.referenced(
+                                    &record.nested_stream_ids[reference.stream_id as usize]
+                                ),
+                                announced,
+                                "the persisted parent refers to the announced child"
+                            );
+                            reference.stream_id = child;
+                        }
+                        assert!(
+                            journal
+                                .items
+                                .insert(
+                                    (id, record.first_sequence + index as u64),
+                                    (value, offset.as_bytes().to_vec())
+                                )
+                                .is_none()
+                        );
+                        assert!(journal.offsets.insert(offset.as_bytes().to_vec()));
+                    }
+                }
+                PublicOplogEntry::StreamTerminal(params) => {
+                    let record = StreamTerminalRecord::from_value(params.record.value())
+                        .map_err(anyhow::Error::msg)?;
+                    assert_eq!(record.terminal, StreamTerminal::Finished);
+                    assert!(
+                        journal
+                            .ends
+                            .insert(
+                                (streams.id(record.stream_id.0), record.sequence),
+                                record.offset.as_bytes().to_vec()
+                            )
+                            .is_none()
+                    );
+                    assert!(journal.offsets.insert(record.offset.as_bytes().to_vec()));
+                }
+                PublicOplogEntry::Error(_) => {
+                    anyhow::bail!("producer failed or cancelled")
+                }
+                _ => {}
+            }
+        }
+        Ok(journal)
+    }
 }
 
 #[test]
@@ -2887,12 +2875,11 @@ async fn interrupt_output_producer_after_result(
     ephemeral: bool,
     restart_before_input: bool,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let key = IdempotencyKey::fresh();
     let agent_id = if ephemeral {
         let logical = agent_key!("EphemeralStreamingRpcTarget", "interrupt-output");
@@ -2925,7 +2912,7 @@ async fn interrupt_output_producer_after_result(
         .input_record(vec![stream_reference(1)])
         .build()?;
     let mut session = executor.open_session(start.clone()).await?;
-    tokio::time::timeout(Duration::from_secs(30), async {
+    within(SETTLE_TIMEOUT, "the post-result spin handshake", async {
         let mut result_seen = false;
         let mut first_item_seen = false;
         let mut accepted = None;
@@ -2934,7 +2921,7 @@ async fn interrupt_output_producer_after_result(
             let response = session
                 .message()
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("producer ended before the spin handshake"))?;
+                .ok_or_else(|| anyhow!("producer ended before the spin handshake"))?;
             let next_input = match response.response {
                 Some(invocation_response::Response::Accepted(value))
                 | Some(invocation_response::Response::Ready(value)) => {
@@ -2985,13 +2972,17 @@ async fn interrupt_output_producer_after_result(
             }
         }
     })
-    .await
-    .map_err(|_| anyhow::anyhow!("producer did not complete its post-result spin handshake"))??;
+    .await??;
 
-    // The producer now spins without another stream write or cooperative guest wait.
-    tokio::time::timeout(Duration::from_secs(5), executor.interrupt(&agent_id))
-        .await
-        .map_err(|_| anyhow::anyhow!("post-result interruption was not acknowledged"))??;
+    // Action: the producer now spins without another stream write or cooperative guest wait.
+    within(
+        SHORT_TIMEOUT,
+        "the post-result interruption",
+        executor.interrupt(&agent_id),
+    )
+    .await??;
+
+    // The interruption is durable and is not an invocation error.
     assert_eq!(
         executor.get_worker_metadata(&agent_id).await?.status,
         AgentStatus::Interrupted
@@ -3000,7 +2991,8 @@ async fn interrupt_output_producer_after_result(
     assert!(
         oplog
             .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_)))
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_))),
+        "the oplog records the interruption"
     );
     assert!(
         !oplog
@@ -3008,27 +3000,14 @@ async fn interrupt_output_producer_after_result(
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
         "interruption must not become an invocation error or retry"
     );
+    // The attachment closes, and a same-key redispatch fails without restarting the producer.
     assert_interrupted_transport_closed(&mut session).await?;
     drop(session);
     assert_failed_redispatch(&executor, start).await?;
-    let method_starts = executor
-        .get_oplog(&agent_id, OplogIndex::INITIAL)
-        .await?
-        .into_iter()
-        .filter(|entry| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::AgentInvocationStarted(started)
-                    if matches!(
-                        &started.invocation,
-                        PublicAgentInvocation::AgentMethodInvocation(method)
-                            if method.method_name == "produce_then_spin"
-                    )
-            )
-        })
-        .count();
+    let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
     assert_eq!(
-        method_starts, 1,
+        oplog.method_starts("produce_then_spin").len(),
+        1,
         "redispatch restarted the interrupted producer"
     );
     Ok(())
@@ -3039,7 +3018,7 @@ async fn assert_interrupted_transport_closed(
 ) -> anyhow::Result<()> {
     // Owner retirement does not wait for transport delivery. Durable interruption and
     // same-key redispatch are checked separately from this disposable attachment.
-    tokio::time::timeout(Duration::from_secs(10), async {
+    within(GATE_TIMEOUT, "the interrupted transport to close", async {
         loop {
             let response = match session.message().await {
                 Ok(Some(response)) => response,
@@ -3067,8 +3046,7 @@ async fn assert_interrupted_transport_closed(
             }
         }
     })
-    .await
-    .map_err(|_| anyhow::anyhow!("interrupted transport remained open"))?
+    .await?
 }
 
 async fn assert_failed_redispatch(
@@ -3077,12 +3055,12 @@ async fn assert_failed_redispatch(
 ) -> anyhow::Result<String> {
     start.attempt_id = Some(uuid::Uuid::new_v4().into());
     let mut session = executor.open_session(start).await?;
-    let failure = tokio::time::timeout(Duration::from_secs(10), async {
+    let failure = within(GATE_TIMEOUT, "the same-key redispatch's terminal", async {
         let failure = loop {
             let response = session
                 .message()
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("same-key redispatch closed without a terminal"))?;
+                .ok_or_else(|| anyhow!("same-key redispatch closed without a terminal"))?;
             match response.response {
                 Some(invocation_response::Response::Finished(finished)) => {
                     let Some(invocation_session_completion::Outcome::Failure(failure)) =
@@ -3100,8 +3078,7 @@ async fn assert_failed_redispatch(
         assert!(session.is_complete());
         Ok::<_, anyhow::Error>(failure)
     })
-    .await
-    .map_err(|_| anyhow::anyhow!("same-key redispatch did not terminalize"))??;
+    .await??;
     drop(session);
     Ok(failure)
 }
@@ -3115,12 +3092,11 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let agent_id = agent_key!("StreamingRpcTarget", "stream-local-sibling-error");
     let worker_agent_id = executor.start_agent(&component.id, agent_id).await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
@@ -3171,12 +3147,16 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
         }
     }
 
+    // One sibling output failed and the other finished, and the invocation still succeeded.
     assert!(session.is_complete());
     assert_eq!(mapped_outputs, 2);
     assert_eq!(output_items, 65);
-    assert_eq!(output_errors, 1);
-    assert_eq!(output_ends, 1);
-    assert!(finished_successfully);
+    assert_eq!(output_errors, 1, "one output stream failed");
+    assert_eq!(output_ends, 1, "the sibling output finished");
+    assert!(
+        finished_successfully,
+        "a stream-local failure does not fail the invocation"
+    );
     Ok(())
 }
 
@@ -3189,12 +3169,11 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let mut executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        mut executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let caller = agent_key!("StreamingRpcCaller", "stream-context-lifetime");
     let target = agent_key!("StreamingRpcTarget", "stream-context-lifetime");
     let target_worker = executor.start_agent(&component.id, target.clone()).await?;
@@ -3202,9 +3181,13 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
 
     for attempt in 0..2 {
         let gate = executor
-            .invoke_and_await_agent(&component, &target, "create_output_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
+            .invoke_and_await_typed::<PromiseId>(
+                &component,
+                &target,
+                "create_output_gate",
+                data_value!(),
+            )
+            .await?;
         let checkpoint = executor.oplog_max_index(&target_worker).await?;
         let collect = executor.invoke_and_await_agent(
             &component,
@@ -3213,20 +3196,19 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
             data_value!(gate.clone()),
         );
         let release = async {
-            tokio::time::timeout(Duration::from_secs(10), async {
-                loop {
-                    let oplog = executor.get_oplog(&target_worker, checkpoint).await?;
-                    if oplog
-                        .iter()
-                        .any(|entry| matches!(entry.entry, PublicOplogEntry::StreamItems(_)))
-                    {
-                        return Ok::<_, anyhow::Error>(());
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("producer did not persist its first output item"))??;
+            executor
+                .wait_for_oplog(
+                    &target_worker,
+                    GATE_TIMEOUT,
+                    "the producer's first persisted output item",
+                    |oplog| {
+                        oplog.iter().any(|entry| {
+                            entry.oplog_index >= checkpoint
+                                && matches!(entry.entry, PublicOplogEntry::StreamItems(_))
+                        })
+                    },
+                )
+                .await?;
             executor
                 .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
                 .await
@@ -3234,6 +3216,9 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
         let (result, released) = tokio::join!(collect, release);
         released?;
         let snapshots = result?.into_typed::<Vec<(String, String, String)>>()?;
+
+        // The stream child runs in its own span under the caller's trace, and the parent
+        // context survives the guest's return and the child's end.
         assert_eq!(snapshots.len(), 4);
         assert_eq!(snapshots[0].2, "invoke-exported-function");
         assert_eq!(
@@ -3247,7 +3232,11 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
             snapshots[3], snapshots[0],
             "finishing the child lost its parent"
         );
-        assert_ne!(previous_span_id.as_ref(), Some(&snapshots[0].1));
+        assert_ne!(
+            previous_span_id.as_ref(),
+            Some(&snapshots[0].1),
+            "each attempt has its own span"
+        );
         previous_span_id = Some(snapshots[0].1.clone());
 
         // A subsequent scalar invocation also joins the producer's completion bookkeeping.
@@ -3260,7 +3249,8 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
         assert!(
             !oplog
                 .iter()
-                .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+            "the producer records no error"
         );
         assert_eq!(
             oplog
@@ -3271,9 +3261,7 @@ async fn streaming_output_retains_invocation_context_during_live_and_replay(
             "initialization and each gate/stream/scalar invocation finish exactly once"
         );
         if attempt == 0 {
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            drop(executor);
-            executor = start(deps, &context).await?;
+            executor = executor.restart(Teardown::Shutdown).await?;
         }
     }
     Ok(())
@@ -3299,44 +3287,43 @@ async fn streaming_sync_rpc_embeds_span_close_in_end(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let caller = agent_key!("StreamingRpcCaller", "embedded-span-terminal");
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
 
     assert_eq!(
         executor
-            .invoke_and_await_agent(
+            .invoke_and_await_typed::<Vec<u64>>(
                 &component,
                 &caller,
                 "streaming_increment",
                 data_value!(true),
             )
-            .await?
-            .into_typed::<Vec<u64>>()?,
+            .await?,
         vec![1]
     );
 
     let oplog = executor
         .get_oplog(&caller_worker, OplogIndex::INITIAL)
         .await?;
+    // The streaming call's End closes its span.
     assert_converted_rpc_span_lifecycle(&oplog, 1);
-    drop(executor);
-    let executor = start(deps, &context).await?;
+
+    // After a restart, a second call replays the first and closes its own span.
+    let executor = executor.restart(Teardown::Drop).await?;
     assert_eq!(
         executor
-            .invoke_and_await_agent(
+            .invoke_and_await_typed::<Vec<u64>>(
                 &component,
                 &caller,
                 "streaming_increment",
                 data_value!(true)
             )
-            .await?
-            .into_typed::<Vec<u64>>()?,
+            .await?,
         vec![2]
     );
     let oplog = executor
@@ -3367,12 +3354,11 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, fixture).await?;
     for (crash, after_delivery, pending) in [
         (false, false, false),
         (true, false, false),
@@ -3387,28 +3373,35 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
             .start_agent(&component.id, target_id.clone())
             .await?;
         let source_gate = executor
-            .invoke_and_await_agent(&component, &target_id, "create_output_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
+            .invoke_and_await_typed::<PromiseId>(
+                &component,
+                &target_id,
+                "create_output_gate",
+                data_value!(),
+            )
+            .await?;
         let caller_id = agent_key!("StreamingRpcCaller", name);
         let worker = executor
             .start_agent(&component.id, caller_id.clone())
             .await?;
         let resume_gate = executor
-            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
+            .invoke_and_await_typed::<PromiseId>(
+                &component,
+                &caller_id,
+                "create_input_gate",
+                data_value!(),
+            )
+            .await?;
         let pending_gate = if pending {
             Some(
                 executor
-                    .invoke_and_await_agent(
+                    .invoke_and_await_typed::<PromiseId>(
                         &component,
                         &caller_id,
                         "create_input_gate",
                         data_value!(),
                     )
-                    .await?
-                    .into_typed::<PromiseId>()?,
+                    .await?,
             )
         } else {
             None
@@ -3432,9 +3425,7 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
                     .recv()
                     .await
                     .expect("caller output ended before cancellation");
-                if let Some(golem_api_grpc::proto::golem::worker::log_event::Event::Log(log)) =
-                    event.event
-                {
+                if let Some(log_event::Event::Log(log)) = event.event {
                     if log.message.ends_with(": native read pending") {
                         executor
                             .complete_promise(
@@ -3458,34 +3449,31 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
                     )
                     .await?;
             }
-            loop {
-                let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-                let records = entries
-                    .iter()
-                    .filter_map(|entry| match &entry.entry {
-                        PublicOplogEntry::StreamSession(session) => {
-                            Some(StreamSessionRecord::from_value(session.record.value()).unwrap())
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-                let deliveries = records
-                    .iter()
-                    .filter(|record| matches!(record, StreamSessionRecord::ConsumerItemValue(_)))
-                    .count();
-                let waiting = entries.iter().any(|entry| {
-                    matches!(&entry.entry, PublicOplogEntry::Start(start)
-                        if start.function_name == "golem::api::get_promise_result")
-                });
-                if waiting && deliveries == if after_delivery { 2 } else { 1 } {
-                    return Ok::<(), anyhow::Error>(());
-                }
-                tokio::task::yield_now().await;
-            }
+            let expected_deliveries = if after_delivery { 2 } else { 1 };
+            executor
+                .wait_for_oplog(
+                    &worker,
+                    SETTLE_TIMEOUT,
+                    format!("{expected_deliveries} deliveries and the resume gate wait"),
+                    |entries| {
+                        let deliveries = stream_session_records(entries)
+                            .iter()
+                            .filter(|record| {
+                                matches!(record, StreamSessionRecord::ConsumerItemValue(_))
+                            })
+                            .count();
+                        let waiting = !entries
+                            .starts_of("golem::api::get_promise_result")
+                            .is_empty();
+                        waiting && deliveries == expected_deliveries
+                    },
+                )
+                .await?;
+            Ok::<(), anyhow::Error>(())
         };
         tokio::select! {
             result = invocation.as_mut() => panic!("retention settled before crash: {result:?}"),
-            checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoint) => checkpoint??,
+            checkpoint = within(SETTLE_TIMEOUT, "the cancellation checkpoint", checkpoint) => checkpoint??,
         }
         let loads = executor.instance_load_count(&worker.agent_id);
         if crash {
@@ -3507,42 +3495,28 @@ async fn cancelled_stream_read_retains_recorded_positive_delivery(
                 )
                 .await?;
         }
-        let values = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut())
-            .await??
-            .into_typed::<Vec<u32>>()?;
+        let values = within(
+            SETTLE_TIMEOUT,
+            "the recovered read result",
+            invocation.as_mut(),
+        )
+        .await??
+        .into_typed::<Vec<u32>>()?;
+        let records =
+            stream_session_records(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?);
+
+        // The guest read every item once, and the recorded read ordinals stay contiguous
+        // across the cancellation and the crash.
         assert_eq!(values, [17, 20, 23, 26, 29, 32, 35]);
         if crash {
-            assert!(executor.instance_load_count(&worker.agent_id) > loads);
+            assert!(
+                executor.instance_load_count(&worker.agent_id) > loads,
+                "the crash reloaded the caller"
+            );
         }
-        let records = executor
-            .get_oplog(&worker, OplogIndex::INITIAL)
-            .await?
-            .into_iter()
-            .filter_map(|entry| match entry.entry {
-                PublicOplogEntry::StreamSession(session) => {
-                    Some(StreamSessionRecord::from_value(session.record.value()).unwrap())
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let ordinals = records
-            .iter()
-            .filter_map(|record| match record {
-                StreamSessionRecord::ConsumerItemValue(record) => {
-                    Some(record.consumer_read_ordinal)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(ordinals, [0, 1, 2, 3, 4, 5, 6]);
-        let terminal_ordinals = records
-            .iter()
-            .filter_map(|record| match record {
-                StreamSessionRecord::ConsumerTerminal(record) => Some(record.consumer_read_ordinal),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(terminal_ordinals, [7]);
+        let ordinals = ConsumerReadOrdinals::of(&records);
+        assert_eq!(ordinals.items, [0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(ordinals.terminals, [7]);
         executor.delete_worker(&worker).await?;
     }
     Ok(())
@@ -3556,12 +3530,11 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, fixture).await?;
     for (crash, before_cancel) in [(false, false), (true, false), (true, true)] {
         let name = format!("ready-cancellation-{crash}-{before_cancel}");
         let target_id = agent_key!("StreamingRpcTarget", name.clone());
@@ -3569,21 +3542,33 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
             .start_agent(&component.id, target_id.clone())
             .await?;
         let source_gate = executor
-            .invoke_and_await_agent(&component, &target_id, "create_output_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
+            .invoke_and_await_typed::<PromiseId>(
+                &component,
+                &target_id,
+                "create_output_gate",
+                data_value!(),
+            )
+            .await?;
         let caller_id = agent_key!("StreamingRpcCaller", name);
         let worker = executor
             .start_agent(&component.id, caller_id.clone())
             .await?;
         let cancel_gate = executor
-            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
+            .invoke_and_await_typed::<PromiseId>(
+                &component,
+                &caller_id,
+                "create_input_gate",
+                data_value!(),
+            )
+            .await?;
         let resume_gate = executor
-            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
+            .invoke_and_await_typed::<PromiseId>(
+                &component,
+                &caller_id,
+                "create_input_gate",
+                data_value!(),
+            )
+            .await?;
         let loads = executor.instance_load_count(&worker.agent_id);
         let invocation = executor.invoke_and_await_agent(
             &component,
@@ -3598,27 +3583,25 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
         tokio::pin!(invocation);
         let checkpoint = async {
             for phase in 0..3 {
-                loop {
-                    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-                    let reads = entries.iter().filter(|entry| {
-                        matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
-                            if matches!(StreamSessionRecord::from_value(session.record.value()).unwrap(),
-                                StreamSessionRecord::ConsumerItemValue(_)))
-                    }).count();
-                    let waits = entries
-                        .iter()
-                        .filter(|entry| {
-                            matches!(&entry.entry, PublicOplogEntry::Start(start)
-                            if start.function_name == "golem::api::get_promise_result")
-                        })
-                        .count();
-                    if reads == if phase == 0 { 1 } else { 2 }
-                        && waits == if phase == 2 { 2 } else { 1 }
-                    {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
+                let expected_reads = if phase == 0 { 1 } else { 2 };
+                let expected_waits = if phase == 2 { 2 } else { 1 };
+                executor
+                    .wait_for_oplog(
+                        &worker,
+                        SETTLE_TIMEOUT,
+                        format!("{expected_reads} reads and {expected_waits} promise waits"),
+                        |entries| {
+                            let reads = stream_session_records(entries)
+                                .iter()
+                                .filter(|record| {
+                                    matches!(record, StreamSessionRecord::ConsumerItemValue(_))
+                                })
+                                .count();
+                            let waits = entries.starts_of("golem::api::get_promise_result").len();
+                            reads == expected_reads && waits == expected_waits
+                        },
+                    )
+                    .await?;
                 if phase == 0 {
                     executor
                         .complete_promise(
@@ -3646,31 +3629,28 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
         };
         tokio::select! {
             result = invocation.as_mut() => panic!("ready cancellation settled before checkpoint: {result:?}"),
-            checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoint) => checkpoint??,
+            checkpoint = within(SETTLE_TIMEOUT, "the ready cancellation checkpoint", checkpoint) => checkpoint??,
         }
         let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let promise_start = before
-            .iter()
-            .find_map(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::Start(start)
-                if start.function_name == "golem::api::get_promise_result")
-                .then_some(entry.oplog_index)
-            })
-            .expect("cancellation promise Start");
+            .starts_of("golem::api::get_promise_result")
+            .first()
+            .expect("cancellation promise Start")
+            .oplog_index;
         let promise_delivery = before
-            .iter()
-            .find_map(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(delivered)
-                if delivered.start_index == promise_start)
-                .then_some(entry.oplog_index)
-            })
-            .expect("cancellation promise delivery");
+            .call(promise_start)
+            .deliveries
+            .first()
+            .expect("cancellation promise delivery")
+            .oplog_index;
         let read_observation = before.iter().find_map(|entry| {
             matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
                 if matches!(StreamSessionRecord::from_value(session.record.value()).unwrap(),
                     StreamSessionRecord::ConsumerItemValue(record) if record.consumer_read_ordinal == 1))
                 .then_some(entry.oplog_index)
         }).expect("ready read observation");
+
+        // The ready read was observed while the cancellation promise waited.
         assert!(promise_start < read_observation);
         assert!(read_observation < promise_delivery);
         eprintln!(
@@ -3686,47 +3666,59 @@ async fn cancelling_ready_stream_read_survives_store_reconstruction(
                 vec![],
             )
             .await?;
-        let values = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut())
-            .await??
-            .into_typed::<Vec<u32>>()?;
+        let values = within(
+            SETTLE_TIMEOUT,
+            "the recovered read result",
+            invocation.as_mut(),
+        )
+        .await??
+        .into_typed::<Vec<u32>>()?;
+        let records =
+            stream_session_records(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?);
+
+        // The guest read every item once, and the read ordinals stay contiguous.
         assert_eq!(values, [17, 20, 23, 26, 29, 32, 35]);
         if crash {
-            assert!(executor.instance_load_count(&worker.agent_id) > loads);
+            assert!(
+                executor.instance_load_count(&worker.agent_id) > loads,
+                "the crash reloaded the caller"
+            );
         }
-        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-        let ordinals = entries
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::StreamSession(session) => {
-                    match StreamSessionRecord::from_value(session.record.value()).unwrap() {
-                        StreamSessionRecord::ConsumerItemValue(record) => {
-                            Some(record.consumer_read_ordinal)
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(ordinals, [0, 1, 2, 3, 4, 5, 6]);
-        let terminals = entries
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::StreamSession(session) => {
-                    match StreamSessionRecord::from_value(session.record.value()).unwrap() {
-                        StreamSessionRecord::ConsumerTerminal(record) => {
-                            Some(record.consumer_read_ordinal)
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(terminals, [7]);
+        let ordinals = ConsumerReadOrdinals::of(&records);
+        assert_eq!(ordinals.items, [0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(ordinals.terminals, [7]);
         executor.delete_worker(&worker).await?;
     }
     Ok(())
+}
+
+/// The consumer read ordinals that a consumer's stream session records journal.
+struct ConsumerReadOrdinals {
+    /// The ordinals of the item reads, in oplog order.
+    items: Vec<u64>,
+    /// The ordinals of the terminal reads, in oplog order.
+    terminals: Vec<u64>,
+}
+
+impl ConsumerReadOrdinals {
+    fn of(records: &[StreamSessionRecord]) -> Self {
+        let mut ordinals = Self {
+            items: Vec::new(),
+            terminals: Vec::new(),
+        };
+        for record in records {
+            match record {
+                StreamSessionRecord::ConsumerItemValue(record) => {
+                    ordinals.items.push(record.consumer_read_ordinal)
+                }
+                StreamSessionRecord::ConsumerTerminal(record) => {
+                    ordinals.terminals.push(record.consumer_read_ordinal)
+                }
+                _ => {}
+            }
+        }
+        ordinals
+    }
 }
 
 async fn streaming_output_resume_restores_exact_cursors(
@@ -3735,25 +3727,21 @@ async fn streaming_output_resume_restores_exact_cursors(
     agent_rpc_rust: &PrecompiledComponent,
     restart_executor: bool,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(move |config| {
-            // Ephemeral results have no catch-up index; evict history only for durable recovery.
-            if restart_executor {
-                config.invocation_results.recent_capacity = 0;
-                config.invocation_results.bloom_bits = 1;
-                config.invocation_results.bloom_hashes = 1;
-            }
-            // Keep the promise gate valid beyond this test's two-minute deadline.
-            config.suspend.ephemeral_max_sleep = Duration::from_secs(180);
-        })),
-        ..Default::default()
-    };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let overrides = TestExecutorOverrides::configured(move |config| {
+        // Ephemeral results have no catch-up index; evict history only for durable recovery.
+        if restart_executor {
+            config.invocation_results.recent_capacity = 0;
+            config.invocation_results.bloom_bits = 1;
+            config.invocation_results.bloom_hashes = 1;
+        }
+        // Keep the promise gate valid beyond this test's two-minute deadline.
+        config.suspend.ephemeral_max_sleep = Duration::from_secs(180);
+    });
+    let ExecutorTest {
+        context,
+        executor,
+        component,
+    } = ExecutorTest::start_with_overrides(deps, last_unique_id, agent_rpc_rust, overrides).await?;
     let idempotency_key = IdempotencyKey::fresh();
     let (worker_agent_id, method_name, input, mut gate) = if restart_executor {
         let agent_id = agent_key!("StreamingRpcTarget", "output-restart");
@@ -3761,9 +3749,13 @@ async fn streaming_output_resume_restores_exact_cursors(
             .start_agent(&component.id, agent_id.clone())
             .await?;
         let gate = executor
-            .invoke_and_await_agent(&component, &agent_id, "create_output_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
+            .invoke_and_await_typed::<PromiseId>(
+                &component,
+                &agent_id,
+                "create_output_gate",
+                data_value!(),
+            )
+            .await?;
         (
             worker_agent_id,
             "produce_gated_siblings",
@@ -3801,15 +3793,20 @@ async fn streaming_output_resume_restores_exact_cursors(
         .build()?;
     let mut session = executor.open_session(start.clone()).await?;
     let accepted = session.accepted().await?;
+
+    // Phase 1: read the first ten output items and keep a cursor per stream.
+    let mut ledger = OutputLedger::default();
     let mut observed_output_items = 0;
     let mut cursors = BTreeMap::new();
     let mut observed_values = BTreeMap::<u64, Vec<SchemaValue>>::new();
-    let mut observed_offsets = BTreeMap::<u64, BTreeSet<Vec<u8>>>::new();
     while observed_output_items < 10 {
         let response = session
             .message()
             .await?
-            .ok_or_else(|| anyhow::anyhow!("streaming output ended before cursor checkpoint"))?;
+            .ok_or_else(|| anyhow!("streaming output ended before cursor checkpoint"))?;
+        if let Some(invocation_response::Response::Result(result)) = &response.response {
+            ledger.mappings(&result.new_stream_mappings)?;
+        }
         if !restart_executor
             && let Some(invocation_response::Response::Result(result)) = &response.response
         {
@@ -3827,25 +3824,19 @@ async fn streaming_output_resume_restores_exact_cursors(
             gate = Some(promise);
         }
         if let Some(invocation_response::Response::OutputItem(item)) = response.response {
+            ledger.item(&item)?;
             let value = item
                 .value
-                .ok_or_else(|| anyhow::anyhow!("durable output item omitted its value"))?
+                .ok_or_else(|| anyhow!("durable output item omitted its value"))?
                 .try_into()
                 .map_err(anyhow::Error::msg)?;
-            assert!(
-                observed_offsets
-                    .entry(item.transport_stream_id)
-                    .or_default()
-                    .insert(item.durable_offset.clone()),
-                "duplicate offset before resume"
-            );
             observed_values
                 .entry(item.transport_stream_id)
                 .or_default()
                 .push(value);
             let stream_id = item
                 .durable_stream_id
-                .ok_or_else(|| anyhow::anyhow!("durable output item omitted its stream ID"))?;
+                .ok_or_else(|| anyhow!("durable output item omitted its stream ID"))?;
             cursors.insert(
                 (stream_id.high_bits, stream_id.low_bits),
                 StreamCursor {
@@ -3856,43 +3847,34 @@ async fn streaming_output_resume_restores_exact_cursors(
             observed_output_items += 1;
         }
     }
-    let gate = gate.ok_or_else(|| anyhow::anyhow!("streaming output omitted its promise gate"))?;
+    let gate = gate.ok_or_else(|| anyhow!("streaming output omitted its promise gate"))?;
+
+    // Phase 2: lose the session, and for a durable agent the executor too. The session drops
+    // between the shutdown and the restart.
     if restart_executor {
         executor.shutdown_and_wait_for_invocation_loops().await?;
     }
     drop(session);
     let executor = if restart_executor {
-        drop(executor);
-        start_with_overrides(deps, &context, overrides).await?
+        executor.restart(Teardown::Drop).await?
     } else {
         executor
     };
     if !restart_executor {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if executor
-                    .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
-                    .await?
-                    .into_iter()
-                    .any(|entry| {
-                        matches!(
-                            entry.entry,
-                            PublicOplogEntry::StreamSession(session)
-                                if matches!(
-                                    StreamSessionRecord::from_value(session.record.value()),
-                                    Ok(StreamSessionRecord::Detached(record))
-                                        if record.epoch == accepted.epoch
-                                )
-                        )
+        executor
+            .wait_for_oplog(
+                &worker_agent_id,
+                GATE_TIMEOUT,
+                "the ephemeral output session to detach before resume",
+                |oplog| {
+                    stream_session_records(oplog).iter().any(|record| {
+                        matches!(record, StreamSessionRecord::Detached(record)
+                            if record.epoch == accepted.epoch)
                     })
-                {
-                    return Ok::<(), anyhow::Error>(());
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("ephemeral output session did not detach before resume"))??;
+                },
+            )
+            .await?;
+        // The gated ephemeral invocation stays resident and unfinished until the resume.
         assert!(
             executor
                 .worker_is_loaded(&OwnedAgentId::new(
@@ -3906,14 +3888,9 @@ async fn streaming_output_resume_restores_exact_cursors(
             .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
             .await?;
         assert!(
-            !oplog.into_iter().any(|entry| matches!(
-                entry.entry,
-                PublicOplogEntry::StreamSession(session)
-                    if matches!(
-                        StreamSessionRecord::from_value(session.record.value()),
-                        Ok(StreamSessionRecord::Finished(_))
-                    )
-            )),
+            !stream_session_records(&oplog)
+                .iter()
+                .any(|record| matches!(record, StreamSessionRecord::Finished(_))),
             "the gated invocation must remain unfinished until resume acceptance"
         );
         assert_eq!(
@@ -3934,13 +3911,13 @@ async fn streaming_output_resume_restores_exact_cursors(
     }
     resume.cursors = cursors.into_values().collect();
 
-    // A resume whose caller differs from the pinned one, here only in its original caller, is
-    // refused: no resume replaces the recorded caller.
-    let mut changed_caller = golem_common::model::caller::Caller::try_from(
+    // Phase 3: a resume whose caller differs from the pinned one, here only in its original
+    // caller, is refused: no resume replaces the recorded caller.
+    let mut changed_caller = Caller::try_from(
         start
             .caller
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("the start names its caller"))?,
+            .ok_or_else(|| anyhow!("the start names its caller"))?,
     )
     .map_err(anyhow::Error::msg)?;
     changed_caller.original = callers::account_principal(AccountId::new());
@@ -3977,6 +3954,7 @@ async fn streaming_output_resume_restores_exact_cursors(
     );
     drop(changed_requests);
 
+    // Phase 4: resume from the cursors and read the rest of the output.
     let mut session = executor.resume_session(resume).await?;
     let mut mapped_outputs = 0;
     let mut output_items = 0;
@@ -3992,20 +3970,16 @@ async fn streaming_output_resume_restores_exact_cursors(
             }
             Some(invocation_response::Response::Result(result)) => {
                 mapped_outputs = result.new_stream_mappings.len();
+                ledger.mappings(&result.new_stream_mappings)?;
             }
             Some(invocation_response::Response::OutputItem(item)) => {
+                // The ledger fails on a redelivered durable offset or a gap in the sequence.
+                ledger.item(&item)?;
                 let value = item
                     .value
-                    .ok_or_else(|| anyhow::anyhow!("resumed output item omitted its value"))?
+                    .ok_or_else(|| anyhow!("resumed output item omitted its value"))?
                     .try_into()
                     .map_err(anyhow::Error::msg)?;
-                assert!(
-                    observed_offsets
-                        .entry(item.transport_stream_id)
-                        .or_default()
-                        .insert(item.durable_offset),
-                    "resume redelivered an observed durable offset"
-                );
                 observed_values
                     .entry(item.transport_stream_id)
                     .or_default()
@@ -4013,6 +3987,7 @@ async fn streaming_output_resume_restores_exact_cursors(
                 output_items += 1;
             }
             Some(invocation_response::Response::StreamEnd(end)) => {
+                ledger.end(&end)?;
                 assert!(matches!(
                     end.outcome.and_then(|outcome| outcome.terminal),
                     Some(stream_terminal::Terminal::Finished(_))
@@ -4032,7 +4007,10 @@ async fn streaming_output_resume_restores_exact_cursors(
             None => anyhow::bail!("empty recovered output response"),
         }
     }
+
+    // The resumed session delivered exactly the rest of both sibling outputs and finished.
     assert!(session.is_complete());
+    ledger.ensure_complete()?;
     assert_eq!(mapped_outputs, 2);
     assert_eq!(output_items, 66 - observed_output_items);
     assert_eq!(output_ends, 2);
@@ -4058,7 +4036,7 @@ async fn streaming_output_resume_restores_exact_cursors(
         &AgentId::try_from(
             accepted
                 .agent_id
-                .ok_or_else(|| anyhow::anyhow!("ephemeral acceptance omitted final agent ID"))?,
+                .ok_or_else(|| anyhow!("ephemeral acceptance omitted final agent ID"))?,
         )
         .map_err(anyhow::Error::msg)?,
     );
@@ -4084,12 +4062,11 @@ async fn concurrently_deleting_attached_stream_consumer_and_producer_succeeds(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let name = format!("concurrent-stream-delete-{}", uuid::Uuid::new_v4());
     let caller = agent_key!("StreamingRpcCaller", name.clone());
     let producer = agent_key!("StreamingRpcTarget", name);
@@ -4123,12 +4100,11 @@ async fn deleting_stream_consumer_after_its_producer_succeeds(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let name = format!("sequential-stream-delete-{}", uuid::Uuid::new_v4());
     let caller = agent_key!("StreamingRpcCaller", name.clone());
     let producer = agent_key!("StreamingRpcTarget", name);
@@ -4158,12 +4134,11 @@ async fn active_ephemeral_compute_interrupt_same_key_does_not_restart_invocation
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let logical_agent_id = agent_key!("EphemeralStreamingRpcTarget", "interrupt-spin");
     let idempotency_key = IdempotencyKey::fresh();
     let final_agent_id = crate::agent::ephemeral_agent_id(
@@ -4181,53 +4156,30 @@ async fn active_ephemeral_compute_interrupt_same_key_does_not_restart_invocation
     )
     .await?;
 
-    let invocation_executor = executor.clone();
-    let invocation_component = component.clone();
-    let invocation_agent_id = logical_agent_id.clone();
-    let invocation_key = idempotency_key.clone();
-    let invocation = tokio::spawn(async move {
-        invocation_executor
-            .invoke_and_await_agent_with_key(
-                &invocation_component,
-                &invocation_agent_id,
-                &invocation_key,
-                "spin",
-                data_value!(),
-            )
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if executor
-                .get_oplog(&final_agent_id, OplogIndex::INITIAL)
-                .await?
-                .into_iter()
-                .any(|entry| {
-                    matches!(
-                        &entry.entry,
-                        PublicOplogEntry::AgentInvocationStarted(started)
-                            if matches!(
-                                &started.invocation,
-                                PublicAgentInvocation::AgentMethodInvocation(method)
-                                    if method.method_name == "spin"
-                            )
-                    )
-                })
-            {
-                return Ok::<(), anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("spin did not reach its method-start marker"))??;
+    let invocation = executor.spawn_invoke_and_await_with_key(
+        &component,
+        &logical_agent_id,
+        &idempotency_key,
+        "spin",
+        data_value!(),
+    );
+    executor
+        .wait_for_oplog(
+            &final_agent_id,
+            GATE_TIMEOUT,
+            "spin's method start",
+            |oplog| !oplog.method_starts("spin").is_empty(),
+        )
+        .await?;
+
+    // Action: interrupt the running compute, then redispatch with the same key.
     executor.interrupt(&final_agent_id).await?;
-    let first = tokio::time::timeout(Duration::from_secs(10), invocation)
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!("active ephemeral invocation did not observe interruption")
-        })??;
-    assert!(first.is_err(), "interrupted compute unexpectedly succeeded");
+    let first = within(
+        GATE_TIMEOUT,
+        "the active ephemeral invocation to observe the interruption",
+        invocation,
+    )
+    .await??;
 
     let redispatch = executor
         .invoke_and_await_agent_with_key(
@@ -4238,25 +4190,18 @@ async fn active_ephemeral_compute_interrupt_same_key_does_not_restart_invocation
             data_value!(),
         )
         .await;
+    let oplog = executor
+        .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+        .await?;
+
+    // Both attempts fail, and the method started only once.
+    assert!(first.is_err(), "interrupted compute unexpectedly succeeded");
     assert!(
         redispatch.is_err(),
         "same-key redispatch restarted interrupted ephemeral compute"
     );
     assert_eq!(
-        executor
-            .get_oplog(&final_agent_id, OplogIndex::INITIAL)
-            .await?
-            .into_iter()
-            .filter(|entry| matches!(
-                &entry.entry,
-                PublicOplogEntry::AgentInvocationStarted(started)
-                    if matches!(
-                        &started.invocation,
-                        PublicAgentInvocation::AgentMethodInvocation(method)
-                            if method.method_name == "spin"
-                    )
-            ))
-            .count(),
+        oplog.method_starts("spin").len(),
         1,
         "same-key redispatch must not start a second method invocation"
     );
@@ -4272,12 +4217,11 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
 
     let target_key = IdempotencyKey::fresh();
     let target_logical = agent_key!("EphemeralStreamingRpcTarget", "pending-cancel-target");
@@ -4303,17 +4247,23 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
         data_value!(),
     )
     .await?;
-    let accepted = tokio::time::timeout(Duration::from_secs(10), session.next())
-        .await
-        .map_err(|_| anyhow::anyhow!("pending invocation was not accepted"))??
-        .ok_or_else(|| anyhow::anyhow!("pending invocation ended before acceptance"))?;
+    let accepted = within(
+        GATE_TIMEOUT,
+        "the pending invocation's acceptance",
+        session.next(),
+    )
+    .await??
+    .ok_or_else(|| anyhow!("pending invocation ended before acceptance"))?;
     if !matches!(accepted, invocation_response::Response::Accepted(_)) {
         anyhow::bail!("expected pending acceptance after absent interrupt, got {accepted:?}");
     }
 
-    tokio::time::timeout(Duration::from_secs(10), initialization_success.entered())
-        .await
-        .map_err(|_| anyhow::anyhow!("initialization did not reach its success barrier"))?;
+    within(
+        GATE_TIMEOUT,
+        "initialization to reach its success barrier",
+        initialization_success.entered(),
+    )
+    .await?;
     let active = executor
         .active_agent(&OwnedAgentId::new(
             component.environment_id,
@@ -4327,67 +4277,54 @@ async fn pending_ephemeral_interrupt_after_acceptance_prevents_method_start(
         let target_final = target_final.clone();
         async move { executor.interrupt(&target_final).await }
     });
-    tokio::time::timeout(Duration::from_secs(10), async {
+    within(GATE_TIMEOUT, "the initialization interrupt signal", async {
         while !matches!(
             &*execution_status.read().unwrap(),
-            golem_worker_executor::model::ExecutionStatus::Interrupting { .. }
+            ExecutionStatus::Interrupting { .. }
         ) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
     })
-    .await
-    .map_err(|_| anyhow::anyhow!("initialization interrupt was not signalled"))?;
+    .await?;
     assert!(
         !interrupt.is_finished(),
         "interrupt acknowledged before initialization settled"
     );
     initialization_success.release();
-    tokio::time::timeout(Duration::from_secs(10), interrupt)
-        .await
-        .map_err(|_| anyhow::anyhow!("initialization interrupt was not acknowledged"))???;
-    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+    within(
+        GATE_TIMEOUT,
+        "the initialization interrupt's acknowledgement",
+        interrupt,
+    )
+    .await???;
+    let finished = within(GATE_TIMEOUT, "the pending cancellation's terminal", async {
         loop {
             let response = session
                 .next()
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("pending invocation closed without a terminal"))?;
+                .ok_or_else(|| anyhow!("pending invocation closed without a terminal"))?;
             if let invocation_response::Response::Finished(finished) = response {
                 return Ok::<_, anyhow::Error>(finished);
             }
         }
     })
-    .await
-    .map_err(|_| anyhow::anyhow!("pending cancellation did not terminalize"))??;
+    .await??;
+    executor
+        .wait_for_status(&target_final, AgentStatus::Interrupted, GATE_TIMEOUT)
+        .await?;
+    let oplog = executor
+        .get_oplog(&target_final, OplogIndex::INITIAL)
+        .await?;
+
+    // The accepted invocation failed, the agent is interrupted, and spin never started.
     assert!(matches!(
         finished.outcome,
         Some(invocation_session_completion::Outcome::Failure(_))
     ));
     assert!(session.is_complete());
-    executor
-        .wait_for_status(
-            &target_final,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    let method_starts = executor
-        .get_oplog(&target_final, OplogIndex::INITIAL)
-        .await?
-        .into_iter()
-        .filter(|entry| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::AgentInvocationStarted(started)
-                    if matches!(
-                        &started.invocation,
-                        PublicAgentInvocation::AgentMethodInvocation(method)
-                            if method.method_name == "spin"
-                    )
-            )
-        })
-        .count();
     assert_eq!(
-        method_starts, 0,
+        oplog.method_starts("spin").len(),
+        0,
         "pending cancellation allowed spin to start after the permit was released"
     );
     Ok(())
@@ -4402,12 +4339,11 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let idempotency_key = IdempotencyKey::fresh();
     let logical_agent_id = agent_key!("EphemeralStreamingRpcTarget", "interrupt-held-input");
     let worker_agent_id = crate::agent::ephemeral_agent_id(
@@ -4436,49 +4372,33 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
         .input_record(vec![stream_reference(1)])
         .build()?;
     let mut session = executor.open_session(start.clone()).await?;
-    let accepted = tokio::time::timeout(Duration::from_secs(10), session.message())
-        .await
-        .map_err(|_| anyhow::anyhow!("held-input invocation was not accepted"))??
-        .ok_or_else(|| anyhow::anyhow!("held-input session ended before acceptance"))?;
+    let accepted = within(GATE_TIMEOUT, "the held-input acceptance", session.message())
+        .await??
+        .ok_or_else(|| anyhow!("held-input session ended before acceptance"))?;
     let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
         anyhow::bail!("expected held-input acceptance, got {accepted:?}");
     };
     // A queued acceptance is followed by readiness when the selected revision starts the method.
-    tokio::time::timeout(Duration::from_secs(10), session.ready(accepted))
-        .await
-        .map_err(|_| anyhow::anyhow!("held-input invocation did not become ready"))??;
-
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let starts = executor
-                .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
-                .await?
-                .into_iter()
-                .filter(|entry| {
-                    matches!(
-                        &entry.entry,
-                        PublicOplogEntry::AgentInvocationStarted(started)
-                            if matches!(
-                                &started.invocation,
-                                PublicAgentInvocation::AgentMethodInvocation(method)
-                                    if method.method_name == "hold_input"
-                            )
-                    )
-                })
-                .count();
-            if starts == 1 {
-                return Ok::<(), anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("hold_input did not reach its method-start marker"))??;
-
+    within(
+        GATE_TIMEOUT,
+        "the held-input invocation to become ready",
+        session.ready(accepted),
+    )
+    .await??;
+    executor
+        .wait_for_oplog(
+            &worker_agent_id,
+            GATE_TIMEOUT,
+            "hold_input's method start",
+            |oplog| oplog.method_starts("hold_input").len() == 1,
+        )
+        .await?;
     if let Ok(response) = tokio::time::timeout(Duration::from_millis(100), session.message()).await
     {
         panic!("host-wait invocation terminated before interruption: {response:?}");
     }
+
+    // Action: interrupt the agent while it waits for input.
     executor.interrupt(&worker_agent_id).await?;
     assert_interrupted_transport_closed(&mut session).await?;
     assert_eq!(
@@ -4487,44 +4407,33 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     );
     drop(session);
 
+    // An explicit resume is refused, because an interrupted ephemeral agent is inactive. The
+    // resume API reports the executor error only as text.
     let resume = executor.resume(&worker_agent_id, false).await;
     assert!(
         resume.is_err(),
         "interrupted ephemeral agent unexpectedly resumed"
     );
     let resume_error = resume.unwrap_err().to_string();
-    let inactive_ephemeral_error =
-        "An ephemeral agent cannot accept another invocation or be resumed";
     assert!(
-        resume_error.contains(inactive_ephemeral_error),
+        resume_error.contains("An ephemeral agent cannot accept another invocation or be resumed"),
         "explicit resume failed with the wrong category: {resume_error}"
     );
 
-    // Start with a new attempt cannot replace the persisted streaming session;
-    // it is rejected at attachment admission before ephemeral lifecycle checks.
+    // Start with a new attempt cannot replace the persisted streaming session; it is rejected
+    // at attachment admission before ephemeral lifecycle checks. The rejection is an invalid
+    // request that names its category only in its text.
     let redispatch_error = assert_failed_redispatch(&executor, start.clone()).await?;
     assert!(
         redispatch_error.contains("AttemptConflict"),
         "same-key redispatch failed with the wrong category: {redispatch_error}"
     );
-    let method_starts = executor
+    let oplog = executor
         .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
-        .await?
-        .into_iter()
-        .filter(|entry| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::AgentInvocationStarted(started)
-                    if matches!(
-                        &started.invocation,
-                        PublicAgentInvocation::AgentMethodInvocation(method)
-                            if method.method_name == "hold_input"
-                    )
-            )
-        })
-        .count();
+        .await?;
     assert_eq!(
-        method_starts, 1,
+        oplog.method_starts("hold_input").len(),
+        1,
         "resume or redispatch restarted hold_input"
     );
     Ok(())
@@ -4548,6 +4457,8 @@ async fn read_nested_sibling_output(
     let mut terminal_count = 0;
     let mut finished_successfully = false;
     let mut acceptance = None;
+    // Nested values may arrive before the parent item that maps their stream.
+    let mut ledger = OutputLedger::default();
 
     while let Some(response) = session.message().await? {
         match response.response {
@@ -4582,8 +4493,10 @@ async fn read_nested_sibling_output(
                     .map(|mapping| mapping.transport_stream_id)
                     .collect::<BTreeSet<_>>();
                 assert_eq!(mapped_stream_ids, root_stream_ids);
+                ledger.mappings(&result.new_stream_mappings)?;
             }
             Some(invocation_response::Response::OutputItem(item)) => {
+                ledger.item(&item)?;
                 let Some(value) = item.value.and_then(|value| value.value) else {
                     anyhow::bail!("nested sibling item has no value");
                 };
@@ -4609,7 +4522,7 @@ async fn read_nested_sibling_output(
                         .and_then(|handle| handle.stream_id)
                         .map(uuid::Uuid::from)
                         .ok_or_else(|| {
-                            anyhow::anyhow!("nested sibling mapping has no durable stream ID")
+                            anyhow!("nested sibling mapping has no durable stream ID")
                         })?;
                     if labels_by_nested_stream
                         .insert(nested.stream_id, label.clone())
@@ -4650,6 +4563,7 @@ async fn read_nested_sibling_output(
                 }
             }
             Some(invocation_response::Response::StreamEnd(end)) => {
+                ledger.end(&end)?;
                 assert!(matches!(
                     end.outcome.and_then(|outcome| outcome.terminal),
                     Some(stream_terminal::Terminal::Finished(_))
@@ -4670,11 +4584,17 @@ async fn read_nested_sibling_output(
         }
     }
 
+    // The session finished, every root and nested stream ended once, and each nested stream
+    // delivered its values under its label.
     assert!(session.is_complete());
     assert!(finished_successfully);
+    ledger.ensure_complete()?;
     assert_eq!(terminal_count, 4);
     assert_eq!(observed_root_stream_ids, root_stream_ids);
-    assert!(pending_values_by_nested_stream.is_empty());
+    assert!(
+        pending_values_by_nested_stream.is_empty(),
+        "every nested value was assigned to a label"
+    );
     assert_eq!(durable_stream_ids.len(), 2);
     assert_eq!(values.get("left"), Some(&vec![1, 2]));
     assert_eq!(values.get("right"), Some(&vec![10, 20, 30]));
@@ -4683,7 +4603,7 @@ async fn read_nested_sibling_output(
             durable_stream_ids,
             values,
         },
-        acceptance.ok_or_else(|| anyhow::anyhow!("nested sibling invocation was not accepted"))?,
+        acceptance.ok_or_else(|| anyhow!("nested sibling invocation was not accepted"))?,
     ))
 }
 
@@ -4696,12 +4616,11 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .store()
-        .await?;
+    let ExecutorTest {
+        executor,
+        component,
+        ..
+    } = ExecutorTest::start(deps, last_unique_id, agent_rpc_rust).await?;
     let agent_id = agent_key!("StreamingRpcTarget", "nested-sibling-output-restart");
     let worker_agent_id = executor.start_agent(&component.id, agent_id).await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
@@ -4719,16 +4638,18 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
 
     let (first, accepted) =
         read_nested_sibling_output(executor.open_session(start_request.clone()).await?).await?;
-    drop(executor);
 
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     let (replayed, _) = read_nested_sibling_output(
         executor
             .resume_session(resume_attach(&start_request, &accepted))
             .await?,
     )
     .await?;
-    assert_eq!(replayed, first);
+    assert_eq!(
+        replayed, first,
+        "the resumed session replays the same streams and values"
+    );
     Ok(())
 }
 
