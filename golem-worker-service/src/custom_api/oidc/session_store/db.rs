@@ -92,7 +92,7 @@ impl<P> Drop for DbSessionStore<P> {
 pub async fn migrated_sqlite_pool(config: &DbSqliteConfig) -> anyhow::Result<SqlitePool> {
     if let Some(parent) = std::path::Path::new(&config.database)
         .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
+        .filter(|parent| !parent.as_os_str().is_empty() && !config.database.starts_with("file:"))
     {
         tokio::fs::create_dir_all(parent)
             .await

@@ -21,6 +21,8 @@ use crate::mcp::session::{
     McpPostgresStorageConfig, McpSessionConfig, McpSessionStorageConfig, McpSqliteStorageConfig,
 };
 use async_trait::async_trait;
+#[cfg(unix)]
+use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
 use golem_common::redis::RedisPool;
@@ -134,6 +136,51 @@ fn sqlite_session_database_accepts_a_basename_and_keeps_filesystem_errors() {
                 );
                 assert!(!std::path::Path::new("blocked/new/sessions.db").exists());
             });
+        Ok(())
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_session_database_preserves_file_uri_paths() {
+    figment::Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.create_file("file:", "not a directory")?;
+        std::fs::create_dir("sessions").unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                futures::stream::iter([
+                    (
+                        format!(
+                            "file:{}/sessions/%61bsolute.db?mode=rwc",
+                            jail.directory().display()
+                        ),
+                        "absolute.db",
+                    ),
+                    (
+                        "file:sessions/%72elative.db?mode=rwc".to_string(),
+                        "relative.db",
+                    ),
+                ])
+                .for_each(|(database, filename)| async move {
+                    let config = DbSqliteConfig {
+                        database,
+                        max_connections: 2,
+                        foreign_keys: false,
+                    };
+                    let pool =
+                        crate::custom_api::oidc::session_store::migrated_sqlite_pool(&config)
+                            .await
+                            .unwrap();
+                    assert!(std::path::Path::new("sessions").join(filename).is_file());
+                    pool.close().await;
+                })
+                .await;
+            });
+        assert_eq!(std::fs::read("file:").unwrap(), b"not a directory");
         Ok(())
     });
 }

@@ -61,6 +61,10 @@ uuid = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = { workspace = true }
+libc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 same-file = { workspace = true }
 windows-sys = { workspace = true }

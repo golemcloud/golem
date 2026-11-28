@@ -37,7 +37,7 @@ components_bucket = "golem"
 data_bucket = "golem"
 ```
 
-Set `object_storage.endpoint_url` for an S3-compatible service. Supply credentials through the standard AWS sources or `object_storage.credentials`. Create the buckets before startup. Each service checks access with a bounded, read-only listing below a prefix it owns. A failed check stops startup without local blob storage.
+Set `object_storage.endpoint_url` for an S3-compatible service. Supply credentials through the standard AWS sources or `object_storage.credentials`. Create the buckets before startup. Each service checks reachability with a bounded, unsigned request below a prefix it owns. Any HTTP response counts as reachable, including access denied. The check needs no `ListBucket` permission or probe object. Object operations use signed requests. A failed reachability check stops startup without local blob storage.
 
 To override individual bucket settings or the layout, use the unsupported `[advanced.<service>.blob_storage.config]` section. The worker executor uses these fields:
 

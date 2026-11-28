@@ -3961,6 +3961,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap-verbosity-flag",
+ "core-foundation 0.10.1",
  "dirs",
  "figment",
  "golem-cli",
@@ -3974,6 +3975,7 @@ dependencies = [
  "golem-worker-executor",
  "golem-worker-service",
  "hex",
+ "libc",
  "opentelemetry",
  "opentelemetry_sdk",
  "percent-encoding",

@@ -849,6 +849,7 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
         [
             "direct",
             "not-created",
+            "log-directory",
             "hard-link",
             "noncolliding",
             "uri",
@@ -887,6 +888,10 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
             "windows-multi-case-hard-link",
             #[cfg(windows)]
             "windows-database-symlink",
+            #[cfg(target_os = "macos")]
+            "macos-case",
+            #[cfg(target_os = "macos")]
+            "macos-directory-case",
             #[cfg(unix)]
             "symlink",
             #[cfg(unix)]
@@ -925,6 +930,13 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
             jail.set_env("HOME", jail.directory().display().to_string());
             let data_dir = jail.directory().join("data");
             std::fs::create_dir_all(&data_dir).unwrap();
+            #[cfg(target_os = "macos")]
+            let selected = if alias.starts_with("macos-") {
+                std::fs::write(data_dir.join("CaseProbe"), b"case probe").unwrap();
+                selected && data_dir.join("caseprobe").exists()
+            } else {
+                selected
+            };
             let mut database_path = if selected_store.is_some() {
                 jail.directory().join("external").join(database)
             } else {
@@ -950,10 +962,10 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                 "{}{suffix}",
                 resolved_database.file_name().unwrap().to_str().unwrap()
             ));
-            if alias.starts_with("windows-multi-") {
+            if alias.starts_with("windows-multi-") || alias.starts_with("macos-") {
                 state_path.set_file_name(state_path.file_name().unwrap().to_str().unwrap().to_uppercase());
             }
-            if !matches!(alias, "not-created" | "uri-absent" | "windows-case" | "windows-multi-case" | "multi-uri-absent" | "multi-uri-indexed-absent") {
+            if !alias.starts_with("macos-") && !matches!(alias, "not-created" | "log-directory" | "uri-absent" | "windows-case" | "windows-multi-case" | "multi-uri-absent" | "multi-uri-indexed-absent") {
                 std::fs::write(&state_path, b"preserve selected SQLite state").unwrap();
             }
             #[cfg(windows)]
@@ -1078,9 +1090,11 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                     );
                 }
             }
-            let log_path = if alias == "windows-case" {
+            let log_path = if matches!(alias, "log-directory" | "macos-directory-case") {
+                state_path.join("server.log")
+            } else if alias == "windows-case" {
                 state_path.with_file_name(state_path.file_name().unwrap().to_str().unwrap().to_uppercase())
-            } else if matches!(alias, "direct" | "not-created" | "literal-percent" | "windows-multi-case")
+            } else if matches!(alias, "direct" | "not-created" | "literal-percent" | "windows-multi-case" | "macos-case")
                 || alias.starts_with("uri") || (alias.starts_with("multi-uri") && alias != "multi-uri-hard-link") || alias.ends_with("database-symlink") {
                 state_path.clone()
             } else {
@@ -1145,8 +1159,11 @@ fn server_tracing_does_not_overwrite_selected_sqlite_databases() {
                     "{database}, {alias}, retained_key={retained_key}"
                 );
             }
-            if matches!(alias, "not-created" | "uri-absent" | "windows-case" | "windows-multi-case" | "multi-uri-absent" | "multi-uri-indexed-absent") && selected {
+            if (alias.starts_with("macos-") || matches!(alias, "not-created" | "log-directory" | "uri-absent" | "windows-case" | "windows-multi-case" | "multi-uri-absent" | "multi-uri-indexed-absent")) && selected {
                 assert!(!state_path.exists());
+            } else if matches!(alias, "log-directory" | "macos-directory-case") {
+                assert!(state_path.is_dir());
+                assert_eq!(std::fs::read(&log_path).unwrap(), b"log would replace state");
             } else {
                 assert_eq!(
                     std::fs::read(&state_path).unwrap(),

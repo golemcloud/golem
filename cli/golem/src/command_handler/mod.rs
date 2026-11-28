@@ -230,8 +230,37 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     let log_path = Path::new(config.logging.file_dir.as_deref().unwrap_or("."))
         .join(file_name)
         .into_boxed_path();
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent).context("Failed to create the server log directory")?;
+    #[cfg(target_os = "macos")]
+    fn case_insensitive(path: &Path) -> anyhow::Result<bool> {
+        let directory = path
+            .ancestors()
+            .find(|ancestor| ancestor.is_dir())
+            .context("Failed to find the filesystem for the server log guard")?;
+        let directory = std::ffi::CString::new(directory.as_os_str().as_encoded_bytes())?;
+        // The C string stays valid until pathconf returns.
+        match unsafe { libc::pathconf(directory.as_ptr(), libc::_PC_CASE_SENSITIVE) } {
+            0 => Ok(true),
+            1 => Ok(false),
+            _ => Err(std::io::Error::last_os_error())
+                .context("Failed to inspect filesystem case sensitivity"),
+        }
+    }
+    #[cfg(target_os = "macos")]
+    fn equal_filenames(left: &str, right: &str) -> bool {
+        use core_foundation::base::{CFComparisonResult, TCFType};
+        use core_foundation::string::{
+            CFString, CFStringCompare, kCFCompareCaseInsensitive, kCFCompareNonliteral,
+        };
+        let left = CFString::new(left);
+        let right = CFString::new(right);
+        // Both strings stay valid until the nonlocalized comparison returns.
+        unsafe {
+            CFStringCompare(
+                left.as_concrete_TypeRef(),
+                right.as_concrete_TypeRef(),
+                kCFCompareCaseInsensitive | kCFCompareNonliteral,
+            ) == CFComparisonResult::EqualTo
+        }
     }
     fn resolve_path(path: &Path, links: u8) -> std::io::Result<PathBuf> {
         let path = std::path::absolute(path)?;
@@ -268,34 +297,45 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     let check_path = |path: &Path, description: &str| -> anyhow::Result<()> {
         let resolved_path = resolve_path(path, 0)
             .with_context(|| format!("Failed to resolve the {description}"))?;
-        #[cfg(unix)]
-        let same_path = resolved_path == resolved_log;
-        #[cfg(windows)]
-        let same_path = {
-            use std::os::windows::ffi::OsStrExt;
-            use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
-            let left = resolved_path
-                .as_os_str()
-                .encode_wide()
-                .collect::<Box<[_]>>();
-            let right = resolved_log.as_os_str().encode_wide().collect::<Box<[_]>>();
-            // Both slices remain valid until the comparison returns.
-            let result = unsafe {
-                CompareStringOrdinal(
-                    left.as_ptr(),
-                    left.len().try_into()?,
-                    right.as_ptr(),
-                    right.len().try_into()?,
-                    1,
-                )
+        for log_path in resolved_log.ancestors() {
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let same_path = resolved_path == log_path;
+            #[cfg(target_os = "macos")]
+            let same_path = resolved_path == log_path
+                || (case_insensitive(&resolved_path)?
+                    && equal_filenames(
+                        resolved_path
+                            .to_str()
+                            .context("Invalid selected state path")?,
+                        log_path.to_str().context("Invalid server log path")?,
+                    ));
+            #[cfg(windows)]
+            let same_path = {
+                use std::os::windows::ffi::OsStrExt;
+                use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+                let left = resolved_path
+                    .as_os_str()
+                    .encode_wide()
+                    .collect::<Box<[_]>>();
+                let right = log_path.as_os_str().encode_wide().collect::<Box<[_]>>();
+                // Both slices remain valid until the comparison returns.
+                let result = unsafe {
+                    CompareStringOrdinal(
+                        left.as_ptr(),
+                        left.len().try_into()?,
+                        right.as_ptr(),
+                        right.len().try_into()?,
+                        1,
+                    )
+                };
+                if result == 0 {
+                    return Err(std::io::Error::last_os_error()).context("Failed to compare paths");
+                }
+                result == CSTR_EQUAL
             };
-            if result == 0 {
-                return Err(std::io::Error::last_os_error()).context("Failed to compare paths");
+            if same_path {
+                bail!("The server log must not overwrite the {description}");
             }
-            result == CSTR_EQUAL
-        };
-        if same_path {
-            bail!("The server log must not overwrite the {description}");
         }
         let Some(log_metadata) = &log_metadata else {
             return Ok(());
@@ -426,8 +466,13 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
             None => Ok(()),
         }
     };
-    fn strip_filename_affix<'a>(name: &'a str, affix: &str, at_end: bool) -> Option<&'a str> {
-        #[cfg(unix)]
+    fn strip_filename_affix<'a>(
+        name: &'a str,
+        affix: &str,
+        at_end: bool,
+        _case_insensitive: bool,
+    ) -> Option<&'a str> {
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             if at_end {
                 name.strip_suffix(affix)
@@ -435,9 +480,16 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
                 name.strip_prefix(affix)
             }
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         {
-            use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+            #[cfg(target_os = "macos")]
+            if !_case_insensitive {
+                return if at_end {
+                    name.strip_suffix(affix)
+                } else {
+                    name.strip_prefix(affix)
+                };
+            }
             let split = if at_end {
                 name.char_indices().rev().nth(affix.chars().count() - 1)?.0
             } else {
@@ -451,50 +503,66 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
             } else {
                 (prefix, suffix)
             };
-            let left = candidate.encode_utf16().collect::<Box<[_]>>();
-            let right = affix.encode_utf16().collect::<Box<[_]>>();
-            // Both slices remain valid until the comparison returns.
-            let result = unsafe {
-                CompareStringOrdinal(
-                    left.as_ptr(),
-                    left.len().try_into().ok()?,
-                    right.as_ptr(),
-                    right.len().try_into().ok()?,
-                    1,
-                )
-            };
-            (result == CSTR_EQUAL).then_some(remainder)
+            #[cfg(target_os = "macos")]
+            {
+                equal_filenames(candidate, affix).then_some(remainder)
+            }
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+                let left = candidate.encode_utf16().collect::<Box<[_]>>();
+                let right = affix.encode_utf16().collect::<Box<[_]>>();
+                // Both slices remain valid until the comparison returns.
+                let result = unsafe {
+                    CompareStringOrdinal(
+                        left.as_ptr(),
+                        left.len().try_into().ok()?,
+                        right.as_ptr(),
+                        right.len().try_into().ok()?,
+                        1,
+                    )
+                };
+                (result == CSTR_EQUAL).then_some(remainder)
+            }
         }
     }
-    let is_agent_file_key = |key: &str| {
-        #[cfg(windows)]
-        let key = key.to_ascii_lowercase().into_boxed_str();
+    let is_agent_file_key = |key: &str, case_insensitive: bool| {
+        let key = if case_insensitive {
+            std::borrow::Cow::Owned(key.to_ascii_lowercase())
+        } else {
+            std::borrow::Cow::Borrowed(key)
+        };
         key.split_once('_').is_some_and(|(environment, agent)| {
             [environment, agent].into_iter().all(|id| {
                 uuid::Uuid::parse_str(id).is_ok_and(|uuid| uuid.hyphenated().to_string() == id)
             })
         })
     };
-    let is_key_value_database = |name: &str, persistent: bool| {
+    let is_key_value_database = |name: &str, persistent: bool, case_insensitive: bool| {
         (persistent
             && ["kv-running_workers", "kv-schedule.db", "kv-user-defined.db"]
                 .into_iter()
-                .any(|expected| strip_filename_affix(name, expected, false) == Some("")))
-            || strip_filename_affix(name, "kv-worker-", false)
-                .and_then(|key| strip_filename_affix(key, ".db", true))
-                .is_some_and(is_agent_file_key)
+                .any(|expected| {
+                    strip_filename_affix(name, expected, false, case_insensitive) == Some("")
+                }))
+            || strip_filename_affix(name, "kv-worker-", false, case_insensitive)
+                .and_then(|key| strip_filename_affix(key, ".db", true, case_insensitive))
+                .is_some_and(|key| is_agent_file_key(key, case_insensitive))
     };
-    let is_indexed_database = |name: &str| {
-        strip_filename_affix(name, "epochs.db", false) == Some("")
-            || strip_filename_affix(name, ".db", true)
+    let is_indexed_database = |name: &str, case_insensitive: bool| {
+        strip_filename_affix(name, "epochs.db", false, case_insensitive) == Some("")
+            || strip_filename_affix(name, ".db", true, case_insensitive)
                 .and_then(|name| {
-                    strip_filename_affix(name, "durable-", false)
-                        .or_else(|| strip_filename_affix(name, "ephemeral-", false))
+                    strip_filename_affix(name, "durable-", false, case_insensitive).or_else(|| {
+                        strip_filename_affix(name, "ephemeral-", false, case_insensitive)
+                    })
                 })
                 .and_then(|name| {
-                    strip_filename_affix(name, "oplog-", false).or_else(|| {
-                        strip_filename_affix(name, "compressed-oplog-l", false)
-                            .or_else(|| strip_filename_affix(name, "blob-oplog-l", false))
+                    strip_filename_affix(name, "oplog-", false, case_insensitive).or_else(|| {
+                        strip_filename_affix(name, "compressed-oplog-l", false, case_insensitive)
+                            .or_else(|| {
+                                strip_filename_affix(name, "blob-oplog-l", false, case_insensitive)
+                            })
                             .and_then(|name| name.split_once('-'))
                             .and_then(|(level, key)| {
                                 level
@@ -506,7 +574,9 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
                 })
                 .is_some()
     };
-    let check_multi_sqlite = |root: &Path, selected: &dyn Fn(&str) -> bool| -> anyhow::Result<()> {
+    let check_multi_sqlite = |root: &Path,
+                              selected: &dyn Fn(&str, bool) -> bool|
+     -> anyhow::Result<()> {
         let filename = root.to_string_lossy();
         // These URI delimiters keep appended namespace names out of the database path.
         if filename.starts_with("file:")
@@ -523,21 +593,26 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
         } else {
             root.to_path_buf()
         };
+        #[cfg(target_os = "macos")]
+        let case_insensitive = case_insensitive(&resolve_path(&directory, 0)?)?;
+        #[cfg(not(target_os = "macos"))]
+        let case_insensitive = cfg!(windows);
         let check_name = |name: &std::ffi::OsStr| -> anyhow::Result<()> {
             if let Some(name) = name.to_str() {
                 let database = ["-wal", "-shm", "-journal"]
                     .into_iter()
-                    .find_map(|suffix| strip_filename_affix(name, suffix, true))
+                    .find_map(|suffix| strip_filename_affix(name, suffix, true, case_insensitive))
                     .unwrap_or(name);
-                if selected(database) {
+                if selected(database, case_insensitive) {
                     check_sqlite(&root.join(database).to_string_lossy())?;
                 }
             }
             Ok(())
         };
-        if let Some(name) = resolved_log.file_name() {
-            check_name(name)?;
-        }
+        resolved_log
+            .ancestors()
+            .filter_map(Path::file_name)
+            .try_for_each(check_name)?;
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -587,7 +662,9 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
     match &config.worker_executor.key_value_storage {
         KeyValueStorageConfig::Sqlite(sqlite) => check_sqlite(&sqlite.database)?,
         KeyValueStorageConfig::MultiSqlite(sqlite) => {
-            check_multi_sqlite(&sqlite.root_dir, &|name| is_key_value_database(name, true))?
+            check_multi_sqlite(&sqlite.root_dir, &|name, case_insensitive| {
+                is_key_value_database(name, true, case_insensitive)
+            })?
         }
         KeyValueStorageConfig::NamespaceRouted(routed) => {
             [(&routed.cache, false), (&routed.persistent, true)]
@@ -595,8 +672,8 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
                 .try_for_each(|(inner, persistent)| match inner {
                     KeyValueStorageInnerConfig::Sqlite(sqlite) => check_sqlite(&sqlite.database),
                     KeyValueStorageInnerConfig::MultiSqlite(sqlite) => {
-                        check_multi_sqlite(&sqlite.root_dir, &|name| {
-                            is_key_value_database(name, persistent)
+                        check_multi_sqlite(&sqlite.root_dir, &|name, case_insensitive| {
+                            is_key_value_database(name, persistent, case_insensitive)
                         })
                     }
                     _ => Ok(()),
@@ -625,7 +702,11 @@ fn prepare_server_log(config: &GolemServerConfig) -> anyhow::Result<()> {
             }
         }
         _ => Ok(()),
+    }?;
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).context("Failed to create the server log directory")?;
     }
+    Ok(())
 }
 
 impl CommandHandlerHooks for ServerCommandHandler {

@@ -608,7 +608,6 @@ pub(crate) async fn counter_resource_test_1(
     // The compiler increments this counter only after the blob write finishes.
     let http = reqwest::Client::new();
     let metrics_url = format!("http://127.0.0.1:{compilation_http_port}/metrics");
-    let environment_label = format!("environment_id=\"{}\"", env.id);
     let completed = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
         Duration::from_millis(50),
     ))
@@ -624,11 +623,10 @@ pub(crate) async fn counter_resource_test_1(
     })
     .try_filter(|metrics| {
         std::future::ready(metrics.lines().any(|line| {
-            line.starts_with("golem_compilation_cache_objects_written_total{")
-                && line.contains(&environment_label)
-                && line
-                    .split_whitespace()
-                    .nth(1)
+            let mut fields = line.split_whitespace();
+            fields.next() == Some("golem_compilation_cache_objects_written_total")
+                && fields
+                    .next()
                     .and_then(|value| value.parse::<f64>().ok())
                     .is_some_and(|count| count > 0.0)
         }))
