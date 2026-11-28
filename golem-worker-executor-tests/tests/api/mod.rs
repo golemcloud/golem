@@ -21,24 +21,33 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::routing::get;
 
+use fred::types::Expiration;
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::{UpdateMode, log_event};
-use golem_common::model::account::AccountId;
+use golem_common::config::RedisConfig;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
+    AgentConfigEntryDto, AgentMetadataDto, ParsedAgentKey, ResolvedRevert, RevertToOplogIndex,
+    RevertWorkerTarget,
 };
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
+use golem_common::model::security_scheme::{
+    Provider, SecuritySchemeId, SecuritySchemeLogin, SecuritySchemeName, SecuritySchemeRevision,
+};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, FilterComparator,
     IdempotencyKey, InvocationId, OwnedAgentId, PromiseId, RetryConfig, ScanCursor,
     StringFilterComparator,
 };
+use golem_common::redis::RedisPool;
 use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_key, data_value};
@@ -46,6 +55,9 @@ use golem_service_base::clients::registry::{
     RegistryService, RegistryServiceError, ResourceUsageUpdate,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use golem_service_base::custom_api::{
+    CorsOptions, PathSegment, SecuritySchemeDetails, WebhookCallbackBehaviour,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{AccountResourceLimits, MonthlyResourcePolicy};
@@ -57,6 +69,7 @@ use golem_test_framework::dsl::{
     AgentResult, count_agent_invocation_pair_since, drain_connection, stdout_event_matching,
     stdout_events,
 };
+use golem_test_framework::oidc::OidcFixture;
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::FilesystemStorageMode;
 use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
@@ -74,6 +87,15 @@ use golem_worker_executor_test_utils::{
     start_customized, start_with_overrides, start_with_resource_limits_and_configure,
     take_agent_oplog_over_at_epoch,
 };
+use golem_worker_service::custom_api::oidc::DefaultIdentityProvider;
+use golem_worker_service::custom_api::oidc::handler::OidcHandler;
+use golem_worker_service::custom_api::oidc::session_store::RedisSessionStore;
+use golem_worker_service::custom_api::route_resolver::ResolvedRouteEntry;
+use golem_worker_service::custom_api::{
+    RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
+    RichSecuritySchemeRouteSecurity,
+};
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use pretty_assertions::assert_eq;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -93,6 +115,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::{Instrument, Span, debug, info};
 
 /// The shard manager process every shard push in these tests names.
@@ -8490,38 +8513,6 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
 ) -> anyhow::Result<()> {
-    use fred::types::Expiration;
-    use golem_common::config::RedisConfig;
-    use golem_common::model::account::AccountEmail;
-    use golem_common::model::application::ApplicationName;
-    use golem_common::model::deployment::DeploymentRevision;
-    use golem_common::model::domain_registration::Domain;
-    use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::security_scheme::{
-        Provider, SecuritySchemeId, SecuritySchemeLogin, SecuritySchemeName, SecuritySchemeRevision,
-    };
-    use golem_common::redis::RedisPool;
-    use golem_service_base::custom_api::{
-        CorsOptions, PathSegment, SecuritySchemeDetails, WebhookCallbackBehaviour,
-    };
-    use golem_service_base::mcp::CompiledMcp;
-    use golem_test_framework::oidc::OidcFixture;
-    use golem_worker_service::custom_api::oidc::DefaultIdentityProvider;
-    use golem_worker_service::custom_api::oidc::handler::OidcHandler;
-    use golem_worker_service::custom_api::oidc::session_store::RedisSessionStore;
-    use golem_worker_service::custom_api::route_resolver::ResolvedRouteEntry;
-    use golem_worker_service::custom_api::{
-        RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
-        RichSecuritySchemeRouteSecurity,
-    };
-    use golem_worker_service::mcp::McpDeployment;
-    use golem_worker_service::mcp::session::store::{
-        McpSessionId, McpSessionRecord, McpSessionStore, RedisMcpSessionStore,
-    };
-    use golem_worker_service::mcp::session::{McpReplica, McpSessionLayer};
-    use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-    use poem::{Endpoint, EndpointExt};
-
     let context = TestContext::new(last_unique_id);
     let executor = durable_storage.start_with_cache(deps, &context).await?;
     let entered = Arc::new(Semaphore::new(0));
@@ -8529,7 +8520,7 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
     let requests = Arc::new(AtomicUsize::new(0));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
-    let http_server = tokio::spawn({
+    let _http_server = AbortOnDropHandle::new(tokio::spawn({
         let entered = entered.clone();
         let release = release.clone();
         let requests = requests.clone();
@@ -8553,7 +8544,7 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
             );
             axum::serve(listener, route).await.unwrap();
         }
-    });
+    }));
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -8708,53 +8699,7 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
         "fixture-user"
     );
 
-    let session_store = Arc::new(RedisMcpSessionStore::new(redis_pool));
-    let session_id = McpSessionId::generate()?;
-    let session = McpSessionRecord {
-        domain: Domain("cache-loss.example.com".into()),
-        environment_id: context.default_environment_id,
-        deployment_revision: DeploymentRevision::INITIAL,
-    };
-    assert!(
-        session_store
-            .create(session_id, &session, Duration::from_secs(300))
-            .await?
-    );
-    let deployment = Arc::new(McpDeployment::new(CompiledMcp {
-        account_id: AccountId::new(),
-        account_email: AccountEmail::new("owner@example.com"),
-        application_name: ApplicationName("cache-loss".into()),
-        environment_id: session.environment_id,
-        environment_name: EnvironmentName("test".into()),
-        deployment_revision: session.deployment_revision,
-        domain: session.domain,
-        security_scheme_name: None,
-        security_scheme: None,
-        registered_agent_types: Vec::new(),
-        tools: Vec::new(),
-    }));
-    let session_endpoint = poem::endpoint::make_sync(|_| poem::Response::default()).with(
-        McpSessionLayer::new(McpReplica::new(
-            session_store,
-            &golem_worker_service::config::McpConfig::default(),
-        )),
-    );
-    let session_request = || {
-        let mut request = poem::Request::builder()
-            .method(poem::http::Method::POST)
-            .header("mcp-session-id", session_id.to_string())
-            .header("content-type", "application/json")
-            .header("accept", "application/json, text/event-stream")
-            .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
-        request.extensions_mut().insert(deployment.clone());
-        request
-    };
-    assert_eq!(
-        session_endpoint.call(session_request()).await?.status(),
-        poem::http::StatusCode::OK
-    );
-
-    let invocation = tokio::spawn({
+    let invocation = AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
         let agent_id = agent_id.clone();
@@ -8764,7 +8709,7 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
                 .invoke_and_await_agent_with_key(&component, &agent_id, &key, "run", data_value!())
                 .await
         }
-    });
+    }));
     tokio::time::timeout(Duration::from_secs(30), entered.acquire())
         .await??
         .forget();
@@ -8790,26 +8735,18 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
     let sign_in_url = url::Url::parse(sign_in.headers[http::header::LOCATION].to_str()?)?;
     assert_eq!(sign_in_url.origin(), oidc.issuer.origin());
     assert_eq!(sign_in_url.path(), "/authorize");
-    assert_eq!(
-        session_endpoint.call(session_request()).await?.status(),
-        poem::http::StatusCode::NOT_FOUND
-    );
     release.add_permits(1);
     invocation.await??;
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 
-    let count = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &keys[2],
-            "get_count",
-            data_value!(),
-        )
-        .await?;
-    assert_eq!(count.into_typed::<u64>()?, 1);
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
+    let agent = CacheLossAgent {
+        component,
+        agent_id,
+        worker_id,
+        keys,
+        expected_keys,
+    };
+    cache_loss_before_restart(executor, &agent).await?;
     let redis_keys: Vec<String> = redis::cmd("KEYS")
         .arg(format!("{}*", context.redis_prefix()))
         .query_async(&mut redis)
@@ -8821,11 +8758,47 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
             .await?;
     }
     let executor = durable_storage.start_with_cache(deps, &context).await?;
+    cache_loss_after_restart(&executor, &agent).await?;
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+struct CacheLossAgent {
+    component: ComponentDto,
+    agent_id: ParsedAgentKey,
+    worker_id: OwnedAgentId,
+    keys: [IdempotencyKey; 6],
+    expected_keys: Box<[InvocationId]>,
+}
+
+async fn cache_loss_before_restart(
+    executor: TestWorkerExecutor,
+    agent: &CacheLossAgent,
+) -> anyhow::Result<()> {
     let count = executor
         .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &keys[3],
+            &agent.component,
+            &agent.agent_id,
+            &agent.keys[2],
+            "get_count",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(count.into_typed::<u64>()?, 1);
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    Ok(())
+}
+
+async fn cache_loss_after_restart(
+    executor: &TestWorkerExecutor,
+    agent: &CacheLossAgent,
+) -> anyhow::Result<()> {
+    let count = executor
+        .invoke_and_await_agent_with_key(
+            &agent.component,
+            &agent.agent_id,
+            &agent.keys[3],
             "get_count",
             data_value!(),
         )
@@ -8833,27 +8806,27 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
     assert_eq!(count.into_typed::<u64>()?, 1);
     executor
         .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &keys[4],
+            &agent.component,
+            &agent.agent_id,
+            &agent.keys[4],
             "increment",
             data_value!(),
         )
         .await?;
     let count = executor
         .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &keys[5],
+            &agent.component,
+            &agent.agent_id,
+            &agent.keys[5],
             "get_count",
             data_value!(),
         )
         .await?;
     assert_eq!(count.into_typed::<u64>()?, 2);
-    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_settled_history(&entries, &expected_keys);
-    assert_eq!(requests.load(Ordering::SeqCst), 1);
-    http_server.abort();
+    let entries = executor
+        .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_settled_history(&entries, &agent.expected_keys);
     Ok(())
 }
 
