@@ -873,12 +873,6 @@ impl TrustedInvocationReport {
                     revoked.details
                 )
             }
-            Some(invocation_response::Response::ObservationFailed(failed)) => {
-                anyhow::bail!(
-                    "trusted invocation attachment observation failed: {}",
-                    failed.message
-                )
-            }
             None => anyhow::bail!("trusted invocation returned an empty response frame"),
         }
         Ok(())

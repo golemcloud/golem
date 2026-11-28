@@ -162,10 +162,9 @@ pub(super) fn ends_only_the_attachment(error: &SessionError) -> bool {
 
 /// Ends the attachment on a failed durable session operation. Only a violation of the session
 /// protocol records a failed session terminal. A refused write and an oplog that does not read
-/// are failures of the shard or of the agent, not of the session: they record nothing, so the
-/// session result stays with the history. A refused write goes out as the worker error it is; an
-/// oplog that does not read for good goes out as an observation failure, which ends only the
-/// attachment.
+/// are failures of the shard or of the agent, not of the session: they go out as the worker error
+/// they are and record no session terminal and no invocation outcome, so the session result stays
+/// with the history. The attachment still writes its ordinary `Detached` record.
 pub(super) async fn end_attachment_on_failure(
     streams: &StreamSession,
     responses: &mpsc::Sender<InvocationResponse>,

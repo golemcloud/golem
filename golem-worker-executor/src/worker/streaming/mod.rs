@@ -1203,7 +1203,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let activate_foreign = if acceptance.replayed {
             match acceptance.streams.ensure_current_attachment().await {
                 Ok(()) => true,
-                Err(error @ (SessionError::Unreadable(_) | SessionError::Fenced(_))) => {
+                Err(error @ SessionError::Unreadable(_)) => {
                     return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
                 }
                 Err(_) => false,

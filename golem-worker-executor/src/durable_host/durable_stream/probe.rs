@@ -17,8 +17,11 @@ use crate::services::oplog::{OplogReadError, OplogReadSource};
 
 /// The stream error of a failed read of the metadata or the identity of `agent_id`. A read that
 /// failed for a time ([`InvocationObservationFailure::stored_read`]), also in the reason of a
-/// failed resume, stays unreadable until a later read passes. Any other error, also a read that
-/// failed for good or a recovery for another cause, is the text of the error.
+/// failed resume, stays unreadable until a later read passes. A read that failed for good is an
+/// unreadable oplog of the agent that the error names
+/// ([`crate::services::rpc::unreadable_history`]), so the session that read it is not failed as a
+/// protocol violation and records no outcome. Any other error, also a recovery for another cause,
+/// is the text of the error.
 fn agent_read_error(agent_id: &AgentId, error: WorkerExecutorError) -> StreamStoreError {
     use crate::worker::InvocationObservationFailure;
     match InvocationObservationFailure::stored_read(&error) {
@@ -31,13 +34,18 @@ fn agent_read_error(agent_id: &AgentId, error: WorkerExecutorError) -> StreamSto
                 ),
             ))
         }
-        _ => StreamStoreError::Oplog(error.to_string()),
+        _ => match crate::services::rpc::unreadable_history(&error, agent_id) {
+            Some(unreadable) if !unreadable.is_transient() => {
+                StreamStoreError::Unreadable(unreadable)
+            }
+            _ => StreamStoreError::Oplog(error.to_string()),
+        },
     }
 }
 
 /// Reads the stream session record of the entry at `index` in the oplog of `consumer`. A record
-/// that does not read for a time is an unreadable oplog of `consumer` at `index`. A record that
-/// does not read for good is the text of its read error, which names `consumer` and `index`.
+/// that does not read is an unreadable oplog of `consumer` at `index`, for a time or for good as
+/// its read error is.
 async fn consumer_record(
     oplog_service: &dyn OplogService,
     consumer: &OwnedAgentId,
@@ -49,17 +57,12 @@ async fn consumer_record(
         .download_payload(consumer, agent_mode, record)
         .await
         .map_err(|error| {
-            let unreadable = UnreadableOplog::of_payload(
+            StreamStoreError::Unreadable(UnreadableOplog::of_payload(
                 &consumer.agent_id,
                 "consumer journal record",
                 index,
                 error,
-            );
-            if unreadable.is_transient() {
-                StreamStoreError::Unreadable(unreadable)
-            } else {
-                StreamStoreError::Oplog(unreadable.to_string())
-            }
+            ))
         })
 }
 
@@ -781,9 +784,15 @@ mod read_error_tests {
             .await
             .expect_err("an undecodable record must fail the read");
 
-        let StreamStoreError::Oplog(text) = &error else {
-            panic!("a record that does not decode is no temporary read failure, got {error:?}");
+        let StreamStoreError::Unreadable(unreadable) = &error else {
+            panic!("a record that does not decode is an unreadable oplog, got {error:?}");
         };
+        assert_eq!(unreadable.agent_id, agent_id);
+        assert!(
+            !unreadable.is_transient(),
+            "a record that does not decode does not read for good"
+        );
+        let text = unreadable.to_string();
         assert!(text.contains(&agent_id.to_string()), "{text}");
         assert!(text.contains("at oplog index 6:"), "{text}");
         assert!(
@@ -793,20 +802,41 @@ mod read_error_tests {
     }
 
     #[test]
-    fn only_a_temporary_read_failure_of_an_agent_is_unreadable_in_the_stream_error() {
+    fn a_failed_read_of_an_agent_is_unreadable_in_the_stream_error() {
         let agent_id = crate::test_agent_id("probe-identity-unreadable");
-        let failed = agent_read_error(
-            &agent_id,
-            WorkerExecutorError::oplog_failed(
+        let other_agent = crate::test_agent_id("probe-identity-resumed");
+        for (error, named) in [
+            (
+                WorkerExecutorError::oplog_failed(
+                    agent_id,
+                    "failed to decode oplog entry 6: unknown serialization version: 255",
+                ),
                 agent_id,
-                "failed to decode oplog entry 6: unknown serialization version: 255",
             ),
-        );
-        assert!(
-            matches!(&failed, StreamStoreError::Oplog(details)
-                if details.contains("failed to decode oplog entry 6: unknown serialization version: 255")),
-            "{failed:?}"
-        );
+            (
+                WorkerExecutorError::failed_to_resume_worker(
+                    other_agent,
+                    WorkerExecutorError::oplog_failed(
+                        other_agent,
+                        "failed to decode oplog entry 6: unknown serialization version: 255",
+                    ),
+                ),
+                other_agent,
+            ),
+        ] {
+            let failed = agent_read_error(&agent_id, error);
+            let StreamStoreError::Unreadable(unreadable) = &failed else {
+                panic!("a read that failed for good is an unreadable oplog, got {failed:?}");
+            };
+            assert_eq!(unreadable.agent_id, named);
+            assert!(!unreadable.is_transient());
+            assert!(
+                unreadable
+                    .to_string()
+                    .contains("failed to decode oplog entry 6: unknown serialization version: 255"),
+                "{unreadable}"
+            );
+        }
 
         let temporary = agent_read_error(
             &agent_id,
