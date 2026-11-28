@@ -3872,8 +3872,7 @@ pub(super) fn parse_method_argument_schema_value(
 /// One page of `count` items across the agent types in `component_names`, in their order,
 /// under one budget. `scan(position, scan_cursor, limit)` lists the items of the type at
 /// `position` from `scan_cursor`, and gives the scan cursor of its next items. It asks for `limit`
-/// items, but a scan of a Redis indexed storage can list more, and the page keeps all of them, so
-/// `count` is a target there and a limit elsewhere.
+/// items.
 /// The page ends at the first scan that gives a scan cursor, or when `count` items are listed.
 /// The next cursor includes the unfinished type and every type not yet scanned.
 async fn read_page<T>(

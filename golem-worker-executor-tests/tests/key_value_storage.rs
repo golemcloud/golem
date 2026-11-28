@@ -69,54 +69,6 @@ async fn in_memory_storage(
     Arc::new(InMemoryKeyValueStorageWrapper)
 }
 
-struct RedisKeyValueStorageWrapper {
-    redis: Arc<dyn Redis + Send + Sync>,
-}
-
-impl Debug for RedisKeyValueStorageWrapper {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RedisKeyValueStorageWrapper")
-    }
-}
-
-#[async_trait]
-impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
-    async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
-        let random_prefix = Uuid::new_v4();
-        let redis_pool = RedisPool::configured(&RedisConfig {
-            host: self.redis.public_host(),
-            port: self.redis.public_port(),
-            database: 0,
-            tracing: false,
-            pool_size: 1,
-            retries: Default::default(),
-            key_prefix: random_prefix.to_string(),
-            username: None,
-            password: None,
-            tls: false,
-        })
-        .await
-        .unwrap();
-        let kvs = RedisKeyValueStorage::new(redis_pool);
-        Arc::new(kvs)
-    }
-
-    fn observes_expiry(&self) -> bool {
-        true
-    }
-}
-
-#[test_dep(scope = Shared, tagged_as = "redis")]
-async fn redis_storage(
-    deps: &WorkerExecutorTestDependencies,
-) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
-    let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
-    redis.assert_valid();
-    redis_monitor.assert_valid();
-    Arc::new(RedisKeyValueStorageWrapper { redis })
-}
-
 struct SqliteKeyValueStorageWrapper {
     tempdirs: Arc<Mutex<Vec<TempDir>>>,
 }
@@ -407,7 +359,7 @@ fn ns4() -> Namespaces {
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres", "namespace_routed");
+define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "sqlite", "multi_sqlite", "postgres", "namespace_routed");
 define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2", "ns3", "ns4");
 
 #[test]

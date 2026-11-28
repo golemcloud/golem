@@ -170,7 +170,7 @@ fn errors(entries: &[PublicOplogEntryWithIndex]) -> Vec<String> {
         .collect()
 }
 
-fn constructor_key(entries: &[PublicOplogEntryWithIndex]) -> InvocationId {
+pub(crate) fn constructor_key(entries: &[PublicOplogEntryWithIndex]) -> InvocationId {
     let keys: Vec<_> = entries
         .iter()
         .filter_map(|entry| match &entry.entry {
@@ -187,7 +187,10 @@ fn constructor_key(entries: &[PublicOplogEntryWithIndex]) -> InvocationId {
     keys.into_iter().next().unwrap()
 }
 
-fn assert_settled_history(entries: &[PublicOplogEntryWithIndex], expected: &[InvocationId]) {
+pub(crate) fn assert_settled_history(
+    entries: &[PublicOplogEntryWithIndex],
+    expected: &[InvocationId],
+) {
     let expected_keys: HashSet<_> = expected.iter().cloned().collect();
     assert_eq!(
         expected_keys.len(),

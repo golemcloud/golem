@@ -1694,10 +1694,10 @@ owner leaves by:
   reopened on this executor at the new epoch: by that recovery if it was in the running-workers
   index, otherwise by its next invocation. The recovery waits for a live lease.
 - **Oplog epoch fence.** A durable agent's primary oplog asserts the epoch it was opened at
-  whenever it appends or deletes entries, inside the storage transaction, on every indexed-storage backend (a Lua
-  script on Redis, `FOR UPDATE` on Postgres, the single-connection write pool on SQLite, a held
-  entry lock in memory; `storage/indexed/*.rs`, surfaced through `services/oplog/primary.rs`). The
-  shard manager mints a new, higher epoch for each new owner, including a restarted executor
+  whenever it appends or deletes entries. Each indexed-storage backend checks the epoch together
+  with the write. PostgreSQL uses `FOR UPDATE`, SQLite uses `BEGIN IMMEDIATE` write transactions,
+  and memory storage holds an entry lock. See `storage/indexed/` and `services/oplog/primary/`.
+  The shard manager mints a new, higher epoch for each new owner, including a restarted executor
   process at registration, so a write from an executor that has lost the shard is refused rather
   than written (`OplogError::Fenced` / `OplogFence`, carrying the asserted and, when known, the
   stored epoch). This protects an assignment change this executor has not yet heard about, and a
@@ -1747,8 +1747,7 @@ owner leaves by:
   includes a held index reported to a repeated attempt, since the attempt before it may have
   been sent. Such an append is checked against the manifest: if this attempt's entry landed, or
   another attempt listed a chunk holding the same entries, it counts as stored, and otherwise it
-  is a maintenance failure to retry. On Redis a manifest append is sent once, as a primary oplog
-  insert is, so that a lost reply is reported as a failure and not answered by a second run.
+  is a maintenance failure to retry. PostgreSQL and SQLite store oplogs and their epoch records. Redis holds only cache namespaces and cannot hold indexed storage or persistent key-value data. Cache loss does not remove agent state.
   Reads, lengths and scans go through the manifest, never a directory listing. A trim removes
   the manifest entries first and deletes their objects after, and never deletes the agent's
   directory, which is recursive and unfenced. An object no manifest lists is left behind by a

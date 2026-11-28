@@ -50,7 +50,6 @@ pub fn default_key_value_storage_retry() -> RetryConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum KeyValueStorageConfig {
-    Redis(RedisConfig),
     Postgres(KeyValueStoragePostgresConfig),
     NamespaceRouted(KeyValueStorageNamespaceRoutedConfig),
     Sqlite(DbSqliteConfig),
@@ -62,10 +61,6 @@ impl SafeDisplay for KeyValueStorageConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         match self {
-            KeyValueStorageConfig::Redis(inner) => {
-                let _ = writeln!(&mut result, "redis:");
-                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
-            }
             KeyValueStorageConfig::Postgres(inner) => {
                 let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
@@ -105,7 +100,7 @@ impl SafeDisplay for KeyValueStoragePostgresConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyValueStorageNamespaceRoutedConfig {
-    pub cache: KeyValueStorageInnerConfig,
+    pub cache: KeyValueStorageCacheConfig,
     pub persistent: KeyValueStorageInnerConfig,
 }
 
@@ -122,8 +117,24 @@ impl SafeDisplay for KeyValueStorageNamespaceRoutedConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum KeyValueStorageInnerConfig {
+pub enum KeyValueStorageCacheConfig {
     Redis(RedisConfig),
+    #[serde(untagged)]
+    Storage(KeyValueStorageInnerConfig),
+}
+
+impl SafeDisplay for KeyValueStorageCacheConfig {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::Redis(inner) => format!("redis:\n{}\n", inner.to_safe_string_indented()),
+            Self::Storage(inner) => inner.to_safe_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum KeyValueStorageInnerConfig {
     Postgres(KeyValueStoragePostgresConfig),
     Sqlite(DbSqliteConfig),
     MultiSqlite(KeyValueStorageMultiSqliteConfig),
@@ -134,10 +145,6 @@ impl SafeDisplay for KeyValueStorageInnerConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         match self {
-            KeyValueStorageInnerConfig::Redis(inner) => {
-                let _ = writeln!(&mut result, "redis:");
-                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
-            }
             KeyValueStorageInnerConfig::Postgres(inner) => {
                 let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
@@ -248,8 +255,6 @@ impl SafeDisplay for SchedulerStorageInMemoryConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum IndexedStorageConfig {
-    KVStoreRedis(IndexedStorageKVStoreRedisConfig),
-    Redis(RedisConfig),
     Postgres(IndexedStoragePostgresConfig),
     KVStoreSqlite(IndexedStorageKVStoreSqliteConfig),
     KVStoreMultiSqlite(IndexedStorageKVStoreMultiSqliteConfig),
@@ -262,14 +267,6 @@ impl SafeDisplay for IndexedStorageConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         match self {
-            IndexedStorageConfig::KVStoreRedis(inner) => {
-                let _ = writeln!(&mut result, "redis kv-store:");
-                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
-            }
-            IndexedStorageConfig::Redis(inner) => {
-                let _ = writeln!(&mut result, "redis:");
-                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
-            }
             IndexedStorageConfig::Postgres(inner) => {
                 let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
@@ -296,15 +293,6 @@ impl SafeDisplay for IndexedStorageConfig {
             }
         }
         result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IndexedStorageKVStoreRedisConfig {}
-
-impl SafeDisplay for IndexedStorageKVStoreRedisConfig {
-    fn to_safe_string(&self) -> String {
-        "".to_string()
     }
 }
 
@@ -402,13 +390,9 @@ impl Default for KeyValueStorageConfig {
 }
 
 impl KeyValueStorageConfig {
-    pub fn default_redis() -> Self {
-        Self::Redis(RedisConfig::default())
-    }
-
     pub fn default_namespace_routed() -> Self {
         Self::NamespaceRouted(KeyValueStorageNamespaceRoutedConfig {
-            cache: KeyValueStorageInnerConfig::Redis(RedisConfig::default()),
+            cache: KeyValueStorageCacheConfig::Redis(RedisConfig::default()),
             persistent: KeyValueStorageInnerConfig::Sqlite(DbSqliteConfig {
                 database: "../data/worker-executor-key-value-storage.db".to_string(),
                 max_connections: 10,

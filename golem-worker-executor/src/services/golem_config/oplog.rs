@@ -250,7 +250,7 @@ pub struct OplogSweepConfig {
     /// exceed this by up to `page_size`.
     pub max_archives_per_tick: usize,
     /// Keys one tick may scan, split across routes. A close bound rather than an exact one, since
-    /// Redis and the multi-file SQLite backend can return more keys than asked for.
+    /// the multi-file SQLite backend can return more keys than asked for.
     pub max_scanned_per_tick: usize,
     /// Wall-clock bound on one tick. The count budgets bound work; this bounds how long a tick
     /// holds the indexed-storage concurrency it shares with invocations, which matters when the

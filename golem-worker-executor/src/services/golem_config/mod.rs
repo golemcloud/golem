@@ -15,7 +15,7 @@
 use figment::Figment;
 use figment::providers::{Format, Toml};
 use golem_common::SafeDisplay;
-use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig};
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::tracing::TracingConfig;
@@ -70,8 +70,8 @@ pub use services::{
 mod storage;
 pub use storage::{
     IndexedStorageConfig, IndexedStorageInMemoryConfig, IndexedStorageKVStoreMultiSqliteConfig,
-    IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig,
-    IndexedStorageMultiSqliteConfig, IndexedStoragePostgresConfig, KeyValueStorageConfig,
+    IndexedStorageKVStoreSqliteConfig, IndexedStorageMultiSqliteConfig,
+    IndexedStoragePostgresConfig, KeyValueStorageCacheConfig, KeyValueStorageConfig,
     KeyValueStorageInMemoryConfig, KeyValueStorageInnerConfig, KeyValueStorageMultiSqliteConfig,
     KeyValueStorageNamespaceRoutedConfig, KeyValueStoragePostgresConfig, SchedulerStorageConfig,
     SchedulerStorageInMemoryConfig, SchedulerStoragePostgresConfig,
@@ -569,17 +569,6 @@ impl GolemConfig {
 impl HasConfigExamples<GolemConfig> for GolemConfig {
     fn examples() -> Vec<ConfigExample<GolemConfig>> {
         vec![
-            (
-                "with redis indexed_storage and s3 blob storage",
-                Self {
-                    key_value_storage: KeyValueStorageConfig::InMemory(
-                        KeyValueStorageInMemoryConfig {},
-                    ),
-                    indexed_storage: IndexedStorageConfig::Redis(RedisConfig::default()),
-                    blob_storage: BlobStorageConfig::default_s3(),
-                    ..Self::default()
-                },
-            ),
             (
                 "with dual-stack listeners and an advertised executor address",
                 Self {

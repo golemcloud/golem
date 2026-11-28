@@ -12,7 +12,7 @@ Golem Services are distributed as Docker images. They are available in [Golem Se
 The services are using the following storage backends:
 
 - Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (for running locally)
-- [Redis](https://redis.io/) - optional, for the worker executor's storage or the worker service's sessions
+- [Redis](https://redis.io/) - optional, for the worker executor's cache or the worker service's sessions
 - Blob storage - Shared File System or S3
 - [etcd](https://etcd.io/) - optional, only for the shard manager's distributed mode
 
@@ -91,7 +91,7 @@ A replica keeps a running tool call and its response stream in its own memory, o
 
 ### Worker Executor
 
-[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](/next/concepts/agents) that belong to assigned shards. The service keeps each agent's oplog in **indexed storage** - PostgreSQL, SQLite or Redis - and uses key-value and blob storage alongside it.
+[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](/next/concepts/agents) that belong to assigned shards. The service keeps each agent's oplog in **indexed storage**, PostgreSQL or SQLite, and uses key-value and blob storage alongside it. Redis holds only cache data, not agent state or oplogs.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-executor)
 

@@ -20,9 +20,11 @@ Currently Golem provides the following implementations, configurable through the
 | Storage type | Implementations |
 | --- | --- |
 | Blob storage | S3, file system, SQLite, in-memory |
-| Key-value storage | Redis, PostgreSQL, SQLite, multi-SQLite, namespace-routed, in-memory |
-| Indexed storage | Redis, PostgreSQL, SQLite, multi-SQLite, in-memory |
+| Key-value storage | PostgreSQL, SQLite, multi-SQLite, namespace-routed, in-memory |
+| Indexed storage | PostgreSQL, SQLite, multi-SQLite, in-memory |
 | Scheduler storage | PostgreSQL, SQLite, in-memory |
+
+Redis is available only as the cache of namespace-routed key-value storage. The executor rebuilds its cache from the oplog after cache loss. Redis cannot hold oplogs, persistent key-value data or indexed storage. Losing Redis also ends worker-service sessions that use Redis, but does not remove agent state.
 
 ## Blob storage on S3
 
