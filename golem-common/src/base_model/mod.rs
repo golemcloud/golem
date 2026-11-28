@@ -13,6 +13,8 @@
 // limitations under the License.
 
 pub mod account;
+#[cfg(test)]
+mod account_conversion_tests;
 pub mod account_path;
 pub mod account_usage;
 pub mod address_class;
