@@ -18,7 +18,7 @@ use crate::dsl::invocation_session::{InvocationSession, InvocationStartBuilder};
 use crate::dsl::{
     AgentResult, EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream,
     build_ifs_archive, default_agent_initial_permissions_without_card_grants,
-    default_agent_type_provision_config_creation_for_account,
+    default_agent_type_provision_config_creation_for_account, deployment_from_plan,
 };
 use crate::model::IFSEntry;
 use anyhow::{Context, anyhow};
@@ -58,7 +58,7 @@ use golem_common::model::component::{
     ToolProvisionConfigUpdate,
 };
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
+use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
@@ -1218,23 +1218,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             .get_environment_deployment_plan(&environment_id.0)
             .await?;
 
-        let mut deployment_creation = DeploymentCreation {
-            current_revision: plan.current_revision,
-            expected_deployment_hash: plan.deployment_hash,
-            version: DeploymentVersion(Uuid::new_v4().to_string()),
-            publish_tools: Vec::new(),
-            remote_tools: Vec::new(),
-            mcp_imports: Vec::new(),
-            publish_tool_middlewares: Vec::new(),
-            remote_tool_middlewares: Vec::new(),
-            universal_tool_middlewares: Vec::new(),
-            environment_tool_middleware_bindings: Default::default(),
-            agent_tool_middleware_bindings: Default::default(),
-            agent_secret_defaults: Vec::new(),
-            quota_resource_defaults: Vec::new(),
-            retry_policy_defaults: Vec::new(),
-            replace_incompatible_agent_secrets: false,
-        };
+        let mut deployment_creation = deployment_from_plan(&plan, &Uuid::new_v4().to_string());
 
         modify_deployment(&mut deployment_creation);
 

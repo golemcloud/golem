@@ -49,7 +49,9 @@ use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget, UpdateRecord,
 };
-use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};
+use golem_common::model::deployment::{
+    CurrentDeployment, DeploymentCreation, DeploymentPlan, DeploymentRevision, DeploymentVersion,
+};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -91,6 +93,30 @@ pub struct PrecompiledComponent {
     pub wasm_name: String,
     /// The WIT package name used as the component name (passed to `.name()`)
     pub package_name: String,
+}
+
+/// A deployment of the environment that `plan` describes, at the plan's current revision and
+/// with its hash, under `version`. It sets no secret, quota or retry defaults, no tools, no MCP
+/// imports and no tool middlewares. Set those with struct-update syntax:
+/// `DeploymentCreation { publish_tools, ..deployment_from_plan(&plan, "1.0.0") }`.
+pub fn deployment_from_plan(plan: &DeploymentPlan, version: &str) -> DeploymentCreation {
+    DeploymentCreation {
+        current_revision: plan.current_revision,
+        expected_deployment_hash: plan.deployment_hash,
+        version: DeploymentVersion(version.to_string()),
+        agent_secret_defaults: Vec::new(),
+        quota_resource_defaults: Vec::new(),
+        retry_policy_defaults: Vec::new(),
+        publish_tools: Vec::new(),
+        remote_tools: Vec::new(),
+        mcp_imports: Vec::new(),
+        publish_tool_middlewares: Vec::new(),
+        remote_tool_middlewares: Vec::new(),
+        universal_tool_middlewares: Vec::new(),
+        environment_tool_middleware_bindings: Default::default(),
+        agent_tool_middleware_bindings: Default::default(),
+        replace_incompatible_agent_secrets: false,
+    }
 }
 
 /// Default permissions for tests that predate host-call enforcement and exercise host APIs.
