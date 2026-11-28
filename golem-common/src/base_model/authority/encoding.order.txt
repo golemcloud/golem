@@ -1,0 +1,155 @@
+# The order of the binary encoding: the position of each class, of each verb in its class, and of
+# each catalog operation. A test checks that the current lists start with these lists, so a
+# recorded entry never moves, goes or changes its name. GOLEM_UPDATE_GOLDEN never rewrites this
+# file: after you add an entry at the end of a list in the code, add it at the end of the same
+# list here by hand.
+
+[classes and their verbs]
+filesystem: read write list stat delete mount
+network: connect prove-identity
+oplog: read
+secret: hold reveal view create update delete
+principal-secret: hold reveal update
+agent: create invoke exec view delete interrupt resume update-revision fork revert activate-processor deactivate-processor simulate-crash limit replay close-webhook
+tool: invoke view limit interrupt resume close-webhook
+invocation: read cancel send
+promise: send
+webhook: send
+artifact: read unpublish view
+quota: reserve view create update delete restore
+kv: read write delete list
+blob: read write delete list
+rdbms: query mutate unanalyzed
+card: install revoke inspect
+plan: view create update
+account: view view-plan update delete set-plan create configure-sign-in view-account-counts-report view-account-summaries-report create-api-tokens view-api-tokens revoke-api-tokens set-override-expiry set-spend-mode limit view-installation
+account-usage: view update
+account.permission-share: view create update delete
+account.domain-registration: view create delete
+application: view create update delete assert-identity
+environment: view create update delete deploy rollback view-deployment view-deployment-plan view-agent-types view-tools write-deployment-record
+environment.domain-registration: view create delete
+environment.initial-files: view update delete list
+environment.kv-bucket: view create delete clear
+environment.blob-bucket: view create delete clear
+component: view create update delete
+package: publish read de-publish restore deprecate attach-card
+domain: publish
+protocol: publish
+
+[operations]
+create-agent
+invoke-agent
+invoke-tool
+hosted-exec
+retry-agent-invocation
+retry-tool-invocation
+read-invocation
+cancel-invocation
+send-invocation-input
+list-invocations
+read-task
+cancel-task
+send-task-input
+read-stream
+append-stream
+send-to-promise
+send-to-webhook
+read-artifact
+read-tool-files
+view-agent
+read-agent-oplog
+read-tool-invocation-oplog
+list-agents
+delete-agent
+interrupt-agent
+resume-agent
+update-agent-revision
+fork-agent
+revert-agent
+activate-processor
+deactivate-processor
+simulate-crash
+replay-agent
+interrupt-tool-invocation
+resume-tool-invocation
+list-agent-webhooks
+list-tool-webhooks
+close-agent-webhook
+close-tool-webhook
+limit-agent
+limit-tool
+limit-account
+add-volume
+remove-volume
+list-files
+read-file
+read-live-file
+unpublish-artifact
+list-artifacts
+filesystem-read
+filesystem-write
+filesystem-list
+filesystem-stat
+filesystem-delete
+network-connect
+prove-identity
+hold-secret
+reveal-secret
+hold-principal-secret
+reveal-principal-secret
+reserve-quota
+kv-read
+kv-write
+kv-delete
+kv-list
+blob-read
+blob-write
+blob-delete
+blob-list
+rdbms-query
+rdbms-mutate
+rdbms-unanalyzed
+view-secret
+create-secret
+update-secret
+delete-secret
+update-principal-secret
+create-account
+update-account
+configure-sign-in
+view-account-counts-report
+view-account-summaries-report
+create-api-tokens
+list-api-tokens
+view-api-token
+revoke-api-token
+set-override-expiry
+set-spend-mode
+view-installation
+create-application
+create-environment
+deploy-environment
+register-host
+register-wildcard-domain
+list-wildcard-domains
+delete-wildcard-domain
+publish-domain
+publish-protocol
+publish-package
+read-package
+de-publish-package
+restore-package
+deprecate-package
+attach-package-card
+install-card
+revoke-card
+inspect-card
+list-card-tokens
+upsert-agent
+send-tool-input
+send-hosted-exec-input
+inspect-agent-config
+inspect-agent-env-vars
+inspect-tool-config
+inspect-tool-env-vars

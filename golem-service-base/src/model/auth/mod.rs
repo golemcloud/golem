@@ -15,12 +15,14 @@
 #[cfg(test)]
 mod tests;
 
+use async_trait::async_trait;
 use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::base_model::api::error_code::AUTH_UNAUTHORIZED;
 use golem_common::base_model::error::ErrorBody;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::authority::{AuthorizationRequest, Decision, Scope, Target};
 use golem_common::model::card::{
     CardAlgebraError, DelegationSurface, EffectiveSurface, PermissionTarget,
 };
@@ -237,6 +239,24 @@ pub enum AuthCtx {
     User(UserAuthCtx),
     Agent(AgentAuthCtx),
     AdminImpersonation(AdminImpersonationAuthCtx),
+}
+
+/// The one decision call. Every entry point and every host function asks it before any effect,
+/// and turns a denial into a response only with the renderer of its surface.
+#[async_trait]
+pub trait Authorizer: Send + Sync {
+    /// Allows the operation only when every part is allowed. A denial is the denial of the first
+    /// part that fails, in the catalog's order. An error inside the evaluation denies; it never
+    /// allows.
+    async fn decide(&self, request: &AuthorizationRequest) -> Decision;
+
+    /// Keeps the targets that the request may see and drops the rest silently. The request's
+    /// operation has one part, and each target is decided in that part's place.
+    async fn filter(&self, request: &AuthorizationRequest, targets: Vec<Target>) -> Vec<Target>;
+
+    /// Before a listing: the owners that the request's class and verb grants cover. It may be
+    /// wider than the final answer, never narrower; `filter` decides each row.
+    async fn scope(&self, request: &AuthorizationRequest) -> Scope;
 }
 
 // Note: Basic visibility of resources is enforced in the repo. Use this to check permissions to modify resource / access restricted resources.
