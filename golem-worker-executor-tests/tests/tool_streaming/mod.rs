@@ -8616,6 +8616,350 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
     Ok(())
 }
 
+// `exit(CODE)` in a tool body that returns `ProcessExitStatus` ends that call as a process exit
+// does: CODE is its status, its stdout and stderr are complete, and the owner stays healthy. This
+// holds also when the body finished and dropped its writers before the exit. A durable call still
+// pending at the exit is cancelled before the body's terminal, as for a trapped body.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn tool_body_exit_becomes_its_process_exit_status(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let worker_id = executor
+        .start_agent(
+            &caller_component.id,
+            agent_key!("ToolStreamingCaller", "tool-exit"),
+        )
+        .await?;
+
+    let tool_terminals = |oplog: &[PublicOplogEntryWithIndex]| {
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) => params.response.as_ref(),
+                _ => None,
+            })
+            .filter_map(|response| {
+                SerializableToolOperationTerminal::from_value(response.value()).ok()
+            })
+            .collect::<Vec<_>>()
+    };
+    let errors = |oplog: &[PublicOplogEntryWithIndex]| {
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+            .count()
+    };
+
+    let exited = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["3", "out-3", "err-3"],
+    )
+    .await?;
+    assert_eq!(exited.exit_code, 3, "{exited:?}");
+    assert_eq!(exited.stdout, b"out-3");
+    assert_eq!(exited.stderr, b"err-3");
+    let succeeded = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["0", "out-0", ""],
+    )
+    .await?;
+    assert_eq!(succeeded.exit_code, 0, "{succeeded:?}");
+    assert_eq!(succeeded.stdout, b"out-0");
+    assert!(succeeded.stderr.is_empty());
+    let closed = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["3", "out-c", "err-c", "close"],
+    )
+    .await?;
+    assert_eq!(closed.exit_code, 3, "{closed:?}");
+    assert_eq!(closed.stdout, b"out-c");
+    assert_eq!(closed.stderr, b"err-c");
+    let pending = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["6", "out-p", "err-p", "pending"],
+    )
+    .await?;
+    assert_eq!(pending.exit_code, 6, "{pending:?}");
+    assert_eq!(pending.stdout, b"out-p");
+    assert_eq!(pending.stderr, b"err-p");
+
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let terminals = tool_terminals(&before);
+    assert_eq!(terminals.len(), 4, "{before:#?}");
+    let wait = before
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "clocks::monotonic-clock::wait-for"
+                    && params
+                        .request
+                        .as_ref()
+                        .is_some_and(|request| format!("{request:?}").contains("60000000000")) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the pending sleep has a Start");
+    let wait_terminals_of = |oplog: &[PublicOplogEntryWithIndex]| {
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Cancelled(params) if params.start_index == wait => {
+                    Some((entry.oplog_index, "Cancelled"))
+                }
+                PublicOplogEntry::End(params) if params.start_index == wait => {
+                    Some((entry.oplog_index, "End"))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let wait_terminals = wait_terminals_of(&before);
+    let body_end = before
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params)
+                if params.response.as_ref().is_some_and(|response| {
+                    SerializableToolOperationTerminal::from_value(response.value()).is_ok()
+                }) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the pending exit has a terminal");
+    assert!(
+        matches!(wait_terminals.as_slice(), [(index, "Cancelled")] if *index < body_end),
+        "the pending sleep must be cancelled before the body terminal at {body_end}: {wait_terminals:?}\n{before:#?}"
+    );
+    for terminal in &terminals {
+        assert_eq!(
+            terminal.body_execution,
+            SerializableEntityBodyExecution::Executed
+        );
+        assert!(terminal.result.is_ok(), "{terminal:?}");
+    }
+    assert_eq!(errors(&before), 0, "{before:#?}");
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let after_restart = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["5", "out-5", "err-5"],
+    )
+    .await?;
+    assert_eq!(after_restart.exit_code, 5, "{after_restart:?}");
+    assert_eq!(after_restart.stdout, b"out-5");
+    assert_eq!(after_restart.stderr, b"err-5");
+
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let replayed = tool_terminals(&after);
+    assert_eq!(
+        replayed.len(),
+        5,
+        "replay must not append duplicate terminals"
+    );
+    assert_eq!(&replayed[..4], terminals.as_slice());
+    assert_eq!(errors(&after), 0, "{after:#?}");
+    assert_eq!(
+        wait_terminals_of(&after),
+        wait_terminals,
+        "replay must not add terminals for the pending sleep"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn typed_middleware_exit_keeps_lifecycle_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        &agent_type.0,
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    let definition = metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "middleware-process-exit")
+        .unwrap();
+    assert!(matches!(
+        definition.scope,
+        ToolMiddlewareScope::Monomorphic(_)
+    ));
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &ToolName::try_from("process-exit").unwrap(),
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        &metadata.tool_middlewares,
+        vec![(
+            definition.name.as_str(),
+            empty_middleware_parameters(definition),
+        )],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let worker_id = executor
+        .start_agent(
+            &caller_component.id,
+            agent_key!("ToolStreamingCaller", "middleware-exit"),
+        )
+        .await?;
+
+    let failure = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "middleware-exit",
+        "process-exit",
+        "/",
+        vec!["4", "out-4", "err-4"],
+    )
+    .await
+    .expect_err("an exit in middleware must not become a process exit status");
+    assert!(
+        failure.to_string().contains("Process exited"),
+        "{failure:?}"
+    );
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Exited
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let returned_statuses = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) => params.response.as_ref(),
+            _ => None,
+        })
+        .filter_map(|response| SerializableToolOperationTerminal::from_value(response.value()).ok())
+        .filter(|terminal| terminal.result.is_ok())
+        .count();
+    assert_eq!(returned_statuses, 0, "{oplog:#?}");
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]

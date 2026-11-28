@@ -443,6 +443,10 @@ impl AttachmentController {
         WeakAttachmentController(Arc::downgrade(&self.attachment))
     }
 
+    pub(crate) fn producer_active(&self) -> bool {
+        self.attachment.state.lock().unwrap().producer_active
+    }
+
     pub(crate) fn has_open_endpoints(&self) -> bool {
         let state = self.attachment.state.lock().unwrap();
         state.producer_active || state.consumer_active || state.guest_watchers != 0
