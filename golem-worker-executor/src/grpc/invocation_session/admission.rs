@@ -109,7 +109,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     worker
                         .deleted_incarnation_as_not_found(expected_fingerprint, bound)
                         .await?;
-                    match worker.lookup_invocation_result(&ik).await {
+                    match worker.lookup_invocation_result(&ik).await? {
                         crate::model::LookupResult::Complete(Ok(mut output)) => {
                             publish_acceptance(
                                 acceptance_committed,
@@ -235,7 +235,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 let observable =
                                     match worker.try_lookup_invocation_result(&ik).await {
                                         Ok(crate::model::LookupResult::Complete(Ok(_))) => true,
-                                        Ok(crate::model::LookupResult::New) | Err(_) => false,
+                                        Ok(crate::model::LookupResult::New)
+                                        | Err(WorkerExecutorError::Runtime { .. }) => false,
+                                        Err(lookup_error) => {
+                                            return worker
+                                                .deleted_incarnation_as_not_found(
+                                                    expected_fingerprint,
+                                                    Err(lookup_error),
+                                                )
+                                                .await;
+                                        }
                                         Ok(_) => request.origin_invocation.is_some(),
                                     };
                                 if !observable {
@@ -285,29 +294,61 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     );
                     if worker.prepared_stream_session(&ik).await?.is_none()
-                        && let Some(attached) = worker
-                        .stream_session_records(&key, None)
-                        .await?
-                        .into_iter()
-                        .find_map(|record| {
-                            if let golem_common::model::durable_stream::StreamSessionRecord::Attached(record) = record { Some(record) } else { None }
-                        })
+                        && let Some((index, attached)) =
+                            worker.retained_stream_attachment(&key).await?
                     {
-                        let requested = super::request::capture_session_acceptance(request,
-                            self.services.config().limits.live_stream_event_broadcast_capacity.get())?;
-                        let original = worker.accepted_invocation_payload(&ik).await?
-                            .ok_or_else(|| WorkerExecutorError::runtime("stream attachment has no retained request"))?;
-                        if !crate::worker::same_origin_queued_request(&original, &invocation.clone().into_parts().1, &attached.acceptance, &requested) {
-                            return Err(WorkerExecutorError::invalid_request("IdempotencyConflict: queued observer differs from the retained origin request"));
+                        let requested = super::request::capture_session_acceptance(
+                            request,
+                            self.services
+                                .config()
+                                .limits
+                                .live_stream_event_broadcast_capacity
+                                .get(),
+                        )?;
+                        let original =
+                            worker
+                                .accepted_invocation_payload(&ik)
+                                .await?
+                                .ok_or_else(|| {
+                                    WorkerExecutorError::runtime(
+                                        "stream attachment has no retained request",
+                                    )
+                                })?;
+                        if !crate::worker::same_origin_queued_request(
+                            &original,
+                            &invocation.clone().into_parts().1,
+                            &attached.acceptance,
+                            &requested,
+                        )
+                        .map_err(|error| worker.stream_origin_read_error(index, error))?
+                        {
+                            return Err(WorkerExecutorError::invalid_request(
+                                "IdempotencyConflict: queued observer differs from the retained origin request",
+                            ));
                         }
-                        let streams = worker.queued_method_session(ik, attached.epoch, attached.attempt_id).await?;
+                        let streams = worker
+                            .queued_method_session(ik, attached.epoch, attached.attempt_id)
+                            .await?;
                         let _ = acceptance_committed.send(());
-                        accepted.send(AcceptedInvocation {
-                            agent_id: final_agent_id, idempotency_key: ik,
-                            component_revision: None, durable_streams: Some(streams), prepared: None,
-                            durable_replayed: true, joined_origin_observer: true,
-                            queued: Some((attached, Box::pin(worker.clone().wait_method_session_ready(ik)))),
-                        }).map_err(|_| WorkerExecutorError::runtime("invocation session ended before observer acceptance"))?;
+                        accepted
+                            .send(AcceptedInvocation {
+                                agent_id: final_agent_id,
+                                idempotency_key: ik,
+                                component_revision: None,
+                                durable_streams: Some(streams),
+                                prepared: None,
+                                durable_replayed: true,
+                                joined_origin_observer: true,
+                                queued: Some((
+                                    attached,
+                                    Box::pin(worker.clone().wait_method_session_ready(ik)),
+                                )),
+                            })
+                            .map_err(|_| {
+                                WorkerExecutorError::runtime(
+                                    "invocation session ended before observer acceptance",
+                                )
+                            })?;
                         let mut output = worker.await_enqueued_invocation(ik).await?;
                         output.agent_id = Some(final_agent_id);
                         output.idempotency_key = Some(ik);
@@ -447,12 +488,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             Some(result)
                         },
                     };
-                    let retained = worker.stream_session_records(&session_key, None).await?
-                        .into_iter().find_map(|record| if let golem_common::model::durable_stream::StreamSessionRecord::Attached(record) = record { Some(record) } else { None });
-                    let (streams, queued) = if let Some(retained) = retained {
-                        if retained.acceptance != attached.acceptance
-                            || retained.attempt_id != attempt_id
-                        {
+                    let retained = worker.retained_stream_attachment(&session_key).await?;
+                    let (streams, queued) = if let Some((index, retained)) = retained {
+                        if !worker.retained_attachment_matches(
+                            index,
+                            &retained,
+                            &attached.acceptance,
+                            attempt_id,
+                        )? {
                             return Err(WorkerExecutorError::invalid_request(
                                 "AttemptConflict: retained stream acceptance differs",
                             ));

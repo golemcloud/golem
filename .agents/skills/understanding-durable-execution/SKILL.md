@@ -242,11 +242,11 @@ executor took over, and no record at all refuses too. An append only buffers, so
 `commit_oplog_and_update_state` and `add_and_commit_oplog` surface the refusal rather than
 swallowing it, so a refused `PendingAgentInvocation` commit is not acknowledged as accepted and a
 refused `AgentInvocationFinished` commit is not published to waiters. The first refusal latches:
-every later add or commit on that handle is refused locally, without reaching storage, and the
-agent is retired for its lost shard instead of retried. The refusal travels as a typed error
-(`OplogError::Fenced`, `StreamStoreError::Fenced`, `SessionError::Fenced`,
-`WorkerExecutorError::OplogFenced`) to whoever acts on it; nothing re-reads the latch to
-reinterpret a failure that already happened.
+every later add, commit and flush on that handle is refused locally, without reaching storage, a
+later prefix drop does nothing, and the agent is retired for its lost shard instead of retried.
+The refusal travels as a typed error (`OplogError::Fenced`, `StreamStoreError::Fenced`,
+`SessionError::Fenced`, `WorkerExecutorError::OplogFenced`) to whoever acts on it; nothing
+re-reads the latch to reinterpret a failure that already happened.
 
 The shared direct and accessor durable-call start paths commit `WriteRemote` with
 `CommitLevel::DurableOnly` after appending the actual `Start` and before returning the session
@@ -264,7 +264,24 @@ which writes only through the compressed archive levels. The blob archive layer 
 through its manifest in indexed storage, since blob storage has no conditional write. One write
 stays outside the fence: blob uploads of large payloads.
 
-`worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
+A primary oplog read returns a decode error as `UnreadableOplog`, as an archive read does. A missing, unknown or unsupported codec version never means that an entry is absent. The diagnostic gives the agent ID, the entry index and the decode cause. It does not show the payload. A permanent failure of the agent's own history becomes `OplogFailed`. It fails only the agent of the oplog: the agent records its `Recovery` error and gets the `Failed` status. The stored entries stay as they are. A permanent failure of another agent's history is the error of the call that made the read. A temporary storage failure becomes `RecoveryRequired` with the cause `OplogReadUnavailable`. It adds no entry, and the agent tries again later. `OplogReadError::is_transient()` is the only rule that separates the two kinds. This is also true during stream-index lineage discovery and scratch refolding. A suffix payload read failure returns typed `UnreadableOplog` instead of triggering full lineage discovery. When a commit report cannot read its missing prefix, it keeps the report watermark and clears the retained batches. The next report reads the whole unreported range, including the explicit commit. When a stream-index cache row does not decode, the reader rebuilds it from the oplog. When another writer wins the publication, the reader takes another snapshot and repairs it if necessary. Status reconstruction discards a cached baseline whose processor delivery snapshot does not decode. An unreadable delivery snapshot in retained oplog history gives `UnreadableOplog` with the index of its checkpoint.
+
+A commit report can fail after storage or ordered writer handoff succeeded. Then the status actor answers the receipt as committed and returns `Unreadable` to the full transaction. Before it returns, it detaches the status and waits until the flusher invalidates its baseline. Admission repairs that status before it checks a key, so a retry cannot append a second `PendingAgentInvocation` for stored work that the failed report did not include. `Fenced` and `ArchiveWrite` refuse the receipt.
+
+On the durable primary oplog, `ReportOnly` reports the earlier commits and does not store the buffered tail. On an ephemeral oplog it returns an empty report.
+
+`AppendInvocationIfVersion` keeps a refusal before storage apart from
+`InvocationAppendOutcome::Appended(StoredAppend::Unreported)`, which follows the append and
+commit of the job itself. After it releases its guards, the immediate admission owner requests a
+normal startup for the stored work and reports the read error. A scheduled admission registers
+the wake at the stored deadline instead. Scheduled delivery repairs a detached status before it
+decides whether the key is still pending. If the repair fails, the wake stays retryable.
+
+Lazy hydration of a `Finished` result keeps a backend error apart from a corrupt payload, names the requested agent and the terminal index, and leaves the result lazy when it fails. Revert preflight computes its deletion mask before it hydrates retained payloads, including processor delivery snapshots. A corrupt nested delivery in the deleted suffix does not reject a warm revert, but corruption in retained history does. An unreadable outer entry can fail the revert before preflight has a decoded history.
+
+An older invocation result can need the persisted result index to catch up from the oplog. A permanent read failure returns `OplogFailed`. A temporary failure, or an index that is still unavailable, returns `RecoveryRequired`. These are lookup errors, not a recorded failure of the invocation. The invocation loop takes the recovery path of the agent and does not withdraw the queued key as a duplicate. A temporary failure adds no entry. A permanent failure records the `Recovery` error that fails the agent. Cancellation reports the read error and does not answer that the invocation completed. A stream observer reports the error and records no session terminal. An unreadable attachment authority does not prove a revocation. An unreadable execution configuration in a retained attachment or preparation reports its oplog index and version, not an idempotency conflict. Stream maintenance leaves an unreadable session unfinished; a failed read of a local session ends that maintenance pass, and later sessions wait for the next pass. A temporary read failure requests another maintenance pass.
+
+`worker/state_actor/mod.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
 threshold flushes and replica waits commit outside an explicit commit. After such a commit the
 primary oplog calls its auto-commit listener (`Oplog::set_auto_commit_listener`, held weakly),
@@ -1384,11 +1401,20 @@ retries, fails the open, and the open-oplog cache keeps nothing. The open fails 
 rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
 `UnreadableOplog` up to the boundary, where it becomes `OplogFailed` or `RecoveryRequired` by its
 kind. An invocation session attachment records a failed session terminal (`fail_protocol`) only
-for a violation of the session protocol (`grpc/invocation_session/mod.rs::end_attachment_on_failure`).
+for a violation of the session protocol (`grpc/invocation_session/attachment.rs::end_attachment_on_failure`).
 When a read of the session history meets storage that did not answer (including a stream payload
 download), the attachment ends without a terminal frame, and the client reattaches from its
-durable cursors. A fence or an oplog that failed for good goes out as its worker error and
-records nothing. An ephemeral oplog whose writer task cannot store a batch in the first
+durable cursors. A fence or an oplog that failed for good goes out as its worker error. On this
+executor path it records no session terminal and no invocation outcome, and cancels no input;
+the transport attempts its ordinary `Detached` record only while its cleanup authority is held. In
+the active phase the response validator accepts a completion only after every stream terminal and
+with no pending input acknowledgement (a queued acceptance and a joined observer have their own
+rules); before the first decision of a resume it accepts only an acceptance or a rejection, so the
+executor sends a rejection with the worker error where it can, and a completion there is dropped.
+Where the completion is not legal, the client sees only the end of the attachment, not the error:
+the current protocol has no frame for it. These guarantees cover the executor path only. An HTTP
+session reattaches a bounded number of times; what it does when that budget runs out, such as its
+cleanup, is downstream of this path. An ephemeral oplog whose writer task cannot store a batch in the first
 archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
 refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
 (`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write
@@ -1417,7 +1443,9 @@ even the empty status baseline are corrupt history; they do not mean the worker 
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded
 yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
-fail those keys. For a key that it fails, it caches the typed agent error and stderr of an
+fail those keys. For a stored read that failed for a time, also as the reason of a failed resume,
+it tells the waiters and caches no result for their pending work. For any other key that it
+fails, an oplog that failed for good included, it caches the typed agent error and stderr of an
 `InvocationFailed` (any other error as `AgentError::Unknown`), so a later lookup of the key returns
 the same error as its waiters. When
 `on_invocation_failure` cannot record the failure of an invocation, the refusal takes the

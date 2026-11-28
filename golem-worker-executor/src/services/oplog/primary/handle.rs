@@ -249,12 +249,14 @@ impl PrimaryOplog {
                             level => state.commit(level).await,
                         };
                         let result = match committed {
-                            Ok(committed) => Ok(state
-                                .committed_since_last_report(
-                                    previously_committed_through,
-                                    committed,
-                                )
-                                .await),
+                            Ok(committed) => {
+                                state
+                                    .committed_since_last_report(
+                                        previously_committed_through,
+                                        committed,
+                                    )
+                                    .await
+                            }
                             Err(error) => Err(error),
                         };
                         let _ = done.send(result);
@@ -262,11 +264,10 @@ impl PrimaryOplog {
                     OplogJob::Flush { done } => {
                         // The job has no error to reply with. A fence is latched on the state,
                         // where `wait_for_replicas` reads it after this job, so a fenced flush is
-                        // reported as not durable rather than lost; every subsequent write fails on
-                        // it without asking the storage again. A transient storage failure is fatal
-                        // here as everywhere else.
+                        // reported as not durable rather than lost; every later add, commit and
+                        // flush fails on it without asking the storage again.
                         match state.auto_commit().await {
-                            Ok(()) | Err(OplogError::Fenced(_)) => {}
+                            Ok(()) | Err(OplogError::Fenced(_) | OplogError::Unreadable(_)) => {}
                             Err(error) => panic!("oplog write: {error}"),
                         }
                         let _ = done.send(());
@@ -276,9 +277,17 @@ impl PrimaryOplog {
                         done,
                     } => {
                         let result = async {
-                            let before = state.reader().try_length().await?;
+                            let before = state
+                                .reader()
+                                .length()
+                                .await
+                                .map_err(|error| error.to_string())?;
                             state.try_drop_prefix(last_dropped_id).await?;
-                            let remaining = state.reader().try_length().await?;
+                            let remaining = state
+                                .reader()
+                                .length()
+                                .await
+                                .map_err(|error| error.to_string())?;
                             let dropped = before - remaining;
                             if dropped > 0 {
                                 record_storage_objects_deleted(STORAGE_TYPE_OPLOG, dropped);
@@ -294,7 +303,7 @@ impl PrimaryOplog {
                     OplogJob::RawDurableStreamSessionStatus { session_key, done } => {
                         let cached = state
                             .durable_stream_sessions
-                            .cached(&session_key)
+                            .cached(&state.owned_agent_id.agent_id, &session_key)
                             .transpose();
                         let _ = done.send(RawSessionLookup {
                             watermark: state.last_oplog_idx,
@@ -598,7 +607,10 @@ impl Oplog for PrimaryOplog {
         let unreadable = |error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error);
         checked_range_end(oplog_index, n).map_err(unreadable)?;
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        let entries = reader.read_source(oplog_index, n).await;
+        let entries = reader
+            .read_source(oplog_index, n)
+            .await
+            .map_err(unreadable)?;
         exact_from_source(OplogReadSource::Primary, oplog_index, n, entries).map_err(unreadable)
     }
 
@@ -608,7 +620,10 @@ impl Oplog for PrimaryOplog {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        Ok(reader.read_source(oplog_index, n).await)
+        reader
+            .read_source(oplog_index, n)
+            .await
+            .map_err(|error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
     }
 
     async fn try_read_source(
@@ -617,22 +632,26 @@ impl Oplog for PrimaryOplog {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.try_read_source(oplog_index, n).await
+        reader
+            .read_source(oplog_index, n)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        Ok(reader.read(oplog_index).await)
+        reader
+            .read(oplog_index)
+            .await
+            .map_err(|error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
     }
 
     async fn length(&self) -> Result<u64, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        Ok(reader.length().await)
-    }
-
-    async fn try_length(&self) -> Result<u64, String> {
-        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.try_length().await
+        reader
+            .length()
+            .await
+            .map_err(|error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {

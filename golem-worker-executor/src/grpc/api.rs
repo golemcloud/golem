@@ -1148,20 +1148,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .control_durable_stream_attachment_internal(request)
             .instrument(record.span.clone())
             .await
+            .map_err(DurableStreamRemoteError::into_other)
         {
             Ok(result) => {
                 record.succeed(Ok(Response::new(DurableStreamAttachmentControlResponse {
                     result: Some(result),
                 })))
             }
-            Err(DurableStreamRemoteError::Unavailable) => {
+            Err(None) => {
                 let message = "durable stream producer is unavailable";
                 record.fail(
                     Err(Status::unavailable(message)),
                     &mut WorkerExecutorError::runtime(message),
                 )
             }
-            Err(DurableStreamRemoteError::Other(mut error)) => record.fail(
+            Err(Some(mut error)) => record.fail(
                 Ok(Response::new(DurableStreamAttachmentControlResponse {
                     result: Some(durable_stream_attachment_control_response::Result::Failure(
                         error.clone().into(),
@@ -1185,20 +1186,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .read_durable_stream_segment_internal(request)
             .instrument(record.span.clone())
             .await
+            .map_err(DurableStreamRemoteError::into_other)
         {
             Ok(payload) => record.succeed(Ok(Response::new(DurableStreamSegmentReadResponse {
                 result: Some(durable_stream_segment_read_response::Result::Payload(
                     payload,
                 )),
             }))),
-            Err(DurableStreamRemoteError::Unavailable) => {
+            Err(None) => {
                 let message = "durable stream producer is unavailable";
                 record.fail(
                     Err(Status::unavailable(message)),
                     &mut WorkerExecutorError::runtime(message),
                 )
             }
-            Err(DurableStreamRemoteError::Other(mut error)) => record.fail(
+            Err(Some(mut error)) => record.fail(
                 Ok(Response::new(DurableStreamSegmentReadResponse {
                     result: Some(durable_stream_segment_read_response::Result::Failure(
                         error.clone().into(),
@@ -1248,11 +1250,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             },
             Err(error) => Err(error),
         };
-        let result = match result {
+        let result = match result.map_err(DurableStreamRemoteError::into_other) {
             Ok(Some(value)) => Outcome::Success(value.into()),
             Ok(None) => Outcome::NotFound(golem_schema::proto::golem::common::Empty {}),
-            Err(DurableStreamRemoteError::Other(error)) => Outcome::Failure(error.into()),
-            Err(DurableStreamRemoteError::Unavailable) => {
+            Err(Some(error)) => Outcome::Failure(error.into()),
+            Err(None) => {
                 return Err(Status::unavailable(
                     "durable stream producer is unavailable",
                 ));
@@ -1279,26 +1281,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 AppendToStreamSlotResponse::from(outcome),
             )
         }
-        .await;
+        .await
+        .map_err(DurableStreamRemoteError::into_other);
         match result {
             Ok(response) => Ok(Response::new(response)),
-            Err(DurableStreamRemoteError::Unavailable) => Err(Status::unavailable(
+            Err(None) => Err(Status::unavailable(
                 "durable stream producer is unavailable",
             )),
-            Err(DurableStreamRemoteError::Other(error)) => {
-                Ok(Response::new(AppendToStreamSlotResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::append_to_stream_slot_response::Result::Failure(
-                            error.into(),
-                        ),
+            Err(Some(error)) => Ok(Response::new(AppendToStreamSlotResponse {
+                result: Some(
+                    golem::workerexecutor::v1::append_to_stream_slot_response::Result::Failure(
+                        error.into(),
                     ),
-                    invocation_key: None,
-                    expiry_policy: None,
-                    expiry_deadline_millis: None,
-                    stream_head_offset: Vec::new(),
-                    stream_closed: None,
-                }))
-            }
+                ),
+                invocation_key: None,
+                expiry_policy: None,
+                expiry_deadline_millis: None,
+                stream_head_offset: Vec::new(),
+                stream_closed: None,
+            })),
         }
     }
 

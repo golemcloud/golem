@@ -159,10 +159,7 @@ fn target_load_executor_errors_preserve_every_pending_update() {
         WorkerExecutorError::Interrupted {
             kind: InterruptKind::ShardLost,
         },
-        WorkerExecutorError::RecoveryRequired {
-            retry_from: Some(OplogIndex::from_u64(5)),
-            details: "retry target load".to_string(),
-        },
+        WorkerExecutorError::recovery_required_from("retry target load", OplogIndex::from_u64(5)),
         WorkerExecutorError::runtime("compile task panic"),
     ];
     let automatic = automatic_head();
@@ -431,9 +428,7 @@ fn code(cell: Cell) -> &'static str {
 /// `AfterReplay` (a filesystem failure after the replay, which passes in every column),
 /// `BlobStorageRefused` (a refused initial-file source at the update point),
 /// `InitialFileRefused` (a refused initial-file source that the start loads, which fails only a
-/// pending manual update, because only its start loads the files of the target), and
-/// `LoadLost` (a lost payload of the selected record, which only a snapshot-assisted attempt
-/// reports).
+/// pending manual update, because only its start loads the files of the target).
 #[test]
 fn the_outcome_table() {
     use StartProblem as Problem;
@@ -447,7 +442,7 @@ fn the_outcome_table() {
         Column::AssistedPromoted,
     ];
     let refused = FetchProblem::Refused(ComponentServiceRefusal::Unauthorized);
-    let table: [(Problem, [&str; 7]); 38] = [
+    let table: [(Problem, [&str; 7]); 37] = [
         (Problem::StaleSource, ["P", "P", "P", "P", "P", "F", "P"]),
         (Problem::TargetExecutor, ["P", "P", "P", "P", "P", "P", "P"]),
         (
@@ -520,7 +515,6 @@ fn the_outcome_table() {
             Problem::LoadUnavailable,
             ["P", "F", "V2", "P", "Fr", "F", "P"],
         ),
-        (Problem::LoadLost, ["P", "P", "P", "P", "P", "Fu", "P"]),
         (Problem::LoadFailed, ["R", "F", "V2", "P", "Fr", "Fi", "V2"]),
         (
             Problem::ManualLoadFailed,
@@ -674,10 +668,7 @@ fn each_raw_error_has_its_problem() {
         start_index: OplogIndex::from_u64(4),
     };
     let runtime = WorkerExecutorError::runtime("boom");
-    let recovery = WorkerExecutorError::RecoveryRequired {
-        retry_from: None,
-        details: "again".to_string(),
-    };
+    let recovery = WorkerExecutorError::recovery_required("again");
     let interrupted = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Restart,
     };
@@ -870,40 +861,24 @@ fn each_raw_error_has_its_problem() {
     );
 }
 
-/// An oplog that does not read ends the start with its error from every step of the start
-/// that reads it, for every baseline and head: no record is skipped or rejected, and no
-/// update fails, because each of them would start the agent from another history.
+/// A failed stored read ends the start with its error from every step of the start that
+/// reads stored data, for every baseline and head: no record is skipped or rejected, no update
+/// fails and no invocation fails, because each of them would take the read error as an outcome
+/// or start the agent from another history. This holds for an oplog that fails, for a read
+/// that fails for a time, and for a read that fails for a time in the reason of a failed resume.
 #[test]
-fn an_unreadable_oplog_fails_the_start_in_every_column() {
-    let unreadable = WorkerExecutorError::oplog_failed(
+fn a_failed_stored_read_fails_the_start_in_every_column() {
+    let permanent = WorkerExecutorError::oplog_failed(
         agent_id(),
         "corrupt oplog data from archive layer 1: failed to decode compressed oplog chunk",
     );
-    let failed =
-        SnapshotRecoveryResult::Failed(unreadable.clone(), crate::model::FailureProvenance::Host);
-    let unavailable = SnapshotRecoveryResult::Unavailable(
-        unreadable.clone(),
-        crate::model::FailureProvenance::Host,
+    let transient = WorkerExecutorError::oplog_read_unavailable(
+        "oplog data from application snapshot payload is unavailable: blob store timed out",
     );
-    let lost = SnapshotRecoveryResult::Lost(unreadable.clone());
-    let unreadable_creation = creation(&unreadable);
-    let errors = [
-        RawStartError::Replay {
-            error: &unreadable,
-            diverged: false,
-            provenance: None,
-        },
-        RawStartError::Replay {
-            error: &unreadable,
-            diverged: true,
-            provenance: None,
-        },
-        RawStartError::Load(&failed),
-        RawStartError::Load(&unavailable),
-        RawStartError::Load(&lost),
-        RawStartError::Instantiation(&unreadable_creation),
-        RawStartError::TargetLoad(&unreadable),
-        RawStartError::TargetFetch(&unreadable),
+    let reads = [
+        permanent,
+        transient.clone(),
+        WorkerExecutorError::failed_to_resume_worker(agent_id(), transient),
     ];
     let assisted = Arc::new(assisted_head());
     let manual = Arc::new(manual_head());
@@ -922,15 +897,74 @@ fn an_unreadable_oplog_fails_the_start_in_every_column() {
         ),
         (BaselineRole::AssistedPromoted, None),
     ];
-    for (role, head) in &starts {
-        for (index, error) in errors.iter().enumerate() {
-            let action = decide_now(role, *head, *error);
-            assert!(
-                matches!(&action, StartAction::Error(error) if *error == unreadable),
-                "{role:?} with error {index}: {action:?}"
+    let wrong = reads
+        .iter()
+        .flat_map(|read| {
+            let failed =
+                SnapshotRecoveryResult::Failed(read.clone(), crate::model::FailureProvenance::Host);
+            let unavailable = SnapshotRecoveryResult::Unavailable(
+                read.clone(),
+                crate::model::FailureProvenance::Host,
             );
-        }
-    }
+            let read_creation = creation(read);
+            let errors = [
+                RawStartError::Replay {
+                    error: read,
+                    diverged: false,
+                    provenance: None,
+                },
+                RawStartError::Replay {
+                    error: read,
+                    diverged: true,
+                    provenance: None,
+                },
+                RawStartError::Load(&failed),
+                RawStartError::Load(&unavailable),
+                RawStartError::Instantiation(&read_creation),
+                RawStartError::TargetLoad(read),
+                RawStartError::TargetFetch(read),
+            ];
+            starts
+                .iter()
+                .flat_map(|(role, head)| {
+                    errors
+                        .iter()
+                        .enumerate()
+                        .map(|(index, error)| (role, index, decide_now(role, *head, *error)))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|(_, _, action)| {
+                    !matches!(action, StartAction::Error(passed) if passed == read)
+                })
+                .map(|(role, index, action)| format!("{read} / {role:?} / {index}: {action:?}"))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Only a read that fails for a time is a failed stored read in the reason of a failed resume. A
+/// failed resume of an oplog that failed for good is an ordinary start failure: the automatic
+/// update fails with it.
+#[test]
+fn a_failed_resume_of_a_failed_oplog_fails_the_update() {
+    let wrapped = WorkerExecutorError::failed_to_resume_worker(
+        agent_id(),
+        WorkerExecutorError::oplog_failed(
+            agent_id(),
+            "corrupt oplog data from archive layer 1: failed to decode compressed oplog chunk",
+        ),
+    );
+    let action = decide_now(
+        &BaselineRole::ManualPromoted,
+        Some(&automatic_head()),
+        RawStartError::Replay {
+            error: &wrapped,
+            diverged: false,
+            provenance: None,
+        },
+    );
+    failed_entry(action);
 }
 
 fn decide_now(
@@ -1116,10 +1150,7 @@ fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
     let role = BaselineRole::AssistedPending(Arc::new(head.clone()));
     let transient = restore(RestoreClass::Transient);
     let quota = FilesystemError::AgentQuota(storage());
-    let recovery = WorkerExecutorError::RecoveryRequired {
-        retry_from: None,
-        details: "again".to_string(),
-    };
+    let recovery = WorkerExecutorError::recovery_required("again");
     let interrupted = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Restart,
     };
@@ -2512,4 +2543,138 @@ fn a_tainted_generation_turns_target_failures_and_divergences_into_operational_f
         assert_eq!(failure_class(problem, &error, false), untainted);
         assert_eq!(failure_class(problem, &error, true), tainted);
     }
+}
+
+/// The replay of a completed invocation reads its stored request and result again. When one of
+/// them does not decode, the replay gives the read error with the entry index and the version
+/// byte, and the start of an automatic update passes that error on. The update stays pending:
+/// history that does not read is not a failure of the target revision.
+#[test]
+async fn an_unreadable_replayed_invocation_payload_keeps_an_automatic_update_pending() {
+    use crate::durable_host::durable_stream::tests::TestOplog;
+    use crate::durable_host::replay_state::ReplayState;
+    use crate::services::oplog::Oplog;
+    use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::OplogPayload;
+    use golem_common::model::regions::DeletedRegions;
+    use golem_common::model::{
+        InvocationId, InvocationRequestOperation, OwnedAgentId, StoredAgentInvocationPayload,
+    };
+
+    let owned_agent_id = OwnedAgentId {
+        environment_id: EnvironmentId::new(),
+        agent_id: agent_id(),
+    };
+    let invocation_id = InvocationId(uuid::Uuid::from_u128(0x5eed));
+    let started = |payload| OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::from(2_000),
+        invocation_id,
+        operation: Box::new(InvocationRequestOperation::SaveSnapshot),
+        payload,
+        trace_id: TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Box::new(InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [9; 32],
+                generation: 4,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: None,
+        }),
+    };
+    let readable_request =
+        OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
+            caller: golem_common::model::caller::Caller::anonymous(),
+        }));
+    let finished = |result| OplogEntry::AgentInvocationFinished {
+        timestamp: Timestamp::from(3_000),
+        invocation_id,
+        result,
+        method_name: None,
+        consumed_fuel: 11,
+        component_revision: revision(2),
+        awaits_settlement: false,
+    };
+    let replay_error = async |entries: Vec<OplogEntry>| -> (OplogIndex, WorkerExecutorError) {
+        let oplog = Arc::new(TestOplog::default());
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
+        use futures::{StreamExt, TryStreamExt};
+        let last = futures::stream::iter(entries)
+            .then(|entry| oplog.add(entry))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .last()
+            .copied()
+            .unwrap_or(OplogIndex::INITIAL);
+        let horizon = oplog.current_oplog_index().await;
+        let replay = ReplayState::new_for_owner(
+            owned_agent_id.clone(),
+            oplog,
+            DeletedRegions::default(),
+            None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            horizon,
+            None,
+        )
+        .await
+        .unwrap();
+        let error = match replay.get_oplog_entry_agent_invocation_started().await {
+            Err(error) => error,
+            Ok(_) => replay
+                .get_oplog_entry_agent_invocation_finished(&invocation_id)
+                .await
+                .expect_err("the unreadable result must fail the replay"),
+        };
+        (last, error)
+    };
+
+    let automatic = automatic_head();
+    let unreadable_request = replay_error(vec![started(OplogPayload::SerializedInline {
+        bytes: vec![255],
+        cached: None,
+    })])
+    .await;
+    let unreadable_result = replay_error(vec![
+        started(readable_request),
+        finished(OplogPayload::SerializedInline {
+            bytes: vec![255],
+            cached: None,
+        }),
+    ])
+    .await;
+    [unreadable_request, unreadable_result]
+        .into_iter()
+        .for_each(|(index, error)| {
+            let WorkerExecutorError::OplogFailed {
+                agent_id: failed,
+                details,
+                ..
+            } = &error
+            else {
+                panic!("expected the read error of entry {index}, got {error:?}");
+            };
+            assert_eq!(*failed, agent_id());
+            assert!(
+                details.contains(&format!("oplog index {index}"))
+                    && details.contains("version: 255"),
+                "{details}"
+            );
+            let action = decide_now(
+                &BaselineRole::InitialFiles,
+                Some(&automatic),
+                RawStartError::Replay {
+                    error: &error,
+                    diverged: false,
+                    provenance: Some(FailureProvenance::Host),
+                },
+            );
+            assert!(
+                matches!(&action, StartAction::Error(passed) if *passed == error),
+                "{action:?}"
+            );
+        });
 }

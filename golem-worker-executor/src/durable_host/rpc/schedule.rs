@@ -48,7 +48,7 @@ use golem_common::model::oplog::HostResponseGolemRpcUnit;
 use golem_common::model::oplog::host_functions::GolemRpcCancellationTokenCancel;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcScheduleInvocation;
 use golem_common::model::oplog::types::SerializableScheduleId;
-use golem_common::serialization::deserialize;
+use golem_common::serialization::decode;
 use golem_common::serialization::serialize;
 use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::decode_value_with;
@@ -87,8 +87,8 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
         let invocation_key = golem_common::model::InvocationId::from(uuid::Uuid::from(
             entry.metadata.invocation_id.id,
         ));
-        let serialized_schedule_id: SerializableScheduleId = deserialize(&entry.schedule_id)
-            .map_err(|err| {
+        let serialized_schedule_id: SerializableScheduleId =
+            decode(&entry.schedule_id).map_err(|err| {
                 anyhow::Error::from(WorkerExecutorError::runtime(format!(
                     "Failed to deserialize cancellation token: {err}"
                 )))

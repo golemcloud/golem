@@ -26,14 +26,16 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, InvocationId, InvocationRequestKey, OwnedAgentId};
 use prost::Message;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::progress::{AcceptedIdentity, Command, InputProgress, OutputProgress, RecoveryProgress};
+use super::progress::{
+    AcceptedIdentity, CleanupAuthority, Command, ExecutorEnd, InputProgress, OutputProgress,
+    RecoveryProgress,
+};
 use super::transport::SessionTransport;
 use super::{
     HttpSessionError, HttpSessionEvent, HttpSessionLimits, INPUT_STREAM_ID, SessionOutput,
@@ -49,7 +51,7 @@ pub(super) async fn run_session(
     mut commands: mpsc::Receiver<Command>,
     mut controls: mpsc::Receiver<Command>,
     events: SessionOutput,
-    completed: Arc<AtomicBool>,
+    cleanup: Arc<CleanupAuthority>,
     cleanup_identity: Arc<OnceLock<(OwnedAgentId, InvocationId)>>,
     cancelled: CancellationToken,
 ) {
@@ -226,6 +228,9 @@ pub(super) async fn run_session(
                     worker_error = ?rejected.worker_error,
                     "HTTP invocation session was rejected"
                 );
+                if let Some(end) = ExecutorEnd::of_rejection(&rejected) {
+                    cleanup.observe(end);
+                }
                 let error = if rejected.reason() == InvocationRejectionReason::IdempotencyConflict {
                     HttpSessionError::InvocationIdentityConflict(rejected.error)
                 } else {
@@ -451,7 +456,7 @@ pub(super) async fn run_session(
                     controls.close();
                     cancel_and_drain(
                         &mut input, &mut output, &mut protocol, &request_tx,
-                        &mut responses, &mapping, epoch, &completed,
+                        &mut responses, &mapping, epoch, &cleanup,
                     ).await;
                     return;
                 }
@@ -541,7 +546,7 @@ pub(super) async fn run_session(
                             permit.send(HttpSessionEvent::Result(Box::new(result)));
                         }
                         invocation_response::Response::Finished(finished) => {
-                            completed.store(true, Ordering::Release);
+                            cleanup.observe(ExecutorEnd::Finished);
                             if let Some(golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome::Failure(failure)) = &finished.outcome {
                                 tracing::warn!(
                                     kind = failure.kind,
@@ -615,7 +620,7 @@ async fn cancel_and_drain(
     responses: &mut InvocationResponseStream,
     mapping: &DurableStreamMapping,
     epoch: u64,
-    completed: &AtomicBool,
+    cleanup: &CleanupAuthority,
 ) {
     // Transport EOF only detaches. Send explicit stream terminals while this attachment
     // is alive, then drain their delivery within the owner's cleanup timeout.
@@ -672,7 +677,7 @@ async fn cancel_and_drain(
                 }
             }
             Some(invocation_response::Response::Finished(_)) => {
-                completed.store(true, Ordering::Release);
+                cleanup.observe(ExecutorEnd::Finished);
                 return;
             }
             _ => {}

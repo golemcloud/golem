@@ -146,7 +146,7 @@ use golem_common::model::oplog::{
     QueuedCardEvent,
 };
 use golem_common::model::{AgentId, OwnedAgentId, PendingCardEventRef, Timestamp};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::serialize;
 use golem_schema::schema::schema_value::PermissionCardValuePayload;
 use golem_schema::schema::wit::wire::{HostPermissionCard, HostPermissionCardWithStore};
 use golem_schema::schema::wit::{PermissionCardHandleRep, PermissionCardResolver};

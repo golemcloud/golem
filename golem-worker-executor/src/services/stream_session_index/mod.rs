@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use crate::durable_host::durable_stream::metadata::{
-    ProducerMetadataKey, ProducerMetadataProjection, ProducerMetadataRow, project_producer_metadata,
+    ProducerMetadataKey, ProducerMetadataProjection, ProducerMetadataRow, ProjectionError,
+    project_producer_metadata, read_projection, unanswered_index_read,
 };
 use crate::durable_host::durable_stream::{SessionControlMetadata, SessionError};
 use crate::metrics::workers::record_derived_cache_publication_failed;
 use crate::services::activity::spawn_with_activity;
-use crate::services::oplog::{OplogService, OplogServiceOps};
+use crate::services::oplog::{
+    OplogPayloadDownloadError, OplogService, OplogServiceOps, UnreadableOplog,
+};
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::worker::DERIVED_CACHE_EXPIRY;
 use crate::services::worker::DurableStreamRecoveryMetadata;
@@ -27,6 +30,7 @@ use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use bytes::Bytes;
 use golem_common::base_model::durable_stream::{
     LocalStreamReaderId, StreamSessionKey, StreamSessionRecord,
 };
@@ -36,7 +40,7 @@ use golem_common::model::{
     AgentFingerprint, DurableStreamPublicBinding, DurableStreamSessionStatus, InvocationId,
     OwnedAgentId,
 };
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::{DecodeError, decode, serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use tokio::sync::Mutex as AsyncMutex;
@@ -47,6 +51,27 @@ const SESSION_FIELD_PREFIX: &str = "session:";
 const PUBLIC_BINDING_FIELD_PREFIX: &str = "public-binding:";
 pub(crate) const CONSUMER_JOURNAL_INDEX_PAGE_SIZE: u64 = 256;
 const RECOVERY_CATALOGUE_PAGE_SIZE: u64 = 256;
+
+/// The oplog index through which a refold rebuilds the index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RefoldTarget {
+    /// Rebuild through this index.
+    Through(OplogIndex),
+    /// The stored coverage is unknown. Rebuild through the committed oplog tail, and not below
+    /// `minimum`.
+    CommittedTail { minimum: OplogIndex },
+}
+
+/// Selects the refold target. The target is never below `minimum` or the stored coverage, so a
+/// refold that wins its compare-and-set never moves the stored coverage back. When the coverage
+/// is absent or does not decode, only the committed oplog tail is known to be at least the
+/// coverage that another reader published.
+fn refold_target(minimum: OplogIndex, coverage: Option<OplogIndex>) -> RefoldTarget {
+    match coverage {
+        Some(covered) => RefoldTarget::Through(minimum.max(covered)),
+        None => RefoldTarget::CommittedTail { minimum },
+    }
+}
 
 fn recovery_catalogue_field(page: u64) -> String {
     format!("recovery:{page}")
@@ -131,6 +156,65 @@ impl Drop for IndexLock {
 }
 
 impl StreamSessionIndexService {
+    /// Reads `fields` together with the coverage marker. `fields[0]` is the marker.
+    /// `decode_fields` receives the other fields. A cache miss refolds the index from the oplog
+    /// and reads again.
+    async fn cached_snapshot<T>(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        api_name: &'static str,
+        entity_name: &'static str,
+        fields: Arc<[String]>,
+        decode_fields: impl Fn(&[Option<Bytes>]) -> Result<T, ProjectionError> + Sync,
+    ) -> Result<(Bytes, Metadata, T), SessionError> {
+        let namespace = Self::namespace(id, fingerprint);
+        let mut minimum = OplogIndex::NONE;
+        loop {
+            let values = self
+                .kv
+                .with_entity("stream_session_index", api_name, entity_name)
+                .get_many_raw(namespace.clone(), fields.clone())
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?;
+            let expected = values[0].clone();
+            let metadata = expected
+                .as_deref()
+                .and_then(|bytes| decode::<Metadata>(bytes).ok());
+            let coverage = metadata.as_ref().map(|value| value.covered_through);
+            let result = match (expected.clone(), metadata) {
+                (Some(marker), Some(metadata)) => {
+                    decode_fields(&values[1..]).map(|value| (marker, metadata, value))
+                }
+                _ => Err(ProjectionError::CacheMiss),
+            };
+            // A read is ready only when the marker and every row decode and the coverage is at
+            // least the minimum. A refold continues with a new read, because its compare-and-set
+            // can lose to another writer.
+            match result {
+                Err(ProjectionError::Other(error)) => return Err(*error),
+                Ok(value) if coverage.is_some_and(|covered| covered >= minimum) => {
+                    return Ok(value);
+                }
+                _ => {}
+            }
+            let target = refold_target(minimum, coverage);
+            minimum = minimum.max(coverage.unwrap_or(minimum));
+            let through = self
+                .refold_and_publish(
+                    id,
+                    mode,
+                    fingerprint,
+                    target,
+                    &namespace,
+                    expected.as_deref(),
+                )
+                .await?;
+            minimum = minimum.max(through);
+        }
+    }
+
     pub async fn lookup_producer_identity(
         &self,
         id: &OwnedAgentId,
@@ -140,12 +224,17 @@ impl StreamSessionIndexService {
         let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
         let horizon = oplog.get_last_index(id, mode).await?;
         self.catch_up(id, mode, fingerprint, horizon).await?;
-        let metadata: Metadata = self
-            .kv
-            .with_entity("stream_session_index", "lookup_identity", "metadata")
-            .get(Self::namespace(id, fingerprint), METADATA_FIELD)
-            .await?
-            .ok_or("producer identity metadata is unavailable")?;
+        let (_, metadata, ()) = self
+            .cached_snapshot(
+                id,
+                mode,
+                fingerprint,
+                "lookup_identity",
+                "metadata",
+                vec![METADATA_FIELD.into()].into(),
+                |_| Ok(()),
+            )
+            .await?;
         if metadata.covered_through < horizon {
             return Err("producer identity coverage is unavailable".into());
         }
@@ -180,48 +269,61 @@ impl StreamSessionIndexService {
                 for key in &keys {
                     fields.push(key.field()?);
                 }
-                let values = this
-                    .kv
-                    .with_entity("stream_session_index", "lookup_producer", "metadata")
-                    .get_many_raw(Self::namespace(&id, fingerprint), fields.into())
+                let (expected, metadata, values) = this
+                    .cached_snapshot(
+                        &id,
+                        mode,
+                        fingerprint,
+                        "lookup_producer",
+                        "metadata",
+                        fields.into(),
+                        |values| {
+                            keys.iter()
+                                .zip(values)
+                                .map(|(key, value)| {
+                                    if matches!(key, ProducerMetadataKey::Lineage) {
+                                        Ok(None)
+                                    } else {
+                                        value
+                                            .as_deref()
+                                            .map(|bytes| {
+                                                ProducerMetadataRow::decode_for_key(key, bytes)
+                                            })
+                                            .transpose()
+                                    }
+                                })
+                                .collect::<Result<Vec<_>, ProjectionError>>()
+                        },
+                    )
                     .await?;
-                let expected = values.first().cloned().flatten();
-                let metadata = values
-                    .first()
-                    .and_then(Option::as_ref)
-                    .map(|bytes| deserialize::<Metadata>(bytes))
-                    .transpose()?;
-                let covered = metadata
-                    .as_ref()
-                    .map_or(OplogIndex::NONE, |metadata| metadata.covered_through);
+                let covered = metadata.covered_through;
                 if covered < horizon {
                     return Err("producer metadata coverage is unavailable".into());
                 }
-                let result = async {
-                    let mut rows = Vec::with_capacity(keys.len());
-                    for (key, value) in keys.iter().zip(values.into_iter().skip(1)) {
-                        if matches!(key, ProducerMetadataKey::Lineage) {
-                            rows.push(Some(ProducerMetadataRow::Lineage(
-                                metadata
-                                    .as_ref()
-                                    .map(|metadata| metadata.stream_fork_lineage.through(covered))
-                                    .transpose()?
-                                    .unwrap_or_default(),
-                            )));
-                            continue;
-                        }
-                        let row = value.map(|bytes| deserialize(&bytes)).transpose()?;
+                let result = keys
+                    .iter()
+                    .zip(values)
+                    .try_fold(Vec::with_capacity(keys.len()), |mut rows, (key, value)| {
+                        let row = if matches!(key, ProducerMetadataKey::Lineage) {
+                            Some(ProducerMetadataRow::Lineage(
+                                metadata.stream_fork_lineage.through(covered)?,
+                            ))
+                        } else {
+                            value
+                        };
                         rows.push(row);
-                    }
-                    Ok::<_, SessionError>((covered, rows))
-                }
-                .await;
+                        Ok::<_, SessionError>(rows)
+                    })
+                    .map(|rows| (covered, rows));
                 let current = this
                     .kv
                     .with_entity("stream_session_index", "lookup_producer", "metadata")
                     .get_raw(Self::namespace(&id, fingerprint), METADATA_FIELD)
-                    .await?;
-                if current == expected {
+                    .await
+                    .map_err(|error| {
+                        unanswered_index_read(&Self::namespace(&id, fingerprint), error)
+                    })?;
+                if current.as_ref() == Some(&expected) {
                     return result;
                 }
             }
@@ -244,32 +346,23 @@ impl StreamSessionIndexService {
         join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await?;
-            let namespace = Self::namespace(&id, fingerprint);
             let resume_field = stream_resume_index_field(&key, attempt)?;
             loop {
                 this.catch_up_inner(&id, mode, fingerprint, horizon).await?;
-                let values = this
-                    .kv
-                    .with_entity("stream_session_index", "lookup_resume", "attempt")
-                    .get_many_raw(
-                        namespace.clone(),
+                let (_, metadata, offset) = this
+                    .cached_snapshot(
+                        &id,
+                        mode,
+                        fingerprint,
+                        "lookup_resume",
+                        "attempt",
                         vec![METADATA_FIELD.into(), resume_field.clone()].into(),
+                        |values| Ok(values[0].as_deref().map(decode::<OplogIndex>).transpose()?),
                     )
                     .await?;
-                let coverage = values
-                    .first()
-                    .and_then(Option::as_ref)
-                    .map(|bytes| deserialize::<Metadata>(bytes))
-                    .transpose()?
-                    .map_or(OplogIndex::NONE, |metadata| metadata.covered_through);
-                if coverage < horizon {
+                if metadata.covered_through < horizon {
                     continue;
                 }
-                let offset = values
-                    .get(1)
-                    .and_then(Option::as_ref)
-                    .map(|bytes| deserialize::<OplogIndex>(bytes))
-                    .transpose()?;
                 return Ok(offset.filter(|index| *index <= horizon));
             }
         }))
@@ -289,22 +382,36 @@ impl StreamSessionIndexService {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await?;
             this.catch_up_inner(&id, mode, fingerprint, horizon).await?;
-            let namespace = Self::namespace(&id, fingerprint);
             'snapshot: loop {
                 let mut requested_pages = 0;
                 let (covered_through, keys, consumer_deleting) = loop {
                     let mut names = vec![METADATA_FIELD.into(), "consumer-deleting".into()];
                     names.extend((0..requested_pages).map(recovery_catalogue_field));
-                    let fields = this
-                        .kv
-                        .with_entity("stream_session_index", "read_recovery", "page")
-                        .get_many_raw(namespace.clone(), names.into())
+                    let (_, metadata, (deleting, pages)) = this
+                        .cached_snapshot(
+                            &id,
+                            mode,
+                            fingerprint,
+                            "read_recovery",
+                            "page",
+                            names.into(),
+                            |fields| {
+                                Ok((
+                                    fields[0].as_deref().map(decode).transpose()?.flatten(),
+                                    fields
+                                        .iter()
+                                        .skip(1)
+                                        .map(|value| {
+                                            value
+                                                .as_deref()
+                                                .map(decode::<Vec<StreamSessionKey>>)
+                                                .transpose()
+                                        })
+                                        .collect::<Result<Vec<_>, DecodeError>>()?,
+                                ))
+                            },
+                        )
                         .await?;
-                    let metadata: Metadata = fields[0]
-                        .as_ref()
-                        .map(|bytes| deserialize(bytes))
-                        .transpose()?
-                        .unwrap_or_default();
                     if metadata.covered_through < horizon {
                         return Err("recovery catalogue coverage is unavailable".into());
                     }
@@ -316,27 +423,21 @@ impl StreamSessionIndexService {
                         continue;
                     }
                     let mut keys = Vec::new();
-                    for page in 0..needed_pages {
-                        let entries: Vec<StreamSessionKey> = deserialize(
-                            fields[page as usize + 2]
-                                .as_ref()
-                                .ok_or("recovery catalogue page is missing")?,
-                        )?;
-                        let needed = (metadata.recovery_session_count
-                            - page * RECOVERY_CATALOGUE_PAGE_SIZE)
-                            .min(RECOVERY_CATALOGUE_PAGE_SIZE);
-                        if entries.len() as u64 != needed {
-                            return Err(
-                                "recovery catalogue page does not match its coverage".into()
-                            );
-                        }
-                        keys.extend(entries);
-                    }
-                    let deleting = fields[1]
-                        .as_ref()
-                        .map(|bytes| deserialize(bytes))
-                        .transpose()?
-                        .flatten();
+                    pages
+                        .into_iter()
+                        .take(needed_pages as usize)
+                        .enumerate()
+                        .try_for_each(|(page, entries)| {
+                            let entries = entries.ok_or("recovery catalogue page is missing")?;
+                            let needed = (metadata.recovery_session_count
+                                - page as u64 * RECOVERY_CATALOGUE_PAGE_SIZE)
+                                .min(RECOVERY_CATALOGUE_PAGE_SIZE);
+                            if entries.len() as u64 != needed {
+                                return Err("recovery catalogue page does not match its coverage");
+                            }
+                            keys.extend(entries);
+                            Ok(())
+                        })?;
                     break (metadata.covered_through, keys, deleting);
                 };
                 let mut sessions = Vec::with_capacity(keys.len());
@@ -347,28 +448,36 @@ impl StreamSessionIndexService {
                             .map(stream_control_index_field)
                             .collect::<Result<Vec<_>, _>>()?,
                     );
-                    let values = this
-                        .kv
-                        .with_entity("stream_session_index", "read_recovery", "session")
-                        .get_many_raw(namespace.clone(), fields.into())
+                    let (_, coverage, values) = this
+                        .cached_snapshot(
+                            &id,
+                            mode,
+                            fingerprint,
+                            "read_recovery",
+                            "session",
+                            fields.into(),
+                            |values| {
+                                Ok(values
+                                    .iter()
+                                    .map(|value| {
+                                        value
+                                            .as_deref()
+                                            .map(decode::<SessionControlMetadata>)
+                                            .transpose()
+                                    })
+                                    .collect::<Result<Vec<_>, DecodeError>>()?)
+                            },
+                        )
                         .await?;
-                    let coverage: Metadata = deserialize(
-                        values[0]
-                            .as_ref()
-                            .ok_or("recovery catalogue coverage is missing")?,
-                    )?;
                     if coverage.covered_through != covered_through {
                         continue 'snapshot;
                     }
-                    for (key, value) in keys.iter().zip(values.iter().skip(1)) {
-                        let mut control: SessionControlMetadata = deserialize(
-                            value
-                                .as_ref()
-                                .ok_or("recovery catalogue session is missing")?,
-                        )?;
+                    keys.iter().zip(values).try_for_each(|(key, value)| {
+                        let mut control = value.ok_or("recovery catalogue session is missing")?;
                         control.advance_coverage(coverage.covered_through);
                         sessions.push((key.clone(), control));
-                    }
+                        Ok::<_, &str>(())
+                    })?;
                 }
                 return Ok(DurableStreamRecoveryMetadata {
                     covered_through,
@@ -386,14 +495,17 @@ impl StreamSessionIndexService {
         namespace: &KeyValueStorageNamespace,
         pages: &'a mut HashMap<u64, Vec<StreamSessionKey>>,
         page: u64,
-    ) -> Result<&'a mut Vec<StreamSessionKey>, SessionError> {
+    ) -> Result<&'a mut Vec<StreamSessionKey>, ProjectionError> {
         if let std::collections::hash_map::Entry::Vacant(e) = pages.entry(page) {
-            let keys = self
-                .kv
-                .with_entity("stream_session_index", "read_recovery", "page")
-                .get(namespace.clone(), &recovery_catalogue_field(page))
-                .await?
-                .unwrap_or_default();
+            let keys = read_projection(
+                self.kv.as_ref(),
+                namespace.clone(),
+                "read_recovery",
+                "page",
+                &recovery_catalogue_field(page),
+            )
+            .await?
+            .unwrap_or_default();
             e.insert(keys);
         }
         Ok(pages.get_mut(&page).unwrap())
@@ -405,7 +517,7 @@ impl StreamSessionIndexService {
         namespace: &KeyValueStorageNamespace,
         controls: &mut HashMap<StreamSessionKey, SessionControlMetadata>,
         metadata: &mut Metadata,
-    ) -> Result<HashMap<u64, Vec<StreamSessionKey>>, SessionError> {
+    ) -> Result<HashMap<u64, Vec<StreamSessionKey>>, ProjectionError> {
         let mut pages = HashMap::new();
         let keys: Vec<_> = controls.keys().cloned().collect();
         for key in keys {
@@ -455,12 +567,15 @@ impl StreamSessionIndexService {
                         }
                         *entry = moved.clone();
                         if !controls.contains_key(&moved) {
-                            let control = self
-                                .kv
-                                .with_entity("stream_session_index", "read_recovery", "session")
-                                .get(namespace.clone(), &stream_control_index_field(&moved)?)
-                                .await?
-                                .ok_or("recovery catalogue refers to a missing session")?;
+                            let control = read_projection(
+                                self.kv.as_ref(),
+                                namespace.clone(),
+                                "read_recovery",
+                                "session",
+                                &stream_control_index_field(&moved)?,
+                            )
+                            .await?
+                            .ok_or("recovery catalogue refers to a missing session")?;
                             controls.insert(moved.clone(), control);
                         }
                         controls
@@ -482,30 +597,41 @@ impl StreamSessionIndexService {
     pub async fn read_consumer_page(
         &self,
         id: &OwnedAgentId,
+        mode: AgentMode,
         fingerprint: AgentFingerprint,
         key: &StreamSessionKey,
         reader: LocalStreamReaderId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, SessionError> {
-        let namespace = Self::namespace(id, fingerprint);
-        loop {
-            let expected = self
-                .kv
-                .with_entity("stream_session_index", "read_consumer_journal", "metadata")
-                .get_raw(namespace.clone(), METADATA_FIELD)
-                .await?;
-            let result = self
-                .read_consumer_page_inner(&namespace, key, reader, page)
-                .await;
-            let current = self
-                .kv
-                .with_entity("stream_session_index", "read_consumer_journal", "metadata")
-                .get_raw(namespace.clone(), METADATA_FIELD)
-                .await?;
-            if current == expected {
-                return result?.ok_or_else(|| "consumer journal index page is missing".into());
-            }
-        }
+        page.checked_mul(CONSUMER_JOURNAL_INDEX_PAGE_SIZE)
+            .ok_or("consumer journal page overflow")?;
+        let (_, _, row) = self
+            .cached_snapshot(
+                id,
+                mode,
+                fingerprint,
+                "read_consumer_journal",
+                "page",
+                vec![
+                    METADATA_FIELD.into(),
+                    consumer_journal_index_field(key, reader, page)?,
+                ]
+                .into(),
+                |values| {
+                    let row = values[0]
+                        .as_deref()
+                        .map(decode::<Vec<OplogIndex>>)
+                        .transpose()?;
+                    if let Some(ref row) = row
+                        && row.len() as u64 > CONSUMER_JOURNAL_INDEX_PAGE_SIZE
+                    {
+                        return Err("consumer journal index page exceeds its bound".into());
+                    }
+                    Ok(row)
+                },
+            )
+            .await?;
+        row.ok_or_else(|| "consumer journal index page is missing".into())
     }
 
     async fn read_consumer_page_inner(
@@ -514,17 +640,17 @@ impl StreamSessionIndexService {
         key: &StreamSessionKey,
         reader: LocalStreamReaderId,
         page: u64,
-    ) -> Result<Option<Vec<OplogIndex>>, SessionError> {
+    ) -> Result<Option<Vec<OplogIndex>>, ProjectionError> {
         page.checked_mul(CONSUMER_JOURNAL_INDEX_PAGE_SIZE)
             .ok_or("consumer journal page overflow")?;
-        let row: Option<Vec<OplogIndex>> = self
-            .kv
-            .with_entity("stream_session_index", "read_consumer_journal", "page")
-            .get(
-                namespace.clone(),
-                &consumer_journal_index_field(key, reader, page)?,
-            )
-            .await?;
+        let row: Option<Vec<OplogIndex>> = read_projection(
+            self.kv.as_ref(),
+            namespace.clone(),
+            "read_consumer_journal",
+            "page",
+            &consumer_journal_index_field(key, reader, page)?,
+        )
+        .await?;
         if let Some(ref row) = row
             && row.len() as u64 > CONSUMER_JOURNAL_INDEX_PAGE_SIZE
         {
@@ -552,41 +678,35 @@ impl StreamSessionIndexService {
             this.catch_up_inner(&id, mode, fingerprint, horizon).await?;
             let lock = this.index_lock(&id);
             let _guard = lock.inner.lock().await;
-            let fields = this
-                .kv
-                .with_entity("stream_session_index", "lookup_control", "session")
-                .get_many_raw(
-                    Self::namespace(&id, fingerprint),
+            let (_, metadata, (mut snapshot, consumer_deleting)) = this
+                .cached_snapshot(
+                    &id,
+                    mode,
+                    fingerprint,
+                    "lookup_control",
+                    "session",
                     vec![
                         METADATA_FIELD.into(),
                         stream_control_index_field(&key)?,
                         "consumer-deleting".into(),
                     ]
                     .into(),
+                    |fields| {
+                        Ok((
+                            fields[0]
+                                .as_deref()
+                                .map(decode::<SessionControlMetadata>)
+                                .transpose()?
+                                .unwrap_or_default(),
+                            fields[1].as_deref().map(decode).transpose()?.flatten(),
+                        ))
+                    },
                 )
                 .await?;
-            let coverage = fields
-                .first()
-                .and_then(Option::as_ref)
-                .map(|bytes| deserialize::<Metadata>(bytes))
-                .transpose()?
-                .map_or(OplogIndex::NONE, |value| value.covered_through);
-            if coverage < horizon {
+            if metadata.covered_through < horizon {
                 return Err("durable stream control metadata coverage is unavailable".into());
             }
-            let mut snapshot = fields
-                .get(1)
-                .and_then(Option::as_ref)
-                .map(|bytes| deserialize::<SessionControlMetadata>(bytes))
-                .transpose()?
-                .unwrap_or_default();
-            let consumer_deleting = fields
-                .get(2)
-                .and_then(Option::as_ref)
-                .map(|bytes| deserialize(bytes))
-                .transpose()?
-                .flatten();
-            snapshot.restore_index_state(coverage, consumer_deleting);
+            snapshot.restore_index_state(metadata.covered_through, consumer_deleting);
             Ok(snapshot)
         }))
         .await
@@ -694,32 +814,30 @@ impl StreamSessionIndexService {
         self.catch_up(id, mode, fingerprint, horizon).await?;
         let lock = self.index_lock(id);
         let _guard = lock.inner.lock().await;
-        let values = self
-            .kv
-            .with_entity("stream_session_index", "lookup", "public_binding")
-            .get_many_raw(
-                Self::namespace(id, fingerprint),
+        let (_, metadata, binding) = self
+            .cached_snapshot(
+                id,
+                mode,
+                fingerprint,
+                "lookup",
+                "public_binding",
                 vec![
                     METADATA_FIELD.into(),
                     Self::public_binding_field(route_scope, public_session_id),
                 ]
                 .into(),
+                |values| {
+                    Ok(values[0]
+                        .as_deref()
+                        .map(decode::<DurableStreamPublicBinding>)
+                        .transpose()?)
+                },
             )
             .await?;
-        let metadata: Metadata = values
-            .first()
-            .and_then(Option::as_ref)
-            .map(|bytes| deserialize(bytes))
-            .transpose()?
-            .ok_or("stream session index coverage is unavailable after catch-up")?;
         if metadata.covered_through < horizon {
             return Err("stream session index coverage regressed after catch-up".into());
         }
-        Ok(values
-            .get(1)
-            .and_then(Option::as_ref)
-            .map(|bytes| deserialize(bytes))
-            .transpose()?)
+        Ok(binding)
     }
 
     pub async fn clear(
@@ -783,12 +901,14 @@ impl StreamSessionIndexService {
                 .kv
                 .with_entity("stream_session_index", "snapshot_clear", "metadata")
                 .get_raw(namespace.clone(), METADATA_FIELD)
-                .await?;
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?;
             let mut keys = self
                 .kv
                 .with("stream_session_index", "snapshot_clear")
                 .keys(namespace.clone())
-                .await?;
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?;
             if expected.is_none() && keys.is_empty() {
                 return Ok(());
             }
@@ -824,17 +944,22 @@ impl StreamSessionIndexService {
     ) -> Result<(), SessionError> {
         let lock = self.index_lock(id);
         let _guard = lock.inner.lock().await;
+        let mut horizon = horizon;
         let namespace = Self::namespace(id, fingerprint);
         let oplog = self
             .oplog
             .upgrade()
             .ok_or_else(|| "oplog service is unavailable".to_string())?;
+        let payload_error = |index, error| {
+            UnreadableOplog::of_payload(&id.agent_id, "stream index payload", index, error)
+        };
         loop {
             let mut expected = self
                 .kv
                 .with_entity("stream_session_index", "read", "metadata")
                 .get_raw(namespace.clone(), METADATA_FIELD)
-                .await?;
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?;
             if expected.is_none() {
                 let initial = Metadata {
                     generation: Uuid::new_v4(),
@@ -862,7 +987,22 @@ impl StreamSessionIndexService {
                 }
                 expected = Some(initial.into());
             }
-            let mut metadata = deserialize::<Metadata>(expected.as_ref().unwrap())?;
+            let Some(mut metadata) = expected
+                .as_deref()
+                .and_then(|bytes| decode::<Metadata>(bytes).ok())
+            else {
+                horizon = self
+                    .refold_and_publish(
+                        id,
+                        mode,
+                        fingerprint,
+                        refold_target(horizon, None),
+                        &namespace,
+                        expected.as_deref(),
+                    )
+                    .await?;
+                continue;
+            };
             if metadata.covered_through >= horizon {
                 return Ok(());
             }
@@ -891,9 +1031,8 @@ impl StreamSessionIndexService {
                     true
                 } else if entries.keys().max().is_some_and(|index| *index >= horizon) {
                     let mut found = false;
-                    for entry in entries
-                        .range(metadata.lineage_discovered_through.next()..=horizon)
-                        .map(|(_, entry)| entry)
+                    for (index, entry) in
+                        entries.range(metadata.lineage_discovered_through.next()..=horizon)
                     {
                         if matches!(entry, OplogEntry::Revert { .. }) {
                             found = true;
@@ -904,7 +1043,7 @@ impl StreamSessionIndexService {
                                 oplog
                                     .download_payload(id, mode, record.clone())
                                     .await
-                                    .map_err(String::from)?,
+                                    .map_err(|error| payload_error(*index, error))?,
                                 StreamSessionRecord::ForkCut(_)
                             )
                         {
@@ -947,7 +1086,7 @@ impl StreamSessionIndexService {
                     id,
                     mode,
                     fingerprint,
-                    horizon,
+                    refold_target(horizon, Some(metadata.covered_through)),
                     &namespace,
                     expected.as_deref(),
                 )
@@ -961,13 +1100,13 @@ impl StreamSessionIndexService {
                     .deleted_regions()
                     .is_in_deleted_region(*index)
             });
-            while let Some((_, OplogEntry::StreamRegistered { record, .. })) =
+            while let Some((index, OplogEntry::StreamRegistered { record, .. })) =
                 entries.last_key_value()
             {
                 let record = oplog
                     .download_payload(id, mode, record.clone())
                     .await
-                    .map_err(String::from)?;
+                    .map_err(|error| payload_error(*index, error))?;
                 if !matches!(
                     record.coordinate,
                     golem_common::model::durable_stream::StreamRegistrationRecordCoordinate::Nested { .. }
@@ -1037,15 +1176,10 @@ impl StreamSessionIndexService {
                     } = entry
                     {
                         if !updates.contains_key(idempotency_key) {
-                            let old: Option<Result<DurableStreamSessionStatus, String>> = self
-                                .kv
-                                .with_entity("stream_session_index", "read", "session")
-                                .get_attempt_deserialize(
-                                    namespace.clone(),
-                                    &Self::field(idempotency_key),
-                                )
-                                .await?;
-                            if let Some(old) = old.transpose()? {
+                            let old: Option<DurableStreamSessionStatus> = read_projection(
+                                self.kv.as_ref(), namespace.clone(), "read", "session", &Self::field(idempotency_key),
+                            ).await?;
+                            if let Some(old) = old {
                                 updates.insert(*idempotency_key, old);
                             }
                         }
@@ -1075,11 +1209,11 @@ impl StreamSessionIndexService {
                             bytes,
                             cached: None,
                         } => {
-                            decoded = deserialize(bytes)?;
+                            decoded = decode(bytes).map_err(|error| payload_error(*idx, OplogPayloadDownloadError::Corrupt(anyhow::Error::new(error))))?;
                             &decoded
                         }
                         OplogPayload::External { cached: None, .. } => {
-                            decoded = oplog.download_payload(id, mode, record.clone()).await.map_err(String::from)?;
+                            decoded = oplog.download_payload(id, mode, record.clone()).await.map_err(|error| payload_error(*idx, error))?;
                             &decoded
                         }
                     };
@@ -1091,11 +1225,9 @@ impl StreamSessionIndexService {
                     if let StreamSessionRecord::ForkCut(cut) = record {
                         for key in metadata.export_fork_initialized_sessions.clone() {
                             if let std::collections::hash_map::Entry::Vacant(entry) = updates.entry(key) {
-                                let status: Option<DurableStreamSessionStatus> = self
-                                    .kv
-                                    .with_entity("stream_session_index", "read", "session")
-                                    .get(namespace.clone(), &Self::field(&key))
-                                    .await?;
+                                let status: Option<DurableStreamSessionStatus> = read_projection(
+                                    self.kv.as_ref(), namespace.clone(), "read", "session", &Self::field(&key),
+                                ).await?;
                                 if let Some(status) = status {
                                     entry.insert(status);
                                 }
@@ -1109,13 +1241,9 @@ impl StreamSessionIndexService {
                                 let old = if let Some(control) = controls.remove(key) {
                                     control
                                 } else {
-                                    self.kv
-                                        .with_entity(
-                                            "stream_session_index",
-                                            "read_control",
-                                            "session",
-                                        )
-                                        .get(namespace.clone(), &stream_control_index_field(key)?)
+                                    read_projection(
+                                        self.kv.as_ref(), namespace.clone(), "read_control", "session", &stream_control_index_field(key)?,
+                                    )
                                         .await?
                                         .unwrap_or_default()
                                 };
@@ -1123,15 +1251,9 @@ impl StreamSessionIndexService {
                                 projected.assign_recovery_slot(old.recovery_slot());
                                 controls.insert(key.clone(), projected);
                                 if let std::collections::hash_map::Entry::Vacant(entry) = updates.entry(key.idempotency_key) {
-                                    let status: Option<DurableStreamSessionStatus> = self
-                                        .kv
-                                        .with_entity(
-                                            "stream_session_index",
-                                            "read",
-                                            "session",
-                                        )
-                                        .get(namespace.clone(), &Self::field(&key.idempotency_key))
-                                        .await?;
+                                    let status: Option<DurableStreamSessionStatus> = read_projection(
+                                        self.kv.as_ref(), namespace.clone(), "read", "session", &Self::field(&key.idempotency_key),
+                                    ).await?;
                                     if let Some(status) = status {
                                         entry.insert(status);
                                     }
@@ -1175,18 +1297,9 @@ impl StreamSessionIndexService {
                     };
                     if let Some(public_session_id) = public_session_id {
                         if !public_bindings.contains_key(&public_session_id) {
-                            let old = self
-                                .kv
-                                .with_entity(
-                                    "stream_session_index",
-                                    "read",
-                                    "public_binding",
-                                )
-                                .get(
-                                    namespace.clone(),
-                                    &public_session_id,
-                                )
-                                .await?;
+                            let old = read_projection(
+                                self.kv.as_ref(), namespace.clone(), "read", "public_binding", &public_session_id,
+                            ).await?;
                             public_bindings.insert(public_session_id.clone(), old);
                         }
                         let current = public_bindings
@@ -1211,11 +1324,9 @@ impl StreamSessionIndexService {
                         if let std::collections::hash_map::Entry::Vacant(entry) =
                             resume_offsets.entry(field)
                         {
-                            let old: Option<OplogIndex> = self
-                                .kv
-                                .with_entity("stream_session_index", "read_resume", "attempt")
-                                .get(namespace.clone(), entry.key())
-                                .await?;
+                            let old: Option<OplogIndex> = read_projection(
+                                self.kv.as_ref(), namespace.clone(), "read_resume", "attempt", entry.key(),
+                            ).await?;
                             entry.insert(old.unwrap_or(*idx));
                         }
                     }
@@ -1226,11 +1337,9 @@ impl StreamSessionIndexService {
                         producer_fingerprint,
                     ) {
                         if !controls.contains_key(&key) {
-                            let old: Option<SessionControlMetadata> = self
-                                .kv
-                                .with_entity("stream_session_index", "read_control", "session")
-                                .get(namespace.clone(), &stream_control_index_field(&key)?)
-                                .await?;
+                            let old: Option<SessionControlMetadata> = read_projection(
+                                self.kv.as_ref(), namespace.clone(), "read_control", "session", &stream_control_index_field(&key)?,
+                            ).await?;
                             controls.insert(key.clone(), old.unwrap_or_default());
                         }
                         let control = controls.get_mut(&key).unwrap();
@@ -1280,12 +1389,10 @@ impl StreamSessionIndexService {
                         continue;
                     };
                     if let std::collections::hash_map::Entry::Vacant(entry) = updates.entry(key) {
-                        let old: Option<Result<DurableStreamSessionStatus, String>> = self
-                            .kv
-                            .with_entity("stream_session_index", "read", "session")
-                            .get_attempt_deserialize(namespace.clone(), &Self::field(&key))
-                            .await?;
-                        entry.insert(old.transpose()?.unwrap_or_default());
+                        let old: Option<DurableStreamSessionStatus> = read_projection(
+                            self.kv.as_ref(), namespace.clone(), "read", "session", &Self::field(&key),
+                        ).await?;
+                        entry.insert(old.unwrap_or_default());
                     }
                     let status = updates.get_mut(&key).unwrap();
                     if let StreamSessionRecord::Attached(attached) = record
@@ -1375,20 +1482,33 @@ impl StreamSessionIndexService {
                     fields.push(("consumer-deleting".into(), serialize(&record)?));
                 }
                 fields.push((METADATA_FIELD.into(), serialize(&metadata)?));
-                Ok::<_, SessionError>(fields)
+                Ok::<_, ProjectionError>(fields)
             }
             .await;
             let fields = match fields {
                 Ok(fields) => fields,
-                Err(error) => {
+                Err(ProjectionError::CacheMiss) => {
+                    self.refold_and_publish(
+                        id,
+                        mode,
+                        fingerprint,
+                        refold_target(horizon, Some(metadata.covered_through)),
+                        &namespace,
+                        expected.as_deref(),
+                    )
+                    .await?;
+                    continue;
+                }
+                Err(ProjectionError::Other(error)) => {
                     // Separate row reads may straddle another executor's atomic update.
                     let current = self
                         .kv
                         .with_entity("stream_session_index", "read", "metadata")
                         .get_raw(namespace.clone(), METADATA_FIELD)
-                        .await?;
+                        .await
+                        .map_err(|error| unanswered_index_read(&namespace, error))?;
                     if current == expected {
-                        return Err(error);
+                        return Err(*error);
                     }
                     continue;
                 }
@@ -1420,10 +1540,17 @@ impl StreamSessionIndexService {
         id: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-        horizon: OplogIndex,
+        target: RefoldTarget,
         namespace: &KeyValueStorageNamespace,
         expected: Option<&[u8]>,
-    ) -> Result<(), SessionError> {
+    ) -> Result<OplogIndex, SessionError> {
+        let horizon = match target {
+            RefoldTarget::Through(covered) => covered,
+            RefoldTarget::CommittedTail { minimum } => {
+                let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
+                minimum.max(oplog.get_last_index(id, mode).await?)
+            }
+        };
         let scratch: Arc<dyn KeyValueStorage + Send + Sync> =
             Arc::new(InMemoryKeyValueStorage::new());
         let scratch_service = Self::new(scratch.clone(), self.oplog.clone());
@@ -1432,17 +1559,20 @@ impl StreamSessionIndexService {
         let scratch_keys = scratch
             .with("stream_session_index", "refold_read")
             .keys(namespace.clone())
-            .await?;
+            .await
+            .map_err(|error| unanswered_index_read(namespace, error))?;
         let scratch_values = scratch
             .with_entity("stream_session_index", "refold_read", "session")
             .get_many_raw(namespace.clone(), scratch_keys.clone().into())
-            .await?;
+            .await
+            .map_err(|error| unanswered_index_read(namespace, error))?;
         let retained = scratch_keys.iter().cloned().collect::<HashSet<_>>();
         let old_keys = self
             .kv
             .with("stream_session_index", "refold_publish")
             .keys(namespace.clone())
-            .await?;
+            .await
+            .map_err(|error| unanswered_index_read(namespace, error))?;
         let deletes = old_keys
             .iter()
             .filter(|key| !retained.contains(*key))
@@ -1471,10 +1601,24 @@ impl StreamSessionIndexService {
                 DERIVED_CACHE_EXPIRY,
             )
             .await?;
-        Ok(())
+        // The next read uses shared storage, whether the CAS won or lost.
+        Ok(horizon)
     }
 
-    #[tracing::instrument(name = "stream_session_index.lookup", level = "debug", skip_all)]
+    /// Folds the snapshot of an exact lookup in private storage. The shared index keeps its
+    /// coverage.
+    async fn scratch_lookup(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        key: &InvocationId,
+        lookup: SessionLookup,
+    ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
+        let scratch = Self::new(Arc::new(InMemoryKeyValueStorage::new()), self.oplog.clone());
+        Box::pin(scratch.lookup_in(id, mode, fingerprint, key, lookup, false)).await
+    }
+
     async fn lookup_inner(
         &self,
         id: &OwnedAgentId,
@@ -1482,6 +1626,23 @@ impl StreamSessionIndexService {
         fingerprint: AgentFingerprint,
         key: &InvocationId,
         lookup: SessionLookup,
+    ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
+        self.lookup_in(id, mode, fingerprint, key, lookup, true)
+            .await
+    }
+
+    /// With `private_fold`, an exact lookup that the shared index cannot answer at its horizon
+    /// folds the horizon in private storage. Only coverage that was already above the horizon
+    /// when the lookup began is an error.
+    #[tracing::instrument(name = "stream_session_index.lookup", level = "debug", skip_all)]
+    async fn lookup_in(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        key: &InvocationId,
+        lookup: SessionLookup,
+        private_fold: bool,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let horizon = match lookup {
             SessionLookup::Exact(horizon) | SessionLookup::Offsets(horizon) => horizon,
@@ -1493,31 +1654,77 @@ impl StreamSessionIndexService {
                     .await?
             }
         };
-        self.catch_up_inner(id, mode, fingerprint, horizon).await?;
-        let lock = self.index_lock(id);
-        let _guard = lock.inner.lock().await;
-        let values = self
-            .kv
-            .with_entity("stream_session_index", "lookup", "session")
-            .get_many_raw(
-                Self::namespace(id, fingerprint),
+        let namespace = Self::namespace(id, fingerprint);
+        let exact = matches!(lookup, SessionLookup::Exact(_));
+        if exact && private_fold {
+            let marker = self
+                .kv
+                .with_entity("stream_session_index", "read", "metadata")
+                .get_raw(namespace.clone(), METADATA_FIELD)
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?;
+            match marker.map(|bytes| decode::<Metadata>(&bytes)) {
+                // A refold of an unreadable coverage rebuilds through the committed tail, which
+                // can be above the horizon and can fail on an entry above it. Other reads repair
+                // the shared index.
+                Some(Err(_)) => {
+                    return self
+                        .scratch_lookup(id, mode, fingerprint, key, lookup)
+                        .await;
+                }
+                Some(Ok(metadata)) if metadata.covered_through > horizon => {
+                    return Err("stream session index is newer than the requested horizon".into());
+                }
+                _ => {}
+            }
+        }
+        let snapshot = async {
+            self.catch_up_inner(id, mode, fingerprint, horizon).await?;
+            let lock = self.index_lock(id);
+            let _guard = lock.inner.lock().await;
+            self.cached_snapshot(
+                id,
+                mode,
+                fingerprint,
+                "lookup",
+                "session",
                 vec![METADATA_FIELD.into(), Self::field(key)].into(),
+                |values| {
+                    Ok(values[0]
+                        .as_deref()
+                        .map(decode::<DurableStreamSessionStatus>)
+                        .transpose()?)
+                },
             )
-            .await?;
-        let Some(metadata) = values.first().and_then(Option::as_ref) else {
-            return Err("stream session index coverage is unavailable after catch-up".into());
+            .await
+        }
+        .await;
+        let (_, metadata, value) = match snapshot {
+            // The shared index can fail on history above the horizon, for example when its
+            // coverage became unreadable after the probe and its repair reads the committed tail.
+            Err(SessionError::Unreadable(_)) if exact && private_fold => {
+                return self
+                    .scratch_lookup(id, mode, fingerprint, key, lookup)
+                    .await;
+            }
+            snapshot => snapshot?,
         };
-        let metadata: Metadata = deserialize(metadata)?;
         if metadata.covered_through < horizon {
             return Err("stream session index coverage regressed after catch-up".into());
         }
-        if metadata.covered_through > horizon && matches!(lookup, SessionLookup::Exact(_)) {
+        if metadata.covered_through > horizon && exact {
+            // The coverage was not above the horizon when the lookup began: a repair or another
+            // writer moved it past the horizon since.
+            if private_fold {
+                return self
+                    .scratch_lookup(id, mode, fingerprint, key, lookup)
+                    .await;
+            }
             return Err("stream session index is newer than the requested horizon".into());
         }
-        let Some(value) = values.get(1).and_then(Option::as_ref) else {
+        let Some(mut value) = value else {
             return Ok(None);
         };
-        let mut value: DurableStreamSessionStatus = deserialize(value)?;
         if matches!(lookup, SessionLookup::Offsets(_)) {
             for field in [
                 &mut value.first_prepared,
@@ -1557,3 +1764,6 @@ impl StreamSessionIndexService {
             .then_some(value))
     }
 }
+
+#[cfg(test)]
+mod tests;

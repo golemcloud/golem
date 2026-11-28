@@ -107,7 +107,7 @@ impl McpSessionRecord {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, McpSessionStoreError> {
-        golem_common::serialization::deserialize(bytes)
+        golem_common::serialization::decode(bytes)
             .map_err(|e| anyhow!("McpSessionRecord deserialization error: {e}").into())
     }
 }

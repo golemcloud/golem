@@ -162,7 +162,10 @@ async fn an_unreadable_oplog_while_cancelling_unbound_inputs_traps_for_recovery(
         None,
         acceptance,
         std::future::pending::<
-            Result<crate::services::rpc::DurableRpcInvocationResult, ServiceRpcError>,
+            Result<
+                crate::services::rpc::DurableRpcInvocationResult,
+                crate::services::rpc::RpcAwaitError,
+            >,
         >(),
     )
     .await;
@@ -410,7 +413,7 @@ impl Rpc for ActivatingRpc {
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _scope_card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, ServiceRpcError> {
+    ) -> Result<SchemaValue, crate::services::rpc::RpcAwaitError> {
         *self.dispatched_fingerprint.lock().unwrap() = expected_callee_fingerprint;
         self.invoke_called.store(true, Ordering::SeqCst);
         Ok(SchemaValue::Tuple { elements: vec![] })
@@ -431,7 +434,7 @@ impl Rpc for ActivatingRpc {
         _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
+    ) -> Result<(), crate::services::rpc::RpcAwaitError> {
         unreachable!("test only exercises invoke-and-await dispatch")
     }
 }
@@ -521,7 +524,7 @@ impl Rpc for RecordingScopeCardRpc {
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, ServiceRpcError> {
+    ) -> Result<SchemaValue, crate::services::rpc::RpcAwaitError> {
         *self.dispatched_scope_card.lock().unwrap() = scope_card;
         Ok(SchemaValue::Tuple { elements: vec![] })
     }
@@ -541,7 +544,7 @@ impl Rpc for RecordingScopeCardRpc {
         _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
+    ) -> Result<(), crate::services::rpc::RpcAwaitError> {
         unreachable!("test only exercises invoke-and-await dispatch")
     }
 }

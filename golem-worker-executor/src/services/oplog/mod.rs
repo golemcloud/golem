@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durable_stream::SessionError;
 use crate::metrics::oplog::record_oplog_epoch_fence;
 use crate::model::ExecutionStatus;
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
@@ -60,6 +61,8 @@ pub use multilayer::{
     OplogArchiveService,
 };
 pub use primary::PrimaryOplogService;
+#[cfg(test)]
+pub(crate) use primary::{add_grow_memory_entries, create_test_oplog, test_oplog_service};
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -502,14 +505,16 @@ impl OplogFence {
 ///
 /// A `Fenced` write is not a storage failure - the storage is healthy and refused the write on
 /// purpose - so it is returned rather than retried or panicked on, and the worker that hit it is
-/// stopped and left to the shard's new owner. Storage failures on execution-critical reads and
-/// writes keep their fail-stop semantics inside the oplog implementation. Fallible archive
-/// maintenance returns `Maintenance`, allowing the fenced cleanup to be retried without stopping
-/// the executor. `Payload` is an entry whose payload the caller-supplied builder could not produce.
+/// stopped and left to the shard's new owner. Storage failures on execution-critical writes keep
+/// their fail-stop semantics inside the oplog implementation. Fallible archive maintenance returns
+/// `Maintenance`, allowing the fenced cleanup to be retried without stopping the executor.
+/// `Payload` is an entry whose payload the caller-supplied builder could not produce.
 /// `ArchiveWrite` is a write to an archive layer that failed after its retries: it is latched, so
-/// the agent stops, and only that agent. `Unreadable` is a commit whose entries were stored, but
-/// whose status could not be rebuilt because the oplog does not read: the agent stops with the
-/// cause, and only that agent.
+/// the agent stops, and only that agent.
+///
+/// `Unreadable` is a read of the oplog that failed. On a write path, the commit stored its
+/// entries, but its report or the status after it does not read. The agent stops with the read
+/// error, and only that agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
@@ -540,7 +545,7 @@ impl Display for ArchiveWriteFailure {
 /// An archive layer that did not store the oplog fails the agent for good.
 impl From<ArchiveWriteFailure> for WorkerExecutorError {
     fn from(failure: ArchiveWriteFailure) -> Self {
-        WorkerExecutorError::oplog_failed(
+        WorkerExecutorError::oplog_archive_write_failed(
             failure.agent_id,
             format!(
                 "failed to write oplog data to archive layer {}: {}",
@@ -612,13 +617,13 @@ impl std::error::Error for OplogError {}
 /// A write after which the agent cannot go on. Every other `OplogError` stays fail-stop.
 ///
 /// `Fenced` (the shard has a new owner) and `ArchiveWrite` (an archive layer of an ephemeral oplog
-/// did not store its entries after its retries) are latched on the oplog: every later add and
-/// commit fails the same way, so a path that cannot report the refusal leaves it to the next write
-/// that can.
+/// did not store its entries after its retries) are latched on the oplog: every later add, commit
+/// and flush fails the same way, so a path that cannot report the refusal leaves it to the next
+/// write that can. Neither is a commit, so the commit receipt is refused.
 ///
-/// `Unreadable` is not latched. Only the commit of the status task gives it, after the entries of
-/// that commit were stored, when the status could not be rebuilt because the oplog does not read.
-/// A later write can succeed, so the caller that receives it fails the agent with the cause.
+/// `Unreadable` is not latched. A commit report can fail to read history after storage or ordered
+/// writer handoff succeeds. Status reconstruction can also return it. `ReportOnly` stores no
+/// buffered entries. A later report or rebuild can succeed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogRefusal {
     Fenced(OplogFence),
@@ -679,7 +684,7 @@ pub type OplogAddPairReceipt = BoxFuture<'static, Result<(OplogIndex, OplogIndex
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawDurableStreamSessionStatus {
     pub watermark: OplogIndex,
-    pub status: Result<Option<DurableStreamSessionStatus>, String>,
+    pub status: Result<Option<DurableStreamSessionStatus>, SessionError>,
 }
 
 /// An open oplog providing write access
@@ -789,7 +794,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
         Ok(self.drop_prefix(last_dropped_id).await)
     }
 
-    /// Commits the buffered entries to the oplog
+    /// Commits buffered entries at the requested level and reports the committed entries.
+    /// `Unreadable` tells that report collection failed after the storage or ordered-handoff
+    /// milestone succeeded. For a durable primary oplog, `ReportOnly` reports prior commits without
+    /// storing the buffered tail. For an ephemeral oplog it returns an empty report.
     async fn commit(
         &self,
         level: CommitLevel,

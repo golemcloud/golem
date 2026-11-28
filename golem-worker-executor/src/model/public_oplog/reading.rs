@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::conversion::PublicEntryError;
 use super::*;
 use crate::services::golem_config::ScanBudget;
 use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
@@ -120,7 +121,7 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
     claims: ClaimVisibility,
-) -> Result<PublicOplogChunk, String> {
+) -> Result<PublicOplogChunk, PublicEntryError> {
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -156,7 +157,8 @@ pub async fn get_public_oplog_page(
     initial_oplog_index: OplogIndex,
     limits: PublicOplogPageLimits,
     claims: ClaimVisibility,
-) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
+) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, PublicEntryError>
+{
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -211,7 +213,7 @@ pub async fn get_public_oplog_entry(
             .await?
         }
     };
-    let chunk = get_public_oplog_chunk(
+    let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
         owned_agent_id,
@@ -222,10 +224,11 @@ pub async fn get_public_oplog_entry(
         component_revision,
         oplog_index,
         1,
+        None,
         claims,
+        &mut InProcessChunk,
     )
-    .await
-    .map_err(WorkerExecutorError::unknown)?;
+    .await?;
     chunk.entries.into_iter().next().ok_or_else(|| {
         WorkerExecutorError::unknown(format!(
             "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
@@ -237,6 +240,8 @@ pub async fn get_public_oplog_entry(
 /// `filter` to the chunk, in the form that `builder` selects. The chunk ends early at the first
 /// matching entry that does not fit; the cursor of the chunk then points to that entry, and the
 /// returned flag is `true`.
+/// A stored value of an entry that does not read gives [`PublicEntryError::Unreadable`] with the
+/// index of the entry.
 #[allow(clippy::too_many_arguments)]
 async fn read_public_oplog_chunk<B: ChunkBuilder>(
     components: Arc<dyn ComponentService>,
@@ -252,12 +257,11 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     filter: Option<&Query>,
     claims: ClaimVisibility,
     builder: &mut B,
-) -> Result<(PublicOplogChunk<B::Entry>, bool), String> {
+) -> Result<(PublicOplogChunk<B::Entry>, bool), PublicEntryError> {
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     let available = if initial_oplog_index <= last_index {
         last_index.as_u64() - initial_oplog_index.as_u64() + 1
     } else {
@@ -270,8 +274,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             initial_oplog_index,
             (count as u64).min(available),
         )
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -293,9 +296,9 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
         let attribution = attribution_resolver
             .attribution_for_entry(index, &raw_entry)
             .await?;
-        let entry = PublicOplogEntry::from_oplog_entry(
+        let entry = PublicOplogEntry::from_enrichment_entry(
             index,
-            raw_entry,
+            raw_entry.into(),
             oplog_service.clone(),
             components.clone(),
             owned_agent_id,
@@ -359,7 +362,7 @@ pub async fn search_public_oplog(
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult, String> {
+) -> Result<PublicOplogSearchResult, PublicEntryError> {
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -397,7 +400,10 @@ pub async fn search_public_oplog_page(
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
+) -> Result<
+    PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+    PublicEntryError,
+> {
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -441,7 +447,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     budget: ScanBudget,
     claims: ClaimVisibility,
     mut builder: B,
-) -> Result<PublicOplogSearchResult<B::Entry>, String> {
+) -> Result<PublicOplogSearchResult<B::Entry>, PublicEntryError> {
     let started = Instant::now();
     let mut scanned = 0u64;
     let mut results = Vec::new();
@@ -748,8 +754,7 @@ pub async fn get_public_oplog_range_page(
         claims,
         &mut RemotePage::new(limits),
     )
-    .await
-    .map_err(WorkerExecutorError::unknown)?;
+    .await?;
     // The read fetches `count` entries from storage, also when the byte limit of the page admits
     // fewer of them.
     scan.charge(count as u64);
@@ -844,5 +849,188 @@ pub async fn oplog_page_start(
                 find_component_revision_at(oplog_service, owned_agent_id, agent_mode, from).await?;
             Ok((from, revision))
         }
+    }
+}
+
+#[cfg(test)]
+mod read_error_tests {
+    use super::*;
+    use crate::services::oplog::tests::{
+        default_execution_status, default_last_known_status, make_agent_metadata,
+    };
+    use crate::services::oplog::{CommitLevel, PrimaryOplogService};
+    use crate::services::worker::session_index_tests::UnusedComponentService;
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use futures::StreamExt;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::{RetryConfig, Timestamp};
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use test_r::test;
+    use uuid::Uuid;
+
+    /// A durable oplog whose entry 6 is an `End` with a response that does not decode.
+    async fn oplog_with_undecodable_end() -> (Arc<dyn OplogService>, OwnedAgentId) {
+        let service = Arc::new(
+            PrimaryOplogService::new(
+                Arc::new(InMemoryIndexedStorage::new()),
+                Arc::new(InMemoryBlobStorage::new()),
+                1,
+                1,
+                100,
+                32,
+                RetryConfig::default(),
+            )
+            .await,
+        );
+        let agent_id = crate::test_agent_id("public-oplog-unreadable");
+        let environment_id = EnvironmentId::new();
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let oplog = service
+            .open(
+                &mut service.lock_lifecycle(&agent_id).await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                make_agent_metadata(agent_id, AccountId::new(), environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        futures::stream::iter(1..=5)
+            .for_each(|size| {
+                let oplog = &oplog;
+                async move {
+                    oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
+                }
+            })
+            .await;
+        oplog
+            .add(OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: OplogIndex::from_u64(5),
+                response: Some(OplogPayload::SerializedInline {
+                    bytes: vec![255, 7, 7],
+                    cached: None,
+                }),
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            })
+            .await
+            .unwrap();
+        oplog.add(OplogEntry::grow_memory(6)).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        (service, owned_agent_id)
+    }
+
+    #[test]
+    async fn an_undecodable_payload_fails_the_entry_read_as_unreadable_at_its_index() {
+        let (service, owned_agent_id) = oplog_with_undecodable_end().await;
+
+        let error = get_public_oplog_entry(
+            Arc::new(UnusedComponentService),
+            service,
+            &owned_agent_id,
+            AgentMode::Durable,
+            ComponentId(Uuid::from_u128(0xc0)),
+            OwnerKind::ComponentAgent,
+            None,
+            OplogIndex::from_u64(6),
+            Some(ComponentRevision::INITIAL),
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .expect_err("an undecodable payload must fail the read");
+
+        let WorkerExecutorError::OplogFailed {
+            agent_id, details, ..
+        } = &error
+        else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(*agent_id, owned_agent_id.agent_id);
+        assert!(details.contains("at oplog index 6:"), "{details}");
+        assert!(
+            details.contains("unknown serialization version: 255"),
+            "{details}"
+        );
+    }
+
+    #[test]
+    async fn an_undecodable_payload_names_its_entry_and_version_in_a_page_read() {
+        let (service, owned_agent_id) = oplog_with_undecodable_end().await;
+
+        let error = get_public_oplog_page(
+            Arc::new(UnusedComponentService),
+            service,
+            &owned_agent_id,
+            AgentMode::Durable,
+            ComponentId(Uuid::from_u128(0xc0)),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::from_u64(2),
+            PublicOplogPageLimits {
+                count: 10,
+                max_bytes: 1 << 20,
+                max_entry_bytes: 1 << 20,
+            },
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .err()
+        .expect("an undecodable payload must fail the page");
+
+        assert_unreadable_at_entry_6(&owned_agent_id, WorkerExecutorError::from(error));
+    }
+
+    #[test]
+    async fn an_undecodable_payload_names_its_entry_and_version_in_a_search_page() {
+        let (service, owned_agent_id) = oplog_with_undecodable_end().await;
+
+        let error = search_public_oplog_page(
+            Arc::new(UnusedComponentService),
+            service,
+            &owned_agent_id,
+            AgentMode::Durable,
+            ComponentId(Uuid::from_u128(0xc0)),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::from_u64(2),
+            PublicOplogPageLimits {
+                count: 10,
+                max_bytes: 1 << 20,
+                max_entry_bytes: 1 << 20,
+            },
+            "end",
+            ScanBudget::default(),
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .err()
+        .expect("an undecodable payload must fail the search");
+
+        assert_unreadable_at_entry_6(&owned_agent_id, WorkerExecutorError::from(error));
+    }
+
+    /// The error is `OplogFailed` for the agent that owns the oplog, and names entry 6 and the
+    /// version byte that does not decode.
+    fn assert_unreadable_at_entry_6(owned_agent_id: &OwnedAgentId, error: WorkerExecutorError) {
+        let WorkerExecutorError::OplogFailed {
+            agent_id, details, ..
+        } = &error
+        else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(*agent_id, owned_agent_id.agent_id);
+        assert!(details.contains("at oplog index 6:"), "{details}");
+        assert!(
+            details.contains("unknown serialization version: 255"),
+            "{details}"
+        );
     }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durable_stream::SessionError;
 use crate::metrics::oplog::{
     record_oplog_call, record_oplog_epoch_fence, record_oplog_storage_retry,
 };
@@ -21,7 +22,7 @@ use crate::metrics::storage::{
 };
 use crate::model::ExecutionStatus;
 use crate::services::oplog::reader::{
-    OplogReadSource, UnreadableOplog, checked_range_end, exact_from_source,
+    OplogReadError, OplogReadSource, UnreadableOplog, checked_range_end, exact_from_source,
 };
 use crate::services::oplog::{
     AutoCommitListener, CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder,
@@ -51,7 +52,7 @@ use golem_common::model::{
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::{DecodeError, decode, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace,
@@ -72,10 +73,12 @@ mod service;
 mod state;
 mod storage;
 
-use reader::read_persisted_oplog_entries;
-use storage::{
-    retry_maintenance_storage_op, retry_oplog_append, retry_storage_op, retry_storage_op_result,
+use reader::{read_persisted_oplog_entries, retry_primary_read};
+#[cfg(test)]
+pub(crate) use storage::tests::{
+    add_all as add_grow_memory_entries, create as create_test_oplog, service as test_oplog_service,
 };
+use storage::{retry_maintenance_storage_op, retry_oplog_append, retry_storage_op};
 
 enum SerializedOplogAppend {
     Entry((u64, Bytes)),
@@ -235,7 +238,7 @@ enum OplogJob {
         session_key: golem_common::model::durable_stream::StreamSessionKey,
         expected_watermark: OplogIndex,
         expected_committed: OplogIndex,
-        status: Box<Result<Option<DurableStreamSessionStatus>, String>>,
+        status: Box<Result<Option<DurableStreamSessionStatus>, SessionError>>,
         done: tokio::sync::oneshot::Sender<Option<super::RawDurableStreamSessionStatus>>,
     },
     LastAddedNonHintEntry {
@@ -256,7 +259,7 @@ struct RawSessionLookup {
     watermark: OplogIndex,
     committed: OplogIndex,
     buffer: VecDeque<OplogEntry>,
-    cached: Option<Result<Option<DurableStreamSessionStatus>, String>>,
+    cached: Option<Result<Option<DurableStreamSessionStatus>, SessionError>>,
 }
 
 /// Snapshot of the state needed to upload/download oplog payload blobs outside the actor.

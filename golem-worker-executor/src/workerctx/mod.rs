@@ -607,13 +607,14 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     type ExtraDeps: Clone + Send + Sync + 'static;
 
     /// Gets how many times the worker has been retried to recover from an error, and what
-    /// error was stored in the last entry.
+    /// error was stored in the last entry. A read of the oplog that fails gives its read error,
+    /// never a made-up last error or the absence of one.
     fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> impl Future<Output = Option<LastError>> + Send;
+    ) -> impl Future<Output = Result<Option<LastError>, crate::services::oplog::UnreadableOplog>> + Send;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker, but by general it can be no-op.

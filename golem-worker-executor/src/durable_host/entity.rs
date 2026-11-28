@@ -27,7 +27,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
-use crate::services::oplog::OplogOps;
+use crate::services::oplog::{OplogOps, OplogReadError, OplogReadSource, UnreadableOplog};
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::worker::entity_invocation::{
     EntityBodyOutcome, EntityInvocationHandle, EntityInvocationResources,
@@ -457,13 +457,11 @@ impl EntityInvocationDurability {
         let start_index = handle.start_index();
         match load_recorded_request(store, get_ctx, start_index).await? {
             HostRequest::EntityInvocation(request) => {
+                let owner = store
+                    .with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.agent_id);
                 let metadata =
                     desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
-                        .map_err(|error| {
-                            WorkerExecutorError::runtime(format!(
-                                "failed to decode recorded entity invocation metadata: {error}"
-                            ))
-                        })?;
+                        .map_err(|_| undecodable_entity_metadata(&owner, start_index))?;
                 Ok(ToolInvocationReplayOutcome::Accepted(Box::new(
                     Self::from_started_request(
                         store,
@@ -1407,7 +1405,9 @@ where
             Some(request.metadata)
         }
     };
+    let owner = store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.agent_id);
     resolve_recorded_plan_from_root_payload(
+        &owner,
         current_start_index,
         entity,
         reference,
@@ -1415,7 +1415,24 @@ where
     )
 }
 
+/// The read error of recorded entity invocation metadata that does not decode. A decoder error can
+/// hold stored values, so the error names only the owner and the `Start` that holds the metadata.
+fn undecodable_entity_metadata(
+    owner: &golem_common::model::AgentId,
+    start_index: OplogIndex,
+) -> WorkerExecutorError {
+    UnreadableOplog::new(
+        owner,
+        OplogReadError::corruption(
+            OplogReadSource::Other("entity invocation metadata"),
+            format!("failed to decode the entity invocation metadata at oplog index {start_index}"),
+        ),
+    )
+    .into()
+}
+
 fn resolve_recorded_plan_from_root_payload(
+    owner: &golem_common::model::AgentId,
     current_start_index: OplogIndex,
     entity: &AgentEntity,
     reference: EntityInvocationPlanReference,
@@ -1436,11 +1453,7 @@ fn resolve_recorded_plan_from_root_payload(
                 desert_rust::deserialize::<EntityInvocationRequest>(root_metadata.ok_or_else(
                     || WorkerExecutorError::runtime("missing root entity invocation metadata"),
                 )?)
-                .map_err(|error| {
-                    WorkerExecutorError::runtime(format!(
-                        "failed to decode root entity invocation metadata: {error}"
-                    ))
-                })?;
+                .map_err(|_| undecodable_entity_metadata(owner, root_start_index))?;
             let EntityInvocationPlanReference::Root { plan } = metadata.plan else {
                 return Err(WorkerExecutorError::runtime(
                     "descendant entity invocation does not reference a plan root",
@@ -2071,8 +2084,13 @@ pub(crate) mod tests {
         .unwrap()
     }
 
+    fn test_owner() -> golem_common::model::AgentId {
+        golem_common::model::AgentId::from_parts(0x1628, 0xe1)
+    }
+
     pub(crate) fn middleware_position() -> ResolvedEntityInvocationPosition {
         resolve_recorded_plan_from_root_payload(
+            &test_owner(),
             OplogIndex::from_u64(42),
             &AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
             EntityInvocationPlanReference::Root {
@@ -2090,6 +2108,7 @@ pub(crate) mod tests {
             plan: three_layer_plan(),
         });
         let resolved = resolve_recorded_plan_from_root_payload(
+            &test_owner(),
             OplogIndex::from_u64(61),
             &AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
             EntityInvocationPlanReference::Descendant {
@@ -2115,6 +2134,7 @@ pub(crate) mod tests {
         assert_eq!(parameters.value(), &SchemaValue::U64(7));
 
         let leaf = resolve_recorded_plan_from_root_payload(
+            &test_owner(),
             OplogIndex::from_u64(62),
             &AgentEntity::Tool(ToolName::try_from("entity").unwrap()),
             EntityInvocationPlanReference::Descendant {
@@ -2139,6 +2159,7 @@ pub(crate) mod tests {
         for (current, position) in [(42, 1), (41, 1), (61, 0), (61, 3)] {
             assert!(
                 resolve_recorded_plan_from_root_payload(
+                    &test_owner(),
                     OplogIndex::from_u64(current),
                     &middleware,
                     EntityInvocationPlanReference::Descendant {
@@ -2152,6 +2173,7 @@ pub(crate) mod tests {
         }
         assert!(
             resolve_recorded_plan_from_root_payload(
+                &test_owner(),
                 OplogIndex::from_u64(61),
                 &AgentEntity::Tool(ToolName::try_from("entity").unwrap()),
                 EntityInvocationPlanReference::Descendant {
@@ -2168,6 +2190,7 @@ pub(crate) mod tests {
         });
         assert!(
             resolve_recorded_plan_from_root_payload(
+                &test_owner(),
                 OplogIndex::from_u64(61),
                 &middleware,
                 EntityInvocationPlanReference::Descendant {
@@ -2178,17 +2201,27 @@ pub(crate) mod tests {
             )
             .is_err()
         );
-        assert!(
-            resolve_recorded_plan_from_root_payload(
-                OplogIndex::from_u64(61),
-                &middleware,
-                EntityInvocationPlanReference::Descendant {
-                    root_start_index: root,
-                    position: 1,
-                },
-                Some(b"malformed plan"),
-            )
-            .is_err()
+        let unreadable = resolve_recorded_plan_from_root_payload(
+            &test_owner(),
+            OplogIndex::from_u64(61),
+            &middleware,
+            EntityInvocationPlanReference::Descendant {
+                root_start_index: root,
+                position: 1,
+            },
+            Some(b"malformed plan"),
+        )
+        .err()
+        .expect("an undecodable recorded plan is a read error");
+        assert_eq!(
+            unreadable,
+            WorkerExecutorError::from(UnreadableOplog::new(
+                &test_owner(),
+                OplogReadError::corruption(
+                    OplogReadSource::Other("entity invocation metadata"),
+                    "failed to decode the entity invocation metadata at oplog index 42",
+                ),
+            ))
         );
     }
 

@@ -820,7 +820,7 @@ impl ExternalOperations<Context> for Context {
         agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         worker_status_record: &AgentStatusRecord,
-    ) -> Option<LastError> {
+    ) -> Result<Option<LastError>, crate::services::oplog::UnreadableOplog> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(
             this,
             agent_id,

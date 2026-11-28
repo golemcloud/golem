@@ -40,6 +40,7 @@ pub struct KeyValueStorageFaults {
 struct FaultState {
     armed: Vec<ArmedFault>,
     calls: HashMap<&'static str, usize>,
+    entity_calls: HashMap<(&'static str, &'static str), usize>,
     attempts: usize,
     /// When set, a failing operation is applied to the inner storage before its failure is
     /// reported - the lost-response case, where the backend did the work and the answer never
@@ -215,6 +216,18 @@ impl KeyValueStorageFaults {
             .unwrap_or(0)
     }
 
+    /// How many operations labelled `api_name` on the entity `entity_name` have been attempted,
+    /// failed or not. An operation without an entity, such as a delete, has the entity `""`.
+    pub fn entity_calls(&self, api_name: &'static str, entity_name: &'static str) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .entity_calls
+            .get(&(api_name, entity_name))
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// How many operations have been attempted in total, failed or not.
     pub fn attempts(&self) -> usize {
         self.state.lock().unwrap().attempts
@@ -243,9 +256,17 @@ impl KeyValueStorageFaults {
     }
 
     /// Records the call and decides whether it fails. The lock is not held across the gate wait.
-    fn decide(&self, api_name: &'static str) -> (Decision, Option<Arc<GateState>>) {
+    fn decide(
+        &self,
+        api_name: &'static str,
+        entity_name: &'static str,
+    ) -> (Decision, Option<Arc<GateState>>) {
         let mut state = self.state.lock().unwrap();
         *state.calls.entry(api_name).or_default() += 1;
+        *state
+            .entity_calls
+            .entry((api_name, entity_name))
+            .or_default() += 1;
         state.attempts += 1;
 
         let Some(index) = state
@@ -281,8 +302,8 @@ impl KeyValueStorageFaults {
         )
     }
 
-    async fn intercept(&self, api_name: &'static str) -> Decision {
-        let (decision, gate) = self.decide(api_name);
+    async fn intercept(&self, api_name: &'static str, entity_name: &'static str) -> Decision {
+        let (decision, gate) = self.decide(api_name, entity_name);
         if let Some(gate) = gate {
             gate.entered.notify_one();
             gate.release.notified().await;
@@ -319,9 +340,10 @@ impl FaultInjectingKeyValueStorage {
     async fn run<T>(
         &self,
         api_name: &'static str,
+        entity_name: &'static str,
         op: impl Future<Output = Result<T, KeyValueStorageError>>,
     ) -> Result<T, KeyValueStorageError> {
-        match self.faults.intercept(api_name).await {
+        match self.faults.intercept(api_name, entity_name).await {
             Decision::Pass => op.await,
             Decision::Fail {
                 error,
@@ -349,6 +371,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<(), KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .set(svc_name, api_name, entity_name, namespace, key, value),
         )
@@ -367,6 +390,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<(), KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner.set_with_expiry(
                 svc_name,
                 api_name,
@@ -390,6 +414,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<(), KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .set_many(svc_name, api_name, entity_name, namespace, pairs),
         )
@@ -409,6 +434,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<bool, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner.compare_and_set_many(
                 svc_name,
                 api_name,
@@ -437,6 +463,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<bool, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner.compare_and_mutate_many(
                 svc_name,
                 api_name,
@@ -463,6 +490,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<bool, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .set_if_not_exists(svc_name, api_name, entity_name, namespace, key, value),
         )
@@ -479,6 +507,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<Option<Bytes>, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .get(svc_name, api_name, entity_name, namespace, key),
         )
@@ -495,6 +524,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .get_many(svc_name, api_name, entity_name, namespace, keys),
         )
@@ -510,6 +540,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .get_all(svc_name, api_name, entity_name, namespace),
         )
@@ -523,8 +554,12 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<(), KeyValueStorageError> {
-        self.run(api_name, self.inner.del(svc_name, api_name, namespace, key))
-            .await
+        self.run(
+            api_name,
+            "",
+            self.inner.del(svc_name, api_name, namespace, key),
+        )
+        .await
     }
 
     async fn del_many(
@@ -536,6 +571,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<(), KeyValueStorageError> {
         self.run(
             api_name,
+            "",
             self.inner.del_many(svc_name, api_name, namespace, keys),
         )
         .await
@@ -550,6 +586,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<bool, KeyValueStorageError> {
         self.run(
             api_name,
+            "",
             self.inner.exists(svc_name, api_name, namespace, key),
         )
         .await
@@ -561,7 +598,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<String>, KeyValueStorageError> {
-        self.run(api_name, self.inner.keys(svc_name, api_name, namespace))
+        self.run(api_name, "", self.inner.keys(svc_name, api_name, namespace))
             .await
     }
 
@@ -576,6 +613,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<(), KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .add_to_set(svc_name, api_name, entity_name, namespace, key, value),
         )
@@ -593,6 +631,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<(), KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .remove_from_set(svc_name, api_name, entity_name, namespace, key, value),
         )
@@ -609,6 +648,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<Vec<Bytes>, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .members_of_set(svc_name, api_name, entity_name, namespace, key),
         )
@@ -627,6 +667,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<(), KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner.add_to_sorted_set(
                 svc_name,
                 api_name,
@@ -651,6 +692,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<(), KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner.remove_from_sorted_set(
                 svc_name,
                 api_name,
@@ -673,6 +715,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .get_sorted_set(svc_name, api_name, entity_name, namespace, key),
         )
@@ -691,6 +734,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
     ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         self.run(
             api_name,
+            entity_name,
             self.inner
                 .query_sorted_set(svc_name, api_name, entity_name, namespace, key, min, max),
         )

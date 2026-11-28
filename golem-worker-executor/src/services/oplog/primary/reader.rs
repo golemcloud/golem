@@ -14,33 +14,89 @@
 
 use super::*;
 
+/// Reads the stored entries in `[start..=end]` and decodes them.
+///
+/// A storage failure is retried while the retry policy allows. An entry that does not decode is
+/// corruption of the primary oplog, and the error names its index and the decoder reason.
 pub(super) async fn read_persisted_oplog_entries(
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+    retry_config: &RetryConfig,
+    op_name: &'static str,
     namespace: IndexedStorageNamespace,
-    key: String,
+    key: &str,
     start: u64,
     end: u64,
-) -> Result<Vec<(u64, OplogEntry)>, IndexedStorageError> {
-    let entries = indexed_storage
-        .with_entity("oplog", "read", "entry")
-        .read_raw(namespace, &key, start, end)
-        .await?;
+) -> Result<Vec<(u64, OplogEntry)>, OplogReadError> {
+    let entries = retry_primary_read(retry_config, op_name, key, || {
+        let indexed_storage = indexed_storage.clone();
+        let namespace = namespace.clone();
+        async move {
+            indexed_storage
+                .with_entity("oplog", "read", "entry")
+                .read_raw(namespace, key, start, end)
+                .await
+        }
+    })
+    .await?;
 
     join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
         entries
             .into_iter()
-            .map(|(idx, bytes)| deserialize(&bytes).map(|entry| (idx, entry)))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(IndexedStorageError::Other)
+            .map(|(idx, bytes)| {
+                decode::<OplogEntry>(&bytes)
+                    .map(|entry| (idx, entry))
+                    .map_err(|error| (idx, error))
+            })
+            .collect::<Result<Vec<_>, (u64, DecodeError)>>()
     }))
     .await
     .map_err(|error| {
-        IndexedStorageError::Other(format!("oplog deserialization task failed: {error}"))
+        OplogReadError::source_failure(
+            OplogReadSource::Primary,
+            format!("oplog deserialization task failed: {error}"),
+        )
     })?
+    .map_err(|(idx, error)| primary_decode_error(idx, &error))
+}
+
+/// An entry that does not decode gives the same error on every read, so it is corruption.
+fn primary_decode_error(idx: u64, error: &DecodeError) -> OplogReadError {
+    OplogReadError::corruption(
+        OplogReadSource::Primary,
+        format!("failed to decode oplog entry {idx}: {error}"),
+    )
+}
+
+/// Runs a read of the primary storage under the retry policy. A storage that did not answer
+/// after the retries is unavailable; any other failure is a source failure. The error names the
+/// operation and the storage key.
+pub(super) async fn retry_primary_read<T, F, Fut>(
+    retry_config: &RetryConfig,
+    op_name: &'static str,
+    key: &str,
+    op: F,
+) -> Result<T, OplogReadError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    retry_maintenance_storage_op(retry_config, op_name, key, op)
+        .await
+        .map_err(|error| primary_read_error(op_name, key, error))
+}
+
+fn primary_read_error(op_name: &str, key: &str, error: IndexedStorageError) -> OplogReadError {
+    let detail = format!("indexed storage operation '{op_name}' failed for key '{key}': {error}");
+    match error {
+        IndexedStorageError::Transient(_) => {
+            OplogReadError::source_unavailable(OplogReadSource::Primary, detail)
+        }
+        _ => OplogReadError::source_failure(OplogReadSource::Primary, detail),
+    }
 }
 
 impl OplogReader {
-    pub(super) async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    pub(super) async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
         record_oplog_call("read");
 
         let buffer_start = self.last_committed_idx.next();
@@ -49,33 +105,29 @@ impl OplogReader {
             if let Ok(offset) = usize::try_from(offset)
                 && let Some(entry) = self.buffer.get(offset)
             {
-                return entry.clone();
+                return Ok(entry.clone());
             }
         }
 
-        let entries: Vec<(u64, OplogEntry)> = {
-            let is = self.indexed_storage.clone();
-            let namespace = self.namespace.clone();
-            let key = self.key.clone();
-            let idx: u64 = oplog_index.into();
-            retry_storage_op(&self.retry_config, "read", &key, || {
-                let is = is.clone();
-                let ns = namespace.clone();
-                let key = key.clone();
-                async move { read_persisted_oplog_entries(is, ns, key, idx, idx).await }
-            })
-            .await
-        };
+        let idx: u64 = oplog_index.into();
+        let entries = read_persisted_oplog_entries(
+            self.indexed_storage.clone(),
+            &self.retry_config,
+            "read",
+            self.namespace.clone(),
+            &self.key,
+            idx,
+            idx,
+        )
+        .await?;
 
         entries
             .into_iter()
             .next()
             .map(|(_, entry)| entry)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Missing oplog entry {oplog_index} for {} in indexed storage",
-                    self.key
-                )
+            .ok_or(OplogReadError::Gap {
+                start: oplog_index,
+                end: oplog_index,
             })
     }
 
@@ -83,38 +135,24 @@ impl OplogReader {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.try_read_source(oplog_index, n)
-            .await
-            .unwrap_or_else(|error| panic!("{error}"))
-    }
-
-    pub(super) async fn try_read_source(
-        &self,
-        oplog_index: OplogIndex,
-        n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         record_oplog_call("read_exact");
 
-        let Some(last_idx) =
-            checked_range_end(oplog_index, n).map_err(|error| error.to_string())?
-        else {
+        let Some(last_idx) = checked_range_end(oplog_index, n)? else {
             return Ok(BTreeMap::new());
         };
 
         let mut result: BTreeMap<OplogIndex, OplogEntry> = if oplog_index <= self.last_committed_idx
         {
-            let is = self.indexed_storage.clone();
-            let namespace = self.namespace.clone();
-            let key = self.key.clone();
-            let start: u64 = oplog_index.into();
-            let end: u64 = min(last_idx, self.last_committed_idx).into();
-            retry_storage_op_result(&self.retry_config, "read_exact", &key, || {
-                let is = is.clone();
-                let ns = namespace.clone();
-                let key = key.clone();
-                async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
-            })
+            read_persisted_oplog_entries(
+                self.indexed_storage.clone(),
+                &self.retry_config,
+                "read_exact",
+                self.namespace.clone(),
+                &self.key,
+                oplog_index.into(),
+                min(last_idx, self.last_committed_idx).into(),
+            )
             .await?
             .into_iter()
             .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
@@ -149,26 +187,19 @@ impl OplogReader {
         Ok(result)
     }
 
-    pub(super) async fn length(&self) -> u64 {
-        self.try_length()
-            .await
-            .unwrap_or_else(|error| panic!("{error}"))
-    }
-
-    pub(super) async fn try_length(&self) -> Result<u64, String> {
+    pub(super) async fn length(&self) -> Result<u64, OplogReadError> {
         record_oplog_call("length");
-
-        Ok({
-            let is = self.indexed_storage.clone();
+        let indexed_storage = self.indexed_storage.as_ref();
+        let key = self.key.as_str();
+        retry_primary_read(&self.retry_config, "length", key, || {
             let namespace = self.namespace.clone();
-            let key = self.key.clone();
-            retry_storage_op_result(&self.retry_config, "length", &key, || {
-                let is = is.clone();
-                let ns = namespace.clone();
-                let key = key.clone();
-                async move { is.with("oplog", "length").length(ns, &key).await }
-            })
-            .await?
+            async move {
+                indexed_storage
+                    .with("oplog", "length")
+                    .length(namespace, key)
+                    .await
+            }
         })
+        .await
     }
 }

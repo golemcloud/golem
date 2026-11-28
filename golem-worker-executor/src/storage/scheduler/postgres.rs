@@ -20,7 +20,7 @@ use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
 
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
-use golem_common::serialization::deserialize;
+use golem_common::serialization::decode;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -197,7 +197,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
                     schedule_id: ScheduleId {
                         id: row.schedule_id,
                     },
-                    action: deserialize(&row.action)?,
+                    action: decode(&row.action).map_err(|error| error.to_string())?,
                     due_at: millis_to_datetime(row.due_at_ms)?,
                     lease_owner,
                     attempt_count: row.attempt_count as u32,

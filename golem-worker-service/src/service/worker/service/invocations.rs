@@ -34,7 +34,7 @@ use golem_common::model::{
     AgentId, AgentInvocationResult, BackgroundFailure, IdempotencyKey, InvocationOwner,
     OwnedAgentId, OwnedInvocationId, RESERVED_TYPE_TAG, StandaloneToolInvocation,
 };
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailureCause, WorkerExecutorError};
 use golem_service_base::model::auth::AuthCtx;
 use jiff::Timestamp;
 use std::time::SystemTime;
@@ -490,7 +490,11 @@ impl WorkerService {
         Ok(summary)
     }
 
-    /// The result of a terminal invocation, read through the existing result lookup.
+    /// The result of a terminal invocation, read through the existing result lookup. A lookup
+    /// failure that is the recorded outcome is the result. A failed oplog read, also one that an
+    /// accepted invocation or a failed resume wraps, fails with an internal error that does not
+    /// show the details of the read, because they can contain stored data. Any other lookup
+    /// failure gives no outcome.
     async fn invocation_outcome(
         &self,
         agent: &ManagedAgent,
@@ -520,6 +524,15 @@ impl WorkerService {
                     && let Some(failure) = recorded_failure(&error)
                 {
                     return Ok(Some(InvocationOutcome::Failure(failure)));
+                }
+                if refused_by_a_failed_read(&error) {
+                    warn!(
+                        invocation_id = %invocation_id,
+                        "The result of a terminal invocation cannot be read"
+                    );
+                    return Err(WorkerServiceError::Internal(format!(
+                        "the result of invocation {invocation_id} cannot be read"
+                    )));
                 }
                 warn!(
                     invocation_id = %invocation_id,
@@ -639,6 +652,26 @@ fn tool_command_paths(
 pub(super) fn background_failure(failure: BackgroundFailure) -> InvocationFailure {
     InvocationFailure {
         error: WorkerServiceError::GolemError(WorkerExecutorError::from(failure)).to_safe_string(),
+    }
+}
+
+/// Whether a failed oplog read refused the result lookup, for a time or for good, also when an
+/// accepted invocation or a failed resume wraps the read error.
+fn refused_by_a_failed_read(error: &WorkerServiceError) -> bool {
+    fn failed_read(error: &WorkerExecutorError) -> bool {
+        match error {
+            WorkerExecutorError::OplogFailed {
+                cause: OplogFailureCause::Read,
+                ..
+            } => true,
+            WorkerExecutorError::FailedToResumeAgent { reason, .. } => failed_read(reason),
+            error => error.is_oplog_read_failure(),
+        }
+    }
+    match error {
+        WorkerServiceError::AcceptedInvocation { source, .. } => refused_by_a_failed_read(source),
+        WorkerServiceError::GolemError(error) => failed_read(error),
+        _ => false,
     }
 }
 

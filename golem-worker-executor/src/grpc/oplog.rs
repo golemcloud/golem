@@ -133,7 +133,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             claims,
         )
         .await
-        .map_err(WorkerExecutorError::unknown)?;
+        .map_err(WorkerExecutorError::from)?;
 
         let next = oplog_page_cursor(
             chunk.next_oplog_index,
@@ -260,7 +260,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .map_err(WorkerExecutorError::invalid_request)?,
         )
         .await
-        .map_err(WorkerExecutorError::unknown)?;
+        .map_err(WorkerExecutorError::from)?;
 
         let next = oplog_page_cursor(
             chunk.next_oplog_index,

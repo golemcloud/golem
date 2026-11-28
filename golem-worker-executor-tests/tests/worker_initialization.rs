@@ -1048,14 +1048,14 @@ async fn grpc_create_keeps_startup_failure_out_of_constructor_results(
     let cached = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             if let LookupResult::Complete(Err(error)) =
-                worker.lookup_invocation_result(&keys[0]).await
+                worker.lookup_invocation_result(&keys[0]).await?
             {
-                break error;
+                break Ok::<_, WorkerExecutorError>(error);
             }
             tokio::task::yield_now().await;
         }
     })
-    .await?;
+    .await??;
     assert!(matches!(
         cached,
         WorkerExecutorError::InvocationFailed { .. }
@@ -3660,7 +3660,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
     let metadata = tokio::time::timeout(Duration::from_secs(20), metadata_read).await???;
     assert_eq!(metadata.unwrap().last_known_status, *status);
     let LookupResult::Complete(Ok(output)) =
-        tokio::time::timeout(Duration::from_secs(20), result).await??
+        tokio::time::timeout(Duration::from_secs(20), result).await???
     else {
         panic!("expected the completed invocation result");
     };
@@ -3799,7 +3799,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
         tokio::time::timeout(Duration::from_secs(1), events.wait_for(&completion)).await???;
     assert_eq!(observed.result, result);
     assert!(matches!(
-        worker.lookup_invocation_result(&key).await,
+        worker.lookup_invocation_result(&key).await?,
         LookupResult::Complete(Ok(_))
     ));
 

@@ -138,7 +138,7 @@ fn decode_record<R: desert_rust::BinaryDeserializer>(
     bytes: &[u8],
     name: &str,
 ) -> Result<R, SessionStoreError> {
-    golem_common::serialization::deserialize(bytes)
+    golem_common::serialization::decode(bytes)
         .map_err(|e| SessionStoreError::InternalError(anyhow!("{name} deserialization error: {e}")))
 }
 

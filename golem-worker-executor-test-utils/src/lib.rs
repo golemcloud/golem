@@ -3991,7 +3991,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
+    ) -> Result<Option<LastError>, golem_worker_executor::services::oplog::UnreadableOplog> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
@@ -9561,6 +9561,9 @@ impl BlobStoreService for FailingBlobStoreService {
 pub struct FailingRpc {
     inner: Arc<dyn Rpc>,
     remaining_failures: AtomicU32,
+    /// The failed history read that each fire-and-forget call returns, and the count of those
+    /// calls.
+    invoke_failure: Option<(WorkerExecutorError, Arc<AtomicUsize>)>,
 }
 
 pub struct RecordingRpc {
@@ -9594,6 +9597,21 @@ impl FailingRpc {
         Self {
             inner,
             remaining_failures: AtomicU32::new(failure_count),
+            invoke_failure: None,
+        }
+    }
+
+    /// Each fire-and-forget call fails with the failed history read `error` and adds one to
+    /// `calls`. Other calls pass.
+    pub fn failing_invoke(
+        inner: Arc<dyn Rpc>,
+        error: WorkerExecutorError,
+        calls: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            inner,
+            remaining_failures: AtomicU32::new(0),
+            invoke_failure: Some((error, calls)),
         }
     }
 }
@@ -9718,7 +9736,7 @@ impl Rpc for RecordingRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
-    ) -> Result<SchemaValue, ServiceRpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         if method_name == self.method_name {
             self.attempts.lock().unwrap().push(idempotency_key.clone());
@@ -9758,7 +9776,7 @@ impl Rpc for RecordingRpc {
         caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .invoke(
@@ -9896,7 +9914,7 @@ impl Rpc for FailingRpc {
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
-    ) -> Result<SchemaValue, ServiceRpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         if self
             .remaining_failures
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
@@ -9904,7 +9922,8 @@ impl Rpc for FailingRpc {
         {
             Err(ServiceRpcError::RemoteInternalError {
                 details: "transient test failure".to_string(),
-            })
+            }
+            .into())
         } else {
             self.inner
                 .invoke_and_await(
@@ -9942,7 +9961,15 @@ impl Rpc for FailingRpc {
         caller: &Caller,
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
+        if let Some((error, calls)) = &self.invoke_failure {
+            calls.fetch_add(1, Ordering::SeqCst);
+            return Err(
+                golem_worker_executor::services::rpc::RpcAwaitError::FailedRead(Box::new(
+                    error.clone(),
+                )),
+            );
+        }
         self.inner
             .invoke(
                 target,

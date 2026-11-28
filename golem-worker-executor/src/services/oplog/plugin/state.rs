@@ -208,11 +208,27 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let pinned_delivery: Option<(InstalledPlugin, AgentMetadata)> =
-            live.delivery.as_ref().map(|delivery| {
-                golem_common::serialization::deserialize(delivery)
-                    .expect("committed oplog processor delivery snapshot must decode")
-            });
+        let pinned_delivery: Option<(InstalledPlugin, AgentMetadata)> = match live
+            .delivery
+            .as_deref()
+            .map(golem_common::serialization::decode)
+            .transpose()
+        {
+            Ok(delivery) => delivery,
+            Err(error) => {
+                self.stop_forwarding(OplogRefusal::Unreadable(UnreadableOplog::new(
+                    &self.initial_worker_metadata.agent_id,
+                    crate::services::oplog::OplogReadError::corruption(
+                        crate::services::oplog::OplogReadSource::Other("oplog processor delivery"),
+                        format!(
+                            "failed to decode delivery in status at oplog index {}: {error}",
+                            status.oplog_idx
+                        ),
+                    ),
+                )));
+                return;
+            }
+        };
         let plugin = if let Some((plugin, _)) = &pinned_delivery {
             plugin.clone()
         } else {

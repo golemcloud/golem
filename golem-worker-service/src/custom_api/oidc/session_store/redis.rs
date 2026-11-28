@@ -140,7 +140,7 @@ impl SessionStore for RedisSessionStore {
 
         if let Some(bytes) = maybe_bytes {
             let record: records::PendingOidcLoginRecord =
-                golem_common::serialization::deserialize(&bytes)
+                golem_common::serialization::decode(&bytes)
                     .map_err(|e| anyhow!("PendingOidcLogin deserialization error: {e}"))?;
             Ok(Some(PendingOidcLogin::from(record)))
         } else {
@@ -294,9 +294,8 @@ impl SessionStore for RedisSessionStore {
             .await?;
 
         if let Some(bytes) = maybe_bytes {
-            let record: records::OidcSessionRecord =
-                golem_common::serialization::deserialize(&bytes)
-                    .map_err(|e| anyhow!("OidcSession deserialization error: {e}"))?;
+            let record: records::OidcSessionRecord = golem_common::serialization::decode(&bytes)
+                .map_err(|e| anyhow!("OidcSession deserialization error: {e}"))?;
             let session = OidcSession::try_from(record)?;
 
             Ok(Some(session))
@@ -341,9 +340,8 @@ impl SessionStore for RedisSessionStore {
             .await?;
 
         if let Some(bytes) = maybe_bytes {
-            let record: records::McpPendingAuthRecord =
-                golem_common::serialization::deserialize(&bytes)
-                    .map_err(|e| anyhow!("McpPendingAuth deserialization error: {e}"))?;
+            let record: records::McpPendingAuthRecord = golem_common::serialization::decode(&bytes)
+                .map_err(|e| anyhow!("McpPendingAuth deserialization error: {e}"))?;
 
             let _: i32 = self
                 .redis
@@ -393,7 +391,7 @@ impl SessionStore for RedisSessionStore {
 
         if let Some(bytes) = maybe_bytes {
             let record: records::McpProxyCodeEntryRecord =
-                golem_common::serialization::deserialize(&bytes)
+                golem_common::serialization::decode(&bytes)
                     .map_err(|e| anyhow!("McpProxyCodeEntry deserialization error: {e}"))?;
 
             let _: i32 = self

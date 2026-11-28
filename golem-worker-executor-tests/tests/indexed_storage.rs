@@ -1296,6 +1296,140 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
     );
 }
 
+/// A PostgreSQL oplog entry whose stored bytes carry an unknown version byte, or no bytes at all,
+/// fails the strict primary read for good with the decode error of the entry, and the read leaves
+/// the stored row as it is. A backend that refuses the select for good fails the indexed read as
+/// `Other` and the primary read for good.
+#[test]
+#[test_r::timeout("90s")]
+async fn postgres_strict_reads_reject_undecodable_entries_and_backend_refusals()
+-> anyhow::Result<()> {
+    use futures::{StreamExt, TryStreamExt};
+    use golem_common::model::oplog::OplogEntry;
+    use golem_common::model::{OplogIndex, RetryConfig};
+    use golem_common::serialization::{DecodeError, serialize};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use golem_worker_executor::services::oplog::{OplogService, PrimaryOplogService};
+    use std::time::Duration;
+
+    let wrapper = PostgresIndexedStorageWrapper {
+        postgres: DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await,
+    };
+    let config = wrapper.fresh_database().await;
+    let storage = Arc::new(
+        PostgresIndexedStorage::configured(&config)
+            .await
+            .map_err(anyhow::Error::msg)?,
+    );
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(config.postgres.connect_options())
+        .await?;
+    let id = golem_common::model::OwnedAgentId::from_storage_key(KEY1).unwrap();
+    let namespace = IndexedStorageNamespace::OpLog {
+        owned_agent_id: id.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let entry = OplogEntry::suspend().rounded();
+    storage
+        .append(
+            "test",
+            "seed",
+            "entry",
+            namespace.clone(),
+            KEY1,
+            1,
+            serialize(&entry).map_err(anyhow::Error::msg)?,
+            None,
+        )
+        .await?;
+    let primary = PrimaryOplogService::new(
+        storage.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        100,
+        100,
+        1024,
+        32,
+        RetryConfig {
+            max_attempts: 2,
+            min_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        primary
+            .read_exact(&id, AgentMode::Durable, OplogIndex::INITIAL, 1)
+            .await?
+            .get(&OplogIndex::INITIAL),
+        Some(&entry)
+    );
+
+    futures::stream::iter([
+        (vec![255], DecodeError::UnknownVersion(255)),
+        (vec![], DecodeError::MissingVersion),
+    ])
+    .map(Ok::<_, anyhow::Error>)
+    .try_for_each(|(corrupt, decode_error)| {
+        let pool = &pool;
+        let primary = &primary;
+        let id = &id;
+        let storage = storage.clone();
+        let namespace = namespace.clone();
+        async move {
+            sqlx::query("UPDATE index_storage SET value = $1")
+                .bind(&corrupt)
+                .execute(pool)
+                .await?;
+            let error: WorkerExecutorError = primary
+                .read_exact(id, AgentMode::Durable, OplogIndex::INITIAL, 1)
+                .await
+                .unwrap_err()
+                .into();
+            assert!(
+                matches!(error, WorkerExecutorError::OplogFailed { .. }),
+                "{error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("failed to decode oplog entry 1: {decode_error}")),
+                "{message}"
+            );
+            assert_eq!(
+                storage
+                    .read("test", "unchanged", "entry", namespace, KEY1, 1, 1)
+                    .await?,
+                vec![(1, corrupt)]
+            );
+            Ok(())
+        }
+    })
+    .await?;
+
+    sqlx::query("DROP TABLE index_storage")
+        .execute(&pool)
+        .await?;
+    assert!(matches!(
+        storage
+            .read("test", "refused", "entry", namespace, KEY1, 1, 1)
+            .await,
+        Err(IndexedStorageError::Other(_))
+    ));
+    let error: WorkerExecutorError = primary
+        .read_exact(&id, AgentMode::Durable, OplogIndex::INITIAL, 1)
+        .await
+        .unwrap_err()
+        .into();
+    assert!(
+        matches!(error, WorkerExecutorError::OplogFailed { .. }),
+        "{error:?}"
+    );
+    pool.close().await;
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn exists_append(

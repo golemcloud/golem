@@ -507,6 +507,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let mut origins = self.external_invocation_origins.write().await;
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
+        // A stored read that failed for a time, also as the reason of a failed resume, tells why
+        // this generation stopped, not how its pending invocations ended. For it, tell the
+        // waiters and make no result, because a result blocks a later pickup.
+        let observer_only = lost_shard
+            || matches!(
+                InvocationObservationFailure::classify(&error),
+                Some(InvocationObservationFailure::RetryableRead)
+            );
         // A later lookup of a failed key must return the error its waiters received.
         let (cached_error, cached_stderr) = match &error {
             WorkerExecutorError::InvocationFailed { error, stderr } => {
@@ -523,7 +531,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if invocation_results.is_complete(idempotency_key, &status) {
                 continue;
             }
-            if lost_shard {
+            if observer_only {
                 self.publish_completion(idempotency_key, Err(error.clone()));
                 origins.remove(idempotency_key);
                 continue;

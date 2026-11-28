@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durable_stream::SessionError;
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
     ArchiveSource, BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService,
@@ -122,7 +123,7 @@ enum EphemeralJob {
         session_key: golem_common::model::durable_stream::StreamSessionKey,
         expected_watermark: OplogIndex,
         expected_committed: OplogIndex,
-        status: Box<Result<Option<DurableStreamSessionStatus>, String>>,
+        status: Box<Result<Option<DurableStreamSessionStatus>, SessionError>>,
         done: tokio::sync::oneshot::Sender<Option<super::RawDurableStreamSessionStatus>>,
     },
     LastAddedNonHintEntry {
@@ -139,7 +140,7 @@ struct RawSessionLookup {
     watermark: OplogIndex,
     committed: OplogIndex,
     buffer: VecDeque<OplogEntry>,
-    cached: Option<Result<Option<DurableStreamSessionStatus>, String>>,
+    cached: Option<Result<Option<DurableStreamSessionStatus>, SessionError>>,
 }
 
 /// Snapshot of the uncommitted buffer and commit watermark, used to serve reads outside the
@@ -472,7 +473,7 @@ impl EphemeralOplog {
                     EphemeralJob::RawDurableStreamSessionStatus { session_key, done } => {
                         let cached = state
                             .durable_stream_sessions
-                            .cached(&session_key)
+                            .cached(&actor_owned_agent_id.agent_id, &session_key)
                             .transpose();
                         let _ = done.send(RawSessionLookup {
                             watermark: state.last_oplog_idx,
@@ -1197,8 +1198,9 @@ impl Oplog for EphemeralOplog {
                 })
                 .await
             }
-            // Ephemeral agents fold their status at the explicit commit that ends each
-            // invocation, so the oplog reports nothing between explicit commits.
+            // `DurableOnly` commits nothing for an ephemeral agent. `ReportOnly` commits nothing
+            // and has nothing to report: an ephemeral oplog calls no auto-commit listener, and the
+            // explicit commit at the end of each invocation reports its own entries.
             CommitLevel::DurableOnly | CommitLevel::ReportOnly => Ok(BTreeMap::new()),
         }
     }

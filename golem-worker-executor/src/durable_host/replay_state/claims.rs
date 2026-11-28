@@ -1,10 +1,15 @@
 use super::*;
 use crate::durable_host::tool::operation::OwnerToolOperation;
+use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+use golem_common::model::AgentId;
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 
 pub(super) type AdmissionRefusal = (OwnerToolOperation, String);
 
+/// Whether `claim` is the claim of the recorded admission refusal of `admission`. A recorded claim
+/// that does not decode is a read error of `owner` at the terminal that holds the refusal.
 pub(super) fn matching_admission_refusal(
+    owner: &AgentId,
     admission: Option<&AdmissionRefusal>,
     claim: &StartClaim,
 ) -> Result<Option<(SerializableToolAdmissionRefusal, OplogIndex)>, WorkerExecutorError> {
@@ -20,9 +25,15 @@ pub(super) fn matching_admission_refusal(
             claim: encoded,
         } => {
             function == initiating_function
-                && desert_rust::deserialize::<StartClaim>(encoded).map_err(|error| {
-                    WorkerExecutorError::runtime(format!(
-                        "invalid recorded admission claim: {error}"
+                && desert_rust::deserialize::<StartClaim>(encoded).map_err(|_| {
+                    WorkerExecutorError::from(UnreadableOplog::new(
+                        owner,
+                        OplogReadError::corruption(
+                            OplogReadSource::Other("tool admission refusal"),
+                            format!(
+                                "failed to decode the recorded admission claim at oplog index {terminal_index}"
+                            ),
+                        ),
                     ))
                 })? == claim.clone().with_abandoned_host_internal_calls(false)
         }

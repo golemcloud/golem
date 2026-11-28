@@ -154,7 +154,7 @@ impl Rpc for CreateThenHangRpc {
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         self.inner
             .invoke_and_await(
                 agent,
@@ -190,7 +190,7 @@ impl Rpc for CreateThenHangRpc {
         callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
         self.inner
             .invoke(
                 agent,

@@ -1369,7 +1369,10 @@ impl TestDsl for TestWorkerExecutor {
                     golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
                         error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::AgentNotFound(_)),
                     } => Ok(None),
-                    _ => Err(anyhow!("Failed getting worker metadata: {error:?}")),
+                    _ => Err(match WorkerExecutorError::try_from(error.clone()) {
+                        Ok(error) => anyhow!("Failed getting worker metadata: {error}"),
+                        Err(_) => anyhow!("Failed getting worker metadata: {error:?}"),
+                    }),
                 }
             }
         }

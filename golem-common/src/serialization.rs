@@ -63,19 +63,15 @@ pub fn serialize<T: BinarySerializer>(value: &T) -> Result<Vec<u8>, String> {
 }
 
 pub fn deserialize<T: BinaryDeserializer>(bytes: &[u8]) -> Result<T, String> {
-    let (version, data) = bytes.split_at(1);
-    deserialize_with_version(data, version[0])
+    decode(bytes).map_err(|error| error.to_string())
 }
 
-pub fn try_deserialize<T: BinaryDeserializer>(bytes: &[u8]) -> Result<Option<T>, String> {
-    match decode(bytes) {
-        Ok(value) => Ok(Some(value)),
-        Err(DecodeError::MissingVersion | DecodeError::UnknownVersion(_)) => Ok(None),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-/// Decodes versioned data without panicking or discarding the reason it does not decode.
+/// Decodes versioned data.
+///
+/// Returns `MissingVersion`, `UnknownVersion` or `UnsupportedVersion` when the version byte is
+/// missing or not supported. Returns `InvalidData` when the payload decoder returns an error. Its
+/// message names only the version, not the decoder error, because that error can contain stored
+/// values. This function does not catch a panic in the payload decoder.
 pub fn decode<T: BinaryDeserializer>(bytes: &[u8]) -> Result<T, DecodeError> {
     let (&version, data) = bytes.split_first().ok_or(DecodeError::MissingVersion)?;
     decode_with_version(data, version)
@@ -89,37 +85,11 @@ pub fn decode_with_version<T: BinaryDeserializer>(
         SERIALIZATION_VERSION_V1 | SERIALIZATION_VERSION_V2 => {
             Err(DecodeError::UnsupportedVersion(version))
         }
-        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data)
-            .map_err(|error| DecodeError::InvalidData(error.to_string())),
+        // A decoder error can include values from the stored payload.
+        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data).map_err(|_| {
+            DecodeError::InvalidData(format!("invalid data for serialization version {version}"))
+        }),
         _ => Err(DecodeError::UnknownVersion(version)),
-    }
-}
-
-pub fn deserialize_with_version<T: BinaryDeserializer>(
-    data: &[u8],
-    version: u8,
-) -> Result<T, String> {
-    match try_deserialize_with_version(data, version)? {
-        Some(value) => Ok(value),
-        None => {
-            tracing::error!(
-                version,
-                data = format!("{:?}", data),
-                "invalid serialization version"
-            );
-            panic!("invalid serialization version: {version}")
-        }
-    }
-}
-
-pub fn try_deserialize_with_version<T: BinaryDeserializer>(
-    data: &[u8],
-    version: u8,
-) -> Result<Option<T>, String> {
-    match decode_with_version(data, version) {
-        Ok(value) => Ok(Some(value)),
-        Err(DecodeError::UnknownVersion(_)) => Ok(None),
-        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -181,13 +151,12 @@ mod tests {
     }
 
     #[test]
-    pub fn try_deserialize_without_version() {
+    pub fn unversioned_data_is_an_error() {
         let mut rng = rand::rng();
         for _ in 0..1000 {
             let example = Example::random(&mut rng);
             let serialized = serde_json::to_vec(&example).unwrap();
-            let result: Option<Example> = super::try_deserialize(&serialized).unwrap();
-            assert_eq!(result, None);
+            assert!(super::deserialize::<Example>(&serialized).is_err());
         }
     }
 
@@ -198,7 +167,7 @@ mod tests {
             super::SERIALIZATION_VERSION_V2,
         ] {
             let bytes = [version, 0u8, 0u8, 0u8, 0u8];
-            let result: Result<Option<Example>, String> = super::try_deserialize(&bytes);
+            let result: Result<Example, String> = super::deserialize(&bytes);
             let err = result.expect_err("a dropped version must not deserialize");
             assert_eq!(
                 err,
@@ -208,40 +177,59 @@ mod tests {
     }
 
     #[test]
+    fn public_readers_reject_missing_or_unknown_versions() {
+        assert_eq!(
+            super::deserialize::<String>(&[]),
+            Err("missing serialization version".to_string())
+        );
+        [0, 255].into_iter().for_each(|version| {
+            let bytes = [version, b's', b'e', b'c', b'r', b'e', b't'];
+            let expected = format!("unknown serialization version: {version}");
+            assert_eq!(super::deserialize::<String>(&bytes), Err(expected));
+            assert_eq!(
+                super::decode::<String>(&bytes),
+                Err(super::DecodeError::UnknownVersion(version))
+            );
+            assert_eq!(
+                super::decode_with_version::<String>(&bytes[1..], version),
+                Err(super::DecodeError::UnknownVersion(version))
+            );
+        });
+    }
+
+    #[test]
     fn decode_distinguishes_version_errors_from_invalid_data() {
-        use super::{DecodeError, decode, decode_with_version, try_deserialize};
+        use super::{DecodeError, decode, decode_with_version};
 
         assert_eq!(decode::<String>(&[]), Err(DecodeError::MissingVersion));
-        assert_eq!(try_deserialize::<String>(&[]), Ok(None));
         for version in [0, 255] {
             assert_eq!(
                 decode::<String>(&[version]),
                 Err(DecodeError::UnknownVersion(version))
             );
-            assert_eq!(try_deserialize::<String>(&[version]), Ok(None));
         }
         for version in [1, 2] {
             assert_eq!(
                 decode::<String>(&[version]),
                 Err(DecodeError::UnsupportedVersion(version))
             );
-            assert!(try_deserialize::<String>(&[version]).is_err());
         }
-        assert!(matches!(
-            decode::<String>(&[SERIALIZATION_VERSION_V3]),
-            Err(DecodeError::InvalidData(_))
-        ));
-        assert!(try_deserialize::<String>(&[SERIALIZATION_VERSION_V3]).is_err());
+        let error = decode::<String>(&[SERIALIZATION_VERSION_V3]).unwrap_err();
+        assert!(matches!(error, DecodeError::InvalidData(_)));
+        assert_eq!(
+            error.to_string(),
+            "invalid data for serialization version 3"
+        );
+        assert_eq!(
+            super::deserialize::<String>(&[SERIALIZATION_VERSION_V3]),
+            Err(error.to_string())
+        );
 
         let bytes = super::serialize(&"archived entry".to_string()).unwrap();
         assert_eq!(decode::<String>(&bytes), Ok("archived entry".to_string()));
         assert_eq!(
             decode_with_version::<String>(&bytes[1..], SERIALIZATION_VERSION_V3),
             Ok("archived entry".to_string())
-        );
-        assert_eq!(
-            try_deserialize::<String>(&bytes),
-            Ok(Some("archived entry".to_string()))
         );
     }
 }

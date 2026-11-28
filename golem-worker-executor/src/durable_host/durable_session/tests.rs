@@ -1723,7 +1723,7 @@ async fn session_value_maps_canonical_indices_to_binding_local_transport_ids() {
         .encode_to_vec(),
         stream_mappings: mappings.iter().map(StreamBindingRecord::foreign).collect(),
     };
-    let value = SessionValue::from_persisted(&producer, record.clone())
+    let value = SessionValue::from_persisted(&producer, OplogIndex::from_u64(29), record.clone())
         .await
         .unwrap();
     assert_eq!(
@@ -1756,10 +1756,20 @@ async fn session_value_maps_canonical_indices_to_binding_local_transport_ids() {
         result: reference(2).encode_to_vec(),
         ..record
     };
+    let error = SessionValue::from_persisted(&producer, OplogIndex::from_u64(29), invalid)
+        .await
+        .expect_err("a result that names an unmapped handle is corrupt history");
+    let SessionError::Unreadable(unreadable) = error else {
+        panic!("a corrupt stored result must fail its agent, got {error:?}");
+    };
+    assert_eq!(unreadable.agent_id, identity.agent_id);
+    assert!(!unreadable.is_transient());
     assert!(
-        SessionValue::from_persisted(&producer, invalid)
-            .await
-            .is_err()
+        unreadable
+            .error
+            .to_string()
+            .contains("invalid durable invocation result at oplog index 29: "),
+        "{unreadable}"
     );
 }
 
@@ -3408,13 +3418,13 @@ impl AttachedStreamSegmentSource for LagRecordingSource {
     }
 }
 
-struct AttachedProducerRpc {
-    producer: Arc<DurableStreamStore>,
-    cancellation_owner: Option<Arc<DurableStreamStore>>,
-    stall_next_cancel: std::sync::atomic::AtomicBool,
-    scripted_reads: Mutex<VecDeque<Result<Vec<u8>, DurableStreamRemoteError<RpcError>>>>,
-    pending_read: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
-    read_requests:
+pub(crate) struct AttachedProducerRpc {
+    pub(crate) producer: Arc<DurableStreamStore>,
+    pub(crate) cancellation_owner: Option<Arc<DurableStreamStore>>,
+    pub(crate) stall_next_cancel: std::sync::atomic::AtomicBool,
+    pub(crate) scripted_reads: Mutex<VecDeque<Result<Vec<u8>, DurableStreamRemoteError<RpcError>>>>,
+    pub(crate) pending_read: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    pub(crate) read_requests:
         Mutex<Vec<golem_common::base_model::durable_stream::AttachedStreamSegmentRequest>>,
 }
 
@@ -3556,7 +3566,7 @@ impl Rpc for AttachedProducerRpc {
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _scope_card: Option<golem_common::base_model::card::ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, crate::services::rpc::RpcAwaitError> {
         unreachable!("test RPC only serves attached stream segments")
     }
 
@@ -3625,7 +3635,7 @@ impl Rpc for AttachedProducerRpc {
         _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), crate::services::rpc::RpcAwaitError> {
         unreachable!("test RPC only serves attached stream segments")
     }
 }
@@ -3731,6 +3741,27 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
             })));
         assert!(
             matches!(read().await, Err(StreamStoreError::Oplog(message)) if message.contains("access revoked"))
+        );
+        assert_eq!(rpc.read_requests.lock().await.len(), 1);
+        rpc.read_requests.lock().await.clear();
+
+        // A producer history that does not read keeps its type, so the reader reports the failed
+        // read of that producer and not a failed request.
+        let unreadable = crate::services::oplog::UnreadableOplog {
+            agent_id: identity.agent_id,
+            error: crate::services::oplog::OplogReadError::Gap {
+                start: OplogIndex::from_u64(42),
+                end: OplogIndex::from_u64(43),
+            },
+        };
+        rpc.scripted_reads
+            .lock()
+            .await
+            .push_back(Err(DurableStreamRemoteError::Unreadable(
+                unreadable.clone(),
+            )));
+        assert!(
+            matches!(read().await, Err(StreamStoreError::Unreadable(read)) if read == unreadable)
         );
         assert_eq!(rpc.read_requests.lock().await.len(), 1);
         rpc.read_requests.lock().await.clear();

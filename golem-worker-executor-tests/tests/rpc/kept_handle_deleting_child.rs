@@ -287,7 +287,7 @@ impl Rpc for GatedSchedule {
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<golem_common::model::card::ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         self.inner
             .invoke_and_await(
                 target,
@@ -323,7 +323,7 @@ impl Rpc for GatedSchedule {
         callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), golem_worker_executor::services::rpc::RpcAwaitError> {
         self.inner
             .invoke(
                 target,

@@ -16,8 +16,8 @@ use super::{
     BinaryDeserializer, BinarySerializer, DurableCallSession, DurableFunctionType,
     DurableWorkerCtx, HostPayloadPair, HostRequestPermissionCardDecision,
     HostResponsePermissionCardDecision, NotCancellable, PermissionCardDeriveError,
-    SerializablePermissionError, Uuid, WorkerCtx, WorkerExecutorError, anyhow, deserialize,
-    permissions_types, serialize,
+    SerializablePermissionError, Uuid, WorkerCtx, WorkerExecutorError, anyhow, permissions_types,
+    serialize,
 };
 
 pub(super) fn permission_error_to_anyhow(
@@ -144,6 +144,7 @@ where
             )));
         }
     }
+    let start_index = call.start_index();
     let response = call
         .run(ctx, async move |ctx| {
             let result = match decide(ctx).await? {
@@ -156,11 +157,36 @@ where
         })
         .await?;
     match response.result {
-        Ok(decided) => Ok(Ok(deserialize(&decided).map_err(|error| {
-            anyhow!("failed to deserialize a recorded permission-card decision: {error}")
-        })?)),
+        Ok(decided) => Ok(Ok(decode_recorded_decision(
+            &ctx.state.owned_agent_id.agent_id,
+            start_index,
+            &decided,
+        )?)),
         Err(error) => Ok(Err(permission_error_from_serializable(error))),
     }
+}
+
+/// Decodes the decision that the durable call whose `Start` is at `start_index` recorded in the
+/// oplog of `agent_id`. A decision that does not decode is corrupt history: the error is
+/// `OplogFailed` for that agent and names the `Start` and the decoder reason.
+fn decode_recorded_decision<T: BinaryDeserializer>(
+    agent_id: &golem_common::model::AgentId,
+    start_index: golem_common::model::oplog::OplogIndex,
+    decided: &[u8],
+) -> anyhow::Result<T> {
+    use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+
+    golem_common::serialization::decode(decided).map_err(|error| {
+        anyhow::Error::from(WorkerExecutorError::from(UnreadableOplog::new(
+            agent_id,
+            OplogReadError::corruption(
+                OplogReadSource::Other("permission-card decision"),
+                format!(
+                    "failed to decode the recorded decision of the durable call at oplog index {start_index}: {error}"
+                ),
+            ),
+        )))
+    })
 }
 
 pub(super) fn permission_error_to_derive_error(
@@ -193,5 +219,37 @@ pub(super) fn derive_error_to_permission_error(
         PermissionCardDeriveError::NotPermitted(message) => {
             permissions_types::PermissionError::NotPermitted(message)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use test_r::test;
+
+    #[test]
+    fn an_undecodable_recorded_decision_is_unreadable_at_its_call() {
+        let agent_id = crate::test_agent_id("permission-decision-unreadable");
+
+        let error =
+            decode_recorded_decision::<String>(&agent_id, OplogIndex::from_u64(6), &[255, 7, 7])
+                .expect_err("an undecodable decision must fail");
+
+        let Some(WorkerExecutorError::OplogFailed {
+            agent_id: failed,
+            details,
+            ..
+        }) = error.downcast_ref::<WorkerExecutorError>()
+        else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(*failed, agent_id);
+        assert!(details.contains("oplog index 6"), "{details}");
+        assert!(
+            details.contains("unknown serialization version: 255"),
+            "{details}"
+        );
     }
 }

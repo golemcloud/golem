@@ -14,6 +14,7 @@
 
 use super::running_workers::stale_reason;
 use super::*;
+use golem_common::serialization::DecodeError;
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
@@ -68,13 +69,14 @@ impl WorkerService for DefaultWorkerService {
     async fn read_durable_stream_consumer_page(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         key: &StreamSessionKey,
         reader: golem_common::model::durable_stream::LocalStreamReaderId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, SessionError> {
         self.stream_session_index
-            .read_consumer_page(owned_agent_id, fingerprint, key, reader, page)
+            .read_consumer_page(owned_agent_id, agent_mode, fingerprint, key, reader, page)
             .await
     }
 
@@ -443,7 +445,7 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
-        let value: Option<Result<Vec<OplogIndex>, String>> = self
+        let value: Option<Result<Vec<OplogIndex>, DecodeError>> = self
             .key_value_storage
             .with_entity("worker", "get_rejected_periodic_snapshots", "oplog_indexes")
             .get_attempt_deserialize(
@@ -452,10 +454,9 @@ impl WorkerService for DefaultWorkerService {
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        value
-            .transpose()
-            .map(|indexes| indexes.into_iter().flatten().collect())
-            .map_err(WorkerExecutorError::runtime)
+        // The stored rejections are a hint: a set that does not decode is a miss. A start can
+        // select a rejected entry again and reject it again.
+        Ok(value.and_then(Result::ok).into_iter().flatten().collect())
     }
 
     async fn reject_periodic_snapshots(
@@ -478,12 +479,11 @@ impl WorkerService for DefaultWorkerService {
                 .get_raw(namespace.clone(), &field)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
-            let current_indexes = match &current {
-                Some(current) => {
-                    deserialize::<Vec<OplogIndex>>(current).map_err(WorkerExecutorError::runtime)?
-                }
-                None => Vec::new(),
-            };
+            // A stored set that does not decode is a miss, and this write replaces it.
+            let current_indexes = current
+                .as_deref()
+                .and_then(|current| decode::<Vec<OplogIndex>>(current).ok())
+                .unwrap_or_default();
             let Some(to_store) = rejections_to_store(current_indexes, status, oplog_indexes) else {
                 return Ok(());
             };
@@ -579,7 +579,7 @@ impl WorkerService for DefaultWorkerService {
                     .map(|value| value.to_vec());
                 let persisted = observed_metadata
                     .as_deref()
-                    .map(deserialize::<InvocationResultIndexMetadata>)
+                    .map(decode::<InvocationResultIndexMetadata>)
                     .transpose();
                 let (mut metadata, mut expected_metadata) = match &persisted {
                     Ok(Some(metadata)) if metadata.revert_generation > status_generation => {
@@ -606,7 +606,7 @@ impl WorkerService for DefaultWorkerService {
                             .map(|(_, value)| value.to_vec());
                         let snapshot_decoded = snapshot_metadata
                             .as_deref()
-                            .map(deserialize::<InvocationResultIndexMetadata>)
+                            .map(decode::<InvocationResultIndexMetadata>)
                             .transpose();
                         match snapshot_decoded {
                             Ok(Some(metadata))
@@ -729,12 +729,12 @@ impl WorkerService for DefaultWorkerService {
                             .await
                             .map_err(WorkerExecutorError::runtime)?;
                         let indexed = match indexed
-                            .map(|value| try_deserialize::<PersistedInvocationResult>(&value))
+                            .map(|value| decode::<PersistedInvocationResult>(&value))
                             .transpose()
                         {
                             Ok(None) => None,
-                            Ok(Some(Some(indexed))) => Some(indexed),
-                            Ok(Some(None)) | Err(_) => {
+                            Ok(Some(indexed)) => Some(indexed),
+                            Err(_) => {
                                 // A field that does not decode makes the whole index suspect.
                                 self.invalidate_invocation_result_index(
                                     &namespace,
@@ -828,7 +828,7 @@ impl WorkerService for DefaultWorkerService {
         else {
             return Ok(None);
         };
-        let Ok(metadata) = deserialize::<InvocationResultIndexMetadata>(&raw_metadata) else {
+        let Ok(metadata) = decode::<InvocationResultIndexMetadata>(&raw_metadata) else {
             return Ok(None);
         };
         if metadata.revert_generation != status.invocation_results.revert_generation()
@@ -845,8 +845,8 @@ impl WorkerService for DefaultWorkerService {
             let key = key
                 .parse::<InvocationId>()
                 .map_err(|error| error.to_string());
-            let value = try_deserialize::<PersistedInvocationResult>(value);
-            let (Ok(key), Ok(Some(value))) = (key, value) else {
+            let value = decode::<PersistedInvocationResult>(value);
+            let (Ok(key), Ok(value)) = (key, value) else {
                 // A field that does not decode makes the whole index suspect: the next catch-up
                 // rebuilds it from the oplog.
                 self.invalidate_invocation_result_index(&namespace, Some(&raw_metadata))
@@ -891,7 +891,15 @@ impl WorkerService for DefaultWorkerService {
         let Some(metadata) = values.first().and_then(Option::as_ref) else {
             return Ok(InvocationResultIndexLookup::Incomplete);
         };
-        let metadata: InvocationResultIndexMetadata = deserialize(metadata)?;
+        let Ok(metadata) = decode::<InvocationResultIndexMetadata>(metadata) else {
+            // Metadata that does not decode is a miss of the derived index: the next catch-up
+            // rebuilds it from the oplog.
+            let namespace = Self::invocation_result_index_namespace(owned_agent_id, fingerprint);
+            self.invalidate_invocation_result_index(&namespace, values[0].as_deref())
+                .await
+                .map_err(|error| error.to_string())?;
+            return Ok(InvocationResultIndexLookup::Incomplete);
+        };
         if metadata.revert_generation != status.invocation_results.revert_generation() {
             return Ok(InvocationResultIndexLookup::Incomplete);
         }
@@ -903,7 +911,7 @@ impl WorkerService for DefaultWorkerService {
         let Some(value) = values.get(1).and_then(Option::as_ref) else {
             return Ok(InvocationResultIndexLookup::DefinitiveMiss);
         };
-        let Ok(Some(value)) = try_deserialize::<PersistedInvocationResult>(value) else {
+        let Ok(value) = decode::<PersistedInvocationResult>(value) else {
             // A field that does not decode makes the whole index suspect: the next catch-up
             // rebuilds it from the oplog.
             let namespace = Self::invocation_result_index_namespace(owned_agent_id, fingerprint);

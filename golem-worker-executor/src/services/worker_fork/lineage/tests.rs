@@ -21,6 +21,7 @@ use crate::model::ExecutionStatus;
 use crate::services::oplog::tests::{ReadCountingBlobStorage, ReadCountingIndexedStorage};
 use crate::services::oplog::{CommitLevel, PrimaryOplogService};
 use arc_swap::ArcSwap;
+use futures::StreamExt;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
@@ -719,12 +720,11 @@ async fn suffix_discovery_is_fixed_to_its_horizon_and_finds_a_later_marker() {
 }
 
 #[test]
-#[should_panic(expected = "missing oplog entries in range [2..=2]")]
 async fn service_lineage_loader_rejects_a_missing_requested_range() {
     let source = owner("source");
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(37));
     let fixture = ServiceFixture::new(&source, fingerprint).await;
-    StreamForkLineage::load_from_service(
+    let error = StreamForkLineage::load_from_service(
         &*fixture.service,
         &source,
         AgentMode::Durable,
@@ -732,7 +732,15 @@ async fn service_lineage_loader_rejects_a_missing_requested_range() {
         OplogIndex::from_u64(2),
     )
     .await
-    .unwrap();
+    .expect_err("the missing range must retain its typed error");
+    assert_eq!(error.agent_id, source.agent_id);
+    assert_eq!(
+        error.error,
+        OplogReadError::Gap {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(2),
+        }
+    );
 }
 
 #[test]
@@ -796,4 +804,50 @@ fn through_preserves_marker_and_deletion_boundaries() {
 
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+}
+
+#[test]
+async fn an_undecodable_lineage_record_keeps_its_index_and_class() {
+    use golem_common::model::oplog::OplogPayload;
+
+    let identity = owner("source");
+    let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(41));
+    let fixture = ServiceFixture::new(&identity, fingerprint).await;
+    futures::stream::iter(1..=3)
+        .for_each(|size| {
+            let oplog = &fixture.oplog;
+            async move {
+                oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
+            }
+        })
+        .await;
+    let unreadable_index = fixture
+        .oplog
+        .add(OplogEntry::StreamSession {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            summary: None,
+            record: OplogPayload::SerializedInline {
+                bytes: vec![255, 7, 7],
+                cached: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let error = StreamForkLineage::load(&*fixture.oplog, &identity, fingerprint)
+        .await
+        .expect_err("an undecodable lineage record must fail the load");
+
+    assert_eq!(error.agent_id, identity.agent_id);
+    assert!(matches!(error.error, OplogReadError::Corruption { .. }));
+    let text = error.to_string();
+    assert!(
+        text.contains(&format!("at oplog index {unreadable_index}:")),
+        "{text}"
+    );
+    assert!(
+        text.contains("unknown serialization version: 255"),
+        "{text}"
+    );
 }

@@ -66,6 +66,7 @@ impl From<DurableStreamRemoteError<WorkerExecutorError>> for Error {
             DurableStreamRemoteError::Unavailable => Self::Worker(WorkerExecutorError::runtime(
                 "durable stream producer is unavailable",
             )),
+            DurableStreamRemoteError::Unreadable(unreadable) => Self::Worker(unreadable.into()),
             DurableStreamRemoteError::Other(error) => Self::Worker(error),
         }
     }

@@ -554,11 +554,7 @@ impl RunningWorker {
                         start_outcome::FetchProblem::Unavailable
                     )
                 {
-                    return Err(WorkerExecutorError::RecoveryRequired {
-                        retry_from: None,
-                        details: error.to_string(),
-                    }
-                    .into());
+                    return Err(WorkerExecutorError::recovery_required(error.to_string()).into());
                 }
                 let problem = match &metadata {
                     Ok(metadata) => component_support_error(&metadata.metadata)
@@ -639,10 +635,7 @@ impl RunningWorker {
                             .await
                             .map_err(|error| match error {
                                 WorkerExecutorError::Runtime { .. } => {
-                                    WorkerExecutorError::RecoveryRequired {
-                                        retry_from: None,
-                                        details: error.to_string(),
-                                    }
+                                    WorkerExecutorError::recovery_required(error.to_string())
                                 }
                                 error => error,
                             })?;

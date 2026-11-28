@@ -13,6 +13,29 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+
+/// The error of a stored output item that does not decode: a failed read of the history of the
+/// producer of the item, which names the producer and the offset. The decoder text can hold stored
+/// values, so the error leaves it out. It is the failure of the read: of the `reader` agent, which
+/// it fails, when the item is in its own history, and otherwise of the operation that read the item.
+/// It is never a violation of the session protocol, so it does not settle the session.
+fn undecodable_output_value(
+    producer: golem_common::model::AgentId,
+    offset: golem_common::model::durable_stream::StreamOffset,
+) -> SessionError {
+    SessionError::Unreadable(UnreadableOplog::new(
+        &producer,
+        OplogReadError::corruption(
+            OplogReadSource::Other("durable output value"),
+            format!(
+                "invalid durable output value at oplog index {} item {}",
+                offset.producer_oplog_index(),
+                offset.sub_index()
+            ),
+        ),
+    ))
+}
 
 impl StreamSession {
     /// Drives output streams from committed producer history into transport callbacks.
@@ -197,6 +220,7 @@ impl StreamSession {
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<Vec<StreamSessionMappingRecord>, SessionError> {
         let durable_stream_id = handle.stream_id;
+        let item_producer = handle.producer;
         let role = self
             .mapping(transport_stream_id)
             .ok_or_else(|| format!("unknown durable output stream {transport_stream_id}"))?
@@ -257,9 +281,9 @@ impl StreamSession {
                             session.ensure_current_attachment().await?;
                             session.recover_session_mappings().await?;
                             let mut nested_streams = Vec::new();
-                            let value =
-                                ProtoSchemaValue::decode(bytes.as_slice()).map_err(|error| {
-                                    format!("invalid durable output value: {error}")
+                            let value = ProtoSchemaValue::decode(bytes.as_slice())
+                                .map_err(|_| {
+                                    undecodable_output_value(item_producer, event.offset)
                                 })?;
                             let handle_indices = preflight_proto_recursive_stream_value(&value)?;
                             let nested_handles = event.nested_handles.clone();

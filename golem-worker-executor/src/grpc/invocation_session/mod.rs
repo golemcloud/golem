@@ -195,8 +195,8 @@ use response::{
 
 mod attachment;
 use attachment::{
-    detach_durable_attachment, end_attachment_on_failure, ends_only_the_attachment,
-    is_attachment_termination, until_response_closed,
+    end_attachment_on_failure, ends_only_the_attachment, is_attachment_termination,
+    until_response_closed,
 };
 
 #[cfg(test)]
