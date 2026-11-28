@@ -21,7 +21,7 @@ use test_r::{inherit_test_dep, test, timeout};
 inherit_test_dep!(Tracing);
 
 const TRUSTED_INGRESS_ADDRESSES: &str =
-    "GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES";
+    "GOLEM_ADVANCED__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES";
 
 /// Deploys an HTTP router that answers every request with the request URL that its agent sees.
 async fn deploy_origin_probe(ctx: &mut TestContext) {

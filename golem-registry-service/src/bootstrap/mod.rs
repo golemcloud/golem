@@ -104,6 +104,9 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::blob::s3::{
+    ConfiguredS3BlobStorageFactory, S3BlobStorageFactory, S3StartupNamespace,
+};
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
 use std::sync::Arc;
@@ -203,6 +206,7 @@ impl Services {
             config,
             join_set,
             Some((startup_progress, builtin_artifact_shutdown)),
+            ConfiguredS3BlobStorageFactory::default(),
         )
         .await
     }
@@ -212,7 +216,13 @@ impl Services {
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<Self> {
-        Self::new_inner(config, join_set, None).await
+        Self::new_inner(
+            config,
+            join_set,
+            None,
+            ConfiguredS3BlobStorageFactory::default(),
+        )
+        .await
     }
 
     async fn new_inner(
@@ -222,6 +232,7 @@ impl Services {
             &StartupProgress,
             crate::services::builtin_artifact::BuiltinArtifactShutdown,
         )>,
+        blob_storage_factory: impl S3BlobStorageFactory,
     ) -> anyhow::Result<Self> {
         config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
@@ -231,7 +242,7 @@ impl Services {
         )
         .await?;
 
-        let blob_storage = make_blob_storage(&config.blob_storage).await?;
+        let blob_storage = make_blob_storage(&config.blob_storage, blob_storage_factory).await?;
 
         let initial_agent_files = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
         let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage.clone()));
@@ -855,12 +866,19 @@ async fn make_repos(
 
 async fn make_blob_storage(
     blob_storage_config: &BlobStorageConfig,
+    blob_storage_factory: impl S3BlobStorageFactory,
 ) -> anyhow::Result<Arc<dyn BlobStorage>> {
     match blob_storage_config {
         BlobStorageConfig::S3(config) => {
-            let blob_storage =
-                golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await;
-            Ok(Arc::new(blob_storage))
+            blob_storage_factory
+                .create(
+                    config.clone(),
+                    &[
+                        S3StartupNamespace::Components,
+                        S3StartupNamespace::InitialAgentFiles,
+                    ],
+                )
+                .await
         }
         BlobStorageConfig::LocalFileSystem(config) => {
             let blob_storage =
@@ -881,3 +899,6 @@ async fn make_blob_storage(
         _ => Err(anyhow!("Unsupported blob storage configuration")),
     }
 }
+
+#[cfg(test)]
+mod tests;

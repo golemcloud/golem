@@ -925,7 +925,7 @@ A periodic policy takes a snapshot only when the state of the agent can have cha
 
 To include the agent's [files](/next/develop/agent-filesystem) in snapshot-based recovery:
 
-1. Run the agent on executors with [filesystem snapshots enabled](/next/operate/filesystem_snapshots). The local `golem server run` command enables them by default on macOS. Standalone executors and local servers on other platforms disable them by default.
+1. Run the agent on executors with [filesystem snapshots enabled](/next/operate/filesystem_snapshots). The native macOS local server enables them by default. Standalone executors and other local-server platforms disable them by default. Set `filesystem_snapshots.enabled = true` to enable them there.
 2. Configure the agent's [snapshotting policy](#configuring-snapshot-based-recovery) and application state saving and loading as described above. Enabling executor snapshots alone does not schedule snapshots for an agent.
 3. Flush file output streams before each invocation returns. Your snapshot saver must not modify files: Golem does not run it again during replay.
 

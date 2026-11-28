@@ -2,30 +2,24 @@ import { Callout } from "nextra/components"
 
 # Deploy using Docker
 
-To try Golem with Docker, use the [PostgreSQL example](https://github.com/golemcloud/golem/tree/main/docker-examples/published-postgres). You need Docker Engine and Docker Compose v2. The example uses the published `v1.6.0` images, including the Envoy router. All Golem images must use the same version. The release provides Linux amd64 and arm64 images; amd64 needs an x86-64-v3 CPU.
+To try Golem with Docker, use the [PostgreSQL example](https://github.com/golemcloud/golem/tree/main/docker-examples/published-postgres). You need Docker Engine, Docker Compose v2 and Golem images built from the same checkout as the example. The published `v1.6.0` images do not read these settings. The Dockerfiles support Linux amd64 and arm64; amd64 needs an x86-64-v3 CPU.
 
 <Callout type="warning">
   This is a development example, not a production deployment. For a production deployment, see the [production checklist](/next/deploy/production-checklist) and the [fixed cluster with Docker Compose](/next/deploy/vm#fixed-cluster-with-docker-compose).
 </Callout>
 
-## Start the published images
+## Build and start the images
 
-Download the Compose file and its environment file from the `v1.6.0` release revision:
+Clone the repository and [build the example images](https://github.com/golemcloud/golem/blob/main/docker-examples/README.md) from that checkout. Build the service images and the Envoy router together. Then, from the repository root:
 
 ```bash filename="Terminal" copy
-GOLEM_REVISION=v1.6.0
-BASE=https://raw.githubusercontent.com/golemcloud/golem
-EXAMPLE="$BASE/$GOLEM_REVISION/docker-examples/published-postgres"
-curl -fLO "$EXAMPLE/compose.yaml"
-curl -fLO "$EXAMPLE/.env"
-
+cd docker-examples/published-postgres
 docker compose config --quiet
-docker compose pull
 docker compose up -d --no-build
 docker compose ps
 ```
 
-The Docker image tag includes the `v`: `GOLEM_IMAGES_VERSION=v1.6.0`. The Compose file also has build definitions for development from source, but the commands above pull the release images and do not build them. Do not combine a router from another revision with these service images. For a controlled deployment, pin upstream images such as PostgreSQL and Redis to verified versions or digests too.
+Keep `GOLEM_IMAGES_VERSION=local`. Compose uses the locally built Golem images and does not pull older release images. Do not combine a router from another revision with these service images. Docker still pulls dependency images when needed. For a controlled deployment, pin upstream images such as PostgreSQL and Redis to verified versions or digests too.
 
 The [`distributed-etcd` example](https://github.com/golemcloud/golem/tree/main/docker-examples/distributed-etcd) runs the shard manager in etcd mode instead. Its README describes the leader and standby checks.
 
@@ -35,7 +29,7 @@ The example has known account tokens and database credentials, disables login, a
 
 - The management [REST API](/next/rest-api) uses port `9881` with the host `localhost`. The router selects the management API by `GOLEM_ROUTER_MANAGEMENT_HOST`; other hosts go to deployed HTTP/MCP endpoints. Host routing is not an access-control boundary.
 - The direct HTTP gateway uses port `9006`; the direct MCP listener uses port `9007`. They are also loopback-only.
-- Use the downloaded `.env` to inspect port settings. Change host-side ports in `compose.yaml` if local ports conflict; keep container ports and their service configuration consistent.
+- Use the example's `.env` to inspect port settings. Change host-side ports in `compose.yaml` if local ports conflict; keep container ports and their service configuration consistent.
 
 Before **any remote exposure**, replace both account tokens in `.env` with distinct securely generated tokens and replace the database password in **every** matching Compose environment setting. Do not commit real credentials or print resolved `docker compose config` output: it includes credentials. Protect `.env` and restrict access to the Docker daemon and data volumes. Changing bootstrap tokens or PostgreSQL initialization variables does not rotate credentials already stored in existing volumes; use a fresh development stack or explicitly rotate stored credentials.
 
@@ -55,10 +49,10 @@ docker compose logs --tail=100
 docker compose down
 ```
 
-`docker compose down --volumes` permanently deletes this development stack's data. Back up data before removing volumes. To upgrade, change the image version for every Golem service together, pull the images, and recreate the containers.
+`docker compose down --volumes` permanently deletes this development stack's data. Back up data before removing volumes. After changing the checkout, rebuild every Golem image together before recreating the containers. Follow the release's upgrade instructions before using an existing data volume with a different version.
 
 ## Troubleshooting
 
-- If Compose tries to build an image, check the image tag and run `docker compose pull` first. The Dockerfiles package prebuilt Linux binaries; they do not compile Rust.
+- If Compose reports a missing Golem image, follow the matching-checkout build instructions above. The Dockerfiles package prebuilt Linux binaries; they do not compile Rust. Pulling a 1.6 image does not provide the new settings reader.
 - If Docker reports a missing `docker-credential-desktop`, repair or install the credential helper configured in your Docker client configuration. Do not work around it by disabling credential storage or renaming configuration keys.
 - Use `docker compose ps` and service logs to diagnose database health checks or startup failures. This recipe provides no SQLite fallback Compose file.

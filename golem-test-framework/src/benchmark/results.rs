@@ -951,7 +951,7 @@ impl MeasurementEnvironment {
 pub fn benchmark_sockets_enabled() -> bool {
     resolve_sockets_enabled(
         std::env::var("GOLEM_BENCH_SOCKETS_ENABLED").ok().as_deref(),
-        std::env::var("GOLEM__AGENT_SOCKETS__ENABLED")
+        std::env::var("GOLEM__OUTBOUND_SOCKETS__ENABLED")
             .ok()
             .as_deref(),
     )
@@ -2161,6 +2161,14 @@ mod tests {
         assert!(!resolve_sockets_enabled(Some("false"), None));
         assert!(!resolve_sockets_enabled(Some("false"), Some("true")));
         assert!(resolve_sockets_enabled(Some("true"), Some("false")));
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("GOLEM__OUTBOUND_SOCKETS__ENABLED", "true");
+            assert!(benchmark_sockets_enabled());
+            jail.set_env("GOLEM_BENCH_SOCKETS_ENABLED", "false");
+            assert!(!benchmark_sockets_enabled());
+            Ok(())
+        });
     }
 
     #[test]

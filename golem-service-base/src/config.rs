@@ -162,16 +162,37 @@ impl S3BlobStorageConfig {
     /// Without `namespace_prefixes`, refuses two bucket settings that name the same bucket. The
     /// keys of two namespaces, or of two levels of the compressed oplog, can then be the same.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.namespace_prefixes {
-            return Ok(());
-        }
-        let mut settings_by_bucket = HashMap::new();
-        for (setting, bucket) in self.bucket_settings() {
-            if let Some(other) = settings_by_bucket.insert(bucket, setting.clone()) {
-                anyhow::bail!(
-                    "blob_storage.config.{other} and blob_storage.config.{setting} both name the bucket \"{bucket}\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
-                );
+        use anyhow::Context;
+        if !self.namespace_prefixes {
+            let mut settings_by_bucket = HashMap::new();
+            for (setting, bucket) in self.bucket_settings() {
+                if let Some(other) = settings_by_bucket.insert(bucket, setting.clone()) {
+                    anyhow::bail!(
+                        "blob_storage.config.{other} and blob_storage.config.{setting} both name the bucket \"{bucket}\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
+                    );
+                }
             }
+        }
+        if let Some(endpoint) = &self.aws_endpoint_url {
+            let uri = endpoint
+                .parse::<http::Uri>()
+                .context("Invalid blob_storage.config.aws_endpoint_url")?;
+            let url = url::Url::parse(endpoint)
+                .context("Invalid blob_storage.config.aws_endpoint_url")?;
+            anyhow::ensure!(
+                matches!(uri.scheme_str(), Some("http" | "https"))
+                    && uri.host().is_some()
+                    && url.host_str().is_some()
+                    && url.query().is_none()
+                    && url.fragment().is_none(),
+                "blob_storage.config.aws_endpoint_url must be an absolute HTTP or HTTPS URL with a host and no query or fragment"
+            );
+        }
+        if let Some(jitter) = self.retries.max_jitter_factor {
+            anyhow::ensure!(
+                jitter.is_finite() && jitter > 0.0,
+                "blob_storage.config.retries.max_jitter_factor must be finite and positive; omit it to disable jitter"
+            );
         }
         Ok(())
     }
@@ -363,55 +384,63 @@ mod tests {
 
     #[test]
     fn blob_storage_config_files_and_examples_are_valid() {
-        for (name, source, has_s3_example) in [
+        [
             (
-                "worker-executor",
+                "worker_executor",
                 include_str!("../../golem-worker-executor/config/worker-executor.toml"),
                 true,
             ),
             (
-                "registry-service",
+                "registry_service",
                 include_str!("../../golem-registry-service/config/registry-service.toml"),
                 false,
             ),
             (
-                "component-compilation-service",
+                "component_compilation_service",
                 include_str!(
                     "../../golem-component-compilation-service/config/component-compilation-service.toml"
                 ),
                 true,
             ),
-        ] {
-            let config: BlobStorageConfig = Figment::new()
-                .merge(Toml::string(source))
-                .extract_inner("blob_storage")
-                .unwrap();
+        ]
+        .into_iter()
+        .for_each(|(name, source, has_s3_example)| {
+            let config: BlobStorageConfig = golem_common::config::server_settings::project(
+                name,
+                &Figment::from(Toml::string(source)),
+            )
+            .extract_inner("blob_storage")
+            .unwrap();
             config.validate().unwrap();
 
-            let mut found_s3_example = false;
-            for example in source.split("# [blob_storage]").skip(1) {
+            let prefix = format!("advanced.{name}.blob_storage");
+            let header = format!("# [{prefix}]");
+            let nested = format!("# [{prefix}.");
+            let found_s3_example = source.split(&header).skip(1).fold(false, |found, example| {
                 let section = example
                     .lines()
                     .take_while(|line| {
-                        !line.starts_with("# [") || line.starts_with("# [blob_storage.")
+                        !line.starts_with("# [") || line.starts_with(&nested)
                     })
                     .filter_map(|line| line.strip_prefix("# "))
                     .collect::<Vec<_>>()
                     .join("\n");
-                let config: BlobStorageConfig = Figment::new()
-                    .merge(Toml::string(&format!("[blob_storage]\n{section}")))
-                    .extract_inner("blob_storage")
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let config: BlobStorageConfig = golem_common::config::server_settings::project(
+                    name,
+                    &Figment::from(Toml::string(&format!("[{prefix}]\n{section}"))),
+                )
+                .extract_inner("blob_storage")
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
                 config
                     .validate()
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
-                found_s3_example |= matches!(config, BlobStorageConfig::S3(_));
-            }
+                found || matches!(config, BlobStorageConfig::S3(_))
+            });
             assert_eq!(
                 found_s3_example, has_s3_example,
                 "{name}: S3 example coverage"
             );
-        }
+        });
     }
 
     #[test]

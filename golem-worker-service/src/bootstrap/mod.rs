@@ -54,9 +54,11 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::service::routing_table::RoutingTableService;
+use golem_service_base::storage::blob::s3::{
+    ConfiguredS3BlobStorageFactory, S3BlobStorageFactory, S3StartupNamespace,
+};
 use golem_service_base::storage::blob::{
-    BlobStorage, fs::FileSystemBlobStorage, memory::InMemoryBlobStorage, s3::S3BlobStorage,
-    sqlite::SqliteBlobStorage,
+    BlobStorage, fs::FileSystemBlobStorage, memory::InMemoryBlobStorage, sqlite::SqliteBlobStorage,
 };
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
@@ -90,6 +92,19 @@ impl Services {
         config: &WorkerServiceConfig,
         golem_issuer: GolemIssuer,
     ) -> anyhow::Result<Self> {
+        Self::new_with_blob_storage_factory(
+            config,
+            golem_issuer,
+            ConfiguredS3BlobStorageFactory::default(),
+        )
+        .await
+    }
+
+    async fn new_with_blob_storage_factory(
+        config: &WorkerServiceConfig,
+        golem_issuer: GolemIssuer,
+        blob_storage_factory: impl S3BlobStorageFactory,
+    ) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
         config.validate_keep_alive().map_err(anyhow::Error::msg)?;
         config.mcp.session.validate().map_err(anyhow::Error::msg)?;
@@ -99,7 +114,11 @@ impl Services {
             .map_err(anyhow::Error::msg)?;
         config.blob_storage.validate()?;
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
-            BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
+            BlobStorageConfig::S3(config) => {
+                blob_storage_factory
+                    .create(config.clone(), &[S3StartupNamespace::InitialAgentFiles])
+                    .await?
+            }
             BlobStorageConfig::LocalFileSystem(config) => {
                 Arc::new(FileSystemBlobStorage::new(&config.root).await?)
             }
@@ -414,204 +433,4 @@ async fn postgres_mcp_session_store(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{MigratedConnections, StoreConnector, session_stores};
-    use crate::config::{
-        PostgresSessionStoreConfig, RedisSessionStoreConfig, SessionStoreConfig,
-        SqliteSessionStoreConfig,
-    };
-    use crate::mcp::session::{
-        McpPostgresStorageConfig, McpSessionConfig, McpSessionStorageConfig, McpSqliteStorageConfig,
-    };
-    use async_trait::async_trait;
-    use futures::TryStreamExt;
-    use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
-    use golem_common::redis::RedisPool;
-    use golem_service_base::db::postgres::PostgresPool;
-    use golem_service_base::db::sqlite::SqlitePool;
-    use std::sync::Mutex;
-    use std::time::Duration;
-    use tempfile::NamedTempFile;
-    use test_r::test;
-
-    /// Opens Redis and SQLite connections like production and Postgres pools that connect only
-    /// when used, and records every connection it opens.
-    #[derive(Default)]
-    struct RecordingConnector {
-        opened: Mutex<Vec<String>>,
-    }
-
-    impl RecordingConnector {
-        fn record(&self, connection: String) {
-            self.opened
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(connection);
-        }
-
-        fn opened(&self) -> Vec<String> {
-            self.opened
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-        }
-    }
-
-    #[async_trait]
-    #[golem_async_trait::region_simple]
-    impl StoreConnector for RecordingConnector {
-        async fn redis(&self, config: &RedisConfig) -> anyhow::Result<RedisPool> {
-            self.record(format!("redis database {}", config.database));
-            MigratedConnections.redis(config).await
-        }
-
-        async fn sqlite(&self, config: &DbSqliteConfig) -> anyhow::Result<SqlitePool> {
-            self.record(format!("sqlite {}", config.database));
-            MigratedConnections.sqlite(config).await
-        }
-
-        async fn postgres(&self, config: &DbPostgresConfig) -> anyhow::Result<PostgresPool> {
-            self.record(format!("postgres schema {:?}", config.schema));
-            PostgresPool::new(
-                sqlx::postgres::PgPoolOptions::new().connect_lazy_with(config.connect_options()),
-            )
-            .await
-        }
-    }
-
-    fn sqlite_db(database: &str) -> DbSqliteConfig {
-        DbSqliteConfig {
-            database: database.to_string(),
-            max_connections: 2,
-            foreign_keys: false,
-        }
-    }
-
-    fn postgres_db(schema: Option<&str>) -> DbPostgresConfig {
-        DbPostgresConfig {
-            host: "localhost".to_string(),
-            database: "golem".to_string(),
-            username: "golem".to_string(),
-            password: "golem".to_string(),
-            port: 5432,
-            max_connections: 4,
-            schema: schema.map(str::to_string),
-            acquire_timeout: None,
-        }
-    }
-
-    fn mcp(session_storage: Option<McpSessionStorageConfig>) -> McpSessionConfig {
-        McpSessionConfig {
-            session_storage,
-            ..McpSessionConfig::default()
-        }
-    }
-
-    /// The connections that building both stores opens.
-    async fn opened(
-        gateway: &SessionStoreConfig,
-        mcp: &McpSessionConfig,
-    ) -> anyhow::Result<Vec<String>> {
-        let connector = RecordingConnector::default();
-        session_stores(gateway, mcp, &connector).await?;
-        Ok(connector.opened())
-    }
-
-    #[test]
-    async fn the_mcp_store_uses_the_gateway_pool_when_the_connections_are_equal()
-    -> anyhow::Result<()> {
-        let gateway_file = NamedTempFile::new()?;
-        let gateway_db = gateway_file.path().to_string_lossy().to_string();
-        let other_file = NamedTempFile::new()?;
-        let other_db = other_file.path().to_string_lossy().to_string();
-        let gateway_sqlite = SessionStoreConfig::Sqlite(SqliteSessionStoreConfig {
-            pending_login_expiration: Duration::from_secs(60),
-            cleanup_interval: Duration::from_secs(3600),
-            sqlite_config: sqlite_db(&gateway_db),
-        });
-        let mcp_sqlite = |database: &str| {
-            Some(McpSessionStorageConfig::Sqlite(McpSqliteStorageConfig {
-                cleanup_interval: Duration::from_secs(60),
-                sqlite_config: sqlite_db(database),
-            }))
-        };
-        let gateway_postgres = SessionStoreConfig::Postgres(PostgresSessionStoreConfig {
-            pending_login_expiration: Duration::from_secs(60),
-            cleanup_interval: Duration::from_secs(3600),
-            postgres_config: postgres_db(None),
-        });
-        let mcp_postgres = |schema| {
-            Some(McpSessionStorageConfig::Postgres(
-                McpPostgresStorageConfig {
-                    cleanup_interval: Duration::from_secs(60),
-                    postgres_config: postgres_db(schema),
-                },
-            ))
-        };
-        let gateway_redis = SessionStoreConfig::Redis(RedisSessionStoreConfig::default());
-        let mcp_redis = |database| {
-            Some(McpSessionStorageConfig::Redis(RedisConfig {
-                database,
-                ..RedisConfig::default()
-            }))
-        };
-        let default_schema = format!(
-            "postgres schema {:?}",
-            Some(crate::config::DEFAULT_POSTGRES_SESSION_STORE_SCHEMA)
-        );
-
-        let rows = [
-            (&gateway_sqlite, None, vec![format!("sqlite {gateway_db}")]),
-            (
-                &gateway_sqlite,
-                mcp_sqlite(&gateway_db),
-                vec![format!("sqlite {gateway_db}")],
-            ),
-            (
-                &gateway_sqlite,
-                mcp_sqlite(&other_db),
-                vec![format!("sqlite {gateway_db}"), format!("sqlite {other_db}")],
-            ),
-            (&gateway_postgres, None, vec![default_schema.clone()]),
-            (
-                &gateway_postgres,
-                mcp_postgres(Some(crate::config::DEFAULT_POSTGRES_SESSION_STORE_SCHEMA)),
-                vec![default_schema.clone()],
-            ),
-            (
-                &gateway_postgres,
-                mcp_postgres(Some("mcp_sessions")),
-                vec![
-                    default_schema.clone(),
-                    format!("postgres schema {:?}", Some("mcp_sessions")),
-                ],
-            ),
-            (&gateway_redis, None, vec!["redis database 0".to_string()]),
-            (
-                &gateway_redis,
-                mcp_redis(0),
-                vec!["redis database 0".to_string()],
-            ),
-            (
-                &gateway_redis,
-                mcp_redis(1),
-                vec![
-                    "redis database 0".to_string(),
-                    "redis database 1".to_string(),
-                ],
-            ),
-            (
-                &gateway_redis,
-                mcp_sqlite(&other_db),
-                vec!["redis database 0".to_string(), format!("sqlite {other_db}")],
-            ),
-        ];
-        futures::stream::iter(rows.into_iter().enumerate().map(Ok))
-            .try_for_each(|(row, (gateway, session_storage, expected))| async move {
-                let opened = opened(gateway, &mcp(session_storage)).await?;
-                assert_eq!(opened, expected, "row {row}");
-                Ok(())
-            })
-            .await
-    }
-}
+mod tests;

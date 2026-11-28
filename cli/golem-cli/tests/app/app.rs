@@ -50,7 +50,7 @@ async fn local_server_lease_renewals_without_otlp_do_not_warn(_tracing: &Tracing
     let server_log = ctx.cwd_path_join("lease-renewals-server.log");
     ctx.server_log = Some(server_log.clone());
     ctx.add_env_var(
-        "GOLEM_LOG_FILTER",
+        "RUST_LOG",
         "info,golem_shard_manager::sharding::shard_management=debug",
     );
     ctx.start_server().await;
@@ -97,7 +97,7 @@ async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let server_log = ctx.cwd_path_join("runtime-metrics-server.log");
     ctx.server_log = Some(server_log.clone());
-    ctx.add_env_var("GOLEM_LOG_FILTER", "info");
+    ctx.add_env_var("RUST_LOG", "info");
     ctx.start_server().await;
 
     let metrics_url = format!("http://localhost:{}/metrics", ctx.router_port());

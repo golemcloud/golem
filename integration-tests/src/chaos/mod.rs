@@ -2638,7 +2638,7 @@ mod tests {
                 resolution.poisoned_name.starts_with("shard-manager."),
                 "{code} poisons {}, but the only name the executor resolves towards the shard \
                  manager is shard-manager.<namespace>.svc.cluster.local — see \
-                 GOLEM__SHARD_MANAGER__HOST on the worker-executor deployment",
+                 GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST on the worker-executor deployment",
                 resolution.poisoned_name
             );
         }

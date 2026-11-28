@@ -117,32 +117,20 @@ impl RegistryService for CloudRegistryService {
         self.default_plan_id
     }
 
-    fn low_fuel_plan(&self) -> PlanId {
-        panic!(
-            "low_fuel_plan is not supported in cloud mode; \
-             the benchmark calling this method requires a local or provided cluster"
-        );
+    fn low_fuel_plan(&self) -> Option<PlanId> {
+        None
     }
 
-    fn low_disk_space_plan(&self) -> PlanId {
-        panic!(
-            "low_disk_space_plan is not supported in cloud mode; \
-             the benchmark calling this method requires a local or provided cluster"
-        );
+    fn low_disk_space_plan(&self) -> Option<PlanId> {
+        None
     }
 
-    fn low_http_calls_plan(&self) -> PlanId {
-        panic!(
-            "low_http_calls_plan is not supported in cloud mode; \
-             the benchmark calling this method requires a local or provided cluster"
-        );
+    fn low_http_calls_plan(&self) -> Option<PlanId> {
+        None
     }
 
-    fn low_rpc_calls_plan(&self) -> PlanId {
-        panic!(
-            "low_rpc_calls_plan is not supported in cloud mode; \
-             the benchmark calling this method requires a local or provided cluster"
-        );
+    fn low_rpc_calls_plan(&self) -> Option<PlanId> {
+        None
     }
 
     async fn kill(&self) {}
@@ -167,35 +155,4 @@ impl RegistryService for CloudRegistryService {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use test_r::test;
-
-    /// Every generated client has to reach the gateway, not `http://host:port`.
-    ///
-    /// This is a regression test with a cost attached: `resources_client` was
-    /// added while only `client()` was overridden here, so it built
-    /// `http://release.dev-api.golem.cloud:443`, got an empty body back, and
-    /// failed chaos-prep with a JSON decode error that named neither the URL nor
-    /// the cause. Overriding the *context* is what makes one fix cover every
-    /// client, and this asserts the override is still in place.
-    #[test]
-    async fn every_client_reaches_the_gateway_url() {
-        let api_url = Url::parse("https://release.dev-api.golem.cloud").unwrap();
-        let service = CloudRegistryService::new(
-            api_url.clone(),
-            TokenSecret::new(),
-            AccountId(uuid::Uuid::nil()),
-            PlanId(uuid::Uuid::nil()),
-        );
-        let token = TokenSecret::new();
-
-        assert_eq!(service.client_context(&token).await.base_url, api_url);
-        assert_eq!(service.client(&token).await.context.base_url, api_url);
-        assert_eq!(
-            service.resources_client(&token).await.context.base_url,
-            api_url,
-            "a client that skips the context override silently talks to the wrong host"
-        );
-    }
-}
+mod tests;

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use super::{RegistryService, wait_for_startup};
-use crate::components::ChildProcessLogger;
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::new_reqwest_client_with_tracing;
 use crate::components::rdb::Rdb;
+use crate::components::{ChildProcessLogger, SupportedServiceLaunch};
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
@@ -40,10 +40,10 @@ pub struct SpawnedRegistryService {
     admin_account_token: TokenSecret,
     builtin_plugin_owner_account_id: AccountId,
     default_plan_id: PlanId,
-    low_fuel_plan_id: PlanId,
-    low_disk_space_plan_id: PlanId,
-    low_http_calls_plan_id: PlanId,
-    low_rpc_calls_plan_id: PlanId,
+    low_fuel_plan_id: Option<PlanId>,
+    low_disk_space_plan_id: Option<PlanId>,
+    low_http_calls_plan_id: Option<PlanId>,
+    low_rpc_calls_plan_id: Option<PlanId>,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
@@ -74,7 +74,6 @@ impl SpawnedRegistryService {
 
         let builtin_plugin_owner_account_id =
             AccountId(uuid!("b7d3b9fb-ca74-4f75-8d20-c2ce03f5871d"));
-
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
         let low_fuel_plan_id = PlanId(uuid!("301fd75c-dcc5-48e3-967e-e7c33df52493"));
         let low_disk_space_plan_id = PlanId(uuid!("a2f3b4c5-d6e7-8901-abcd-ef0123456789"));
@@ -87,31 +86,95 @@ impl SpawnedRegistryService {
         let builtin_artifact_cache_dir =
             repository_root.join("target/integration-builtin-artifacts");
 
-        let mut child = Command::new(executable)
-            .current_dir(working_directory)
-            .envs(
-                super::env_vars(
-                    http_port,
-                    grpc_port,
-                    rdb,
-                    false,
-                    component_compilation_service,
-                    verbosity,
-                    admin_plan_id,
-                    admin_account_id,
-                    &admin_account_email,
-                    &admin_account_token,
-                    builtin_plugin_owner_account_id,
-                    default_plan_id,
-                    low_fuel_plan_id,
-                    low_disk_space_plan_id,
-                    low_http_calls_plan_id,
-                    low_rpc_calls_plan_id,
-                    otlp,
-                    &builtin_artifact_cache_dir,
-                )
-                .await,
+        let mut command = Command::new(executable);
+        command.current_dir(working_directory).envs(
+            super::env_vars(
+                http_port,
+                grpc_port,
+                rdb,
+                false,
+                component_compilation_service,
+                verbosity,
+                admin_plan_id,
+                admin_account_id,
+                &admin_account_email,
+                &admin_account_token,
+                builtin_plugin_owner_account_id,
+                default_plan_id,
+                low_fuel_plan_id,
+                low_disk_space_plan_id,
+                low_http_calls_plan_id,
+                low_rpc_calls_plan_id,
+                otlp,
+                &builtin_artifact_cache_dir,
             )
+            .await,
+        );
+        let (child, logger) =
+            Self::start(command, http_port, grpc_port, out_level, err_level).await;
+
+        Self {
+            http_port,
+            grpc_port,
+            child: Arc::new(Mutex::new(Some(child))),
+            _logger: logger,
+            admin_account_id,
+            admin_account_email,
+            admin_account_token,
+            builtin_plugin_owner_account_id,
+            default_plan_id,
+            low_fuel_plan_id: Some(low_fuel_plan_id),
+            low_disk_space_plan_id: Some(low_disk_space_plan_id),
+            low_http_calls_plan_id: Some(low_http_calls_plan_id),
+            low_rpc_calls_plan_id: Some(low_rpc_calls_plan_id),
+            base_http_client: OnceCell::new(),
+        }
+    }
+
+    pub(crate) async fn new_supported(
+        launch: SupportedServiceLaunch,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let [http_port, grpc_port] = launch.listeners("registry_service");
+        let (child, logger) = Self::start(
+            launch.command(&[]),
+            http_port,
+            grpc_port,
+            out_level,
+            err_level,
+        )
+        .await;
+        Self {
+            http_port,
+            grpc_port,
+            child: Arc::new(Mutex::new(Some(child))),
+            _logger: logger,
+            admin_account_id: AccountId(uuid!("e71a6160-4144-4720-9e34-e5943458d129")),
+            admin_account_email: AccountEmail::new("initial@user"),
+            admin_account_token: TokenSecret::trusted(
+                "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string(),
+            ),
+            builtin_plugin_owner_account_id: AccountId(uuid!(
+                "adb2694f-cd9f-425d-905d-ca2888c9c5de"
+            )),
+            default_plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+            low_fuel_plan_id: None,
+            low_disk_space_plan_id: None,
+            low_http_calls_plan_id: None,
+            low_rpc_calls_plan_id: None,
+            base_http_client: OnceCell::new(),
+        }
+    }
+
+    async fn start(
+        mut command: Command,
+        http_port: u16,
+        grpc_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> (Child, ChildProcessLogger) {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -134,22 +197,7 @@ impl SpawnedRegistryService {
         )
         .await;
 
-        Self {
-            http_port,
-            grpc_port,
-            child: Arc::new(Mutex::new(Some(child))),
-            _logger: logger,
-            admin_account_id,
-            admin_account_email,
-            admin_account_token,
-            builtin_plugin_owner_account_id,
-            default_plan_id,
-            low_fuel_plan_id,
-            low_disk_space_plan_id,
-            low_http_calls_plan_id,
-            low_rpc_calls_plan_id,
-            base_http_client: OnceCell::new(),
-        }
+        (child, logger)
     }
 }
 
@@ -186,19 +234,19 @@ impl RegistryService for SpawnedRegistryService {
     fn default_plan(&self) -> PlanId {
         self.default_plan_id
     }
-    fn low_fuel_plan(&self) -> PlanId {
+    fn low_fuel_plan(&self) -> Option<PlanId> {
         self.low_fuel_plan_id
     }
 
-    fn low_disk_space_plan(&self) -> PlanId {
+    fn low_disk_space_plan(&self) -> Option<PlanId> {
         self.low_disk_space_plan_id
     }
 
-    fn low_http_calls_plan(&self) -> PlanId {
+    fn low_http_calls_plan(&self) -> Option<PlanId> {
         self.low_http_calls_plan_id
     }
 
-    fn low_rpc_calls_plan(&self) -> PlanId {
+    fn low_rpc_calls_plan(&self) -> Option<PlanId> {
         self.low_rpc_calls_plan_id
     }
 

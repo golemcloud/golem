@@ -5,7 +5,8 @@
 # - The image runs as uid and gid 65534, and that user can write the directories of the image
 #   where the default configuration keeps data.
 # - No file in the image has a setuid or setgid bit.
-# - The golem image starts with GOLEM_LITESTREAM=true on a new volume.
+# - With GOLEM_LITESTREAM=true, the golem entrypoint restores a new volume, and Litestream runs
+#   a controlled child and reports its failure. This does not check Golem server readiness.
 # - Envoy accepts the configuration that the router image writes, and the router sends each request
 #   to its service.
 # - The binary of xfs-quotad has the file capability cap_sys_admin+ep.
@@ -35,11 +36,11 @@ fi
 
 # <directory of the Dockerfile> <binary> <directories that uid 65534 must write>
 services=(
-    "golem-worker-executor worker-executor /home/golem /data /data/blob_storage"
-    "golem-registry-service golem-registry-service /home/golem /data /data/blob_storage /app/builtin-artifacts"
-    "golem-shard-manager golem-shard-manager /home/golem /data /data/blob_storage"
-    "golem-worker-service golem-worker-service /home/golem /data /data/blob_storage"
-    "golem-component-compilation-service golem-component-compilation-service /home/golem /data /data/blob_storage"
+    "golem-worker-executor worker-executor /home/golem /data /data/blob_storage /var/lib/golem"
+    "golem-registry-service golem-registry-service /home/golem /data /data/blob_storage /var/lib/golem /app/builtin-artifacts"
+    "golem-shard-manager golem-shard-manager /home/golem /data /data/blob_storage /var/lib/golem"
+    "golem-worker-service golem-worker-service /home/golem /data /data/blob_storage /var/lib/golem"
+    "golem-component-compilation-service golem-component-compilation-service /home/golem /data /data/blob_storage /var/lib/golem"
     "cli/golem golem /home/golem /var/lib/golem"
     "golem-xfs-quotad golem-xfs-quotad /run/golem-quota"
     "golem-router - /home/golem"
@@ -73,19 +74,73 @@ for service in "${services[@]}"; do
     [ -z "$privileged" ] || fail "$image has setuid or setgid files: $privileged"
 done
 
-# The entrypoint lists the databases of the Litestream configuration, restores each of them from
-# the empty replica, and runs `golem --version` under `litestream replicate`, all as uid 65534.
+# Use a controlled child even when the image has a real Golem binary. This checks packaging,
+# argument quoting and child exit handling, not server configuration or readiness.
 golem="$tag_prefix/cli/golem"
-echo "== $golem: startup with Litestream on a new volume"
-volume=$("$engine" volume create)
-output=$("$engine" run --rm -v "$volume:/var/lib/golem" -e GOLEM_LITESTREAM=true \
-    -e GOLEM_LITESTREAM_REPLICA_URL=file:///var/lib/golem/replica "$golem" --version 2>&1) ||
-    fail "$golem with GOLEM_LITESTREAM=true: $output"
-"$engine" volume rm "$volume" >/dev/null
+child=$(cat <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = --litestream-preflight ]; then
+    exit 0
+fi
+[ "$#" = 4 ] && [ "$1" = server ] && [ "$2" = run ] &&
+    [ "$3" = --config ] && [ "$4" = "$GOLEM_IMAGE_CHECK_CONFIG" ] || exit 90
+[ "$GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE" = Sqlite ] || exit 91
+[ "$GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE" = Sqlite ] || exit 92
+echo "litestream probe child exit=$GOLEM_IMAGE_CHECK_EXIT"
+exit "$GOLEM_IMAGE_CHECK_EXIT"
+EOF
+)
+volume=
+container=
+cleanup_litestream() {
+    [ -z "$container" ] || "$engine" rm -f "$container" >/dev/null 2>&1 || true
+    [ -z "$volume" ] || "$engine" volume rm "$volume" >/dev/null 2>&1 || true
+}
+trap cleanup_litestream EXIT
 databases=$(grep -c '^  - path:' cli/golem/docker/litestream.yml)
-restores=$(grep -c "no matching backups found" <<<"$output" || true)
-[ "$restores" = "$databases" ] ||
-    fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
+for child_exit in 0 23; do
+    echo "== $golem: Litestream packaging probe, child exit $child_exit"
+    volume=$("$engine" volume create)
+    container=$("$engine" create -v "$volume:/var/lib/golem" -e GOLEM_LITESTREAM=true \
+        -e GOLEM_LITESTREAM_REPLICA_URL=file:///var/lib/golem/replica \
+        -e "GOLEM_IMAGE_CHECK_CHILD=$child" -e "GOLEM_IMAGE_CHECK_EXIT=$child_exit" \
+        -e "GOLEM_IMAGE_CHECK_CONFIG=settings with 'quotes'.toml" \
+        --entrypoint /bin/bash "$golem" -euc '
+            mkdir -p /home/golem/probe-bin
+            printf "%s\n" "$GOLEM_IMAGE_CHECK_CHILD" > /home/golem/probe-bin/golem
+            chmod +x /home/golem/probe-bin/golem
+            export PATH="/home/golem/probe-bin:$PATH"
+            exec /usr/bin/tini -- /usr/local/bin/golem-entrypoint "$@"
+        ' sh server run --config "settings with 'quotes'.toml")
+    "$engine" start "$container" >/dev/null
+    for _ in $(seq 1 180); do
+        [ "$("$engine" inspect --format '{{.State.Running}}' "$container")" = true ] || break
+        sleep 1
+    done
+    output=$("$engine" logs "$container" 2>&1)
+    restores=$(grep -c "no matching backups found" <<<"$output" || true)
+    [ "$restores" = "$databases" ] ||
+        fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
+    [ "$("$engine" inspect --format '{{.State.Running}}' "$container")" = false ] ||
+        fail "$golem: Litestream did not stop after its controlled child: $output"
+    grep -qx "litestream probe child exit=$child_exit" <<<"$output" ||
+        fail "$golem: Litestream did not execute its controlled child: $output"
+    expected_exit=0
+    if [ "$child_exit" != 0 ]; then
+        # Litestream 0.5.17 reports the child's status but exits with 1 itself.
+        expected_exit=1
+        grep -q "Error: exit status $child_exit" <<<"$output" ||
+            fail "$golem: Litestream did not report the child failure: $output"
+    fi
+    actual_exit=$("$engine" inspect --format '{{.State.ExitCode}}' "$container")
+    [ "$actual_exit" = "$expected_exit" ] ||
+        fail "$golem: Litestream exited with $actual_exit, not $expected_exit: $output"
+    cleanup_litestream
+    container=
+    volume=
+done
+trap - EXIT
 
 # The entrypoint writes the Envoy configuration from the variables, and Envoy validates it.
 router="$tag_prefix/golem-router"

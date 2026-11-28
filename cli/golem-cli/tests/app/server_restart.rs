@@ -105,10 +105,10 @@ fn configure_held_artifact(
         &config_file,
         format!(
             r#"
-                [registry_service.builtin_artifacts]
+                [advanced.registry_service.builtin_artifacts]
                 cache_dir = "{}"
 
-                [registry_service.builtin_artifacts.source_overrides.{}]
+                [advanced.registry_service.builtin_artifacts.source_overrides.{}]
                 url = "http://{}/{}.wasm"
                 sha256 = "{held_sha256}"
             "#,

@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::ChildProcessLogger;
 use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::{WorkerExecutor, wait_for_startup};
 use crate::components::worker_service::WorkerService;
+use crate::components::{ChildProcessLogger, SupportedServiceLaunch};
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,14 +35,23 @@ pub struct SpawnedWorkerExecutor {
     reaped: AtomicBool,
     generation: AtomicU64,
     lifecycle: Arc<tokio::sync::Mutex<()>>,
-    executable: PathBuf,
-    working_directory: PathBuf,
+    recipe: ExecutorLaunch,
+    out_level: Level,
+    err_level: Level,
+}
+
+enum ExecutorLaunch {
+    Suite(Box<SuiteInputs>),
+    Supported(SupportedServiceLaunch),
+}
+
+struct SuiteInputs {
+    executable: Box<Path>,
+    working_directory: Box<Path>,
     rdb: Arc<dyn Rdb>,
     shard_manager: Arc<dyn ShardManager>,
     worker_service: Arc<dyn WorkerService>,
     verbosity: Level,
-    out_level: Level,
-    err_level: Level,
     registry_service: Arc<dyn RegistryService>,
     environment_state_cache_capacity: Option<usize>,
     oplog_archive_interval: Option<Duration>,
@@ -74,25 +83,47 @@ impl SpawnedWorkerExecutor {
             panic!("Expected to have precompiled golem-worker-executor at {executable:?}");
         }
 
-        let (child, logger) = Self::start(
-            executable,
-            working_directory,
-            http_port,
-            grpc_port,
-            &rdb,
-            &shard_manager,
-            &worker_service,
+        let recipe = ExecutorLaunch::Suite(Box::new(SuiteInputs {
+            executable: executable.into(),
+            working_directory: working_directory.into(),
+            rdb,
+            shard_manager,
+            worker_service,
             verbosity,
-            out_level,
-            err_level,
-            &registry_service,
+            registry_service,
             environment_state_cache_capacity,
             oplog_archive_interval,
             enable_fs_cache,
             otlp,
-            &[],
+        }));
+        Self::from_recipe(recipe, http_port, grpc_port, out_level, err_level).await
+    }
+
+    pub(crate) async fn new_supported(
+        launch: SupportedServiceLaunch,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let [http_port, grpc_port] = launch.listeners("worker_executor");
+        Self::from_recipe(
+            ExecutorLaunch::Supported(launch),
+            http_port,
+            grpc_port,
+            out_level,
+            err_level,
         )
-        .await;
+        .await
+    }
+
+    async fn from_recipe(
+        recipe: ExecutorLaunch,
+        http_port: u16,
+        grpc_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let command = Self::prepare_command(&recipe, http_port, grpc_port, &[]).await;
+        let (child, logger) = Self::start(command, grpc_port, out_level, err_level).await;
 
         Self {
             http_port,
@@ -102,65 +133,54 @@ impl SpawnedWorkerExecutor {
             reaped: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
-            executable: executable.to_path_buf(),
-            working_directory: working_directory.to_path_buf(),
-            rdb,
-            shard_manager,
-            worker_service,
-            verbosity,
+            recipe,
             out_level,
             err_level,
-            registry_service,
-            environment_state_cache_capacity,
-            oplog_archive_interval,
-            enable_fs_cache,
-            otlp,
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn start(
-        executable: &Path,
-        working_directory: &Path,
+    async fn prepare_command(
+        recipe: &ExecutorLaunch,
         http_port: u16,
         grpc_port: u16,
-        rdb: &Arc<dyn Rdb>,
-        shard_manager: &Arc<dyn ShardManager>,
-        worker_service: &Arc<dyn WorkerService>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        registry_service: &Arc<dyn RegistryService>,
-        environment_state_cache_capacity: Option<usize>,
-        oplog_archive_interval: Option<Duration>,
-        enable_fs_cache: bool,
-        otlp: bool,
         extra_env_vars: &[(String, String)],
-    ) -> (Child, ChildProcessLogger) {
+    ) -> Command {
+        let suite = match recipe {
+            ExecutorLaunch::Supported(launch) => return launch.command(extra_env_vars),
+            ExecutorLaunch::Suite(suite) => suite,
+        };
         let mut env = super::env_vars(
             http_port,
             grpc_port,
-            shard_manager,
-            worker_service,
-            rdb,
-            registry_service,
-            environment_state_cache_capacity,
-            oplog_archive_interval,
-            verbosity,
-            enable_fs_cache,
-            otlp,
+            &suite.shard_manager,
+            &suite.worker_service,
+            &suite.rdb,
+            &suite.registry_service,
+            suite.environment_state_cache_capacity,
+            suite.oplog_archive_interval,
+            suite.verbosity,
+            suite.enable_fs_cache,
+            suite.otlp,
         )
         .await;
-        // Per-restart overrides win over the baseline configuration. Scoped to
-        // this child process only — we never touch the parent test runner's
-        // process-wide environment.
         for (key, value) in extra_env_vars {
             env.insert(key.clone(), value.clone());
         }
 
-        let mut child = Command::new(executable)
-            .current_dir(working_directory)
-            .envs(env)
+        let mut command = Command::new(suite.executable.as_ref());
+        command
+            .current_dir(suite.working_directory.as_ref())
+            .envs(env);
+        command
+    }
+
+    async fn start(
+        mut command: Command,
+        grpc_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> (Child, ChildProcessLogger) {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -364,8 +384,6 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.child.lock().unwrap().is_none(),
             "cannot restart an unreaped executor"
         );
-        self.reaped.store(false, Ordering::Release);
-        self.generation.fetch_add(1, Ordering::AcqRel);
         if extra_env_vars.is_empty() {
             info!("Restarting golem-worker-executor {}", self.grpc_port);
         } else {
@@ -376,25 +394,17 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             );
         }
 
-        let (child, logger) = Self::start(
-            &self.executable,
-            &self.working_directory,
+        let command = Self::prepare_command(
+            &self.recipe,
             self.http_port,
             self.grpc_port,
-            &self.rdb,
-            &self.shard_manager,
-            &self.worker_service,
-            self.verbosity,
-            self.out_level,
-            self.err_level,
-            &self.registry_service,
-            self.environment_state_cache_capacity,
-            self.oplog_archive_interval,
-            self.enable_fs_cache,
-            self.otlp,
             &extra_env_vars,
         )
         .await;
+        self.reaped.store(false, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        let (child, logger) =
+            Self::start(command, self.grpc_port, self.out_level, self.err_level).await;
 
         info!("Restarted golem-worker-executor {}", self.grpc_port);
 

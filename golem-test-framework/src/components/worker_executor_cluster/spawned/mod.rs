@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::SupportedServiceLaunch;
 use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
@@ -20,6 +21,7 @@ use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
+use futures::StreamExt;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,6 +29,49 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::{Instrument, Level, info};
+
+#[cfg(test)]
+mod tests;
+
+fn preflight_supported_launches(
+    launches: &[SupportedServiceLaunch],
+    shard_host: &str,
+    shard_port: u16,
+) {
+    let mut ports = HashSet::new();
+    launches.iter().for_each(|launch| {
+        let listeners: [u16; 2] = launch.listeners("worker_executor");
+        listeners.into_iter().for_each(|port| {
+            assert!(
+                ports.insert(port),
+                "duplicate supported executor listener {port}"
+            )
+        });
+        [
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST",
+                shard_host.to_string(),
+            ),
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT",
+                shard_port.to_string(),
+            ),
+        ]
+        .into_iter()
+        .for_each(|(key, expected)| {
+            let actual = launch
+                .env
+                .iter()
+                .find(|(name, _)| name.as_ref() == key)
+                .map(|(_, value)| value.as_ref());
+            assert_eq!(
+                actual,
+                Some(expected.as_str()),
+                "supported executor shard peer disagrees with registration handle: {key}"
+            );
+        });
+    });
+}
 
 pub struct SpawnedWorkerExecutorCluster {
     worker_executors: Vec<Arc<dyn WorkerExecutor>>,
@@ -121,6 +166,35 @@ impl SpawnedWorkerExecutorCluster {
             );
         }
 
+        Self::finish(worker_executors, shard_manager).await
+    }
+
+    pub(crate) async fn new_supported(
+        launches: Vec<SupportedServiceLaunch>,
+        shard_manager: Arc<dyn ShardManager>,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        preflight_supported_launches(
+            &launches,
+            &shard_manager.grpc_host(),
+            shard_manager.grpc_port(),
+        );
+        let worker_executors = futures::stream::iter(launches)
+            .then(|launch| async move {
+                Arc::new(SpawnedWorkerExecutor::new_supported(launch, out_level, err_level).await)
+                    as Arc<dyn WorkerExecutor>
+            })
+            .collect()
+            .await;
+        Self::finish(worker_executors, shard_manager).await
+    }
+
+    async fn finish(
+        worker_executors: Vec<Arc<dyn WorkerExecutor>>,
+        shard_manager: Arc<dyn ShardManager>,
+    ) -> Self {
+        let size = worker_executors.len();
         info!("Waiting for shard manager to see all executors");
 
         let start = Instant::now();

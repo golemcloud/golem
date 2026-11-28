@@ -4,6 +4,8 @@ The per-service images with several worker executors, Caddy for TLS, and a Postg
 an S3 bucket outside the host. The guide is
 [Fixed cluster with Docker Compose](https://learn.golem.cloud/next/deploy/vm#fixed-cluster-with-docker-compose).
 
+First [build the images from this checkout](../README.md). Every Golem image uses the local tag `local`; the example does not pull an older published image.
+
 ```sh
 cp .env.example .env   # then fill in every value
 docker compose up -d
@@ -17,5 +19,7 @@ docker compose up -d
 - `WORKER_EXECUTOR_REPLICAS` sets the number of worker executors.
 - All services share one bucket with `namespace_prefixes = true`. Do not change it after the first
   start.
-- The registry service keeps its built-in artifact cache in the `builtin_artifacts` volume, so
-  replacing its container does not download the artifacts again.
+- The local build embeds the built-in artifacts, so they need no GitHub download. The registry
+  service keeps extracted metadata and fetched URL-backed artifacts in the `builtin_artifacts`
+  volume. It reuses valid cached entries after container replacement. Source overrides can select
+  URLs even in a binary with embedded artifacts.

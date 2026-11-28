@@ -1007,6 +1007,7 @@ impl Default for SecuritySchemeConfig {
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
     ConfigLoader::new(&PathBuf::from("config/registry-service.toml"))
+        .for_service("registry_service")
 }
 
 #[cfg(test)]

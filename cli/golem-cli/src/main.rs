@@ -38,6 +38,7 @@ mod hooks {
             &self,
             _ctx: Arc<Context>,
             _subcommand: ServerSubcommand,
+            _verbosity: Verbosity,
         ) -> anyhow::Result<()> {
             anyhow::bail!(
                 "This build of golem-cli does not include a bundled local server. \

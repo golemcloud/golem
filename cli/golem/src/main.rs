@@ -15,7 +15,8 @@
 #![recursion_limit = "512"]
 
 use golem::command_handler::ServerCommandHandler;
-use golem_cli::command::GolemCliCommand;
+use golem_cli::command::server::ServerSubcommand;
+use golem_cli::command::{GolemCliCommand, GolemCliCommandParseResult, GolemCliSubcommand};
 use golem_cli::command_handler::{CommandHandler, requires_executor_runtime};
 use golem_cli::main_wrapper;
 use std::process::ExitCode;
@@ -25,6 +26,35 @@ fn main() -> ExitCode {
     // This binary links rustls with both the `ring` and the `aws-lc-rs` provider, so rustls cannot
     // choose a process default. TLS clients that do not name a provider use this one.
     let _ = rustls::crypto::ring::default_provider().install_default();
+
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--litestream-preflight"))
+    {
+        let parsed = GolemCliCommand::try_parse_from_lenient(
+            std::env::args_os()
+                .enumerate()
+                .filter_map(|(index, arg)| (index != 1).then_some(arg)),
+            true,
+        );
+        let result = match parsed {
+            GolemCliCommandParseResult::FullMatch(GolemCliCommand {
+                subcommand:
+                    GolemCliSubcommand::Server {
+                        subcommand: ServerSubcommand::Run { args },
+                    },
+                ..
+            }) => golem::config::check_litestream_config(&args),
+            _ => Err(anyhow::anyhow!(
+                "GOLEM_LITESTREAM=true requires a valid `server run` command"
+            )),
+        };
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                golem_cli::log::eprint_line(format!("Litestream preflight failed: {error:#}"));
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     if let Some(flag) = std::env::args_os()
         .nth(1)

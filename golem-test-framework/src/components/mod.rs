@@ -18,7 +18,8 @@ use golem_client::Security;
 use golem_client::api::HealthCheckClient;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::process::Child;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::str::FromStr;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -50,6 +51,210 @@ pub mod worker_service;
 /// Environment variable holding extra `RUST_LOG` directives that are appended to the log
 /// filter of every spawned Golem service.
 pub const LOG_FILTER_ENV_VAR: &str = "GOLEM_LOG_FILTER";
+
+/// The exact explicit inputs of an isolated supported-settings service process.
+pub(crate) struct SupportedServiceLaunch {
+    service: &'static str,
+    executable: Box<Path>,
+    working_directory: Box<Path>,
+    env: Box<[(Box<str>, Box<str>)]>,
+}
+
+impl SupportedServiceLaunch {
+    pub(crate) fn new(
+        service: &'static str,
+        executable: &Path,
+        working_directory: PathBuf,
+        env: HashMap<String, String>,
+    ) -> Self {
+        Self::validate(
+            service,
+            env.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+        Self {
+            service,
+            executable: executable
+                .canonicalize()
+                .expect("resolve service executable")
+                .into_boxed_path(),
+            working_directory: working_directory.into_boxed_path(),
+            env: env
+                .into_iter()
+                .map(|(key, value)| (key.into_boxed_str(), value.into_boxed_str()))
+                .collect(),
+        }
+    }
+
+    fn validate<'a>(service: &str, env: impl IntoIterator<Item = (&'a str, &'a str)>) {
+        let addresses: &[&str] = match service {
+            "registry_service" => &[
+                "GRPC__PORT",
+                "HTTP_PORT",
+                "COMPONENT_COMPILATION__CONFIG__HOST",
+                "COMPONENT_COMPILATION__CONFIG__PORT",
+            ],
+            "component_compilation_service" => &[
+                "GRPC__PORT",
+                "HTTP_PORT",
+                "REGISTRY_SERVICE__CONFIG__HOST",
+                "REGISTRY_SERVICE__CONFIG__PORT",
+            ],
+            "shard_manager" => &[
+                "GRPC__PORT",
+                "HTTP_PORT",
+                "REGISTRY_SERVICE__HOST",
+                "REGISTRY_SERVICE__PORT",
+            ],
+            "worker_service" => &[
+                "GRPC__PORT",
+                "PORT",
+                "CUSTOM_REQUEST_PORT",
+                "MCP_PORT",
+                "REGISTRY_SERVICE__HOST",
+                "REGISTRY_SERVICE__PORT",
+                "SHARD_MANAGER__HOST",
+                "SHARD_MANAGER__PORT",
+            ],
+            "worker_executor" => &[
+                "GRPC__PORT",
+                "HTTP_PORT",
+                "REGISTRY_SERVICE__HOST",
+                "REGISTRY_SERVICE__PORT",
+                "SHARD_MANAGER__HOST",
+                "SHARD_MANAGER__PORT",
+                "PUBLIC_WORKER_API__HOST",
+                "PUBLIC_WORKER_API__PORT",
+            ],
+            _ => panic!("unsupported service {service}"),
+        };
+        let prefix = format!("GOLEM_ADVANCED__{}__", service.to_uppercase());
+        env.into_iter().for_each(|(key, value)| {
+            if let Some(path) = key.strip_prefix(&prefix) {
+                assert!(
+                    addresses.contains(&path),
+                    "non-address advanced input {key}"
+                );
+                if path.ends_with("HOST") {
+                    assert!(
+                        value == "localhost" || value.parse::<std::net::IpAddr>().is_ok(),
+                        "invalid peer host {key}"
+                    );
+                } else {
+                    assert!(
+                        value
+                            .parse::<u16>()
+                            .is_ok_and(|port| port != 0 && port.to_string() == value),
+                        "invalid listener/peer port {key}"
+                    );
+                }
+            } else {
+                assert!(
+                    matches!(
+                        key,
+                        "HOME"
+                            | "USERPROFILE"
+                            | "GOLEM__STATE_STORE"
+                            | "GOLEM__DATA_DIR"
+                            | "GOLEM__BLOB_STORE"
+                            | "GOLEM__DATA_DISK__BLOB_ROOT"
+                            | "GOLEM__POSTGRES__HOST"
+                            | "GOLEM__POSTGRES__PORT"
+                            | "GOLEM__POSTGRES__DATABASE"
+                            | "GOLEM__POSTGRES__USERNAME"
+                            | "GOLEM__POSTGRES__PASSWORD"
+                            | "GOLEM__POSTGRES__MAX_CONNECTIONS"
+                            | "GOLEM__CACHE__ENABLED"
+                            | "GOLEM__CACHE__HOST"
+                            | "GOLEM__CACHE__PORT"
+                            | "GOLEM__CACHE__KEY_PREFIX"
+                            | "GOLEM__LOGGING__FILE__ENABLED"
+                            | "GOLEM__LOGGING__FILE__JSON"
+                            | "GOLEM__LOGGING__FILE__JSON_SOURCE_LOCATION"
+                            | "GOLEM__LOGGING__FILE__JSON_FLATTEN"
+                            | "GOLEM__LOGGING__FILE__JSON_FLATTEN_SPAN"
+                            | "GOLEM__LOGGING__FILE_DIR"
+                            | "GOLEM__LOGGING__FILE_NAME"
+                    ),
+                    "noncanonical or unsupported explicit input {key}"
+                );
+            }
+        });
+    }
+
+    fn listener_leaves(service: &str) -> &'static [&'static str] {
+        match service {
+            "worker_service" => &["PORT", "GRPC__PORT", "CUSTOM_REQUEST_PORT", "MCP_PORT"],
+            "registry_service"
+            | "component_compilation_service"
+            | "shard_manager"
+            | "worker_executor" => &["HTTP_PORT", "GRPC__PORT"],
+            _ => panic!("unsupported service {service}"),
+        }
+    }
+
+    pub(crate) fn listeners<const N: usize>(&self, expected_service: &str) -> [u16; N] {
+        assert_eq!(
+            self.service, expected_service,
+            "wrong supported launch service"
+        );
+        let leaves = Self::listener_leaves(expected_service);
+        assert_eq!(leaves.len(), N);
+        Self::validate(
+            self.service,
+            self.env
+                .iter()
+                .map(|(key, value)| (key.as_ref(), value.as_ref())),
+        );
+        std::array::from_fn(|index| {
+            let key = format!(
+                "GOLEM_ADVANCED__{}__{}",
+                expected_service.to_uppercase(),
+                leaves[index]
+            );
+            self.env
+                .iter()
+                .find(|(name, _)| name.as_ref() == key)
+                .unwrap_or_else(|| panic!("missing supported listener {key}"))
+                .1
+                .parse()
+                .expect("validated supported listener")
+        })
+    }
+
+    pub(crate) fn command(&self, extras: &[(String, String)]) -> Command {
+        let mut env = self
+            .env
+            .iter()
+            .map(|(key, value)| (key.as_ref(), value.as_ref()))
+            .collect::<HashMap<_, _>>();
+        env.extend(
+            extras
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+        Self::validate(self.service, env.iter().map(|(&key, &value)| (key, value)));
+        Self::listener_leaves(self.service).iter().for_each(|leaf| {
+            let key = format!("GOLEM_ADVANCED__{}__{leaf}", self.service.to_uppercase());
+            let original = self
+                .env
+                .iter()
+                .find(|(name, _)| name.as_ref() == key)
+                .map(|(_, value)| value.as_ref());
+            assert_eq!(
+                env.get(key.as_str()).copied(),
+                original,
+                "supported listener identity changed: {key}"
+            );
+        });
+        let mut command = Command::new(self.executable.as_ref());
+        command
+            .current_dir(self.working_directory.as_ref())
+            .env_clear()
+            .envs(env);
+        command
+    }
+}
 
 pub struct ChildProcessLogger {
     _out_handle: JoinHandle<()>,
@@ -417,16 +622,16 @@ impl EnvVarBuilder {
             .with_rust_back_log()
             .with_tracing_from_env()
             .with_oplog_from_env()
-            .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
-            .with("GOLEM__TRACING__STDOUT__ENABLED", "true".to_string())
-            .with("GOLEM__TRACING__STDOUT__JSON", "true".to_string())
-            .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN", "false".to_string())
+            .with("GOLEM__LOGGING__STDOUT__ANSI", "false".to_string())
+            .with("GOLEM__LOGGING__STDOUT__ENABLED", "true".to_string())
+            .with("GOLEM__LOGGING__STDOUT__JSON", "true".to_string())
+            .with("GOLEM__LOGGING__STDOUT__JSON_FLATTEN", "false".to_string())
             .with(
-                "GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN",
+                "GOLEM__LOGGING__STDOUT__JSON_FLATTEN_SPAN",
                 "false".to_string(),
             )
             .with(
-                "GOLEM__TRACING__STDOUT__JSON_SOURCE_LOCATION",
+                "GOLEM__LOGGING__STDOUT__JSON_SOURCE_LOCATION",
                 "true".to_string(),
             )
     }
@@ -478,37 +683,30 @@ impl EnvVarBuilder {
     }
 
     fn with_tracing_from_env(mut self) -> Self {
-        for (name, value) in
-            std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__TRACING_"))
-        {
-            self.env_vars.insert(name, value);
-        }
+        self.env_vars.extend(std::env::vars().filter(|(name, _)| {
+            name.starts_with("GOLEM__LOGGING__") || name.starts_with("GOLEM__OTLP__")
+        }));
         self
     }
 
     fn with_oplog_from_env(mut self) -> Self {
-        for (name, value) in
-            std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__OPLOG__"))
-        {
-            self.env_vars.insert(name, value);
-        }
+        self.env_vars.extend(
+            std::env::vars()
+                .filter(|(name, _)| name.starts_with("GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG__")),
+        );
         self
     }
 
     fn with_optional_otlp(mut self, service_name: &str, enabled: bool) -> Self {
         if enabled {
-            self.env_vars.insert(
-                "GOLEM__TRACING__OTLP__ENABLED".to_string(),
-                "true".to_string(),
-            );
-            self.env_vars.insert(
-                "GOLEM__TRACING__OTLP__HOST".to_string(),
-                "localhost".to_string(),
-            );
             self.env_vars
-                .insert("GOLEM__TRACING__OTLP__PORT".to_string(), "4318".to_string());
+                .insert("GOLEM__OTLP__ENABLED".to_string(), "true".to_string());
+            self.env_vars
+                .insert("GOLEM__OTLP__HOST".to_string(), "localhost".to_string());
+            self.env_vars
+                .insert("GOLEM__OTLP__PORT".to_string(), "4318".to_string());
             self.env_vars.insert(
-                "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
+                "GOLEM__OTLP__SERVICE_NAME".to_string(),
                 service_name.to_string(),
             );
             // The OTLP layer exports nothing unless its filter is set, and a test
@@ -557,3 +755,6 @@ pub(crate) fn new_reqwest_client_with_tracing() -> reqwest_middleware::ClientWit
 /// and every worker service and executor asks the registry for it, so that the principals of
 /// agents and accounts are the same in all of them.
 pub const TEST_GOLEM_ISSUER: &str = "https://issuer.golem-test.example";
+
+#[cfg(test)]
+mod tests;

@@ -920,9 +920,9 @@ impl DepsOps for EnvBasedTestDependencies {
         match self.rdb().info() {
             DbInfo::Sqlite(_) => {
                 let sqlite_files = [
-                    "golem_shard_manager.db",
-                    "golem_shard_manager.db-shm",
-                    "golem_shard_manager.db-wal",
+                    "shard_manager.db",
+                    "shard_manager.db-shm",
+                    "shard_manager.db-wal",
                 ];
 
                 for file in sqlite_files {

@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::S3BlobStorageConfig;
+use crate::storage::blob::s3::{
+    S3BlobStorageFactory, S3StartupNamespace, startup_failure, startup_scopes,
+};
 use crate::storage::blob::{
-    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorageBackend,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageBackend,
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
     blob_child_path, validate_range,
 };
@@ -27,8 +31,45 @@ use std::{
     collections::{BTreeMap, HashSet},
     path::PathBuf,
     pin::Pin,
+    sync::Arc,
 };
 use tokio::sync::RwLock;
+
+/// Returns prepared storage or a prepared failure after configuration validation.
+#[derive(Debug)]
+pub struct InMemoryS3BlobStorageFactory {
+    result: Result<Arc<InMemoryBlobStorage>, Error>,
+}
+
+impl InMemoryS3BlobStorageFactory {
+    pub fn ready(storage: Arc<InMemoryBlobStorage>) -> Self {
+        Self {
+            result: Ok(storage),
+        }
+    }
+
+    /// Returns the prepared failure for any valid configuration.
+    pub fn failed(error: impl Into<Error>) -> Self {
+        Self {
+            result: Err(error.into()),
+        }
+    }
+}
+
+#[async_trait]
+impl S3BlobStorageFactory for InMemoryS3BlobStorageFactory {
+    async fn create(
+        self,
+        config: S3BlobStorageConfig,
+        startup_namespaces: &[S3StartupNamespace],
+    ) -> Result<Arc<dyn BlobStorage>, Error> {
+        config.validate()?;
+        let scopes = startup_scopes(&config, startup_namespaces)?;
+        self.result
+            .map(|storage| storage as Arc<dyn BlobStorage>)
+            .map_err(|error| startup_failure(scopes[0].0, error))
+    }
+}
 
 /// The place of one blob, or of one directory that `create_dir` made.
 ///

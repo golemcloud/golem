@@ -35,12 +35,9 @@ impl BlobStorageInfo {
     pub fn env(&self) -> HashMap<String, String> {
         match self {
             BlobStorageInfo::LocalFileSytem { root } => [
+                ("GOLEM__BLOB_STORE".to_string(), "data_disk".to_string()),
                 (
-                    "GOLEM__BLOB_STORAGE__TYPE".to_string(),
-                    "LocalFileSystem".to_string(),
-                ),
-                (
-                    "GOLEM__BLOB_STORAGE__CONFIG__ROOT".to_string(),
+                    "GOLEM__DATA_DISK__BLOB_ROOT".to_string(),
                     root.to_string_lossy().to_string(),
                 ),
             ]

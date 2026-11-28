@@ -18,8 +18,8 @@ Filebeat is configured to load logs from `./logs/*.logs`.
 Note that JSON file logging should be enabled, e.g.:
 
 ```shell
-export GOLEM__TRACING__FILE_DIR=../logs
-export GOLEM__TRACING__FILE__ENABLED=true
+export GOLEM__LOGGING__FILE_DIR=../logs
+export GOLEM__LOGGING__FILE__ENABLED=true
 ```
 
 Logs that are not in JSON format (e.g. nginx / redis) will be loaded as the "message" field.

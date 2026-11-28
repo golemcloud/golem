@@ -62,7 +62,6 @@ use crate::{command_name, init_tracing};
 use anyhow::anyhow;
 use clap::CommandFactory;
 use clap_complete::Shell;
-#[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use std::marker::PhantomData;
@@ -105,6 +104,7 @@ pub trait CommandHandlerHooks: Sync + Send {
         &self,
         ctx: Arc<Context>,
         subcommand: ServerSubcommand,
+        verbosity: Verbosity,
     ) -> impl std::future::Future<Output = anyhow::Result<()>>;
 
     // Used for auto starting the default server
@@ -159,6 +159,18 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         command_parse_result: GolemCliCommandParseResult,
         hooks: Arc<Hooks>,
     ) -> ExitCode {
+        Self::handle_with_tracing(command_parse_result, hooks, init_tracing).await
+    }
+
+    async fn handle_with_tracing(
+        command_parse_result: GolemCliCommandParseResult,
+        hooks: Arc<Hooks>,
+        initialize: impl FnOnce(Verbosity, bool),
+    ) -> ExitCode {
+        #[cfg(feature = "server-commands")]
+        let server_run = requires_executor_runtime(&command_parse_result);
+        #[cfg(not(feature = "server-commands"))]
+        let server_run = false;
         let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(mut command) => {
                 // A server must outlive the reader of its console. Any other command ends once
@@ -204,7 +216,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 #[cfg(not(feature = "server-commands"))]
                 let pretty_mode = false;
 
-                init_tracing(verbosity, pretty_mode);
+                if !server_run {
+                    initialize(verbosity, pretty_mode);
+                }
 
                 if !is_server && !is_mcp_server {
                     watch_for_closed_stdout();
@@ -247,7 +261,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 fallback_command,
                 partial_match,
             } => {
-                init_tracing(fallback_command.global_flags.verbosity(), false);
+                initialize(fallback_command.global_flags.verbosity(), false);
 
                 debug!(partial_match = ?partial_match, "Partial match");
                 debug_log_parse_error(&error);
@@ -276,7 +290,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 error,
                 fallback_command,
             } => {
-                init_tracing(fallback_command.global_flags.verbosity(), false);
+                initialize(fallback_command.global_flags.verbosity(), false);
                 debug_log_parse_error(&error);
                 end_on_closed_pipe(error.print());
 
@@ -535,8 +549,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 }
                 #[cfg(feature = "server-commands")]
                 GolemCliSubcommand::Server { subcommand } => {
+                    let verbosity = ctx.global_flags.verbosity();
                     let (context, hooks) = ctx.get_or_init_with_hooks().await?;
-                    hooks.handler_server_commands(context, subcommand).await
+                    hooks
+                        .handler_server_commands(context, subcommand, verbosity)
+                        .await
                 }
                 GolemCliSubcommand::Account { subcommand } => {
                     ctx.get_or_init()
@@ -885,39 +902,7 @@ fn debug_log_parse_error(error: &clap::Error) {
 }
 
 #[cfg(all(test, feature = "server-commands"))]
-mod tests {
-    use super::requires_executor_runtime;
-    use crate::command::GolemCliCommand;
-    use test_r::test;
-
-    fn requires_executor_runtime_for(args: &[&str]) -> bool {
-        let result = GolemCliCommand::try_parse_from_lenient(args, true);
-        requires_executor_runtime(&result)
-    }
-
-    #[test]
-    fn server_runtime_is_selected_only_for_parsed_server_run() {
-        assert!(requires_executor_runtime_for(&["golem", "server", "run"]));
-        assert!(requires_executor_runtime_for(&[
-            "golem",
-            "--verbose",
-            "server",
-            "run"
-        ]));
-
-        assert!(!requires_executor_runtime_for(&[
-            "golem", "server", "clean"
-        ]));
-        assert!(!requires_executor_runtime_for(&[
-            "golem", "server", "run", "--help"
-        ]));
-        assert!(!requires_executor_runtime_for(&[
-            "golem", "server", "invalid"
-        ]));
-        assert!(!requires_executor_runtime_for(&["golem", "templates"]));
-        assert!(!requires_executor_runtime_for(&["golem"]));
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod raw_tool_output_tests {

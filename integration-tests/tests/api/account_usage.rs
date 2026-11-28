@@ -90,7 +90,7 @@ async fn insert_usage_for_period(
                 .max_connections(1)
                 .connect_with(
                     SqliteConnectOptions::new()
-                        .filename(root.join("golem_registry.db"))
+                        .filename(root.join("registry.db"))
                         .journal_mode(SqliteJournalMode::Wal)
                         .foreign_keys(true),
                 )
@@ -130,7 +130,7 @@ async fn insert_usage_for_period(
                 .await?;
             for (usage_type, value) in VALUES {
                 sqlx::query(
-                    "INSERT INTO golem_registry.account_usage_stats \
+                    "INSERT INTO golem_registry_service.account_usage_stats \
                      (account_id, usage_type, usage_key, value, updated_at) \
                      VALUES ($1, $2, $3, $4, $5)",
                 )
@@ -144,7 +144,7 @@ async fn insert_usage_for_period(
                 .with_context(|| format!("failed to seed PostgreSQL usage type {usage_type}"))?;
             }
             sqlx::query(
-                "INSERT INTO golem_registry.account_usage_metering_state \
+                "INSERT INTO golem_registry_service.account_usage_metering_state \
                  (account_id, usage_key, compute_enabled, memory_enabled, \
                   filesystem_enabled, updated_at) \
                  VALUES ($1, $2, TRUE, TRUE, TRUE, $3)",
@@ -370,6 +370,10 @@ async fn account_usage_reports_all_customer_dimensions(
 async fn account_owner_explicitly_changes_monthly_usage_mode(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_disk_space_plan()
+        .context("fixture requires the low-disk-space plan")?;
     let user = deps.user().await?;
     let registry = deps.registry_service();
     let client = registry.client(&user.token).await;
@@ -525,7 +529,7 @@ async fn account_owner_explicitly_changes_monthly_usage_mode(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_disk_space_plan(),
+                plan,
             },
         )
         .await?;
@@ -750,6 +754,10 @@ async fn account_storage_override_endpoints_hide_foreign_accounts(
 async fn account_storage_override_endpoints_resolve_set_and_clear(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_disk_space_plan()
+        .context("fixture requires the low-disk-space plan")?;
     let user = deps.user().await?;
     let admin = deps.admin().await;
     let admin_client = admin.registry_service_client().await;
@@ -758,7 +766,7 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_disk_space_plan(),
+                plan,
             },
         )
         .await?;
@@ -878,6 +886,10 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
 async fn owner_override_mutations_return_active_admin_grants(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_disk_space_plan()
+        .context("fixture requires the low-disk-space plan")?;
     let user = deps.user().await?;
     let admin = deps.admin().await;
     let admin_client = admin.registry_service_client().await;
@@ -886,7 +898,7 @@ async fn owner_override_mutations_return_active_admin_grants(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_disk_space_plan(),
+                plan,
             },
         )
         .await?;
@@ -990,6 +1002,10 @@ async fn owner_override_mutations_return_active_admin_grants(
 async fn account_storage_override_endpoints_validate_capability_and_plan_range(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_disk_space_plan()
+        .context("fixture requires the low-disk-space plan")?;
     let user = deps.user().await?;
     let client = deps.registry_service().client(&user.token).await;
 
@@ -1016,7 +1032,7 @@ async fn account_storage_override_endpoints_validate_capability_and_plan_range(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_disk_space_plan(),
+                plan,
             },
         )
         .await?;
@@ -1059,6 +1075,10 @@ async fn account_storage_override_endpoints_validate_capability_and_plan_range(
 async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_disk_space_plan()
+        .context("fixture requires the low-disk-space plan")?;
     let user = deps.user().await?;
     let user_client = deps.registry_service().client(&user.token).await;
     registry_client(deps)
@@ -1256,7 +1276,7 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_disk_space_plan(),
+                plan,
             },
         )
         .await?;

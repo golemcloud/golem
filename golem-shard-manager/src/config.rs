@@ -263,10 +263,10 @@ pub struct EtcdConfig {
     ///
     /// An environment override must be bracketed, otherwise it is read as a single string and
     /// fails to deserialize:
-    /// `GOLEM__PERSISTENCE__CONFIG__ENDPOINTS=["http://a:2379","http://b:2379"]`
+    /// `GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__ENDPOINTS=["http://a:2379","http://b:2379"]`
     pub endpoints: Vec<String>,
     /// Defaulted, so that selecting etcd by environment variable does not also require setting
-    /// every setting: figment merges `GOLEM__PERSISTENCE__CONFIG__*` over the *default* variant's
+    /// every setting: figment merges advanced persistence settings over the default variant's
     /// map, which is SQLite's, so these would otherwise be missing rather than inherited.
     #[serde(with = "humantime_serde", default = "default_etcd_connect_timeout")]
     pub connect_timeout: Duration,
@@ -299,7 +299,7 @@ pub struct EtcdConfig {
     #[serde(default)]
     pub username: Option<String>,
     /// The password of `username`; usually set from a secret through
-    /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Serialized as `****`, so no configuration dump holds
+    /// `GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__PASSWORD`. Serialized as `****`, so no configuration dump holds
     /// it.
     /// Set this or `password_file`, not both.
     #[serde(default)]
@@ -873,6 +873,7 @@ impl SafeDisplay for HealthCheckK8sConfig {
 
 pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {
     ConfigLoader::new_with_examples(Path::new("config/shard-manager.toml"))
+        .for_service("shard_manager")
 }
 
 /// Environment variables that configured the shard manager's database before `db` became
@@ -903,8 +904,8 @@ pub fn reject_legacy_db_env_vars() -> Result<(), String> {
         "The shard manager's `db` configuration was replaced by `persistence`, which also selects \
          which backend holds the shard lease state. The following environment variables are no \
          longer read, and ignoring them would start the shard manager on the default SQLite \
-         database with an empty routing table:\n  {}\nRename them to `GOLEM__PERSISTENCE__*` (for \
-         example `GOLEM__DB__TYPE` becomes `GOLEM__PERSISTENCE__TYPE`).",
+         database with an empty routing table:\n  {}\nUse `GOLEM__STATE_STORE` and `GOLEM__POSTGRES__*`, \
+         or the unsupported `GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__*` settings.",
         found.join("\n  ")
     ))
 }

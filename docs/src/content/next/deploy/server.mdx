@@ -10,13 +10,13 @@ This page describes the configuration of the `golem` binary and of the [`golemse
 
 | Listener | Default address | Serves |
 | --- | --- | --- |
-| `router.address`, `router.port` | `127.0.0.1:9881` | The management API: the registry and worker service APIs, which the `golem` CLI uses. With `router.management_host`, also the HTTP API and MCP deployments: see [One port](#one-port) |
-| `worker_service.bind_address`, `worker_service.custom_request_port` | `127.0.0.1:9006` | HTTP API deployments and MCP deployments, chosen by the request's host |
-| `worker_service.bind_address`, `worker_service.mcp_port` | `127.0.0.1:9007` | MCP deployments only |
+| `advanced.server.router.address`, `advanced.server.router.port` | `127.0.0.1:9881` | The management API: the registry and worker service APIs, which the `golem` CLI uses. With `advanced.server.router.management_host`, also the HTTP API and MCP deployments: see [One port](#one-port) |
+| `advanced.worker_service.bind_address`, `advanced.worker_service.custom_request_port` | `127.0.0.1:9006` | HTTP API deployments and MCP deployments, chosen by the request's host |
+| `advanced.worker_service.bind_address`, `advanced.worker_service.mcp_port` | `127.0.0.1:9007` | MCP deployments only |
 
 ## One port
 
-Set `router.management_host` (`GOLEM__ROUTER__MANAGEMENT_HOST`) to the host name of the management API, for example `golem.example.com`. The main API port then routes each request by its host: requests for the management host reach the management API, and requests for every other host reach the HTTP API and MCP deployments of that host. So one port serves everything, and a reverse proxy or a platform that routes one port per service can send all host names to it. The server also adds the management host to `registry_service.domain_registration.reserved_domains`, so that no environment can register it as a deployment domain.
+Set `advanced.server.router.management_host` (`GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`) to the host name of the management API, for example `golem.example.com`. The main API port then routes each request by its host: requests for the management host reach the management API, and requests for every other host reach the HTTP API and MCP deployments of that host. So one port serves everything, and a reverse proxy or a platform that routes one port per service can send all host names to it. The server also adds the management host to `advanced.registry_service.domain_registration.reserved_domains`, so that no environment can register it as a deployment domain.
 
 The custom request and MCP ports still serve the deployments. Leave them on `127.0.0.1` when the main API port serves everything.
 
@@ -26,20 +26,43 @@ The services also bind gRPC and metrics listeners on ports that the operating sy
 
 ## Configuration
 
-`golem server run --config <file>` reads a TOML file. Every field has a default, so the file contains only the fields that it changes. `GOLEM__<SECTION>__<FIELD>` environment variables override the file, for example `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Each section has the shape of the configuration of its service:
+`golem server run --config <file>` reads the same supported settings as the per-service binaries. Within the supported channel, `GOLEM__<SETTING>` environment variables override the file. For example, `GOLEM__STATE_STORE=postgres` selects PostgreSQL for every state store, and `GOLEM__POSTGRES__HOST` sets its host. Unsupported settings go under `advanced.<service>` in TOML or `GOLEM_ADVANCED__<SERVICE>__<PATH>` in the environment, with their service paths unchanged:
 
 | Section | Service |
 | --- | --- |
-| `[router]` | The management API listener |
-| `[registry_service]` | Registry service: database, login, initial accounts and plans, domain registration, blob storage |
-| `[shard_manager]` | Shard manager: persistence |
-| `[worker_service]` | Worker service: listeners, session storage, ingress, blob storage |
-| `[worker_executor]` | Worker executor: key-value, indexed and scheduler storage, blob storage, memory, agent filesystems |
-| `[component_compilation_service]` | Component compilation service: blob storage |
+| `[advanced.server.router]` | The management API listener |
+| `[advanced.registry_service]` | Registry service |
+| `[advanced.shard_manager]` | Shard manager |
+| `[advanced.worker_service]` | Worker service |
+| `[advanced.worker_executor]` | Worker executor |
+| `[advanced.component_compilation_service]` | Component compilation service |
+
+Environment variables also override the file within the advanced channel. The advanced channel then overrides the supported settings, even when the advanced value comes from the file and the supported value comes from the environment. For example, `advanced.worker_executor.agent_sockets.enabled = true` in the file overrides `GOLEM__OUTBOUND_SOCKETS__ENABLED=false`. Command-line flags retain their higher priority.
+
+The server settings are shared by all binaries. Choices use lowercase values. Switches use an `enabled` boolean, and their settings sit directly in the section, without `type` or `config`:
+
+| Setting | Purpose |
+| --- | --- |
+| `state_store`, `postgres.*`, `data_dir` | Select `sqlite` or `postgres`. SQLite files stay below `data_dir`; PostgreSQL uses a separate schema for each store. |
+| `blob_store`, `data_disk.blob_root` | Select `data_disk` or `s3`. A failed external store stops startup; it does not select local storage. |
+| `object_storage.*` | S3 region, endpoint, path style, credentials, components bucket and data bucket. |
+| `cache.enabled`, `cache.*` | Enable Redis, default `false`. Redis holds cache namespaces and gateway sessions, not the selected agent state store. Set `host`, `port` and the other Redis fields directly under `[cache]`. |
+| `retained_update_snapshots` | Number of update snapshots to keep, default `2`. |
+| `internal_grpc_tls.*` | `enabled`, `cert_file`, `key_file`, `ca_cert_file` and optional `server_name`. Internal mTLS is off by default. |
+| `etcd.tls.*` | Paths to the CA certificate, client certificate and key for etcd. The shard manager's etcd backend remains an advanced setting. |
+| `logging.*`, `otlp.*` | Logging and OTLP export settings. |
+| `outbound_sockets.enabled` | Allow outbound agent sockets, default `false`. |
+| `filesystem_snapshots.enabled`, `filesystem_snapshots.*` | Enable filesystem snapshots. The native macOS local server defaults to `true` with APFS storage; other server defaults use `false`. Set `repository_key` and the store fields directly under `[filesystem_snapshots]`. |
+
+The [single-node example](https://github.com/golemcloud/golem/blob/main/cli/golem/config/self-host-single-node.toml) and [multi-node example](https://github.com/golemcloud/golem/blob/main/cli/golem/config/self-host-multi-node.toml) contain no credentials. Supply credentials separately.
+
+With `cache.enabled = true`, gateway sessions live in Redis even when `state_store = "postgres"`. The MCP session store inherits the gateway session store unless `advanced.worker_service.mcp.session_storage` overrides it. To override the gateway session store, use `advanced.worker_service.gateway_session_storage`. Cache loss or a switch between session stores can require users to authenticate again. The server does not copy sessions between stores.
+
+On macOS, explicitly set `filesystem_snapshots.enabled = false` when you select `Directory` or `Temporary` filesystem storage. These modes do not support copy-on-write snapshots.
 
 `golem --dump-config-default-toml` prints the complete default configuration, followed by a commented example that keeps all state in Postgres and the blobs in S3. `golem --dump-config-default-env-var` prints the same as environment variables. The server sets the internal ports and hosts itself, and refuses a file that sets them. See [Configuration File](/next/how-to-guides/common/golem-local-dev-server#configuration-file) for all rules.
 
-A field whose value selects a variant with `type` takes its settings from `config`. When the file selects a variant other than the default, give all settings of that variant: the defaults of the default variant do not apply to it. The examples on this page give all settings that have no default.
+Only the advanced channel uses the services' own forms. An advanced field whose value selects a variant with `type` takes its settings from `config`. When the file selects a variant other than the default, give all settings of that variant: the defaults of the default variant do not apply to it. The examples on this page give all settings that have no default.
 
 ## Secrets
 
@@ -47,11 +70,11 @@ The default configuration uses public secrets. Replace all of them:
 
 | Setting | Environment variable | Value |
 | --- | --- | --- |
-| `registry_service.initial_accounts.root.token` | `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN` | The admin token: at least 16 characters, each an ASCII letter, a digit, `-` or `_` |
-| `worker_service.webhook_callback_handler.hmac_key` | `GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` | 32 random bytes, base64 |
-| `worker_executor.agent_webhooks_service.hmac_key` | `GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY` | The same value as the webhook HMAC key of the worker service |
-| `worker_service.invocation_session_tokens.active_key.id` | `GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID` | A name for the key, for example `key-1` |
-| `worker_service.invocation_session_tokens.active_key.key` | `GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY` | 32 random bytes, base64 |
+| `advanced.registry_service.initial_accounts.root.token` | `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN` | The admin token: at least 16 characters, each an ASCII letter, a digit, `-` or `_` |
+| `advanced.worker_service.webhook_callback_handler.hmac_key` | `GOLEM_ADVANCED__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` | 32 random bytes, base64 |
+| `advanced.worker_executor.agent_webhooks_service.hmac_key` | `GOLEM_ADVANCED__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY` | The same value as the webhook HMAC key of the worker service |
+| `advanced.worker_service.invocation_session_tokens.active_key.id` | `GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID` | A name for the key, for example `key-1` |
+| `advanced.worker_service.invocation_session_tokens.active_key.key` | `GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY` | 32 random bytes, base64 |
 
 Keep the secrets out of the TOML file, in an environment file that only the server can read:
 
@@ -59,11 +82,11 @@ Keep the secrets out of the TOML file, in an environment file that only the serv
 umask 077
 HMAC_KEY=$(openssl rand -base64 32)
 cat > golem.env <<EOF
-GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN=$(openssl rand -hex 32)
-GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY=$HMAC_KEY
-GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY=$HMAC_KEY
-GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID=key-1
-GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY=$(openssl rand -base64 32)
+GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN=$(openssl rand -hex 32)
+GOLEM_ADVANCED__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY=$HMAC_KEY
+GOLEM_ADVANCED__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY=$HMAC_KEY
+GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID=key-1
+GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY=$(openssl rand -base64 32)
 EOF
 ```
 
@@ -71,132 +94,47 @@ The server refuses to bind any listener to an address that is not loopback while
 
 ## Single node
 
-In mode 1 the state stays in the default SQLite databases under `data_dir`, so put `data_dir` on a volume that outlives the process. Put the blobs in S3: the same `blob_storage` in all four services that have one. This example uses one bucket, `golem`:
+In mode 1 the state stays in SQLite under `data_dir`, so put `data_dir` on a volume that outlives the process. These settings put the blobs of every service in S3. The example uses one bucket, `golem`, with separate prefixes for each blob kind:
 
 ```toml filename="/etc/golem/golem-server.toml" copy
 data_dir = "/var/lib/golem"
+state_store = "sqlite"
+blob_store = "s3"
 
-[registry_service.blob_storage]
-type = "S3"
-
-[registry_service.blob_storage.config]
+[object_storage]
 region = "us-east-1"
-object_prefix = ""
-namespace_prefixes = true
-compilation_cache_bucket = "golem"
-custom_data_bucket = "golem"
-oplog_payload_bucket = "golem"
-compressed_oplog_buckets = ["golem"]
-initial_agent_files_bucket = "golem"
+data_bucket = "golem"
 components_bucket = "golem"
-filesystem_snapshots_bucket = "golem"
 
-[registry_service.blob_storage.config.retries]
-max_attempts = 3
-min_delay = "100ms"
-max_delay = "1s"
-multiplier = 3.0
-max_jitter_factor = 0.15
-
-# Repeat the three sections above for worker_service, worker_executor and
-# component_compilation_service: [worker_service.blob_storage],
-# [worker_service.blob_storage.config], [worker_service.blob_storage.config.retries], and so on.
-
-[router]
+[advanced.server.router]
 management_host = "golem.example.com"
 
-[worker_service.route_resolver]
+[advanced.worker_service.route_resolver]
 trusted_ingress_addresses = ["127.0.0.1/32"]
 ```
 
-- `namespace_prefixes = true` lets all blob kinds share one bucket. Choose it before the first start and do not change it later. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
-- For an S3-compatible service, add `aws_endpoint_url = "https://<endpoint>"` and, if the service needs it, `aws_path_style = true` to each `blob_storage.config`.
+- The supported S3 settings enable namespace prefixes. Do not change the bucket layout after the first start. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
+- For an S3-compatible service, add `endpoint_url = "https://<endpoint>"` and, if the service needs it, `path_style = true` to `[object_storage]`.
 - The S3 client reads its credentials from the standard AWS sources: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the environment file, or the role of the machine.
 - `management_host` makes the main API port serve the HTTP API and MCP deployments of every other host. See [One port](#one-port).
 - `trusted_ingress_addresses` makes the worker service take the public scheme and host from the `X-Forwarded-Proto` and `X-Forwarded-Host` headers of a reverse proxy on the same host. Each entry is an address range in CIDR notation. A request from a trusted address without both headers fails, so a request sent directly to the custom request port from that host does too.
 
 ## Managed Postgres
 
-In mode 2 the state goes to Postgres too. Add the database to the file of the single node. Each store has its own schema, and the server rejects two stores that share one. Use these schema names: the per-service images use the same, so the database can move to a [fixed cluster](/next/deploy/cluster) later.
+In mode 2 the state goes to PostgreSQL too. Set the top-level `state_store` to `"postgres"` in the single-node file and add one connection. Each store gets its own schema, with the same names in the all-in-one and [fixed cluster](/next/deploy/cluster) binaries:
 
 ```toml filename="/etc/golem/golem-server.toml" copy
-[registry_service.db]
-type = "Postgres"
-
-[registry_service.db.config]
+[postgres]
 host = "db.example.internal"
 port = 5432
 database = "golem"
 username = "golem"
-password = "<password>"
 max_connections = 10
-schema = "golem_registry_service"
-
-[shard_manager.persistence]
-type = "Postgres"
-
-[shard_manager.persistence.config]
-host = "db.example.internal"
-port = 5432
-database = "golem"
-username = "golem"
-password = "<password>"
-max_connections = 10
-schema = "golem_shard_manager"
-
-[worker_executor.key_value_storage]
-type = "Postgres"
-
-[worker_executor.key_value_storage.config]
-host = "db.example.internal"
-port = 5432
-database = "golem"
-username = "golem"
-password = "<password>"
-max_connections = 10
-schema = "golem_worker_executor"
-
-[worker_executor.indexed_storage]
-type = "Postgres"
-
-[worker_executor.indexed_storage.config]
-host = "db.example.internal"
-port = 5432
-database = "golem"
-username = "golem"
-password = "<password>"
-max_connections = 10
-schema = "golem_worker_executor_indexed"
-drop_prefix_delete_batch_size = 1024
-
-[worker_executor.scheduler_storage]
-type = "Postgres"
-
-[worker_executor.scheduler_storage.config]
-host = "db.example.internal"
-port = 5432
-database = "golem"
-username = "golem"
-password = "<password>"
-max_connections = 10
-schema = "golem_worker_executor_scheduler"
-
-[worker_service.gateway_session_storage]
-type = "Postgres"
-
-[worker_service.gateway_session_storage.config]
-host = "db.example.internal"
-port = 5432
-database = "golem"
-username = "golem"
-password = "<password>"
-max_connections = 10
-schema = "golem_worker_service_session_store"
-pending_login_expiration = "1h"
-cleanup_interval = "5m"
 ```
 
-The services create their schemas and tables at startup, so the database user must be able to create schemas in the database. To keep the password out of the file, set it with environment variables such as `GOLEM__REGISTRY_SERVICE__DB__CONFIG__PASSWORD`. The `data_dir` then holds only caches. The server runs without a volume, but then every start downloads the [built-in plugins and tools](#built-in-plugins-and-tools) again.
+The services create their schemas and tables at startup, so the database user must be able to create schemas. Set the password through `GOLEM__POSTGRES__PASSWORD`. An unavailable PostgreSQL or S3 store stops startup. It never selects local storage instead.
+
+PostgreSQL and S3 do not make all local files disposable. With filesystem snapshots enabled and no explicit repository key, the server retains `filesystem-snapshots.repository-key` in `data_dir`, also for snapshots in S3. Preserve that key with the snapshot repository, or supply and preserve an explicit `filesystem_snapshots.repository_key`. Keep any configured local state and filesystem roots too, including paths selected through the advanced channel. The remaining caches can be rebuilt. URL-backed [built-in plugins and tools](#built-in-plugins-and-tools) can need another download when their cache is lost; embedded artifacts need no download.
 
 <Callout type="warning">
   Run exactly one server on one database, and deploy it stop-then-start. Two servers on the same database each run a shard manager in SQL mode, and the same agent can run twice. See [One shard manager](/next/deploy/modes#one-shard-manager).
@@ -204,23 +142,27 @@ The services create their schemas and tables at startup, so the database user mu
 
 ## Built-in plugins and tools
 
-At every start, the registry service provisions Golem's built-in plugins and tools from its cache, `builtin-artifacts` in the data directory. It downloads from the [golem-builtins releases](https://github.com/golemcloud/golem-builtins/releases) on GitHub each one that the cache does not have or that does not match its checksum, which takes about a minute. If a download fails, for example because the server cannot open HTTPS connections to GitHub, the server does not start.
+At every start, the registry service provisions Golem's built-in plugins and tools. The [local image build](https://github.com/golemcloud/golem/blob/main/docker-examples/README.md) enables `embed-builtin-artifacts` in the registry and all-in-one binaries. These binaries read the embedded artifacts without a GitHub download, also on a new volume. They still inspect the artifacts and provision the plugins and tools before startup completes.
 
-Keep the data directory on a persistent volume, so that only the first start downloads. Without one, every start downloads again and needs GitHub.
+For HTTP and HTTPS artifact URLs, the registry service uses its cache, `builtin-artifacts` in the data directory. It fetches an artifact when the cache does not have a valid copy. A release manifest can select URLs from the [golem-builtins releases](https://github.com/golemcloud/golem-builtins/releases) on GitHub. The unsupported `advanced.registry_service.builtin_artifacts.source_overrides` setting selects a URL for each overridden artifact, also in a binary with embedded artifacts. File URLs read the configured path at each start instead of using the download cache. Allow access to the configured sources. A required fetch that fails stops startup. GitHub downloads can take about a minute and need outgoing HTTPS connections to GitHub.
+
+Keep the cache on a persistent volume to reuse fetched artifacts and extracted metadata. An empty cache repeats that work, but does not cause embedded artifacts to be downloaded.
 
 ## Container image
+
+These unreleased settings require an image built from the same checkout as the configuration. Published 1.6 images do not read them. [Build the example images](https://github.com/golemcloud/golem/blob/main/docker-examples/README.md) before using these instructions. For a hosted platform, publish that matching image to a registry you control and use its image name and tag in place of `golemservices/golem:<version>`. Build for the architecture of the platform. Do not substitute an older published image for a missing matching image.
 
 The `golemservices/golem` image runs `golem server run`. It serves everything on one port, `9881`, and these are its defaults:
 
 | Variable | Value in the image |
 | --- | --- |
 | `GOLEM__DATA_DIR` | `/var/lib/golem`, a volume |
-| `GOLEM__ROUTER__ADDRESS` | `::`, which accepts IPv6 and IPv4 |
-| `GOLEM__ROUTER__PORT` | `9881` |
+| `GOLEM_ADVANCED__SERVER__ROUTER__ADDRESS` | `::`, which accepts IPv6 and IPv4 |
+| `GOLEM_ADVANCED__SERVER__ROUTER__PORT` | `9881` |
 
-The router listens on all addresses, so the server does not start until the [secrets](#secrets) have secret values. Set `GOLEM__ROUTER__MANAGEMENT_HOST` to the host name of the management API. The image arguments are the arguments of `golem`, `server run` by default, so a `--config` file still works; on a platform without files, configure everything with environment variables.
+The router listens on all addresses, so the server does not start until the [secrets](#secrets) have secret values. Set `GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST` to the host name of the management API. The image arguments are the arguments of `golem`, `server run` by default, so a `--config` file still works; on a platform without files, configure everything with environment variables.
 
-`/healthcheck` answers `503` while the server starts and `200` once it serves requests. Use it as the health check of the platform: a start that downloads the [built-in plugins and tools](#built-in-plugins-and-tools) takes about a minute.
+`/healthcheck` answers `503` while the server starts and `200` once it serves requests. Use it as the health check of the platform. Allow time to inspect and provision the [built-in plugins and tools](#built-in-plugins-and-tools). URL-backed artifacts can also need downloads; the local build embeds them instead.
 
 ### Volume ownership
 
@@ -258,7 +200,7 @@ GOLEM_POSTGRES_HOST=db.example.internal GOLEM_POSTGRES_PASSWORD=<password> \
   ./generate-env.sh > golem.env
 ```
 
-Use the managed Postgres variables or Litestream, not both: with Litestream, the image keeps the storage of the worker executor in SQLite. For an S3-compatible service, also set `GOLEM_S3_ENDPOINT` and, if the service needs it, `GOLEM_S3_PATH_STYLE=true`. Add the credentials of the bucket, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, unless the platform gives the container a role. Load the file into the secret store of the platform: each platform guide says how. The file contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`; keep it secret.
+Use the managed Postgres variables or Litestream, not both: with Litestream, the image keeps the storage of the worker executor in SQLite. For an S3-compatible service, also set `GOLEM_S3_ENDPOINT` and, if the service needs it, `GOLEM_S3_PATH_STYLE=true`. Add the credentials of the bucket, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, unless the platform gives the container a role. Load the file into the secret store of the platform: each platform guide says how. The file contains the admin token, `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`; keep it secret.
 
 ### Litestream
 
@@ -282,7 +224,7 @@ With Litestream, the worker executor keeps its key-value storage and its indexed
 - **One server only.** Exactly one container may write to a `GOLEM_LITESTREAM_REPLICA_URL`. Two containers that replicate to the same replica corrupt it. Litestream is backup and restore: it gives no high availability and no failover to a second server.
 - **Asynchronous replication.** Litestream copies the changes about once a second by default. When the container stops abruptly and its volume is lost, the newest writes, including oplog entries, can be lost. Agents then replay from a slightly earlier point of their oplog and can run side effects again. This is weaker than the durability of Postgres in the [managed Postgres](#managed-postgres) mode or in a [fixed cluster](/next/deploy/cluster); use those for production durability.
 - **Only the SQLite databases.** Litestream does not replicate blobs. Keep the blobs in S3, for example in [one bucket](/next/operate/persistence#one-bucket-for-all-blobs), not in the local `blobs` directory of the data directory.
-- **Not the cache of the built-in plugins and tools.** Litestream does not replicate `builtin-artifacts`, so a restore onto a new volume downloads the [built-in plugins and tools](#built-in-plugins-and-tools) again, and that start needs HTTPS connections to GitHub.
+- **Not the cache of the built-in plugins and tools.** Litestream does not replicate `builtin-artifacts`. A restore onto a new volume fetches URL-backed [built-in plugins and tools](#built-in-plugins-and-tools) again from their configured sources. Embedded artifacts need no download, but the server must inspect and provision them again.
 - **Restore fills in missing databases only.** At startup, the image restores only the databases that are missing from the data directory. A restart on a volume that still has its data restores nothing, and an older replica never overwrites newer local data.
 
 ## Connect the CLI

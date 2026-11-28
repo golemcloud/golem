@@ -3370,16 +3370,16 @@ pub mod server {
 
     #[derive(Debug, Args, Default)]
     pub struct RunArgs {
-        /// TOML configuration file for the server. It has a `router` section and one section per
-        /// service (`registry_service`, `shard_manager`, `worker_service`, `worker_executor`,
-        /// `component_compilation_service`) with the same shape as that service's own config.
-        /// `GOLEM__<SECTION>__<FIELD>` environment variables override the file, and the flags
-        /// below override both.
+        /// TOML configuration file with the common server settings. Unsupported settings go
+        /// under `advanced.<service>`, with their service paths unchanged.
+        /// `GOLEM__<SETTING>` and `GOLEM_ADVANCED__<SERVICE>__<PATH>` environment variables
+        /// override the file within their channel. Advanced settings override supported settings,
+        /// even when the advanced value comes from the file. The flags below override both.
         #[clap(long, value_name = "FILE")]
         pub config: Option<PathBuf>,
 
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
-        /// Overrides worker_executor.memory.system_memory_override and
+        /// Overrides advanced.worker_executor.memory.system_memory_override and
         /// localServer.systemMemoryOverride. The executor reserves 20% for host overhead. This is
         /// not a hard RSS limit.
         #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]

@@ -1,0 +1,29 @@
+# Use this same file for each service. Supply PostgreSQL and AWS credentials separately.
+# Set service addresses through GOLEM_ADVANCED__<SERVICE>__<PATH>.
+state_store = "postgres"
+blob_store = "s3"
+data_dir = "/var/lib/golem"
+retained_update_snapshots = 2
+
+[outbound_sockets]
+enabled = false
+
+[postgres]
+host = "postgres.internal"
+port = 5432
+database = "golem"
+username = "golem"
+
+[object_storage]
+region = "us-east-1"
+components_bucket = "golem-components"
+data_bucket = "golem-data"
+
+[cache]
+enabled = false
+
+[internal_grpc_tls]
+enabled = false
+
+[filesystem_snapshots]
+enabled = false

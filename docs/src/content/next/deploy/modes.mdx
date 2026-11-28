@@ -7,7 +7,7 @@ Golem runs in one of four shapes, from one process on one machine to a cluster o
 | Mode | What runs | State lives in | Availability | Scales |
 | --- | --- | --- | --- | --- |
 | 1. Single node | One [all-in-one server](/next/deploy/server) process | SQLite on a volume; blobs in S3 | Seconds of downtime for each deploy; restore onto a new machine after a failure | Vertically |
-| 2. Managed Postgres | The same all-in-one process, with no volume | Managed Postgres; blobs in S3 | Restart on failure; no stateful service to operate yourself | Vertically, exactly one instance |
+| 2. Managed Postgres | The same all-in-one process; retain configured local files | Managed Postgres; blobs in S3 | Restart on failure; database backups from the provider | Vertically, exactly one instance |
 | 3. Fixed cluster | The [per-service images](/next/deploy/cluster), with N worker executors | Managed Postgres; blobs in S3 | An executor can be lost: its shards move to the other executors | Horizontally, by the number of executors |
 | 4. Kubernetes | The per-service images, with autoscaled executors and shard manager replicas | Postgres or Redis; shard state in etcd; blobs in S3 | Rolling deploys; executors and the shard manager fail over | Horizontally, autoscaled |
 
@@ -21,7 +21,7 @@ Deploys stop the old process before they start the new one. See [One shard manag
 
 ## Managed Postgres
 
-The same `golem server run` process keeps all its state in a managed Postgres database, so the process itself is stateless. The provider of the database does the backups and point-in-time recovery. Run **exactly one** instance, and deploy it stop-then-start. See [One shard manager](#one-shard-manager).
+The same `golem server run` process keeps its database state in managed Postgres. The provider of the database does the backups and point-in-time recovery. Preserve the filesystem snapshot repository key and any configured local state or filesystem roots as [Managed Postgres](/next/deploy/server#managed-postgres) describes. Run **exactly one** instance, and deploy it stop-then-start. See [One shard manager](#one-shard-manager).
 
 ## Fixed cluster
 
@@ -51,7 +51,7 @@ In etcd mode, any number of shard manager replicas can run, and one of them is e
 | [AWS ECS on Fargate](/next/deploy/ecs) | No | Yes | Yes | Service EBS volumes are deleted when the task stops; task IP addresses are routable inside the VPC |
 | [Google Cloud Run](/next/deploy/cloud-run) | No | Not yet | No | Every deploy overlaps the old and the new instance; NFS volumes have no locks; instances are not individually addressable |
 
-On Railway and Render, the managed Postgres mode needs a volume or a disk too, although the server keeps no state on it: without one, those platforms start the new deployment before they stop the old one. Cloud Run cannot keep one instance at a time, so the managed Postgres mode waits for the shard manager to be fenced with a database lock.
+On Railway and Render, the managed Postgres mode needs a volume or a disk to enforce stop-then-start deployment, even when no configured local state needs it. Without one, those platforms start the new deployment before they stop the old one. Cloud Run cannot keep one instance at a time, so the managed Postgres mode waits for the shard manager to be fenced with a database lock.
 
 The fixed cluster column depends on one property of the network: the shard manager records the source IP address of each executor's registration, and the worker services dial that address. This holds on Docker networks, on Kubernetes and on ECS with `awsvpc` networking. Where the network translates source addresses, set `grpc.advertised_ip` on each executor; see [Network Addresses](/next/deploy#network-addresses). Railway and Render do not document how their private networks treat source addresses, so the fixed cluster on them needs verification.
 

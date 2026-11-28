@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod byte_size;
+pub mod server_settings;
 
 use crate::SafeDisplay;
 use crate::model::RetryConfig;
@@ -64,6 +65,7 @@ pub trait HasConfigExamples<T> {
 pub struct ConfigLoader<T: ConfigLoaderConfig> {
     pub config_file_name: PathBuf,
     pub make_examples: Option<fn() -> Vec<ConfigExample<T>>>,
+    service: Option<&'static str>,
     config_type: std::marker::PhantomData<T>,
 }
 
@@ -75,6 +77,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         Self {
             config_file_name,
             make_examples: None,
+            service: None,
             config_type: std::marker::PhantomData,
         }
     }
@@ -89,27 +92,62 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         Self {
             config_file_name,
             make_examples: Some(T::examples),
+            service: None,
             config_type: std::marker::PhantomData,
         }
     }
 
+    pub fn for_service(mut self, service: &'static str) -> Self {
+        self.service = Some(service);
+        self
+    }
+
     pub fn default_figment(&self) -> Figment {
-        Figment::new().merge(Serialized::defaults(T::default()))
+        Figment::from(Serialized::defaults(T::default()))
+    }
+
+    fn settings_defaults(&self) -> Figment {
+        let defaults = self.default_figment();
+        match self.service {
+            Some(service) => server_settings::reference(service, &defaults),
+            None => defaults,
+        }
     }
 
     pub fn example_figments(&self) -> Vec<(&'static str, Figment)> {
         self.make_examples
             .map_or(Vec::new(), |make| make())
             .into_iter()
-            .map(|(name, example)| (name, Figment::new().merge(Serialized::defaults(example))))
+            .map(|(name, example)| {
+                let value = match self.service {
+                    Some(service) => Serialized::default(&format!("advanced.{service}"), example),
+                    None => Serialized::defaults(example),
+                };
+                (name, Figment::from(value))
+            })
             .collect()
     }
 
     pub fn figment(&self) -> Figment {
-        Figment::new()
-            .merge(Serialized::defaults(T::default()))
-            .merge(Toml::file_exact(self.config_file_name.clone()))
-            .merge(env_config_provider())
+        let defaults = self.settings_defaults();
+        let input = [
+            Figment::from(Toml::file_exact(self.config_file_name.clone())),
+            Figment::from(env_config_provider()),
+        ]
+        .into_iter()
+        .fold(defaults.clone(), |lower, upper| {
+            server_settings::merge_variants(lower, upper, &defaults)
+        });
+        let settings = match self.service {
+            Some(service) => server_settings::project(service, &input),
+            None => input,
+        };
+        let defaults = self.default_figment();
+        server_settings::complete_variant_configs::<T>(server_settings::merge_variants(
+            defaults.clone(),
+            settings,
+            &defaults,
+        ))
     }
 
     pub fn load(&self) -> figment::Result<T> {
@@ -127,7 +165,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     }
 
     fn load_or_dump_config_for_flag(&self, flag: &str) -> Result<LoadOrDump<T>, ConfigError> {
-        if dump_config(flag, &self.default_figment(), &self.example_figments())? {
+        if dump_config(flag, &self.settings_defaults(), &self.example_figments())? {
             Ok(LoadOrDump::Dumped)
         } else {
             self.load()
@@ -290,13 +328,16 @@ pub(crate) mod dump {
                 print!("#");
             }
 
-            print!("{ENV_VAR_PREFIX}");
-
-            if !path.is_empty() {
-                for elem in path {
-                    print!("{}{}", elem.to_uppercase(), ENV_VAR_NESTED_SEPARATOR);
-                }
-            }
+            let path = if path.first() == Some(&"advanced") {
+                print!("GOLEM_ADVANCED__");
+                &path[1..]
+            } else {
+                print!("{ENV_VAR_PREFIX}");
+                path
+            };
+            path.iter().for_each(|elem| {
+                print!("{}{}", elem.to_uppercase(), ENV_VAR_NESTED_SEPARATOR);
+            });
             if !name.is_empty() {
                 print!("{}", name.to_uppercase());
             }
@@ -445,8 +486,12 @@ impl RetryConfig {
     }
 }
 
-pub fn env_config_provider() -> Env {
-    Env::prefixed(ENV_VAR_PREFIX).split(ENV_VAR_NESTED_SEPARATOR)
+pub fn env_config_provider() -> Figment {
+    Figment::from(Env::prefixed(ENV_VAR_PREFIX).split(ENV_VAR_NESTED_SEPARATOR)).merge(
+        Env::prefixed("GOLEM_ADVANCED__")
+            .split(ENV_VAR_NESTED_SEPARATOR)
+            .map(|key| format!("advanced.{key}").into()),
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -580,106 +625,4 @@ impl SafeDisplay for DbPostgresConfig {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{ConfigError, ConfigLoader, LoadOrDump, dump_config};
-    use crate::SafeDisplay;
-    use figment::Figment;
-    use serde::{Deserialize, Serialize};
-    use test_r::test;
-
-    #[derive(Debug, Default, Serialize, Deserialize)]
-    struct LoaderTestConfig {
-        loader_test_port: u16,
-    }
-
-    impl SafeDisplay for LoaderTestConfig {
-        fn to_safe_string(&self) -> String {
-            String::new()
-        }
-    }
-
-    fn loader_with_file(contents: &str) -> (tempfile::TempDir, ConfigLoader<LoaderTestConfig>) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("loader-test.toml");
-        std::fs::write(&path, contents).unwrap();
-        (dir, ConfigLoader::new(&path))
-    }
-
-    #[test]
-    fn invalid_value_is_a_load_error() {
-        let (_dir, loader) = loader_with_file("loader_test_port = \"notanumber\"\n");
-        let err = loader.load_or_dump_config_for_flag("").unwrap_err();
-        assert!(matches!(err, ConfigError::Load(_)), "got {err:?}");
-
-        let printed = format!("{:?}", anyhow::Error::from(err));
-        assert_eq!(printed.matches("Failed to load config").count(), 1);
-        assert_eq!(printed.matches("notanumber").count(), 1);
-    }
-
-    #[test]
-    fn valid_file_loads() {
-        let (_dir, loader) = loader_with_file("loader_test_port = 1234\n");
-        for flag in ["", "--report-time"] {
-            match loader.load_or_dump_config_for_flag(flag) {
-                Ok(LoadOrDump::Loaded(config)) => assert_eq!(config.loader_test_port, 1234),
-                other => panic!("flag {flag:?}: expected Loaded, got {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn missing_file_is_a_load_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let loader = ConfigLoader::<LoaderTestConfig>::new(&dir.path().join("does-not-exist.toml"));
-        let err = loader.load_or_dump_config_for_flag("").unwrap_err();
-        assert!(matches!(err, ConfigError::Load(_)), "got {err:?}");
-    }
-
-    #[test]
-    fn malformed_file_is_a_load_error() {
-        let (_dir, loader) = loader_with_file("loader_test_port = = 1\n");
-        let err = loader.load_or_dump_config_for_flag("").unwrap_err();
-        assert!(matches!(err, ConfigError::Load(_)), "got {err:?}");
-    }
-
-    #[test]
-    fn dump_flag_dumps_without_loading() {
-        let (_dir, loader) = loader_with_file("loader_test_port = \"notanumber\"\n");
-        for flag in [
-            "--dump-config-default",
-            "--dump-config-default-env-var",
-            "--dump-config-default-toml",
-        ] {
-            match loader.load_or_dump_config_for_flag(flag) {
-                Ok(LoadOrDump::Dumped) => {}
-                other => panic!("flag {flag}: expected Dumped, got {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn unknown_dump_flag_is_an_error() {
-        let err = dump_config("--dump-config-bogus", &Figment::new(), &[]).unwrap_err();
-        match &err {
-            ConfigError::UnknownDumpFlag(flag) => assert_eq!(flag, "--dump-config-bogus"),
-            other => panic!("expected UnknownDumpFlag, got {other:?}"),
-        }
-        let message = err.to_string();
-        assert!(message.contains("--dump-config-bogus"), "{message}");
-        assert!(message.contains("--dump-config-default,"), "{message}");
-        assert!(
-            message.contains("--dump-config-default-env-var"),
-            "{message}"
-        );
-        assert!(message.contains("--dump-config-default-toml"), "{message}");
-
-        let (_dir, loader) = loader_with_file("loader_test_port = 1234\n");
-        let err = loader
-            .load_or_dump_config_for_flag("--dump-config-bogus")
-            .unwrap_err();
-        assert!(
-            matches!(err, ConfigError::UnknownDumpFlag(_)),
-            "got {err:?}"
-        );
-    }
-}
+mod tests;

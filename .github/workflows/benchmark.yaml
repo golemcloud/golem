@@ -123,7 +123,7 @@ jobs:
       - name: Extract benchmark bundle
         run: |
           tar -xzf "$RUNNER_TEMP/benchmark-bundle.tar.gz" -C "$GITHUB_WORKSPACE"
-          jq -r --arg root "$GITHUB_WORKSPACE" 'to_entries[] | "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__\(.key | ascii_upcase)__URL=file://\($root)/\(.value.path)"' builtin-artifacts.json >> "$GITHUB_ENV"
+          jq -r --arg root "$GITHUB_WORKSPACE" 'to_entries[] | "GOLEM_ADVANCED__REGISTRY_SERVICE__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__\(.key | ascii_upcase)__URL=file://\($root)/\(.value.path)"' builtin-artifacts.json >> "$GITHUB_ENV"
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.49.0
         with:

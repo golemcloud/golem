@@ -22,7 +22,9 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::service::compiled_component;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::storage::blob::s3::S3BlobStorage;
+use golem_service_base::storage::blob::s3::{
+    ConfiguredS3BlobStorageFactory, S3BlobStorageFactory, S3StartupNamespace,
+};
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::tls::server::GrpcServerTls;
 use grpc::CompileGrpcService;
@@ -56,9 +58,28 @@ pub async fn run(
     prometheus: Registry,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<RunDetails> {
+    run_with_blob_storage_factory(
+        config,
+        prometheus,
+        join_set,
+        ConfiguredS3BlobStorageFactory::default(),
+    )
+    .await
+}
+
+async fn run_with_blob_storage_factory(
+    config: ServerConfig,
+    prometheus: Registry,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    blob_storage_factory: impl S3BlobStorageFactory,
+) -> anyhow::Result<RunDetails> {
     config.blob_storage.validate()?;
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
-        BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
+        BlobStorageConfig::S3(config) => {
+            blob_storage_factory
+                .create(config.clone(), &[S3StartupNamespace::CompilationCache])
+                .await?
+        }
         BlobStorageConfig::LocalFileSystem(config) => Arc::new(
             golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                 .await
@@ -170,3 +191,6 @@ async fn start_grpc_server(
 fn create_wasmtime_config(engine_config: &config::EngineConfig) -> wasmtime::Config {
     golem_common::wasmtime_config::create_wasmtime_config(engine_config.enable_fs_cache)
 }
+
+#[cfg(test)]
+mod tests;

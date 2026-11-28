@@ -233,7 +233,7 @@ async fn environment_deletion_stops_self_scheduling_agent(
 ///     → unwrap_or_else(|err| panic!(...))           ← BOOM
 ///
 /// The archiver is scheduled when a worker transitions to Idle/Failed/Exited.
-/// With GOLEM__OPLOG__ARCHIVE_INTERVAL=2s (set in the test framework env) the
+/// With GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG__ARCHIVE_INTERVAL=2s (set in the test framework env) the
 /// archive action fires within a few seconds after the worker goes idle.
 /// Deleting the environment before that window expires reproduces the panic.
 #[test]

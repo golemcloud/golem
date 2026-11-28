@@ -103,7 +103,7 @@ pub fn check_exposure(config: &GolemServerConfig) -> anyhow::Result<()> {
             .iter()
             .map(|key| {
                 format!(
-                    "  {key} (environment variable GOLEM__{})",
+                    "  {key} (environment variable GOLEM_ADVANCED__{})",
                     key.replace('.', "__").to_uppercase()
                 )
             })
@@ -208,10 +208,10 @@ mod tests {
         for address in ["0.0.0.0", "::", "192.168.1.10", "::ffff:127.0.0.1"] {
             let message = check_exposure(&config(address)).unwrap_err().to_string();
             for variable in [
-                "GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN",
-                "GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY",
-                "GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY",
-                "GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY",
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN",
+                "GOLEM_ADVANCED__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY",
+                "GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY",
             ] {
                 assert!(message.contains(variable), "{address}: {message}");
             }
@@ -249,7 +249,8 @@ mod tests {
             assert!(message.contains(&format!("{key} = 0.0.0.0")), "{message}");
             assert!(!message.contains("router.address"), "{message}");
             assert!(
-                message.contains("GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY"),
+                message
+                    .contains("GOLEM_ADVANCED__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY"),
                 "{message}"
             );
             assert!(check_exposure(&with_secrets(exposed)).is_ok(), "{key}");

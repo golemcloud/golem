@@ -126,8 +126,9 @@ does not hold the files that the agent wrote.
   start uses an older restore point or replays the full oplog, which writes the files again
   without data loss. A snapshot-based manual update fails with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`.
 
-Filesystem snapshots are off by default on standalone executors and on local servers, except
-`golem server run` on macOS. See
+The native macOS local server enables filesystem snapshots by default. Standalone executors and
+other local-server platforms disable them by default. Set `filesystem_snapshots.enabled = true`
+to enable them there. See
 [Agent files and snapshots](https://learn.golem.cloud/next/develop/snapshotting#agent-files-and-snapshots).
 
 ## Evolve the State Schema

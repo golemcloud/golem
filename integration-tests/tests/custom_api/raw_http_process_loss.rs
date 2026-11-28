@@ -129,7 +129,7 @@ async fn request_body_idle_timeout_is_catchable_without_interrupting_the_owner(
     let service = RestartableWorkerService::start_with_env_vars(
         &context.http.user.deps,
         vec![(
-            "GOLEM__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
+            "GOLEM_ADVANCED__WORKER_SERVICE__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
             "2s".into(),
         )],
     )
@@ -189,7 +189,7 @@ async fn steady_request_body_preserves_bytes_over_many_idle_intervals(
     let service = RestartableWorkerService::start_with_env_vars(
         &context.http.user.deps,
         vec![(
-            "GOLEM__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
+            "GOLEM_ADVANCED__WORKER_SERVICE__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
             "2s".into(),
         )],
     )
@@ -249,7 +249,7 @@ async fn unread_incomplete_body_does_not_wait_for_acceptance_through_an_outage(
     let service = RestartableWorkerService::start_with_env_vars(
         &context.http.user.deps,
         vec![(
-            "GOLEM__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
+            "GOLEM_ADVANCED__WORKER_SERVICE__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT".into(),
             "2s".into(),
         )],
     )

@@ -30,10 +30,10 @@ pub struct ProvidedRegistryService {
     admin_account_token: TokenSecret,
     builtin_plugin_owner_account_id: AccountId,
     default_plan_id: PlanId,
-    low_fuel_plan_id: PlanId,
-    low_disk_space_plan_id: PlanId,
-    low_http_calls_plan_id: PlanId,
-    low_rpc_calls_plan_id: PlanId,
+    low_fuel_plan_id: Option<PlanId>,
+    low_disk_space_plan_id: Option<PlanId>,
+    low_http_calls_plan_id: Option<PlanId>,
+    low_rpc_calls_plan_id: Option<PlanId>,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
@@ -47,10 +47,10 @@ impl ProvidedRegistryService {
         admin_account_token: TokenSecret,
         builtin_plugin_owner_account_id: AccountId,
         default_plan_id: PlanId,
-        low_fuel_plan_id: PlanId,
-        low_disk_space_plan_id: PlanId,
-        low_http_calls_plan_id: PlanId,
-        low_rpc_calls_plan_id: PlanId,
+        low_fuel_plan_id: Option<PlanId>,
+        low_disk_space_plan_id: Option<PlanId>,
+        low_http_calls_plan_id: Option<PlanId>,
+        low_rpc_calls_plan_id: Option<PlanId>,
     ) -> Self {
         info!(
             "Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}"
@@ -106,19 +106,19 @@ impl RegistryService for ProvidedRegistryService {
     fn default_plan(&self) -> PlanId {
         self.default_plan_id
     }
-    fn low_fuel_plan(&self) -> PlanId {
+    fn low_fuel_plan(&self) -> Option<PlanId> {
         self.low_fuel_plan_id
     }
 
-    fn low_disk_space_plan(&self) -> PlanId {
+    fn low_disk_space_plan(&self) -> Option<PlanId> {
         self.low_disk_space_plan_id
     }
 
-    fn low_http_calls_plan(&self) -> PlanId {
+    fn low_http_calls_plan(&self) -> Option<PlanId> {
         self.low_http_calls_plan_id
     }
 
-    fn low_rpc_calls_plan(&self) -> PlanId {
+    fn low_rpc_calls_plan(&self) -> Option<PlanId> {
         self.low_rpc_calls_plan_id
     }
 

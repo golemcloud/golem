@@ -36,6 +36,9 @@ case "${replica_url}" in
   *) fail "GOLEM_LITESTREAM_REPLICA_URL must be an s3:// or a file:// URL, not '${replica_url}'" ;;
 esac
 
+# Inspect the original selections before SQLite overrides or restore can change state.
+golem --litestream-preflight "$@"
+
 # The name of each database goes after the path of the URL, and the query, such as
 # `?endpoint=...&region=...`, goes after that name unchanged. Litestream decodes the query. The
 # first `?` of a URL starts its query.
@@ -46,14 +49,14 @@ if [[ "${replica_url}" == *\?* ]]; then
   GOLEM_LITESTREAM_REPLICA_QUERY="?${replica_url#*\?}"
 fi
 
-export GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE=Sqlite
-export GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__DATABASE="${data_dir}/key-value-storage.db"
-export GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS=4
-export GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__FOREIGN_KEYS=false
-export GOLEM__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE=Sqlite
-export GOLEM__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__DATABASE="${data_dir}/indexed-storage.db"
-export GOLEM__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS=4
-export GOLEM__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS=false
+export GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE=Sqlite
+export GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__DATABASE="${data_dir}/key-value-storage.db"
+export GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS=4
+export GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__FOREIGN_KEYS=false
+export GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE=Sqlite
+export GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__DATABASE="${data_dir}/indexed-storage.db"
+export GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS=4
+export GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS=false
 
 # `litestream databases` prints a header, then the path and the replica type of each database.
 databases="$(litestream databases -config "${config}")"

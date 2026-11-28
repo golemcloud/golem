@@ -101,39 +101,37 @@ async fn env_vars(
     otlp: bool,
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
-        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
-        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with(
+            "GOLEM_ADVANCED__SHARD_MANAGER__GRPC__PORT",
+            grpc_port.to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__SHARD_MANAGER__HTTP_PORT",
+            http_port.to_string(),
+        )
         .with_str(
-            "GOLEM__REGISTRY_SERVICE__HOST",
+            "GOLEM_ADVANCED__SHARD_MANAGER__REGISTRY_SERVICE__HOST",
             &registry_service.grpc_host(),
         )
         .with(
-            "GOLEM__REGISTRY_SERVICE__PORT",
+            "GOLEM_ADVANCED__SHARD_MANAGER__REGISTRY_SERVICE__PORT",
             registry_service.grpc_port().to_string(),
         )
         .with_all(
-            // The shard manager's SQL settings live under `persistence`, not `db`: the same key
-            // also selects etcd in distributed mode. The sub-keys are identical to DbConfig's.
             rdb.info()
-                .env("golem_shard_manager", rdb_private_connection)
-                .into_iter()
-                .map(|(key, value)| {
-                    let key = key
-                        .strip_prefix("GOLEM__DB__")
-                        .map(|rest| format!("GOLEM__PERSISTENCE__{rest}"))
-                        .unwrap_or(key);
-                    (key, value)
-                })
-                .collect(),
+                .env("golem_shard_manager", rdb_private_connection),
         )
         .with_optional_otlp("shard_manager", otlp);
 
     if let Some(number_of_shards) = number_of_shards_override {
-        builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
+        builder = builder.with(
+            "GOLEM_ADVANCED__SHARD_MANAGER__NUMBER_OF_SHARDS",
+            number_of_shards.to_string(),
+        );
     }
     if let Some(state_write_timeout) = state_write_timeout_override {
         builder = builder.with(
-            "GOLEM__STATE_WRITE_TIMEOUT",
+            "GOLEM_ADVANCED__SHARD_MANAGER__STATE_WRITE_TIMEOUT",
             format!("{}ms", state_write_timeout.as_millis()),
         );
     }

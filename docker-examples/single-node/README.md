@@ -3,6 +3,8 @@
 The `golemservices/golem` image and Caddy for TLS. The guide is
 [All-in-one image with Docker Compose](https://learn.golem.cloud/next/deploy/vm#all-in-one-image-with-docker-compose).
 
+First [build the images from this checkout](../README.md). The example uses `golemservices/golem:local`, not a published 1.6 image.
+
 Use Docker Compose 2.30 or newer. It reads `golem.env` in raw format, without expanding dollar
 signs in passwords. Write values in that file without surrounding quotes.
 
@@ -25,6 +27,8 @@ docker compose up -d
 - Litestream (`GOLEM_LITESTREAM=true`) is backup and restore for one server, not high availability.
   It replicates the SQLite databases asynchronously, about once a second, so the newest writes can
   be lost with the disk, and at startup it restores only the databases that are missing. It does not
-  replicate the cache of the built-in plugins and tools, so a restore onto a new volume downloads
-  them again from GitHub. Use it only where the disk is ephemeral or belongs to one host. See
+  replicate the cache of the built-in plugins and tools. The local build embeds the artifacts and
+  needs no GitHub download for them. URL-backed artifacts, including source overrides, are fetched
+  again from their configured sources after a restore onto a new volume. Use Litestream only where
+  the disk is ephemeral or belongs to one host. See
   [Litestream limits](https://learn.golem.cloud/next/deploy/server#litestream-limits).

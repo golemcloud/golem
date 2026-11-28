@@ -131,6 +131,7 @@ conditional-trait-gen = "0.4.1"
 console-subscriber = "0.5.0"
 convert_case = "0.11.0"
 cookie = "0.18.1"
+core-foundation = "0.10.1"
 criterion = "0.5"
 crossbeam-channel = "0.5.15"
 crossterm = "0.29"
@@ -232,6 +233,7 @@ openidconnect = "4.0.1"
 opentelemetry = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
 opentelemetry_sdk = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "internal-logs"] }
+percent-encoding = "2.3.2"
 phf = { version = "0.12.1", features = ["macros"] }
 pin-project = "1.1.10"
 pgvector = { version = "=0.4.1", features = ["sqlx", "halfvec"] }
@@ -276,6 +278,7 @@ rustix = { version = "1.1.4", features = ["fs"] }
 rustls = { version = "0.23.23", features = ["ring"] }
 rustls-pemfile = "2.2.0"
 rustls-platform-verifier = "0.7.0"
+same-file = "1.0.6"
 sanitize-filename = "0.6.0"
 scc = "3.6.9"
 semver = "1.0.26"

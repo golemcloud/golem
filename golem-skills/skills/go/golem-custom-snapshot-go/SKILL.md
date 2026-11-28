@@ -128,7 +128,7 @@ A snapshot holds only the agent's in-memory state: the JSON of the exported fiel
 - Do not write files in `Save`, `SaveParts`, `Load`, `LoadParts` or `OnRestore`, and do not copy file contents into the snapshot to keep them. Golem does not run `Save` again in a replay, and the load methods run in read-only mode.
 - On an executor without filesystem snapshots, Golem takes a snapshot only while the agent's files are its initial files. After the agent changes its files, Golem takes no automatic snapshot: a start uses an older restore point or replays the full oplog, which writes the files again without data loss.
 
-Filesystem snapshots are off by default on standalone executors and on local servers, except `golem server run` on macOS. See [Agent files and snapshots](https://learn.golem.cloud/next/develop/snapshotting#agent-files-and-snapshots).
+The native macOS local server enables filesystem snapshots by default. Standalone executors and other local-server platforms disable them by default. Set `filesystem_snapshots.enabled = true` to enable them there. See [Agent files and snapshots](https://learn.golem.cloud/next/develop/snapshotting#agent-files-and-snapshots).
 
 ## Full example: session agent with custom snapshot
 

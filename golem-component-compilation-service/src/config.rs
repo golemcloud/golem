@@ -285,6 +285,7 @@ impl SafeDisplay for EngineConfig {
 
 pub fn make_config_loader() -> ConfigLoader<ServerConfig> {
     ConfigLoader::new_with_examples(Path::new("config/component-compilation-service.toml"))
+        .for_service("component_compilation_service")
 }
 
 #[cfg(test)]

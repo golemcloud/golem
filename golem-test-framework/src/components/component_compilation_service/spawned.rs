@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::ChildProcessLogger;
 use crate::components::component_compilation_service::{
     ComponentCompilationService, wait_for_startup,
 };
+use crate::components::{ChildProcessLogger, SupportedServiceLaunch};
 use async_trait::async_trait;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -51,9 +51,37 @@ impl SpawnedComponentCompilationService {
             );
         }
 
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .current_dir(working_directory)
-            .envs(super::env_vars(http_port, grpc_port, verbosity, enable_fs_cache, otlp).await)
+            .envs(super::env_vars(http_port, grpc_port, verbosity, enable_fs_cache, otlp).await);
+        Self::start(command, http_port, grpc_port, out_level, err_level).await
+    }
+
+    pub(crate) async fn new_supported(
+        launch: SupportedServiceLaunch,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let [http_port, grpc_port] = launch.listeners("component_compilation_service");
+        Self::start(
+            launch.command(&[]),
+            http_port,
+            grpc_port,
+            out_level,
+            err_level,
+        )
+        .await
+    }
+
+    async fn start(
+        mut command: Command,
+        http_port: u16,
+        grpc_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
