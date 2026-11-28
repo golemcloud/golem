@@ -68,6 +68,7 @@ use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
 
+pub mod account_creation;
 pub mod account_tree;
 pub mod common;
 pub mod notifier_reconnect;
