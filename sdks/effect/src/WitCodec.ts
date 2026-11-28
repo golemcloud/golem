@@ -79,6 +79,7 @@ import {
 import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
 import { SchemaRef, SchemaRenderError, type JsonValue } from "./SchemaRef.js"
 import { packJson, unpackJson } from "./internal/reflection/schemaRender.js"
+import { parseJsonValue, stringifyJsonValue } from "./internal/schema-model/json.js"
 import { schemaValueConforms } from "./internal/reflection/schemaValidation.js"
 
 // Branded so `Durability.wrap` (and any other downstream consumer that uses
@@ -991,6 +992,24 @@ const walk = (
               return { type: t.url(native.restrictions), pair: primPair(v.url) }
             case "uuid":
               return { type: t.uuid(), pair: primPair(v.uuid) }
+            case "json": {
+              return {
+                type: t.json(),
+                pair: {
+                  toValue: (value) => v.json(stringifyJsonValue(value)),
+                  fromValue: (value) => {
+                    if (value.tag !== "json") throw new TypeError("Expected a JSON schema value")
+                    return parseJsonValue(value.value)
+                  },
+                  wire: {
+                    write: (value, writer) =>
+                      writer.add({ tag: "json-value", val: stringifyJsonValue(value) }),
+                    read: (nodes, index) =>
+                      parseJsonValue(wireNode(nodes, index, "json-value").val),
+                  },
+                },
+              }
+            }
             case "datetime":
               return { type: t.datetime(), pair: primPair(v.datetime) }
             case "duration":
@@ -2026,8 +2045,7 @@ export const decodeFromWire = <A, RD, RE>(
 export const makeWireDecoder = <A, RD, RE>(codec: Schema.Codec<A, SchemaValue, RD, RE>) => {
   const decode = Schema.decodeEffect(codec)
   const direct = wireCodecs.get(codec) as
-    | Schema.Codec<A, CoreTypes.SchemaValueTree, RD, RE>
-    | undefined
+    Schema.Codec<A, CoreTypes.SchemaValueTree, RD, RE> | undefined
   const decodeDirect = direct && Schema.decodeEffect(direct)
   return (value: CoreTypes.SchemaValueTree): Effect.Effect<A, Schema.SchemaError, RD> =>
     withCapabilityTransaction((transaction) =>
@@ -2080,8 +2098,7 @@ export const makeWireEncoder = <A, RD, RE>(
   const async = <T>(run: (signal: AbortSignal) => Promise<T>) =>
     typedWireErrors ? Effect.tryPromise({ try: run, catch: wireSchemaError }) : Effect.promise(run)
   const direct = wireCodecs.get(codec) as
-    | Schema.Codec<A, CoreTypes.SchemaValueTree, RD, RE>
-    | undefined
+    Schema.Codec<A, CoreTypes.SchemaValueTree, RD, RE> | undefined
   if (direct) {
     const encode = Schema.encodeEffect(direct)
     const validate = (tree: CoreTypes.SchemaValueTree) => {

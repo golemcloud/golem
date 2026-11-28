@@ -147,6 +147,7 @@ impl<'g> Codecs<'g> {
             SchemaType::F32 { .. } => leaf("F32"),
             SchemaType::F64 { .. } => leaf("F64"),
             SchemaType::String { .. } => leaf("String"),
+            SchemaType::Json { .. } => leaf("JSON"),
             SchemaType::Char { .. } => leaf("Char"),
             SchemaType::Text { .. } => leaf("Text"),
             SchemaType::Binary { .. } => leaf("Binary"),

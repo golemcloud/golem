@@ -1,4 +1,43 @@
 ///|
+test "native JSON schema and wire roundtrip every top-level kind" {
+  let values : Array[Json] = [
+    { "b": [1, null, { "x": "y" }], "a": 1.5 },
+    [false, 2],
+    null,
+    false,
+    3.5,
+    "text",
+  ]
+  assert_eq(
+    into_schema_graph((type_tag() : TypeTag[Json])).root,
+    @model.schema_type(@model.Json),
+  )
+  for value in values {
+    assert_eq(rich_roundtrip(value), value)
+    let decoded : Json = from_wire(into_wire(value))
+    assert_eq(decoded, value)
+    let nested : Array[Json?] = [Some(value), None]
+    let decoded_nested : Array[Json?] = from_wire(into_wire(nested))
+    assert_eq(decoded_nested, nested)
+  }
+  try {
+    let _ : Json = from_value_as(@model.SchemaValue::Json("{"))
+  } catch {
+    FromSchemaError::Custom(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected malformed JSON rejection")
+  }
+  try {
+    let _ : Json = from_wire({ value_nodes: [@types.JsonValue("{")], root: 0, })
+  } catch {
+    WireError::Invalid(_) => ()
+  } noraise {
+    _ => fail("expected malformed JSON wire rejection")
+  }
+}
+
+///|
 #warnings("-struct_never_constructed")
 struct TestBytesUnit {} derive(Debug, Eq)
 

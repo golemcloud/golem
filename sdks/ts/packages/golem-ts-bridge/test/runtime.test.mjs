@@ -6,6 +6,8 @@ import { createServer as createHttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import {
   agentStream,
+  assertJsonValue,
+  stringifyJsonValue,
   createAgent,
   createStreamingRemoteMethod,
   decodeStreamSessionEnd,
@@ -2679,6 +2681,75 @@ test('strict JSON rejects non-JSON whitespace and unpaired Unicode surrogates', 
 function codec(body) {
   return publicValueCodec({ defs: new Map(), root: schemaType(body) });
 }
+
+test('JSON projection preserves native values and rejects malformed text and wrong tags', () => {
+  const json = codec({ tag: 'json' });
+  for (const value of [
+    { b: [1, null, { x: 'y' }], a: false },
+    [null, true],
+    'text 😀',
+    1.5,
+    false,
+    null,
+  ]) {
+    const wire = { kind: 'json', value: JSON.stringify(value) };
+    assert.deepEqual(json.validate(wire, 'none'), wire);
+    assert.deepEqual(json.application(wire), value);
+  }
+  for (const value of [
+    '{',
+    '',
+    'null trailing',
+    '1e400',
+    '"\\ud800"',
+    '{"key":"\\udfff"}',
+    '{"\\ud800":true}',
+    null,
+    1,
+  ]) {
+    assert.throws(() => json.validate({ kind: 'json', value }, 'none'));
+  }
+  assert.throws(() => json.validate({ kind: 'string', value: '{}' }, 'none'));
+  const proxied = new Proxy(
+    { x: [1, null, { y: 'nested' }] },
+    {
+      get() {
+        throw new Error('Property getters must not run');
+      },
+    },
+  );
+  assert.deepEqual(JSON.parse(stringifyJsonValue(proxied)), { x: [1, null, { y: 'nested' }] });
+  const disguisedSparse = new Array(1);
+  Object.defineProperty(disguisedSparse, '4294967295', { value: 7, enumerable: true });
+  assert.throws(() => assertJsonValue(disguisedSparse));
+  class HookedArray extends Array {
+    toJSON() {
+      assert.fail('JSON serialization hooks must not run');
+    }
+  }
+  assert.throws(() => assertJsonValue(new HookedArray(1, 2)), /serialization hooks/);
+  const original = Object.getOwnPropertyDescriptor(Array.prototype, 'toJSON');
+  let hookCalls = 0;
+  let rejected = false;
+  try {
+    Object.defineProperty(Array.prototype, 'toJSON', {
+      configurable: true,
+      value() {
+        hookCalls++;
+        return 'replaced';
+      },
+    });
+    try {
+      assertJsonValue([1, 2]);
+    } catch {
+      rejected = true;
+    }
+  } finally {
+    if (original) Object.defineProperty(Array.prototype, 'toJSON', original);
+    else Reflect.deleteProperty(Array.prototype, 'toJSON');
+  }
+  assert.deepEqual({ rejected, hookCalls }, { rejected: true, hookCalls: 0 });
+});
 
 test('public value codec enforces canonical values, restrictions, and strict shapes', () => {
   const u64 = codec({

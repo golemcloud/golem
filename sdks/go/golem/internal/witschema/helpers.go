@@ -56,13 +56,17 @@ func metadataToCore(m types.MetadataEnvelope) core.MetadataEnvelope {
 func roleToCore(r types.Role) core.Role {
 	switch r.Tag() {
 	case types.RoleMultimodal:
-		return core.RoleMultimodal
+		return core.Role{Tag: core.RoleMultimodal}
 	case types.RoleUnstructuredText:
-		return core.RoleUnstructuredText
+		return core.Role{Tag: core.RoleUnstructuredText}
 	case types.RoleUnstructuredBinary:
-		return core.RoleUnstructuredBinary
+		return core.Role{Tag: core.RoleUnstructuredBinary}
+	case types.RoleStandardMultimodal:
+		return core.Role{Tag: core.RoleStandardMultimodal}
+	case types.RoleTaskUpdate:
+		return core.Role{Tag: core.RoleTaskUpdate}
 	}
-	return core.Role(r.Other())
+	return core.Role{Tag: core.RoleOther, Value: r.Other()}
 }
 
 func numericToCore(o witTypes.Option[types.NumericRestrictions]) *core.NumericRestrictions {

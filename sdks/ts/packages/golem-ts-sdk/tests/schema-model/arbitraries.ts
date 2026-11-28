@@ -49,6 +49,8 @@ const arbRole: Arbitrary<Role> = fc.oneof(
   fc.constant<Role>({ tag: 'multimodal' }),
   fc.constant<Role>({ tag: 'unstructured-text' }),
   fc.constant<Role>({ tag: 'unstructured-binary' }),
+  fc.constant<Role>({ tag: 'standard-multimodal' }),
+  fc.constant<Role>({ tag: 'task-update' }),
   fc.record({ tag: fc.constant<'other'>('other'), val: fc.string({ maxLength: 8 }) }),
 );
 
@@ -143,6 +145,7 @@ const PRIM_TAGS = [
   'f64',
   'char',
   'string',
+  'json',
 ] as const;
 
 function leafBodyArbs(ids: string[]): Arbitrary<SchemaTypeBody>[] {
@@ -301,6 +304,7 @@ function leafValueArbs(): Arbitrary<SchemaValue>[] {
       value: fc.string({ minLength: 1, maxLength: 1 }),
     }),
     fc.record({ tag: fc.constant<'string'>('string'), value: fc.string({ maxLength: 12 }) }),
+    fc.jsonValue().map((value) => ({ tag: 'json' as const, value: JSON.stringify(value) })),
     fc.record({ tag: fc.constant<'enum'>('enum'), caseIndex: fc.nat({ max: 10 }) }),
     fc.record({
       tag: fc.constant<'flags'>('flags'),

@@ -30,6 +30,14 @@ object ValueValidationSpec extends ZIOSpecDefault {
   private def validate(tpe: SchemaType, value: SchemaValue, defs: ListMap[String, SchemaTypeDef] = ListMap.empty) =
     ValueValidation.validateValue(graph(tpe, defs), tpe, value)
   override def spec = suite("ValueValidationSpec")(
+    test("JSON accepts every top level but rejects malformed and string-tagged text") {
+      assertTrue(
+        List("{}", "[]", "null", "false", "1.5", "\"text\"").forall(text => validate(t.json, JsonValue(text)).isRight),
+        List("", "{", "null x").forall(text => validate(t.json, JsonValue(text)).isLeft),
+        validate(t.json, StringValue("{}")).isLeft,
+        validate(t.string, JsonValue("\"text\"")).isLeft
+      )
+    },
     test("primitive shape mismatch is reported") {
       assertTrue(validate(t.s32, S64Value(1)).left.exists(_.head.isInstanceOf[ShapeMismatch]))
     },

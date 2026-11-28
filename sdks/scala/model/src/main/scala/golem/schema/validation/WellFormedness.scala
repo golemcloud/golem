@@ -50,6 +50,9 @@ sealed trait SchemaError extends Product with Serializable {
   def message: String; override def toString: String = message
 }
 object SchemaError {
+  final case class UnsupportedRole(role: Role) extends SchemaError {
+    def message = s"role '$role' has no supported shape"
+  }
   final case class DuplicateTypeId(id: String) extends SchemaError { def message = s"duplicate type id `$id`"       }
   final case class DanglingRef(id: String)     extends SchemaError { def message = s"dangling type reference `$id`" }
   final case class RecursiveAlias(id: String)  extends SchemaError {
@@ -132,7 +135,14 @@ object WellFormedness {
     checkType(graph, root, errors)
     if (errors.isEmpty) Right(()) else Left(errors.toList)
   }
-  private def checkType(graph: SchemaGraph, t: SchemaType, errors: mutable.ListBuffer[SchemaError]): Unit =
+  private def checkMetadata(metadata: MetadataEnvelope, errors: mutable.ListBuffer[SchemaError]): Unit =
+    metadata.role.foreach {
+      case role @ (Role.StandardMultimodal | Role.TaskUpdate) => errors += UnsupportedRole(role)
+      case _                                                  => ()
+    }
+
+  private def checkType(graph: SchemaGraph, t: SchemaType, errors: mutable.ListBuffer[SchemaError]): Unit = {
+    checkMetadata(t.metadata, errors)
     t.body match {
       case RefType(id) =>
         RefResolution.resolveRef(graph, t).left.foreach {
@@ -140,9 +150,13 @@ object WellFormedness {
           case RefResolutionError.RecursiveRef(x) => errors += RecursiveAlias(x)
         }
       case RecordType(fields) =>
-        dup(fields.map(_.name), DuplicateFieldName, errors); fields.foreach(f => checkType(graph, f.body, errors))
+        dup(fields.map(_.name), DuplicateFieldName, errors);
+        fields.foreach { f =>
+          checkMetadata(f.metadata, errors); checkType(graph, f.body, errors)
+        }
       case VariantType(cases) =>
         if (cases.isEmpty) errors += EmptyVariant; dup(cases.map(_.name), DuplicateVariantCase, errors);
+        cases.foreach(c => checkMetadata(c.metadata, errors))
         cases.flatMap(_.payload).foreach(checkType(graph, _, errors))
       case EnumType(cases)     => if (cases.isEmpty) errors += EmptyEnum; dup(cases, DuplicateEnumCase, errors)
       case FlagsType(names)    => if (names.isEmpty) errors += EmptyFlags; dup(names, DuplicateFlagName, errors)
@@ -174,6 +188,7 @@ object WellFormedness {
       case F32Type(r)    => checkNum(r, F32, errors); case F64Type(r) => checkNum(r, F64, errors)
       case _             => ()
     }
+  }
   private def dup(xs: List[String], mk: String => SchemaError, e: mutable.ListBuffer[SchemaError]): Unit = {
     val s = mutable.Set.empty[String]; xs.foreach(x => if (!s.add(x)) e += mk(x))
   }
@@ -254,7 +269,7 @@ object WellFormedness {
   } catch { case _: Throwable => None }
   private def validateUnion(g: SchemaGraph, bs: List[UnionBranch], e: mutable.ListBuffer[SchemaError]): Unit = {
     if (bs.isEmpty) e += EmptyUnion; dup(bs.map(_.tag), DuplicateUnionTag, e);
-    bs.foreach { b => checkBranch(g, b, e); checkType(g, b.body, e) };
+    bs.foreach { b => checkMetadata(b.metadata, e); checkBranch(g, b, e); checkType(g, b.body, e) };
     for (i <- bs.indices; j <- i + 1 until bs.length)
       classifyDiscriminatorPair(bs(i).discriminator, bs(j).discriminator) match {
         case DiscriminatorPairClassification.Reject(reason) =>

@@ -15,6 +15,7 @@
 package bridge
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -139,6 +140,27 @@ func DecodeF64(sv schema.SchemaValue) (float64, error) {
 func EncodeString(v string) schema.SchemaValue { return schema.StringValue{Value: v} }
 func DecodeString(sv schema.SchemaValue) (string, error) {
 	return decodeAs("string", sv, func(v schema.StringValue) string { return v.Value })
+}
+
+// EncodeJSON encodes validated native JSON as a first-class JSON node.
+func EncodeJSON(v json.RawMessage) schema.SchemaValue {
+	n := schema.JsonValue{Value: string(v)}
+	if err := schema.NewRef(schema.SchemaGraph{Root: schema.SchemaType{Body: schema.JsonType{}}}).Validate(n); err != nil {
+		panic(&EncodeError{Message: err.Error()})
+	}
+	return n
+}
+
+// DecodeJSON accepts only JSON nodes and validates their text.
+func DecodeJSON(sv schema.SchemaValue) (json.RawMessage, error) {
+	n, ok := sv.(schema.JsonValue)
+	if !ok {
+		return nil, Mismatch("json", sv)
+	}
+	if err := schema.NewRef(schema.SchemaGraph{Root: schema.SchemaType{Body: schema.JsonType{}}}).Validate(n); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(n.Value), nil
 }
 
 func EncodeChar(v values.Char) schema.SchemaValue { return schema.CharValue{Value: rune(v)} }

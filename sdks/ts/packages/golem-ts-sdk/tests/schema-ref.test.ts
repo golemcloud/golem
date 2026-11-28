@@ -34,6 +34,29 @@ function floatBits(value: number): bigint {
 }
 
 describe('SchemaRef canonical JSON', () => {
+  it('renders native JSON inline in records, lists and optional fields', () => {
+    const ref = schema(
+      t.record([
+        field('payload', t.json()),
+        field('items', t.list(t.json())),
+        field('maybe', t.option(t.json())),
+      ]),
+    );
+    const value = { payload: { a: 1 }, items: [false, null, ['nested']], maybe: 'text' };
+    expect(ref.unpackJson(ref.packJson(value))).toEqual(value);
+    expect(ref.toJsonSchema({ includeDraftMarker: false })).toMatchObject({
+      properties: { payload: {}, items: { items: {} }, maybe: { anyOf: [{ type: 'null' }, {}] } },
+      required: ['payload', 'items'],
+    });
+    expect(schema(t.option(t.json())).packJson(null)).toEqual(v.option());
+    expect(schema(t.json()).validateValue(v.json('{')).success).toBe(false);
+    expect(schema(t.json()).validateValue(v.string('{}')).success).toBe(false);
+    for (const text of ['"\\ud800"', '{"key":"\\udfff"}', '{"\\ud800":true}']) {
+      expect(schema(t.json()).validateValue(v.json(text)).success).toBe(false);
+      expect(schema(t.json()).validateJson(JSON.parse(text)).success).toBe(false);
+    }
+  });
+
   it('decodes omitted and explicit-null option fields as absent', () => {
     const ref = schema(t.record([field('maybe', t.option(t.string()))]));
     expect(ref.packJson({})).toEqual(v.record([v.option()]));

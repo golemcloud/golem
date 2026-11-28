@@ -98,6 +98,10 @@ pub fn render<'a>(
         SchemaType::F32 { .. } => "float32".to_string(),
         SchemaType::F64 { .. } => "float64".to_string(),
         SchemaType::String { .. } => "string".to_string(),
+        SchemaType::Json { .. } => {
+            writer.import("encoding/json");
+            "json.RawMessage".to_string()
+        }
 
         // A named type, not `rune`: rune is an alias for int32, so collapsing
         // it would make char and s32 the same Go type.
@@ -631,6 +635,10 @@ mod tests {
     /// import exactly when the rendered type needs one.
     #[test]
     fn rendering_records_the_imports_the_type_needs() {
+        let (rendered, file) = go_type_with_imports(&SchemaType::json());
+        assert_eq!(rendered, "json.RawMessage");
+        assert!(file.contains("\"encoding/json\""), "{file}");
+
         let (rendered, file) = go_type_with_imports(&SchemaType::Datetime { metadata: meta() });
         assert_eq!(rendered, "time.Time");
         assert!(file.contains("\"time\""), "{file}");

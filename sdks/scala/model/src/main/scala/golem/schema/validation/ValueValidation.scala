@@ -48,6 +48,9 @@ sealed trait ValueError extends Product with Serializable {
   def path: ValuePath; def message: String; override def toString: String = message
 }
 object ValueError {
+  final case class InvalidJson(path: ValuePath, reason: String) extends ValueError {
+    def message = s"invalid JSON at $path: $reason"
+  }
   final case class ShapeMismatch(path: ValuePath, expected: String, found: String) extends ValueError {
     def message = s"shape mismatch at $path: expected $expected, found $found"
   }
@@ -168,6 +171,8 @@ object ValueValidation {
     e: mutable.ListBuffer[ValueError]
   ): Unit = resolve(g, t, p, e).foreach { rt =>
     (rt.body, v) match {
+      case (JsonType, JsonValue(text)) =>
+        zio.blocks.schema.json.Json.parse(text).left.foreach(error => e += InvalidJson(path(p), error.toString))
       case (BoolType, BoolValue(_)) | (CharType, CharValue(_)) | (StringType, StringValue(_)) |
           (DatetimeType, DatetimeValue(_)) | (DurationType, DurationValue(_)) | (UuidType, UuidValue(_)) =>
         ()
@@ -277,14 +282,14 @@ object ValueValidation {
   }
   private def path(p: List[ValuePathSegment]) = ValuePath(p)
   private def typeName(b: SchemaTypeBody)     = b match {
-    case RefType(_)            => "ref"; case BoolType         => "bool"; case S8Type(_)           => "s8"; case S16Type(_)   => "s16";
-    case S32Type(_)            => "s32"; case S64Type(_)       => "s64"; case U8Type(_)            => "u8"; case U16Type(_)   => "u16";
-    case U32Type(_)            => "u32"; case U64Type(_)       => "u64"; case F32Type(_)           => "f32"; case F64Type(_)  => "f64";
-    case CharType              => "char"; case StringType      => "string"; case RecordType(_)     => "record";
+    case RefType(_)            => "ref"; case BoolType         => "bool"; case S8Type(_)           => "s8"; case S16Type(_)      => "s16";
+    case S32Type(_)            => "s32"; case S64Type(_)       => "s64"; case U8Type(_)            => "u8"; case U16Type(_)      => "u16";
+    case U32Type(_)            => "u32"; case U64Type(_)       => "u64"; case F32Type(_)           => "f32"; case F64Type(_)     => "f64";
+    case CharType              => "char"; case StringType      => "string"; case JsonType          => "json"; case RecordType(_) => "record";
     case VariantType(_)        => "variant"; case EnumType(_)  => "enum"; case FlagsType(_)        => "flags";
     case TupleType(_)          => "tuple"; case ListType(_)    => "list"; case FixedListType(_, _) => "fixed-list";
     case MapType(_, _)         => "map"; case OptionType(_)    => "option"; case ResultType(_, _)  => "result";
-    case TextType(_)           => "text"; case BinaryType(_)   => "binary"; case PathType(_)       => "path"; case UrlType(_) => "url";
+    case TextType(_)           => "text"; case BinaryType(_)   => "binary"; case PathType(_)       => "path"; case UrlType(_)    => "url";
     case UuidType              => "uuid"; case DatetimeType    => "datetime"; case DurationType    => "duration";
     case QuantityType(_)       => "quantity";
     case UnionType(_)          => "union"; case SecretType(_)  => "secret"; case QuotaTokenType(_) => "quota-token";

@@ -155,6 +155,27 @@ define_matrix_dimension!(db: McpTestContext -> "postgres", "sqlite");
 
 #[test]
 #[tracing::instrument]
+async fn native_json_schema_and_structured_content(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
+    let client = ctx.connect_mcp_client().await?;
+    let tools = client.list_tools().await?;
+    let tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "WeatherAgentSingleton-echo_json")
+        .expect("JSON echo tool is exported");
+    assert_eq!(tool["inputSchema"]["properties"]["value"], json!({}));
+    let value = json!({"b": [1, null, {"x": "y"}], "a": 1.5});
+    let result = client
+        .call_tool("WeatherAgentSingleton-echo_json", json!({"value": value}))
+        .await?;
+    assert_ne!(result["isError"], json!(true));
+    assert_eq!(result["structuredContent"]["value"], value);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn list_tools(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
     let tools = client.list_tools().await?;

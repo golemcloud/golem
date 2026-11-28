@@ -282,6 +282,7 @@ private[reflection] object CanonicalJson {
       case F64Type(r)               => decimal(r)
       case CharType                 => typed("string", "minLength" -> number(1), "maxLength" -> number(1))
       case StringType               => typed("string")
+      case JsonType                 => Json.Object()
       case RecordType(recordFields) =>
         Json.Object(
           "type"       -> Json.String("object"),
@@ -338,7 +339,9 @@ private[reflection] object CanonicalJson {
             "maxItems"    -> number(2)
           )
         )
-      case OptionType(element) => Json.Object("oneOf" -> Json.Array(typed("null"), schemaJson(graph, element)))
+      case OptionType(element) =>
+        val keyword = if (resolve(graph, element).body == JsonType) "anyOf" else "oneOf"
+        Json.Object(keyword -> Json.Array(typed("null"), schemaJson(graph, element)))
       case ResultType(ok, err) =>
         def side(name: String, payload: Option[SchemaType]): Json = Json.Object(
           "type"                 -> Json.String("object"),
@@ -532,6 +535,7 @@ private[reflection] object CanonicalJson {
           fail("expected one Unicode scalar")
         CharValue(text.codePointAt(0))
       case StringType           => StringValue(text(json))
+      case JsonType             => JsonValue(Json.jsonCodec.encodeToString(json))
       case RecordType(expected) =>
         val jsonFields = fields(json)
         jsonFields.keys
@@ -700,6 +704,7 @@ private[reflection] object CanonicalJson {
       case (F64Type(_), F64Value(x))                                                   => number(BigDecimal(x))
       case (CharType, CharValue(x))                                                    => Json.String(new String(Character.toChars(x)))
       case (StringType, StringValue(x))                                                => Json.String(x)
+      case (JsonType, JsonValue(x))                                                    => Json.parse(x).fold(e => fail(e.toString), identity)
       case (RecordType(expected), RecordValue(values)) if expected.size == values.size =>
         Json.Object(expected.zip(values).map { case (field, entry) =>
           field.name -> unpackUnsafe(graph, resolve(graph, field.body), entry)

@@ -144,6 +144,8 @@ pub enum SchemaValue {
         url: String,
     },
     Uuid(uuid::Uuid),
+    /// JSON text, validated against `SchemaType::Json` at acceptance.
+    Json(String),
     Datetime {
         value: Timestamp,
     },

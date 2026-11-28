@@ -37,6 +37,28 @@ use proptest::prelude::*;
 use test_r::test;
 
 #[test]
+fn malformed_json_is_rejected_at_its_nested_path() {
+    let graph = SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+        name: "payload".into(),
+        body: SchemaType::list(SchemaType::json()),
+        metadata: Default::default(),
+    }]));
+    let value = SchemaValue::Record {
+        fields: vec![SchemaValue::List {
+            elements: vec![
+                SchemaValue::Json("null".into()),
+                SchemaValue::Json("{".into()),
+            ],
+        }],
+    };
+    let errors = validate_value(&graph, &graph.root, &value).unwrap_err();
+    assert!(
+        matches!(errors.as_slice(), [ValueError::InvalidJson { path, .. }]
+        if path.segments() == [ValuePathSegment::Field("payload".into()), ValuePathSegment::Index(1)])
+    );
+}
+
+#[test]
 fn long_flat_alias_chain_validates_without_stack_overflow() {
     let count = 20_000;
     let graph = SchemaGraph {

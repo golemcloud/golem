@@ -30,6 +30,7 @@ use golem_common::model::{
 use golem_common::schema::SchemaValue;
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::{agent_key, data_value};
+use golem_test_framework::dsl::oplog_shape::assert_settled_oplog;
 use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::services::agent_types::local_type_id;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
@@ -186,6 +187,81 @@ method_failure_test!(
     "declared_error",
     ["fail"]
 );
+
+#[test]
+#[timeout("3m")]
+async fn native_json_survives_rpc_and_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_key!("RichTypesAgent", "json-history");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let values = vec![
+        serde_json::json!({"b": [1, null, {"x": "y"}], "a": 1.5}),
+        serde_json::json!([false, 7, null]),
+        serde_json::Value::Null,
+    ];
+    for value in &values {
+        let returned = executor
+            .invoke_and_await_agent(&component, &agent, "echo_json", data_value!(value.clone()))
+            .await?
+            .into_typed::<serde_json::Value>()?;
+        assert_eq!(&returned, value);
+    }
+    let returned = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "rpc_json",
+            data_value!(values[0].clone()),
+        )
+        .await?
+        .into_typed::<serde_json::Value>()?;
+    assert_eq!(returned, values[0]);
+    let target = agent_key!("RichTypesAgent", "json-rpc-target");
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    assert_json_history(&executor, &component, &agent, &values).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    assert_json_history(&executor, &component, &agent, &values).await?;
+    assert_json_history(&executor, &component, &target, &values[..1]).await?;
+    for worker in [&worker, &target_worker] {
+        let oplog = executor.get_oplog(worker, OplogIndex::INITIAL).await?;
+        assert_settled_oplog(&oplog, &[], &[]);
+    }
+    let fresh = serde_json::json!({"after": [true, 19]});
+    executor
+        .invoke_and_await_agent(&component, &target, "echo_json", data_value!(fresh.clone()))
+        .await?;
+    assert_json_history(&executor, &component, &target, &[values[0].clone(), fresh]).await?;
+    Ok(())
+}
+
+async fn assert_json_history(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent: &ParsedAgentKey,
+    expected: &[serde_json::Value],
+) -> anyhow::Result<()> {
+    let actual = executor
+        .invoke_and_await_agent(component, agent, "json_values", data_value!())
+        .await?
+        .into_typed::<Vec<serde_json::Value>>()?;
+    assert_eq!(
+        actual, expected,
+        "replay must retain JSON values without repeating an RPC effect"
+    );
+    Ok(())
+}
 
 #[test]
 #[timeout("2m")]

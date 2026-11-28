@@ -385,6 +385,9 @@ fn round_trip_rich_constructors() {
         SchemaValue::Uuid(uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").unwrap()),
         SchemaType::uuid(),
     );
+    for text in [r#"{"nested":[false,null,"x",1.5]}"#, "null", r#""text""#] {
+        round_trip_all(SchemaValue::Json(text.into()), SchemaType::json());
+    }
     round_trip_all(
         SchemaValue::Datetime {
             value: Timestamp::new(1_700_000_000, 0).unwrap(),

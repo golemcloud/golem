@@ -15,9 +15,11 @@
 package schema
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -122,6 +124,12 @@ func (r Ref) validate(t SchemaType, v SchemaValue, path string, depth int) error
 			return err
 		}
 		return checkUTF8(n.Value, path)
+	case JsonType:
+		n, err := expect[JsonValue](v, path, "json")
+		if err != nil {
+			return err
+		}
+		return checkJSON(n.Value, path)
 
 	case RecordType:
 		n, err := expect[RecordValue](v, path, "record")
@@ -433,6 +441,45 @@ func checkFloat(rs *NumericRestrictions, f float64, path string) error {
 		return nil
 	}
 	return checkNumeric(rs, floatBound(f), path)
+}
+
+func checkJSON(s, path string) error {
+	var value any
+	if err := json.Unmarshal([]byte(s), &value); err != nil {
+		return fmt.Errorf("%s: invalid JSON: %w", pathOrRoot(path), err)
+	}
+	return checkJSONUnicode(s, path)
+}
+
+// checkJSONUnicode checks syntactically valid JSON without changing its text.
+func checkJSONUnicode(s, path string) error {
+	if err := checkUTF8(s, path); err != nil {
+		return err
+	}
+	// Unmarshal replaces unpaired escaped surrogates; the host rejects them.
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			continue
+		}
+		i++
+		if s[i] != 'u' {
+			continue
+		}
+		code, _ := strconv.ParseUint(s[i+1:i+5], 16, 16)
+		i += 4
+		if code < 0xd800 || code > 0xdfff {
+			continue
+		}
+		if code <= 0xdbff && i+6 < len(s) && s[i+1:i+3] == `\u` {
+			low, _ := strconv.ParseUint(s[i+3:i+7], 16, 16)
+			if low >= 0xdc00 && low <= 0xdfff {
+				i += 6
+				continue
+			}
+		}
+		return fmt.Errorf("%s: JSON strings cannot contain unpaired surrogates", pathOrRoot(path))
+	}
+	return nil
 }
 
 func checkUTF8(s, path string) error {

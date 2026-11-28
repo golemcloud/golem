@@ -619,6 +619,7 @@ impl<'a> GraphCtx<'a> {
                 metadata,
             },
             wire::SchemaTypeBody::UuidType => SchemaType::Uuid { metadata },
+            wire::SchemaTypeBody::JsonType => SchemaType::Json { metadata },
             wire::SchemaTypeBody::DatetimeType => SchemaType::Datetime { metadata },
             wire::SchemaTypeBody::DurationType => SchemaType::Duration { metadata },
             wire::SchemaTypeBody::QuantityType(q) => SchemaType::Quantity {
@@ -809,6 +810,7 @@ fn decode_value_node(
         wire::SchemaValueNode::PathValue(p) => SchemaValue::Path { path: p.clone() },
         wire::SchemaValueNode::UrlValue(u) => SchemaValue::Url { url: u.clone() },
         wire::SchemaValueNode::UuidValue(value) => SchemaValue::Uuid((*value).into()),
+        wire::SchemaValueNode::JsonValue(value) => SchemaValue::Json(value.clone()),
         wire::SchemaValueNode::DatetimeValue(d) => SchemaValue::Datetime {
             value: datetime_from_wire(d)?,
         },
@@ -1446,6 +1448,7 @@ fn decode_owned_at(
         wire::SchemaValueNode::PathValue(p) => SchemaValue::Path { path: p },
         wire::SchemaValueNode::UrlValue(u) => SchemaValue::Url { url: u },
         wire::SchemaValueNode::UuidValue(u) => SchemaValue::Uuid(u.into()),
+        wire::SchemaValueNode::JsonValue(value) => SchemaValue::Json(value),
         wire::SchemaValueNode::DatetimeValue(d) => SchemaValue::Datetime {
             value: datetime_from_wire(&d)?,
         },
@@ -1497,6 +1500,8 @@ pub fn decode_metadata(m: &wire::MetadataEnvelope) -> MetadataEnvelope {
             wire::Role::Multimodal => Role::Multimodal,
             wire::Role::UnstructuredText => Role::UnstructuredText,
             wire::Role::UnstructuredBinary => Role::UnstructuredBinary,
+            wire::Role::StandardMultimodal => Role::StandardMultimodal,
+            wire::Role::TaskUpdate => Role::TaskUpdate,
             wire::Role::Other(s) => Role::Other(s.clone()),
         }),
     }

@@ -107,6 +107,7 @@ impl TypeName for ScalaTypeName {
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
             | SchemaType::Uuid { .. }
+            | SchemaType::Json { .. }
             | SchemaType::Datetime { .. }
             | SchemaType::Duration { .. }
             | SchemaType::Quantity { .. }

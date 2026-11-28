@@ -69,6 +69,27 @@ mod schema_native_tests {
     }
 
     #[test]
+    fn json_roundtrips_with_structural_delimiters_and_null() {
+        for json in [
+            "{ \"x\": [1,null], \"text\": \"a,b)\" }",
+            "null",
+            "\"text\"",
+        ] {
+            let value = typed(
+                vec![("payload", SchemaType::json())],
+                vec![SchemaValue::Json(json.into())],
+            );
+            assert!(roundtrip(&value).starts_with("@json\""));
+        }
+        let value = typed(
+            vec![("payload", SchemaType::json())],
+            vec![SchemaValue::Json("{".into())],
+        );
+        assert!(format_structural_typed(&value).is_err());
+        assert!(parse_structural_typed("@json\"{\"", value.graph(), value.root_type()).is_err());
+    }
+
+    #[test]
     fn primitives_roundtrip_and_format() {
         let v = typed(
             vec![

@@ -53,6 +53,7 @@ pub(all) enum SchemaTypeBody {
   F64(@types.NumericRestrictions?)
   Char
   String
+  Json
   // Structural composites
   Record(Array[NamedFieldType])
   Variant(Array[VariantCaseType])
@@ -204,6 +205,7 @@ pub(all) enum SchemaValue {
   F64(Double)
   Char(Char)
   String(String)
+  Json(String)
   // Structural composites
   Record(Array[SchemaValue])
   // case index, optional payload

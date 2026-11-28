@@ -72,6 +72,7 @@ fn assignable(
         | (SchemaType::Char { .. }, SchemaType::Char { .. })
         | (SchemaType::String { .. }, SchemaType::String { .. })
         | (SchemaType::Uuid { .. }, SchemaType::Uuid { .. })
+        | (SchemaType::Json { .. }, SchemaType::Json { .. })
         | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
         | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
 
@@ -435,6 +436,7 @@ fn equivalent(
         | (SchemaType::Char { .. }, SchemaType::Char { .. })
         | (SchemaType::String { .. }, SchemaType::String { .. })
         | (SchemaType::Uuid { .. }, SchemaType::Uuid { .. })
+        | (SchemaType::Json { .. }, SchemaType::Json { .. })
         | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
         | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
 

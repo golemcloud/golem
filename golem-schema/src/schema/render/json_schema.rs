@@ -813,7 +813,11 @@ pub(super) fn render_type(
         }
 
         SchemaType::Option { inner, .. } => obj([(
-            "oneOf",
+            if matches!(graph.resolve_ref(inner), Ok(SchemaType::Json { .. })) {
+                "anyOf"
+            } else {
+                "oneOf"
+            },
             Value::Array(vec![
                 obj([("type", Value::String("null".to_string()))]),
                 render_type(graph, inner, false, table, config),
@@ -830,6 +834,7 @@ pub(super) fn render_type(
             ("type", Value::String("string".to_string())),
             ("format", Value::String("uuid".to_string())),
         ]),
+        SchemaType::Json { .. } => Value::Object(Map::new()),
         SchemaType::Datetime { .. } => obj([
             ("type", Value::String("string".to_string())),
             ("format", Value::String("date-time".to_string())),

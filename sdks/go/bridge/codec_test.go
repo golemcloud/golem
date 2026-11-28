@@ -16,6 +16,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -48,6 +49,20 @@ func throughTheWire[T any](t *testing.T, name string, in T, enc Encoder[T], dec 
 }
 
 func TestLeavesRoundTrip(t *testing.T) {
+	for _, text := range []string{` {"b":[1,null,{"x":"y"}],"a":1.5} `, `[false,null]`, `"text"`, `1.5`, `true`, `null`, `"\ud83d\ude00"`, `{"\ud83d\ude00":"\\ud800"}`} {
+		throughTheWire(t, "json", json.RawMessage(text), EncodeJSON, DecodeJSON)
+	}
+	for _, text := range []string{"", "{", "1e400", `"\ud800"`, `{"key":"\udfff"}`, `{"\ud800":true}`} {
+		if _, err := DecodeJSON(schema.JsonValue{Value: text}); err == nil {
+			t.Fatalf("decoded %q", text)
+		}
+		if _, err := Encode(func() schema.SchemaValue { return EncodeJSON(json.RawMessage(text)) }); err == nil {
+			t.Fatalf("encoded %q", text)
+		}
+	}
+	if _, err := DecodeJSON(schema.StringValue{Value: `{}`}); err == nil {
+		t.Fatal("accepted string as JSON")
+	}
 	throughTheWire(t, "bool", true, EncodeBool, DecodeBool)
 	throughTheWire(t, "s8", int8(-8), EncodeS8, DecodeS8)
 	throughTheWire(t, "s64 extreme", int64(-9223372036854775808), EncodeS64, DecodeS64)

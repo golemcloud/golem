@@ -267,6 +267,8 @@ export class GraphEncoder {
         return { tag: "url-type", val: body.restrictions }
       case "uuid":
         return { tag: "uuid-type" }
+      case "json":
+        return { tag: "json-type" }
       case "datetime":
         return { tag: "datetime-type" }
       case "duration":
@@ -453,6 +455,8 @@ export function schemaGraphRootsFromWit(
         return { tag: "url", restrictions: body.val }
       case "uuid-type":
         return { tag: "uuid" }
+      case "json-type":
+        return { tag: "json" }
       case "datetime-type":
         return { tag: "datetime" }
       case "duration-type":
@@ -603,6 +607,7 @@ export function assertSchemaValueRepresentable(
         }
         return
       }
+      case "json":
       case "string":
       case "path":
       case "url":
@@ -899,6 +904,8 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: "url-value", val: v.value }
       case "uuid":
         return { tag: "uuid-value", val: v.value }
+      case "json":
+        return { tag: "json-value", val: v.value }
       case "datetime":
         return { tag: "datetime-value", val: v.value }
       case "duration":
@@ -1242,6 +1249,7 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
           fail("char-value.val must contain one Unicode scalar")
         }
         return
+      case "json-value":
       case "string-value":
       case "path-value":
       case "url-value":
@@ -1568,6 +1576,8 @@ export function schemaValueFromWit(
         return { tag: "url", value: n.val }
       case "uuid-value":
         return { tag: "uuid", value: n.val }
+      case "json-value":
+        return { tag: "json", value: n.val }
       case "datetime-value":
         if (
           typeof n.val.seconds !== "bigint" ||

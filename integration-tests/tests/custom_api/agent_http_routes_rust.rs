@@ -49,6 +49,10 @@ async fn build_test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext 
                 AgentTypeName("WebhookAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
+            (
+                AgentTypeName("RichTypesAgent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
         ],
         "golem_it_agent_sdk_rust_release",
         "golem-it:agent-sdk-rust",
@@ -77,6 +81,42 @@ async fn test_context_sqlite(
 }
 
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
+
+#[test]
+#[test_r::timeout("120s")]
+async fn native_json_body_and_openapi(
+    #[dimension(db)] ctx: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = ctx
+        .client
+        .get(ctx.base_url.join("/openapi.json")?)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let openapi: serde_json::Value = response.json().await?;
+    let schema = &openapi["paths"]["/rich-types/{name}/json"]["post"]["requestBody"]["content"]["application/json"]
+        ["schema"];
+    assert_eq!(schema["properties"]["value"], json!({}), "{openapi}");
+    for value in [
+        json!({"b": [1, null, {"x": "y"}], "a": 1.5}),
+        json!([false, 7]),
+        json!("text"),
+        json!(1.5),
+        json!(true),
+        json!(false),
+        json!(null),
+    ] {
+        let response = ctx
+            .client
+            .post(ctx.base_url.join("/rich-types/json-http/json")?)
+            .json(&json!({"value": value}))
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.json::<serde_json::Value>().await?, value);
+    }
+    Ok(())
+}
 
 #[test]
 #[test_r::timeout("120s")]

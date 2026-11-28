@@ -92,6 +92,7 @@ impl Serialize for BorrowedExternalValue<'_> {
             }
             SchemaValue::Char(v) => tagged!("char", v),
             SchemaValue::String(v) => tagged!("string", v),
+            SchemaValue::Json(v) => tagged!("json", v),
             SchemaValue::Uuid(v) => tagged!("uuid", v.hyphenated().to_string()),
             SchemaValue::Record { fields } => {
                 tagged!("record", object!(fields: BorrowedExternalValues(fields)))
@@ -376,6 +377,10 @@ pub(crate) fn decode_external_schema_value(value: &Value) -> Result<SchemaValue,
             .as_str()
             .map(|value| SchemaValue::String(value.to_string()))
             .ok_or_else(|| "string value must be a string".to_string()),
+        "json" => value
+            .as_str()
+            .map(|value| SchemaValue::Json(value.to_string()))
+            .ok_or_else(|| "json payload must be JSON text".to_string()),
         "uuid" => {
             let encoded = value
                 .as_str()
@@ -1069,6 +1074,7 @@ mod poem_impl {
             F64(ExternalFloat),
             Char(char),
             String(String),
+            Json(String),
             Uuid(uuid::Uuid),
             Record {
                 fields: Vec<ExternalSchemaValue>,
@@ -1341,6 +1347,10 @@ mod tests {
             (
                 SchemaValue::String("Golem".to_string()),
                 json!({"kind":"string","value":"Golem"}),
+            ),
+            (
+                SchemaValue::Json("{ \"x\": [1, null] }".to_string()),
+                json!({"kind":"json","value":"{ \"x\": [1, null] }"}),
             ),
             (
                 SchemaValue::Uuid("DD00721B-3329-4621-A01D-C71F02CD78C6".parse().unwrap()),

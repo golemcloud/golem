@@ -37,6 +37,7 @@ func everyTypeKind() []struct {
 		{`{"kind":"bool","value":{}}`, BoolType{}},
 		{`{"kind":"char","value":{}}`, CharType{}},
 		{`{"kind":"string","value":{}}`, StringType{}},
+		{`{"kind":"json","value":{}}`, JsonType{}},
 		{`{"kind":"s8","value":{}}`, S8Type{}},
 		{`{"kind":"s16","value":{}}`, S16Type{}},
 		{`{"kind":"s32","value":{}}`, S32Type{}},
@@ -204,7 +205,7 @@ func TestMetadataAndRolesSurvive(t *testing.T) {
 	if m.Deprecated == nil || *m.Deprecated != "use id" {
 		t.Fatalf("deprecated read as %v", m.Deprecated)
 	}
-	if m.Role == nil || *m.Role != RoleUnstructuredText {
+	if m.Role == nil || *m.Role != (Role{Tag: RoleUnstructuredText}) {
 		t.Fatalf("role read as %v", m.Role)
 	}
 }
@@ -217,8 +218,18 @@ func TestAnUnknownRoleKeepsItsName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if graph.Root.Metadata.Role == nil || *graph.Root.Metadata.Role != Role("chart") {
+	if graph.Root.Metadata.Role == nil || *graph.Root.Metadata.Role != (Role{Tag: RoleOther, Value: "chart"}) {
 		t.Fatalf("role read as %v", graph.Root.Metadata.Role)
+	}
+}
+
+func TestNamedA2ARolesStayDistinctFromOther(t *testing.T) {
+	for _, tag := range []RoleTag{RoleStandardMultimodal, RoleTaskUpdate} {
+		named := wireRole{Tag: string(tag)}.model()
+		other := wireRole{Tag: "other", Value: string(tag)}.model()
+		if named == other || named.Tag != tag || other.Tag != RoleOther || other.Value != string(tag) {
+			t.Fatalf("collapsed roles: %#v, %#v", named, other)
+		}
 	}
 }
 

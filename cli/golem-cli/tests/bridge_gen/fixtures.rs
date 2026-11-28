@@ -324,6 +324,35 @@ pub fn code_first_snippets_agent_types(language: GuestLanguage) -> Vec<AgentType
     })
 }
 
+pub fn json_agent(language: &str) -> AgentTypeSchema {
+    agent(
+        "JsonAgent",
+        language,
+        vec![field("initial", SchemaType::json())],
+        vec![
+            method(
+                "echo",
+                vec![field("value", SchemaType::json())],
+                Some(SchemaType::json()),
+            ),
+            method(
+                "nested",
+                vec![field("value", ref_to("json-holder"))],
+                Some(ref_to("json-holder")),
+            ),
+        ],
+        vec![def(
+            "json-holder",
+            SchemaType::record(vec![
+                named_field("payload", SchemaType::json()),
+                named_field("maybe", SchemaType::option(SchemaType::json())),
+                named_field("items", SchemaType::list(SchemaType::json())),
+            ]),
+        )],
+        AgentMode::Durable,
+    )
+}
+
 pub fn code_first_snippets_agent_type(
     language: GuestLanguage,
     agent_name: &str,

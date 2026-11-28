@@ -429,6 +429,7 @@ impl<TN: TypeName> TypeNaming<TN> {
                 | SchemaType::F64 { .. }
                 | SchemaType::Char { .. }
                 | SchemaType::String { .. }
+                | SchemaType::Json { .. }
                 | SchemaType::Text { .. }
                 | SchemaType::Binary { .. }
                 | SchemaType::Path { .. }

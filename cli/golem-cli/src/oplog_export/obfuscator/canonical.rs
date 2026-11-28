@@ -16,7 +16,7 @@
 //!
 //! The encoding depends only on the normalised value, never on the source type or on JSON.
 //! Field names, type names, `Text.language` and `Binary.mime_type` are not part of it, so
-//! `String`, `Text`, `Url`, `Path`, `Char` and `Uuid` texts share one encoding, every integer
+//! `String`, `Json`, `Text`, `Url`, `Path`, `Char` and `Uuid` texts share one encoding, every integer
 //! kind encodes as `i128`, and a typed value and its schema-less form encode the same way. Map
 //! entries are sorted by their encoded bytes; every other collection keeps its order.
 
@@ -118,6 +118,7 @@ fn write(out: &mut Vec<u8>, value: &SchemaValue) {
         SchemaValue::F64(v) => write_float(out, *v),
         SchemaValue::Char(c) => write_str(out, c.encode_utf8(&mut [0u8; 4])),
         SchemaValue::String(s) => write_str(out, s),
+        SchemaValue::Json(text) => write_str(out, text),
         SchemaValue::Text(text) => write_str(out, &text.text),
         SchemaValue::Path { path } => write_str(out, path),
         SchemaValue::Url { url } => write_str(out, url),

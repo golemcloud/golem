@@ -124,6 +124,7 @@ impl TypeName for GoTypeName {
             | SchemaType::F64 { .. }
             | SchemaType::Char { .. }
             | SchemaType::String { .. }
+            | SchemaType::Json { .. }
             | SchemaType::FixedList { .. }
             | SchemaType::Map { .. }
             | SchemaType::Text { .. }

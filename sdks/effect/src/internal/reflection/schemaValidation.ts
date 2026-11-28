@@ -18,6 +18,7 @@ import {
 } from "../schema-model/permissionCardHandle.js"
 import { assertSchemaValueRepresentable } from "../schema-model/wit.js"
 import type * as CoreTypes from "golem:core/types@2.0.0"
+import { parseJsonValue } from "../schema-model/json.js"
 
 /** Validate a WIT value tree without lifting or transferring any affine resources. */
 export function schemaValueTreeConforms(
@@ -80,6 +81,9 @@ export function schemaValueTreeConforms(
         break
       case "string-value":
         value = { tag: "string", value: node.val }
+        break
+      case "json-value":
+        value = { tag: "json", value: node.val }
         break
       case "record-value":
         value = { tag: "record", fields: node.val.map(child) }
@@ -278,6 +282,14 @@ export function schemaValueMatches(
       return value.tag === "char" && isUnicodeScalar(value.value)
     case "string":
       return value.tag === "string" && typeof value.value === "string"
+    case "json":
+      if (value.tag !== "json" || typeof value.value !== "string") return false
+      try {
+        parseJsonValue(value.value)
+        return true
+      } catch {
+        return false
+      }
     case "path":
       return (
         value.tag === "path" &&

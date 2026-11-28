@@ -500,6 +500,7 @@ private[golem] object ToolGraphs {
         case _: SchemaTypeBody.PermissionCardType => 35
         case _: SchemaTypeBody.FutureType         => 36
         case _: SchemaTypeBody.StreamType         => 37
+        case SchemaTypeBody.JsonType              => 38
       }
     kind(a) == kind(b)
   }

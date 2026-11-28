@@ -1,4 +1,36 @@
 ///|
+test "JSON fingerprint is distinct and reserved A2A roles fail acceptance" {
+  let graph = empty_graph()
+  let json = schema_type(Json)
+  assert_true(
+    schema_fingerprint_v1(graph, Some(json)) !=
+    schema_fingerprint_v1(graph, Some(schema_type(String))),
+  )
+  let digests : Array[String] = []
+  for role in [@types.Other("standard-multimodal"), @types.Other("task-update")] {
+    let root : SchemaType = {
+      body: Json,
+      metadata: { ..empty_metadata(), role: Some(role), },
+    }
+    let digest = schema_fingerprint_v1({ defs: [], root, }, Some(root)).to_hex()
+    assert_true(!digests.contains(digest))
+    digests.push(digest)
+  }
+  for role in [@types.StandardMultimodal, @types.TaskUpdate] {
+    let root : SchemaType = {
+      body: Json,
+      metadata: { ..empty_metadata(), role: Some(role), },
+    }
+    try schema_fingerprint_v1({ defs: [], root, }, Some(root)) catch {
+      InvalidSchema(_) => ()
+      error => fail(repr(error))
+    } noraise {
+      _ => fail("reserved A2A role accepted")
+    }
+  }
+}
+
+///|
 fn empty_graph() -> SchemaGraph {
   { defs: [], root: schema_type(String), }
 }

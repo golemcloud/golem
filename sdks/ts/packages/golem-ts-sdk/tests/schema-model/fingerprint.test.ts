@@ -15,6 +15,30 @@ const emptyGraph = (root: SchemaType): SchemaGraph => ({ defs: new Map(), root }
 const type = (body: SchemaType['body']): SchemaType => ({ body, metadata: emptyMetadata() });
 
 describe('SchemaFingerprintV1 golden vectors', () => {
+  test('JSON has a distinct fingerprint and reserved roles fail acceptance', () => {
+    const json = type({ tag: 'json' });
+    expect(hex(schemaFingerprintV1(emptyGraph(json), json))).not.toBe(
+      hex(schemaFingerprintV1(emptyGraph(type({ tag: 'string' })), type({ tag: 'string' }))),
+    );
+    const roles = [
+      { tag: 'standard-multimodal' },
+      { tag: 'task-update' },
+      { tag: 'other', val: 'StandardMultimodal' },
+      { tag: 'other', val: 'TaskUpdate' },
+    ] as const;
+    const digests = roles
+      .filter((role) => role.tag === 'other')
+      .map((role) => {
+        const root = { ...json, metadata: { ...emptyMetadata(), role } };
+        return hex(schemaFingerprintV1(emptyGraph(root), root));
+      });
+    expect(new Set(digests).size).toBe(2);
+    for (const role of roles.filter((role) => role.tag !== 'other')) {
+      const root = { ...json, metadata: { ...emptyMetadata(), role } };
+      expect(() => schemaFingerprintV1(emptyGraph(root), root)).toThrow(/no supported shape/);
+    }
+  });
+
   test.each([
     [
       'unit',

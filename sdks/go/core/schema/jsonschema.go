@@ -417,6 +417,13 @@ func (r Ref) renderBody(body SchemaTypeBody) (obj, error) {
 		if err != nil {
 			return nil, err
 		}
+		body, err := r.At(b.Inner).body()
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := body.(JsonType); ok {
+			return obj{"anyOf": []any{obj{"type": "null"}, inner}}, nil
+		}
 		return obj{"oneOf": []any{obj{"type": "null"}, inner}}, nil
 
 	case ResultType:
@@ -466,6 +473,8 @@ func (r Ref) renderBody(body SchemaTypeBody) (obj, error) {
 
 	case UUIDType:
 		return obj{"type": "string", "format": "uuid"}, nil
+	case JsonType:
+		return obj{}, nil
 
 	case QuantityType:
 		return quantitySchema(b.Spec), nil

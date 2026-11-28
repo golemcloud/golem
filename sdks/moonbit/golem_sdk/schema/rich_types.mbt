@@ -1,4 +1,30 @@
 ///|
+pub impl IntoSchema for Json with fn type_id() {
+  "json"
+}
+
+///|
+pub impl IntoSchema for Json with fn register_in(_builder) {
+  @model.schema_type(@model.Json)
+}
+
+///|
+pub impl IntoSchema for Json with fn to_value(self) {
+  @model.SchemaValue::Json(self.stringify())
+}
+
+///|
+pub impl FromSchema for Json with fn from_value(value) {
+  match value {
+    @model.SchemaValue::Json(text) =>
+      @json.parse(text) catch {
+        error => raise FromSchemaError::Custom(error.to_string())
+      }
+    _ => raise FromSchemaError::Custom("expected JSON value")
+  }
+}
+
+///|
 pub(all) struct Path {
   value : String
 } derive(Debug, Eq, Hash)

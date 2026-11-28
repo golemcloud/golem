@@ -1,4 +1,25 @@
 ///|
+test "JSON leaf projects inline and optional JSON uses anyOf" {
+  let schema = test_schema(@model.Json)
+  assert_eq(schema.to_json_schema(include_draft_marker=false), Json::object({}))
+  for
+    value in (
+      [{ "x": [1, null] }, [false, 2], null, false, 1.5, "text"] : Array[Json]) {
+    assert_eq(schema.unpack_json(schema.pack_json(value)), value)
+  }
+  let optional = test_schema(Option(@model.schema_type(@model.Json)))
+  assert_eq(optional.to_json_schema(include_draft_marker=false), {
+    "anyOf": [{ "type": "null" }, {}],
+  })
+  try schema.unpack_json(@model.SchemaValue::Json("{")) catch {
+    Schema(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected malformed JSON rejection")
+  }
+}
+
+///|
 fn test_schema(body : @model.SchemaTypeBody) -> SchemaRef {
   SchemaRef::new({ defs: [], root: @model.schema_type(body), })
 }

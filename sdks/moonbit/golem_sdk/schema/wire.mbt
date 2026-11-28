@@ -844,6 +844,22 @@ pub impl IntoWire for Uuid with fn append_wire(self, encoder) {
 }
 
 ///|
+pub impl IntoWire for Json with fn append_wire(self, encoder) {
+  encoder.push(@types.SchemaValueNode::JsonValue(self.stringify()))
+}
+
+///|
+pub impl FromWire for Json with fn read_wire(tree, index) {
+  match wire_node(tree, index) {
+    @types.SchemaValueNode::JsonValue(text) =>
+      @json.parse(text) catch {
+        error => raise WireError::Invalid(error.to_string())
+      }
+    _ => raise WireError::Invalid("expected JSON value")
+  }
+}
+
+///|
 pub impl FromWire for Uuid with fn read_wire(tree, index) {
   match wire_node(tree, index) {
     @types.SchemaValueNode::UuidValue(value) => Uuid::from_wit(value)

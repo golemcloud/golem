@@ -76,6 +76,7 @@ object WitSchemaTypeBody {
   final case class F64Type(restrictions: Option[NumericRestrictions] = None) extends WitSchemaTypeBody
   case object CharType                                                       extends WitSchemaTypeBody
   case object StringType                                                     extends WitSchemaTypeBody
+  case object JsonType                                                       extends WitSchemaTypeBody
 
   final case class RecordType(fields: Vector[WitNamedFieldType])  extends WitSchemaTypeBody
   final case class VariantType(cases: Vector[WitVariantCaseType]) extends WitSchemaTypeBody
@@ -158,6 +159,7 @@ object WitSchemaValueNode {
   final case class PathValue(value: String)                        extends WitSchemaValueNode
   final case class UrlValue(value: String)                         extends WitSchemaValueNode
   final case class UuidValue(value: UUID)                          extends WitSchemaValueNode
+  final case class JsonValue(value: String)                        extends WitSchemaValueNode
   final case class DatetimeValue(value: Datetime)                  extends WitSchemaValueNode
   final case class DurationValue(payload: WitDurationValuePayload) extends WitSchemaValueNode
   final case class QuantityValueNode(value: QuantityValue)         extends WitSchemaValueNode

@@ -8,6 +8,28 @@
 //     uncommitted reservation, structural cycle).
 
 ///|
+test "JSON transport retains raw text and named role tags" {
+  for text in [" {\"x\": [1, null]} ", "null", "{"] {
+    assert_eq(rt_value(SchemaValue::Json(text)), SchemaValue::Json(text))
+  }
+  assert_eq(
+    rt_type(schema_type(SchemaTypeBody::Json)),
+    schema_type(SchemaTypeBody::Json),
+  )
+  for
+    role in [
+      @types.StandardMultimodal,
+      @types.TaskUpdate,
+      @types.Other("standard-multimodal"),
+      @types.Other("task-update"),
+    ] {
+    let metadata = { ..empty_metadata(), role: Some(role), }
+    let ty : SchemaType = { body: SchemaTypeBody::Json, metadata, }
+    assert_eq(rt_type(ty), ty)
+  }
+}
+
+///|
 fn test_resource_drops() -> SchemaValueResourceDrops {
   {
     drop_secret: fn(_) {  },

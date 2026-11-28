@@ -188,6 +188,8 @@ func sampleValue(t *testing.T, tag uint8, leaf int32) types.SchemaValueNode {
 		return types.MakeSchemaValueNodeCharValue('a')
 	case types.SchemaValueNodeStringValue:
 		return types.MakeSchemaValueNodeStringValue("s")
+	case types.SchemaValueNodeJsonValue:
+		return types.MakeSchemaValueNodeJsonValue(`{"x":[null,1]}`)
 	case types.SchemaValueNodeRecordValue:
 		return types.MakeSchemaValueNodeRecordValue([]int32{leaf})
 	case types.SchemaValueNodeVariantValue:

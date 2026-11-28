@@ -250,6 +250,7 @@ fn schema_type_contains_host_managed_capability(
         | SchemaType::F64 { .. }
         | SchemaType::Char { .. }
         | SchemaType::String { .. }
+        | SchemaType::Json { .. }
         | SchemaType::Enum { .. }
         | SchemaType::Flags { .. }
         | SchemaType::Text { .. }

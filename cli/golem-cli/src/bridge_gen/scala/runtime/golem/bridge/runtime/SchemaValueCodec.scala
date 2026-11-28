@@ -83,6 +83,7 @@ object SchemaValueCodec {
       case F64Value(v)                  => node("f64") { output.append(floatJson(v).render); () }
       case CharValue(v)                 => node("char")(string(charString(v)))
       case StringValue(v)               => node("string")(string(validString(v)))
+      case JsonValue(v)                 => node("json")(string(validString(v)))
       case RecordValue(values)          => children("record", "fields", values)
       case TupleValue(values)           => children("tuple", "elements", values)
       case ListValue(values)            => children("list", "elements", values)
@@ -177,6 +178,7 @@ object SchemaValueCodec {
     case F64Value(v)    => node("f64", floatJson(v))
     case CharValue(v)   => node("char", Json.string(charString(v)))
     case StringValue(v) => node("string", Json.string(validString(v)))
+    case JsonValue(v)   => node("json", Json.string(validString(v)))
 
     case RecordValue(fields) =>
       node("record", Json.obj("fields" -> Json.arr(fields.map(toJson).toVector)))
@@ -417,6 +419,10 @@ object SchemaValueCodec {
     case StringValue(x) => x
     case o              => mismatch("string", o)
   }
+  def asJson(v: SchemaValue): Json = v match {
+    case JsonValue(x) => Json.parse(x).fold(error => throw BridgeException(error), identity)
+    case o           => mismatch("json", o)
+  }
   def asPath(v: SchemaValue): GolemPath = v match {
     case PathValue(x) => GolemPath(x)
     case o            => mismatch("path", o)
@@ -603,6 +609,7 @@ object SchemaValueCodec {
     case "f64"    => floatValue(value).map(F64Value(_))
     case "char"   => Json.asString(value).flatMap(charValue)
     case "string" => decodedText("string")(value).map(StringValue(_))
+    case "json"   => decodedText("json")(value).map(JsonValue(_))
 
     case "record" =>
       exactObject(value, Set("fields"), "record").flatMap(member(_, "fields")).flatMap(Json.asArray).flatMap { items =>

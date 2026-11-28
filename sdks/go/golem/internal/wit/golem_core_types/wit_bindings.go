@@ -633,8 +633,12 @@ const (
 	RoleUnstructuredText uint8 = 1
 	// `variant { inline: binary, url: url }` ergonomic unstructured-binary wrapper.
 	RoleUnstructuredBinary uint8 = 2
+	// Reserved for the standard A2A multimodal value.
+	RoleStandardMultimodal uint8 = 3
+	// Reserved for the standard A2A task-update value.
+	RoleTaskUpdate uint8 = 4
 	// Any other producer-defined role, preserved verbatim.
-	RoleOther uint8 = 3
+	RoleOther uint8 = 5
 )
 
 // Open registry; unknown roles fall back to structural handling.
@@ -662,6 +666,12 @@ func MakeRoleUnstructuredText() Role {
 }
 func MakeRoleUnstructuredBinary() Role {
 	return Role{RoleUnstructuredBinary, nil}
+}
+func MakeRoleStandardMultimodal() Role {
+	return Role{RoleStandardMultimodal, nil}
+}
+func MakeRoleTaskUpdate() Role {
+	return Role{RoleTaskUpdate, nil}
 }
 func MakeRoleOther(value string) Role {
 	return Role{RoleOther, value}
@@ -1040,18 +1050,19 @@ const (
 	SchemaTypeBodyPathType     uint8 = 26
 	SchemaTypeBodyUrlType      uint8 = 27
 	SchemaTypeBodyUuidType     uint8 = 28
-	SchemaTypeBodyDatetimeType uint8 = 29
-	SchemaTypeBodyDurationType uint8 = 30
-	SchemaTypeBodyQuantityType uint8 = 31
+	SchemaTypeBodyJsonType     uint8 = 29
+	SchemaTypeBodyDatetimeType uint8 = 30
+	SchemaTypeBodyDurationType uint8 = 31
+	SchemaTypeBodyQuantityType uint8 = 32
 	// --- Discriminated union (closed, inferred-tag) ---
-	SchemaTypeBodyUnionType uint8 = 32
+	SchemaTypeBodyUnionType uint8 = 33
 	// --- Capability nodes ---
-	SchemaTypeBodySecretType         uint8 = 33
-	SchemaTypeBodyQuotaTokenType     uint8 = 34
-	SchemaTypeBodyPermissionCardType uint8 = 35
+	SchemaTypeBodySecretType         uint8 = 34
+	SchemaTypeBodyQuotaTokenType     uint8 = 35
+	SchemaTypeBodyPermissionCardType uint8 = 36
 	// --- WASI P3 stubs (parseable only; no semantics yet) ---
-	SchemaTypeBodyFutureType uint8 = 36
-	SchemaTypeBodyStreamType uint8 = 37
+	SchemaTypeBodyFutureType uint8 = 37
+	SchemaTypeBodyStreamType uint8 = 38
 )
 
 // The structural body of a `schema-type-node`.
@@ -1362,6 +1373,9 @@ func MakeSchemaTypeBodyUrlType(value UrlRestrictions) SchemaTypeBody {
 func MakeSchemaTypeBodyUuidType() SchemaTypeBody {
 	return SchemaTypeBody{SchemaTypeBodyUuidType, nil}
 }
+func MakeSchemaTypeBodyJsonType() SchemaTypeBody {
+	return SchemaTypeBody{SchemaTypeBodyJsonType, nil}
+}
 func MakeSchemaTypeBodyDatetimeType() SchemaTypeBody {
 	return SchemaTypeBody{SchemaTypeBodyDatetimeType, nil}
 }
@@ -1523,21 +1537,23 @@ const (
 	SchemaValueNodeOptionValue    uint8 = 21
 	SchemaValueNodeResultValue    uint8 = 22
 	// Rich semantic
-	SchemaValueNodeTextValue         uint8 = 23
-	SchemaValueNodeBinaryValue       uint8 = 24
-	SchemaValueNodePathValue         uint8 = 25
-	SchemaValueNodeUrlValue          uint8 = 26
-	SchemaValueNodeUuidValue         uint8 = 27
-	SchemaValueNodeDatetimeValue     uint8 = 28
-	SchemaValueNodeDurationValue     uint8 = 29
-	SchemaValueNodeQuantityValueNode uint8 = 30
+	SchemaValueNodeTextValue   uint8 = 23
+	SchemaValueNodeBinaryValue uint8 = 24
+	SchemaValueNodePathValue   uint8 = 25
+	SchemaValueNodeUrlValue    uint8 = 26
+	SchemaValueNodeUuidValue   uint8 = 27
+	// JSON text; accepts every JSON top-level value.
+	SchemaValueNodeJsonValue         uint8 = 28
+	SchemaValueNodeDatetimeValue     uint8 = 29
+	SchemaValueNodeDurationValue     uint8 = 30
+	SchemaValueNodeQuantityValueNode uint8 = 31
 	// Discriminated union: tag is matched against schema branches.
-	SchemaValueNodeUnionValue uint8 = 31
+	SchemaValueNodeUnionValue uint8 = 32
 	// Capability nodes
-	SchemaValueNodeSecretValue          uint8 = 32
-	SchemaValueNodeQuotaTokenHandle     uint8 = 33
-	SchemaValueNodePermissionCardHandle uint8 = 34
-	SchemaValueNodeStreamValue          uint8 = 35
+	SchemaValueNodeSecretValue          uint8 = 33
+	SchemaValueNodeQuotaTokenHandle     uint8 = 34
+	SchemaValueNodePermissionCardHandle uint8 = 35
+	SchemaValueNodeStreamValue          uint8 = 36
 )
 
 type SchemaValueNode struct {
@@ -1717,6 +1733,12 @@ func (self SchemaValueNode) UuidValue() Uuid {
 	}
 	return self.value.(Uuid)
 }
+func (self SchemaValueNode) JsonValue() string {
+	if self.tag != SchemaValueNodeJsonValue {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
 func (self SchemaValueNode) DatetimeValue() Datetime {
 	if self.tag != SchemaValueNodeDatetimeValue {
 		panic("tag mismatch")
@@ -1849,6 +1871,9 @@ func MakeSchemaValueNodeUrlValue(value string) SchemaValueNode {
 }
 func MakeSchemaValueNodeUuidValue(value Uuid) SchemaValueNode {
 	return SchemaValueNode{SchemaValueNodeUuidValue, value}
+}
+func MakeSchemaValueNodeJsonValue(value string) SchemaValueNode {
+	return SchemaValueNode{SchemaValueNodeJsonValue, value}
 }
 func MakeSchemaValueNodeDatetimeValue(value Datetime) SchemaValueNode {
 	return SchemaValueNode{SchemaValueNodeDatetimeValue, value}
@@ -2517,38 +2542,43 @@ func wasm_lift_1_t78(src unsafe.Pointer) SchemaValueNode {
 		variant = MakeSchemaValueNodeUuidValue(result13)
 
 	case 28:
-		result14 := wasm_lift_1_t5(unsafe.Add(unsafe.Pointer(src), 8))
+		value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
 
-		variant = MakeSchemaValueNodeDatetimeValue(result14)
+		variant = MakeSchemaValueNodeJsonValue(value14)
 
 	case 29:
-		result15 := wasm_lift_1_t69(unsafe.Add(unsafe.Pointer(src), 8))
+		result15 := wasm_lift_1_t5(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = MakeSchemaValueNodeDurationValue(result15)
+		variant = MakeSchemaValueNodeDatetimeValue(result15)
 
 	case 30:
-		result16 := wasm_lift_1_t42(unsafe.Add(unsafe.Pointer(src), 8))
+		result16 := wasm_lift_1_t69(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = MakeSchemaValueNodeQuantityValueNode(result16)
+		variant = MakeSchemaValueNodeDurationValue(result16)
 
 	case 31:
-		result17 := wasm_lift_1_t70(unsafe.Add(unsafe.Pointer(src), 8))
+		result17 := wasm_lift_1_t42(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = MakeSchemaValueNodeUnionValue(result17)
+		variant = MakeSchemaValueNodeQuantityValueNode(result17)
 
 	case 32:
+		result18 := wasm_lift_1_t70(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = MakeSchemaValueNodeSecretValue(SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+		variant = MakeSchemaValueNodeUnionValue(result18)
 
 	case 33:
 
-		variant = MakeSchemaValueNodeQuotaTokenHandle(QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+		variant = MakeSchemaValueNodeSecretValue(SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
 
 	case 34:
 
-		variant = MakeSchemaValueNodePermissionCardHandle(PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+		variant = MakeSchemaValueNodeQuotaTokenHandle(QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
 
 	case 35:
+
+		variant = MakeSchemaValueNodePermissionCardHandle(PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
+
+	case 36:
 
 		variant = MakeSchemaValueNodeStreamValue(SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
 
@@ -2797,29 +2827,37 @@ func wasm_restore_lower_1_t78(pinner *runtime.Pinner, value SchemaValueNode, dst
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(27))
 		wasm_lower_1_t4(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
+	case SchemaValueNodeJsonValue:
+		payload := value.JsonValue()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
+		utf819 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf819)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(utf819)))
+
 	case SchemaValueNodeDatetimeValue:
 		payload := value.DatetimeValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
 		wasm_lower_1_t5(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaValueNodeDurationValue:
 		payload := value.DurationValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
 		wasm_lower_1_t69(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaValueNodeQuantityValueNode:
 		payload := value.QuantityValueNode()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
 		wasm_lower_1_t42(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaValueNodeUnionValue:
 		payload := value.UnionValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
 		wasm_lower_1_t70(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaValueNodeSecretValue:
 		payload := value.SecretValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
 		resource := payload
 		handle := resource.TakeHandle()
 		lifters = append(lifters, func() {
@@ -2829,33 +2867,33 @@ func wasm_restore_lower_1_t78(pinner *runtime.Pinner, value SchemaValueNode, dst
 
 	case SchemaValueNodeQuotaTokenHandle:
 		payload := value.QuotaTokenHandle()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
-		resource19 := payload
-		handle20 := resource19.TakeHandle()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
+		resource20 := payload
+		handle21 := resource20.TakeHandle()
 		lifters = append(lifters, func() {
-			resource19.SetHandle(handle20)
+			resource20.SetHandle(handle21)
 		})
-		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle20
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle21
 
 	case SchemaValueNodePermissionCardHandle:
 		payload := value.PermissionCardHandle()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
-		resource21 := payload
-		handle22 := resource21.TakeHandle()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
+		resource22 := payload
+		handle23 := resource22.TakeHandle()
 		lifters = append(lifters, func() {
-			resource21.SetHandle(handle22)
+			resource22.SetHandle(handle23)
 		})
-		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle22
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle23
 
 	case SchemaValueNodeStreamValue:
 		payload := value.StreamValue()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
-		resource23 := payload
-		handle24 := resource23.TakeHandle()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
+		resource24 := payload
+		handle25 := resource24.TakeHandle()
 		lifters = append(lifters, func() {
-			resource23.SetHandle(handle24)
+			resource24.SetHandle(handle25)
 		})
-		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle24
+		*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = handle25
 
 	default:
 		panic("unreachable")
@@ -3570,38 +3608,42 @@ func wasm_lift_1_t57(src unsafe.Pointer) SchemaTypeBody {
 
 	case 29:
 
-		variant = MakeSchemaTypeBodyDatetimeType()
+		variant = MakeSchemaTypeBodyJsonType()
 
 	case 30:
 
-		variant = MakeSchemaTypeBodyDurationType()
+		variant = MakeSchemaTypeBodyDatetimeType()
 
 	case 31:
+
+		variant = MakeSchemaTypeBodyDurationType()
+
+	case 32:
 		result34 := wasm_lift_1_t44(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeSchemaTypeBodyQuantityType(result34)
 
-	case 32:
+	case 33:
 		result35 := wasm_lift_1_t49(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeSchemaTypeBodyUnionType(result35)
 
-	case 33:
+	case 34:
 		result36 := wasm_lift_1_t50(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeSchemaTypeBodySecretType(result36)
 
-	case 34:
+	case 35:
 		result37 := wasm_lift_1_t51(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeSchemaTypeBodyQuotaTokenType(result37)
 
-	case 35:
+	case 36:
 		result38 := wasm_lift_1_t52(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeSchemaTypeBodyPermissionCardType(result38)
 
-	case 36:
+	case 37:
 		var option39 witTypes.Option[int32]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
 		case 0:
@@ -3616,7 +3658,7 @@ func wasm_lift_1_t57(src unsafe.Pointer) SchemaTypeBody {
 
 		variant = MakeSchemaTypeBodyFutureType(option39)
 
-	case 37:
+	case 38:
 		var option40 witTypes.Option[int32]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))) {
 		case 0:
@@ -4017,42 +4059,46 @@ func wasm_lower_1_t57(pinner *runtime.Pinner, value SchemaTypeBody, dst unsafe.P
 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
 
-	case SchemaTypeBodyDatetimeType:
+	case SchemaTypeBodyJsonType:
 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
 
-	case SchemaTypeBodyDurationType:
+	case SchemaTypeBodyDatetimeType:
 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
 
+	case SchemaTypeBodyDurationType:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+
 	case SchemaTypeBodyQuantityType:
 		payload := value.QuantityType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
 		wasm_lower_1_t44(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaTypeBodyUnionType:
 		payload := value.UnionType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
 		wasm_lower_1_t49(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaTypeBodySecretType:
 		payload := value.SecretType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
 		wasm_lower_1_t50(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaTypeBodyQuotaTokenType:
 		payload := value.QuotaTokenType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
 		wasm_lower_1_t51(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaTypeBodyPermissionCardType:
 		payload := value.PermissionCardType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(35))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
 		wasm_lower_1_t52(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case SchemaTypeBodyFutureType:
 		payload := value.FutureType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(37))
 
 		switch payload.Tag() {
 		case witTypes.OptionNone:
@@ -4069,7 +4115,7 @@ func wasm_lower_1_t57(pinner *runtime.Pinner, value SchemaTypeBody, dst unsafe.P
 
 	case SchemaTypeBodyStreamType:
 		payload := value.StreamType()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(37))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(38))
 
 		switch payload.Tag() {
 		case witTypes.OptionNone:
@@ -4576,6 +4622,14 @@ func wasm_lift_1_t21(src unsafe.Pointer) Role {
 		variant = MakeRoleUnstructuredBinary()
 
 	case 3:
+
+		variant = MakeRoleStandardMultimodal()
+
+	case 4:
+
+		variant = MakeRoleTaskUpdate()
+
+	case 5:
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 
 		variant = MakeRoleOther(value0)
@@ -5095,9 +5149,17 @@ func wasm_lower_1_t21(pinner *runtime.Pinner, value Role, dst unsafe.Pointer) {
 
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
 
+	case RoleStandardMultimodal:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+
+	case RoleTaskUpdate:
+
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
+
 	case RoleOther:
 		payload := value.Other()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
 		utf8 := unsafe.Pointer(unsafe.StringData(payload))
 		pinner.Pin(utf8)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = uint32(uint32(len(payload)))

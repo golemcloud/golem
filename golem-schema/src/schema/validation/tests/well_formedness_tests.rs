@@ -24,6 +24,106 @@ use crate::schema::validation::well_formedness::{SchemaError, validate_graph, va
 use proptest::prelude::*;
 use test_r::test;
 
+#[test]
+fn optional_json_uses_null_as_none_in_canonical_json() {
+    use crate::schema::SchemaValue;
+    use crate::schema::render::{from_json_value, to_json_value};
+    for graph in [
+        SchemaGraph::anonymous(SchemaType::option(SchemaType::json())),
+        SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: TypeId::new("json"),
+                name: None,
+                body: SchemaType::json(),
+            }],
+            root: SchemaType::option(SchemaType::ref_to(TypeId::new("json"))),
+        },
+    ] {
+        validate_graph(&graph).unwrap();
+        let present_null = SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::Json("null".into()))),
+        };
+        let json = to_json_value(&graph, &graph.root, &present_null).unwrap();
+        assert_eq!(json, serde_json::Value::Null);
+        assert_eq!(
+            from_json_value(&graph, &graph.root, &json).unwrap(),
+            SchemaValue::Option { inner: None }
+        );
+    }
+}
+
+#[test]
+fn reserved_a2a_roles_reject_every_shape_and_location() {
+    use crate::schema::{MetadataEnvelope, Role};
+
+    for role in [Role::StandardMultimodal, Role::TaskUpdate] {
+        let metadata = MetadataEnvelope {
+            role: Some(role.clone()),
+            ..Default::default()
+        };
+        for ty in [
+            SchemaType::record(vec![]),
+            SchemaType::list(SchemaType::variant(vec![VariantCaseType {
+                name: "custom".into(),
+                payload: Some(SchemaType::string()),
+                metadata: Default::default(),
+            }])),
+            SchemaType::json(),
+        ] {
+            let marked = ty.clone().with_metadata(metadata.clone());
+            for root in [marked.clone(), SchemaType::list(marked)] {
+                assert!(validate_graph(&SchemaGraph::anonymous(root)).is_err());
+            }
+            let graph = SchemaGraph {
+                defs: vec![SchemaTypeDef {
+                    id: TypeId::new("value"),
+                    name: None,
+                    body: ty.clone(),
+                }],
+                root: SchemaType::ref_to(TypeId::new("value")).with_metadata(metadata.clone()),
+            };
+            assert!(validate_graph(&graph).is_err());
+            let graph = SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+                name: "value".into(),
+                body: ty.clone(),
+                metadata: metadata.clone(),
+            }]));
+            assert!(validate_graph(&graph).is_err());
+            let graph = SchemaGraph {
+                defs: vec![SchemaTypeDef {
+                    id: TypeId::new("value"),
+                    name: None,
+                    body: ty.clone().with_metadata(metadata.clone()),
+                }],
+                root: SchemaType::ref_to(TypeId::new("value")),
+            };
+            assert!(validate_graph(&graph).is_err());
+            for root in [
+                SchemaType::variant(vec![VariantCaseType {
+                    name: "value".into(),
+                    payload: None,
+                    metadata: metadata.clone(),
+                }]),
+                SchemaType::union(UnionSpec {
+                    branches: vec![UnionBranch {
+                        tag: "value".into(),
+                        body: SchemaType::string(),
+                        metadata: metadata.clone(),
+                        discriminator: DiscriminatorRule::Prefix { prefix: "v".into() },
+                    }],
+                }),
+            ] {
+                assert!(validate_graph(&SchemaGraph::anonymous(root)).is_err());
+            }
+            let other = ty.with_metadata(MetadataEnvelope {
+                role: Some(Role::Other(format!("{role:?}"))),
+                ..Default::default()
+            });
+            validate_graph(&SchemaGraph::anonymous(other)).unwrap();
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 

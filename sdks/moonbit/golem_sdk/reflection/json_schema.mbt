@@ -205,6 +205,28 @@ fn schema_wide_integer(
 }
 
 ///|
+fn resolves_to_json(
+  graph : @model.SchemaGraph,
+  schema : @model.SchemaType,
+  visited : Map[String, Unit],
+) -> Bool {
+  match schema.body {
+    Json => true
+    Ref(id) =>
+      if visited.contains(id) {
+        false
+      } else {
+        visited[id] = ()
+        match graph.defs.iter().find_first(definition => definition.id == id) {
+          Some(definition) => resolves_to_json(graph, definition.body, visited)
+          None => false
+        }
+      }
+    _ => false
+  }
+}
+
+///|
 fn schema_resolves_to_option(
   graph : @model.SchemaGraph,
   schema : @model.SchemaType,
@@ -474,10 +496,21 @@ fn schema_json(graph : @model.SchemaGraph, schema : @model.SchemaType) -> Json {
         "type": Json::string("array"),
         "items": schema_pair(schema_json(graph, key), schema_json(graph, value)),
       })
-    Option(element) =>
-      Json::object({
-        "oneOf": schema_array([schema_type("null"), schema_json(graph, element)]),
-      })
+    Option(element) => {
+      let keyword = if resolves_to_json(graph, element, Map([])) {
+        "anyOf"
+      } else {
+        "oneOf"
+      }
+      Json::object(
+        Map::from_array([
+          (
+            keyword,
+            schema_array([schema_type("null"), schema_json(graph, element)]),
+          ),
+        ]),
+      )
+    }
     Result(ok, err) =>
       Json::object({
         "oneOf": schema_array([
@@ -609,6 +642,7 @@ fn schema_json(graph : @model.SchemaGraph, schema : @model.SchemaType) -> Json {
       }
       Json::object(fields)
     }
+    Json => Json::object({})
     Uuid =>
       Json::object({
         "type": Json::string("string"),

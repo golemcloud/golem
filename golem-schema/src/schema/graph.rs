@@ -150,6 +150,7 @@ impl SchemaGraph {
                 | SchemaType::Path { .. }
                 | SchemaType::Url { .. }
                 | SchemaType::Uuid { .. }
+                | SchemaType::Json { .. }
                 | SchemaType::Datetime { .. }
                 | SchemaType::Duration { .. }
                 | SchemaType::Quantity { .. }
@@ -444,6 +445,7 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
         | SchemaType::Uuid { .. }
+        | SchemaType::Json { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }

@@ -13,6 +13,7 @@ trait WeatherAgentSingleton {
     fn get_weather_report_for_city_text(&self, city: String) -> UnstructuredText;
     fn get_snow_fall_image_for_city(&self, city: String) -> UnstructuredBinary<String>;
     fn get_lat_long_for_city(&self, city: String) -> LocationDetails;
+    fn echo_json(&self, value: serde_json::Value) -> serde_json::Value;
 }
 
 struct MyStaticWeatherToolImpl;
@@ -25,6 +26,10 @@ impl WeatherAgentSingleton for MyStaticWeatherToolImpl {
 
     fn get_weather_report_for_city(&self, city: String) -> String {
         format!("This is a weather report for {}.", city)
+    }
+
+    fn echo_json(&self, value: serde_json::Value) -> serde_json::Value {
+        value
     }
 
     fn get_weather_report_for_city_with_images(&self, city: String) -> Multimodal {

@@ -288,6 +288,8 @@ object SchemaWireInterop {
       case Role.Multimodal         => JsRole.multimodal
       case Role.UnstructuredText   => JsRole.unstructuredText
       case Role.UnstructuredBinary => JsRole.unstructuredBinary
+      case Role.StandardMultimodal => JsRole.standardMultimodal
+      case Role.TaskUpdate         => JsRole.taskUpdate
       case Role.Other(name)        => JsRole.other(name)
     }
 
@@ -296,6 +298,8 @@ object SchemaWireInterop {
       case "multimodal"          => Role.Multimodal
       case "unstructured-text"   => Role.UnstructuredText
       case "unstructured-binary" => Role.UnstructuredBinary
+      case "standard-multimodal" => Role.StandardMultimodal
+      case "task-update"         => Role.TaskUpdate
       case "other"               => Role.Other(valOf(j).asInstanceOf[String])
       case other                 => Role.Other(other)
     }
@@ -553,6 +557,7 @@ object SchemaWireInterop {
       case PathType(s)           => JsSchemaTypeBody.pathType(pathToJs(s))
       case UrlType(r)            => JsSchemaTypeBody.urlType(urlRToJs(r))
       case UuidType              => JsSchemaTypeBody.uuidType
+      case JsonType              => JsSchemaTypeBody.jsonType
       case DatetimeType          => JsSchemaTypeBody.datetimeType
       case DurationType          => JsSchemaTypeBody.durationType
       case QuantityType(s)       => JsSchemaTypeBody.quantityType(quantToJs(s))
@@ -603,6 +608,7 @@ object SchemaWireInterop {
       case "path-type"            => PathType(pathFromJs(valOf(j).asInstanceOf[JsPathSpec]))
       case "url-type"             => UrlType(urlRFromJs(valOf(j).asInstanceOf[JsUrlRestrictions]))
       case "uuid-type"            => UuidType
+      case "json-type"            => JsonType
       case "datetime-type"        => DatetimeType
       case "duration-type"        => DurationType
       case "quantity-type"        => QuantityType(quantFromJs(valOf(j).asInstanceOf[JsQuantitySpec]))
@@ -771,6 +777,7 @@ object SchemaWireInterop {
       case PathValue(v)     => JsSchemaValueNode.pathValue(v)
       case UrlValue(v)      => JsSchemaValueNode.urlValue(v)
       case UuidValue(v)     => JsSchemaValueNode.uuidValue(JsUuid.fromUuid(v))
+      case JsonValue(v)     => JsSchemaValueNode.jsonValue(v)
       case DatetimeValue(v) => JsSchemaValueNode.datetimeValue(datetimeToJs(v))
       case DurationValue(p) =>
         JsSchemaValueNode.durationValue(JsDurationValuePayload(js.BigInt(p.nanoseconds.toString)))
@@ -1141,6 +1148,7 @@ object SchemaWireInterop {
       case "path-value"     => PathValue(valOf(j).asInstanceOf[String])
       case "url-value"      => UrlValue(valOf(j).asInstanceOf[String])
       case "uuid-value"     => UuidValue(JsUuid.toUuid(valOf(j).asInstanceOf[JsUuid]))
+      case "json-value"     => JsonValue(valOf(j).asInstanceOf[String])
       case "datetime-value" => DatetimeValue(datetimeFromJs(valOf(j).asInstanceOf[JsDatetime]))
       case "duration-value" =>
         val p = valOf(j).asInstanceOf[JsDurationValuePayload]

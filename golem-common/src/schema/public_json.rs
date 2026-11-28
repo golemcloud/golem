@@ -1107,6 +1107,7 @@ fn inspect_schema_value(
         | SchemaValue::U64(_)
         | SchemaValue::Char(_)
         | SchemaValue::String(_)
+        | SchemaValue::Json(_)
         | SchemaValue::Uuid(_)
         | SchemaValue::Secret(_)
         | SchemaValue::QuotaToken(_)
@@ -1196,7 +1197,7 @@ fn external_value_charge(
         SchemaValue::S32(_) | SchemaValue::U32(_) | SchemaValue::F32(_) => 4,
         SchemaValue::S64(_) | SchemaValue::U64(_) | SchemaValue::F64(_) => 8,
         SchemaValue::Char(value) => value.len_utf8() as u64,
-        SchemaValue::String(value) => value.len() as u64,
+        SchemaValue::String(value) | SchemaValue::Json(value) => value.len() as u64,
         SchemaValue::Uuid(_) => 36,
         SchemaValue::Record { fields } => collection(fields.len())? + sum(fields)?,
         SchemaValue::Variant(value) => {
@@ -1467,7 +1468,7 @@ fn scalar_payload_charge(value: &SchemaValue, json: &Value) -> Result<u64, Publi
         SchemaValue::S32(_) | SchemaValue::U32(_) | SchemaValue::F32(_) => Ok(4),
         SchemaValue::S64(_) | SchemaValue::U64(_) | SchemaValue::F64(_) => Ok(8),
         SchemaValue::Char(value) => Ok(value.len_utf8() as u64),
-        SchemaValue::String(value) => Ok(value.len() as u64),
+        SchemaValue::String(value) | SchemaValue::Json(value) => Ok(value.len() as u64),
         SchemaValue::Text(value) => Ok(value.text.len() as u64
             + value
                 .language

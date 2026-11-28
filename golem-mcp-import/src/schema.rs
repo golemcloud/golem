@@ -587,17 +587,16 @@ impl Projector<'_> {
                 "scalar type unions cannot be projected faithfully",
             ));
         }
-        let typ = s
-            .get("type")
-            .and_then(|x| {
-                x.as_str().or_else(|| {
-                    x.as_array()?
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .find(|x| *x != "null")
-                })
+        let Some(typ) = s.get("type").and_then(|x| {
+            x.as_str().or_else(|| {
+                x.as_array()?
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .find(|x| *x != "null")
             })
-            .ok_or_else(|| schema(path, "schema must have a projectable type"))?;
+        }) else {
+            return Ok(Node::Json);
+        };
         let n = match typ {
             "boolean" => Node::Bool,
             "string" if s.get("contentEncoding").and_then(Value::as_str) == Some("base64") => {
@@ -794,7 +793,8 @@ impl Node {
             }
             Node::Null => SchemaType::tuple(Vec::new()),
             Node::Bool => SchemaType::bool(),
-            Node::String | Node::Json => SchemaType::string(),
+            Node::String => SchemaType::string(),
+            Node::Json => SchemaType::json(),
             Node::Binary => SchemaType::binary(BinaryRestrictions::default()),
             Node::Number => SchemaType::f64(),
             Node::Integer(k) => match k {
@@ -954,9 +954,7 @@ fn encode(
                 body: Box::new(encode(node, v, defs, path)?),
             })
         }
-        Node::Json => {
-            SchemaValue::String(serde_json::to_string(v).map_err(|e| bad(&e.to_string()))?)
-        }
+        Node::Json => SchemaValue::Json(serde_json::to_string(v).map_err(|e| bad(&e.to_string()))?),
         Node::Bool => SchemaValue::Bool(v.as_bool().ok_or_else(|| bad("expected boolean"))?),
         Node::String => {
             SchemaValue::String(v.as_str().ok_or_else(|| bad("expected string"))?.into())
@@ -1077,7 +1075,7 @@ fn decode(
             }
             json
         }
-        (Node::Json, SchemaValue::String(s)) => {
+        (Node::Json, SchemaValue::Json(s)) => {
             serde_json::from_str(s).map_err(|e| bad(&e.to_string()))?
         }
         (Node::Bool, SchemaValue::Bool(x)) => Value::Bool(*x),
@@ -1456,7 +1454,7 @@ fn check_value(value: &SchemaValue, limits: Limits) -> Result<(), Error> {
         }
         nodes -= 1;
         let size = match value {
-            SchemaValue::String(s) => s.len(),
+            SchemaValue::String(s) | SchemaValue::Json(s) => s.len(),
             SchemaValue::Binary(b) => b.bytes.len(),
             SchemaValue::Record { fields }
             | SchemaValue::Tuple { elements: fields }

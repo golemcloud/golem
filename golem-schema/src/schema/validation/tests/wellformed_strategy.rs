@@ -22,7 +22,7 @@
 //! discriminator rule.
 
 use crate::schema::graph::{RefResolutionError, SchemaGraph, SchemaTypeDef};
-use crate::schema::metadata::TypeId;
+use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::proptest_strategies::schema_graph_strategy;
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, QuantitySpec,
@@ -215,7 +215,7 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
                 .map(|f| NamedFieldType {
                     name: f.name.clone(),
                     body: sanitise_type(&f.body, known),
-                    metadata: f.metadata.clone(),
+                    metadata: sanitise_metadata(&f.metadata),
                 })
                 .collect();
             SchemaType::record(new_fields)
@@ -228,7 +228,7 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
                 .map(|c| VariantCaseType {
                     name: c.name.clone(),
                     payload: c.payload.as_ref().map(|p| sanitise_type(p, known)),
-                    metadata: c.metadata.clone(),
+                    metadata: sanitise_metadata(&c.metadata),
                 })
                 .collect();
             if new_cases.is_empty() {
@@ -307,8 +307,21 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
         SchemaType::Stream { inner, .. } => {
             SchemaType::stream(inner.as_ref().map(|t| sanitise_type(t, known)))
         }
-        other => other.clone(),
+        other => other
+            .clone()
+            .with_metadata(sanitise_metadata(other.metadata())),
     }
+}
+
+fn sanitise_metadata(metadata: &MetadataEnvelope) -> MetadataEnvelope {
+    let mut metadata = metadata.clone();
+    if matches!(
+        metadata.role,
+        Some(Role::StandardMultimodal | Role::TaskUpdate)
+    ) {
+        metadata.role = None;
+    }
+    metadata
 }
 
 fn sanitise_quantity(spec: &QuantitySpec) -> QuantitySpec {
@@ -402,7 +415,7 @@ fn sanitise_union_branch(index: usize, branch: &UnionBranch) -> UnionBranch {
         tag: branch.tag.clone(),
         body,
         discriminator,
-        metadata: branch.metadata.clone(),
+        metadata: sanitise_metadata(&branch.metadata),
     }
 }
 

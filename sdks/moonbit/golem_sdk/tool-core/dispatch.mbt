@@ -131,6 +131,7 @@ fn value_matches_type(
     @model.SchemaTypeBody::F64(_) => value is @model.SchemaValue::F64(_)
     @model.SchemaTypeBody::Char => value is @model.SchemaValue::Char(_)
     @model.SchemaTypeBody::String => value is @model.SchemaValue::String(_)
+    @model.SchemaTypeBody::Json => value is @model.SchemaValue::Json(_)
     @model.SchemaTypeBody::Record(fields) =>
       match value {
         @model.SchemaValue::Record(values) =>

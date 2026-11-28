@@ -593,6 +593,7 @@ pub impl FromSchema for String
 pub impl[T : FromSchema] FromSchema for T?
 pub impl FromSchema for Bytes
 pub impl[T : FromSchema] FromSchema for Array[T]
+pub impl FromSchema for Json
 pub impl[K : FromSchema + Hash + Eq, V : FromSchema] FromSchema for Map[K, V]
 pub impl[T : FromSchema, E : FromSchema] FromSchema for Result[T, E]
 pub impl[T0 : FromSchema, T1 : FromSchema] FromSchema for (T0, T1)
@@ -627,6 +628,7 @@ pub impl FromWire for @schema_model.GuestQuotaTokenHandle
 pub impl FromWire for @schema_model.GuestSchemaValueStreamHandle
 pub impl FromWire for @schema_model.GuestSecretHandle
 pub impl[T : FromWire] FromWire for Array[T]
+pub impl FromWire for Json
 pub impl[K : FromWire + Hash + Eq, V : FromWire] FromWire for Map[K, V]
 pub impl[T : FromWire, E : FromWire] FromWire for Result[T, E]
 pub impl[A : FromWire, B : FromWire] FromWire for (A, B)
@@ -658,6 +660,7 @@ pub impl IntoSchema for String
 pub impl[T : IntoSchema] IntoSchema for T?
 pub impl IntoSchema for Bytes
 pub impl[T : IntoSchema] IntoSchema for Array[T]
+pub impl IntoSchema for Json
 pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V]
 pub impl[T : IntoSchema, E : IntoSchema] IntoSchema for Result[T, E]
 pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1)
@@ -693,6 +696,7 @@ pub impl IntoWire for @schema_model.GuestQuotaTokenHandle
 pub impl IntoWire for @schema_model.GuestSchemaValueStreamHandle
 pub impl IntoWire for @schema_model.GuestSecretHandle
 pub impl[T : IntoWire] IntoWire for Array[T]
+pub impl IntoWire for Json
 pub impl[K : IntoWire, V : IntoWire] IntoWire for Map[K, V]
 pub impl[T : IntoWire, E : IntoWire] IntoWire for Result[T, E]
 pub impl[A : IntoWire, B : IntoWire] IntoWire for (A, B)
@@ -737,6 +741,7 @@ pub impl WireSchema for String
 pub impl[T : WireSchema] WireSchema for T?
 pub impl WireSchema for Bytes
 pub impl[T : WireSchema] WireSchema for Array[T]
+pub impl WireSchema for Json
 pub impl[K : WireSchema, V : WireSchema] WireSchema for Map[K, V]
 pub impl[T : WireSchema, E : WireSchema] WireSchema for Result[T, E]
 pub impl[A : WireSchema, B : WireSchema] WireSchema for (A, B)

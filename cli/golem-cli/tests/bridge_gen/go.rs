@@ -357,6 +357,18 @@ fn go_guest_counter(env: &GoEnv) -> GeneratedGo {
     GeneratedGo::guest(env, counter_agent())
 }
 
+#[test]
+fn native_json_clients_compile_in_both_modes(env: &GoEnv) {
+    let agent = crate::bridge_gen::fixtures::json_agent("go");
+    for generated in [
+        GeneratedGo::guest(env, agent.clone()),
+        GeneratedGo::external(env, agent),
+    ] {
+        generated.assert_gofmt_clean(env);
+        generated.run(env, &["test", "./..."]);
+    }
+}
+
 #[test_dep(tagged_as = "go_guest_kitchen_sink")]
 fn go_guest_kitchen_sink(env: &GoEnv) -> GeneratedGo {
     GeneratedGo::guest(env, kitchen_sink_agent())

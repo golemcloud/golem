@@ -295,6 +295,7 @@ impl WireSchemaBuilder {
                 | PathType(_)
                 | UrlType(_)
                 | UuidType
+                | JsonType
                 | DatetimeType
                 | DurationType
                 | QuantityType(_)
@@ -1117,6 +1118,7 @@ fn clone_value_node(node: &wire::SchemaValueNode) -> wire::SchemaValueNode {
         wire::SchemaValueNode::PathValue(v) => wire::SchemaValueNode::PathValue(v.clone()),
         wire::SchemaValueNode::UrlValue(v) => wire::SchemaValueNode::UrlValue(v.clone()),
         wire::SchemaValueNode::UuidValue(v) => wire::SchemaValueNode::UuidValue(*v),
+        wire::SchemaValueNode::JsonValue(v) => wire::SchemaValueNode::JsonValue(v.clone()),
         wire::SchemaValueNode::DatetimeValue(v) => wire::SchemaValueNode::DatetimeValue(*v),
         wire::SchemaValueNode::DurationValue(v) => wire::SchemaValueNode::DurationValue(*v),
         wire::SchemaValueNode::QuantityValueNode(v) => {
@@ -1267,7 +1269,6 @@ scalar! {
     feature = "bigdecimal",
     feature = "rust_decimal",
     feature = "num_bigint",
-    feature = "serde_json_types",
     feature = "jiff"
 ))]
 macro_rules! wire_string {
@@ -1317,7 +1318,6 @@ macro_rules! wire_string {
     feature = "bigdecimal",
     feature = "rust_decimal",
     feature = "num_bigint",
-    feature = "serde_json_types",
     feature = "jiff"
 ))]
 pub(crate) use wire_string;

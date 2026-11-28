@@ -16,6 +16,32 @@ import {
 import { SECRET_INTERNAL } from "../src/internal/schema-model/secretInternal.js"
 
 describe("schema-native graph and value model", () => {
+  it("preserves named reserved roles through WIT and rejects them at acceptance", () => {
+    for (const role of [{ tag: "standard-multimodal" }, { tag: "task-update" }] as const) {
+      const metadata = { ...emptyMetadata(), role }
+      for (const root of [
+        { ...t.json(), metadata },
+        t.record([{ name: "payload", body: t.json(), metadata }]),
+        t.variant([{ name: "payload", payload: t.json(), metadata }]),
+        t.union([
+          { tag: "payload", body: t.string(), discriminator: { tag: "prefix", val: "" }, metadata },
+        ]),
+      ]) {
+        const graph = { defs: new Map(), root }
+        expect(schemaGraphFromWit(schemaGraphToWit(graph))).toEqual(graph)
+        expect(validateSchemaGraph(graph)).toContainEqual(
+          expect.objectContaining({ code: "unsupported-role" }),
+        )
+      }
+    }
+    const root = {
+      ...t.json(),
+      metadata: { ...emptyMetadata(), role: { tag: "other" as const, val: "TaskUpdate" } },
+    }
+    expect(validateSchemaGraph({ defs: new Map(), root })).toEqual([])
+    expect(validateSchemaGraph({ defs: new Map(), root: t.option(t.json()) })).toEqual([])
+  })
+
   it("round-trips recursive definitions and rich nodes through canonical WIT", () => {
     const metadata = emptyMetadata()
     const node = t.record([

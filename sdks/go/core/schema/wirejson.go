@@ -96,8 +96,8 @@ type wireNode struct {
 // are not exhaustive — so the counts are pinned by tests that enumerate every
 // case.
 const (
-	wireValueKinds = 36
-	wireTypeKinds  = 38
+	wireValueKinds = 37
+	wireTypeKinds  = 39
 )
 
 // --- Values, outgoing ----------------------------------------------------
@@ -142,6 +142,11 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 			return wireNode{}, err
 		}
 		return wireScalar("string", n.Value)
+	case JsonValue:
+		if err := wireUTF8("json", n.Value); err != nil {
+			return wireNode{}, err
+		}
+		return wireScalar("json", n.Value)
 
 	case RecordValue:
 		fields, err := valuesToWire(n.Fields)
@@ -372,6 +377,8 @@ func wireToValue(node wireValueNode) (SchemaValue, error) {
 		return readWire(node, func(v wireFloat) SchemaValue { return F64Value{Value: float64(v)} })
 	case "string":
 		return readWire(node, func(v string) SchemaValue { return StringValue{Value: v} })
+	case "json":
+		return readWire(node, func(v string) SchemaValue { return JsonValue{Value: v} })
 
 	case "char":
 		return readWireErr(node, func(s string) (SchemaValue, error) {

@@ -19,6 +19,7 @@ package golem.schema
 import golem.runtime.annotations.quantityUnit
 import golem.schema.Implicits._
 import zio.blocks.schema.Schema
+import zio.blocks.schema.json.Json
 import zio.test._
 
 import java.net.URI
@@ -33,6 +34,11 @@ object RichTypesSpec extends ZIOSpecDefault {
 
   private val bytesUnit   = QuantityUnit[Bytes]
   private val secondsUnit = QuantityUnit[Seconds]
+
+  final case class JsonRecord(payload: Json, items: List[Json], optional: Option[Json])
+  object JsonRecord {
+    implicit val schema: Schema[JsonRecord] = Schema.derived
+  }
 
   final case class RichRecord(path: GolemPath, url: URI, at: Instant, duration: JDuration, size: Quantity[Bytes])
 
@@ -65,6 +71,19 @@ object RichTypesSpec extends ZIOSpecDefault {
     }
 
   override def spec: Spec[TestEnvironment, Any] = suite("rich semantic types")(
+    test("native JSON uses a leaf schema and roundtrips top levels and nested fields") {
+      val values = List("{\"b\":[1,null,{\"x\":\"y\"}],\"a\":1.5}", "[false,2]", "null", "false", "3.5", "\"text\"")
+        .map(text => Json.parse(text).toOption.get)
+      val record = JsonRecord(values.head, values, Some(values(1)))
+      assertTrue(
+        IntoSchema[Json].graph.root.body == SchemaTypeBody.JsonType,
+        values.forall(value => FromSchema[Json].fromValue(IntoSchema[Json].toValue(value)) == Right(value)),
+        FromSchema[JsonRecord].fromValue(IntoSchema[JsonRecord].toValue(record)) == Right(record),
+        recordFieldBodies[JsonRecord].head == SchemaTypeBody.JsonType,
+        FromSchema[Json].fromValue(SchemaValue.JsonValue("{")).isLeft,
+        FromSchema[Json].fromValue(SchemaValue.StringValue("{}")).isLeft
+      )
+    },
     test("top-level schemas use rich nodes") {
       assertTrue(
         IntoSchema[GolemPath].graph.root.body == SchemaTypeBody.PathType(GolemPath.defaultSpec),

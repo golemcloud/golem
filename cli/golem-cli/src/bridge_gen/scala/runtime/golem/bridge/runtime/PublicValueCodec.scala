@@ -78,6 +78,10 @@ object PublicValueCodec {
           if (!Character.isValidCodePoint(v) || v >= 0xd800 && v <= 0xdfff) fail("invalid char value")
           val s = new String(Character.toChars(v)); budget.string(s); budget.json(json.Json.string(s))
         case ("string", StringValue(v)) => validText("string", v); budget.string(v); budget.json(json.Json.string(v))
+        case ("json", JsonValue(v)) =>
+          budget.string(v)
+          val parsed = json.Json.parse(v).fold(error => fail(error), identity)
+          budget.json(parsed)
         case ("record", RecordValue(values)) =>
           val fields = schema.recordFields
           if (fields.length != values.length) fail("record field count does not match schema")

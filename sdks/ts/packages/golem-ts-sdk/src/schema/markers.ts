@@ -82,6 +82,8 @@ import { Result } from '../host/result';
 import { PrincipalRef } from '../caller';
 import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from './agentStream';
 import { Uuid } from '../uuid';
+import type { JsonValue } from './ref';
+import { assertJsonValue, parseJsonValue, stringifyJsonValue } from '../internal/schema-model/json';
 
 /**
  * Hidden brand key carried by every marker schema. The value is a
@@ -353,6 +355,27 @@ function uuidMarker(): MarkerSchema<Uuid, 'rich'> {
     fromValue: (sv) => (sv as { tag: 'uuid'; value: Uuid }).value,
   });
   return marker(validate, descriptor);
+}
+
+function jsonMarker(): MarkerSchema<JsonValue, 'rich'> {
+  const validate: Validator<JsonValue> = (value) => {
+    try {
+      assertJsonValue(value);
+      return ok(value);
+    } catch (error) {
+      return fail(String(error));
+    }
+  };
+  return marker(validate, () => ({
+    graph: { defs: new Map(), root: t.json() },
+    toValue: (value) => {
+      return v.json(stringifyJsonValue(value));
+    },
+    fromValue: (value) => {
+      if (value.tag !== 'json') throw new TypeError('Expected a JSON schema value');
+      return parseJsonValue(value.value);
+    },
+  }));
 }
 
 function isDatetime(value: unknown): value is Datetime {
@@ -1268,6 +1291,7 @@ export const s = {
   // Scalars Standard Schema can't pin.
   char: () => charMarker(),
   uuid: () => uuidMarker(),
+  json: () => jsonMarker(),
   datetime: () => datetimeMarker(),
   duration: () => durationMarker(),
   url: () => urlMarker(),

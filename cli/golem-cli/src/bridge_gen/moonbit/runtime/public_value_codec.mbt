@@ -670,6 +670,13 @@ fn PublicValueCodec::encode_at(
         Json::null()
       }
     }
+    ("json", JsonValue(text)) => {
+      pvc_charge(charge, @utf8.encode(text).length())
+      let parsed = @json.parse(text) catch {
+        error => raise BridgeError(error.to_string())
+      }
+      if materialize { parsed } else { Json::null() }
+    }
     ("uuid", UuidValue(v)) => {
       pvc_charge(charge, 36)
       if materialize {

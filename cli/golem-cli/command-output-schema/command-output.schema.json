@@ -2584,7 +2584,9 @@
       "enum": [
         "multimodal",
         "unstructuredText",
-        "unstructuredBinary"
+        "unstructuredBinary",
+        "standardMultimodal",
+        "taskUpdate"
       ]
     },
     "ReportNode": {
@@ -3012,6 +3014,7 @@
             "f64",
             "char",
             "string",
+            "json",
             "record",
             "variant",
             "enum",
@@ -10975,7 +10978,7 @@
           "required": ["kind", "value"],
           "properties": {
             "kind": {
-              "enum": ["bool", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64", "char", "string", "uuid", "datetime", "duration"]
+              "enum": ["bool", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64", "char", "string", "json", "uuid", "datetime", "duration"]
             },
             "value": {
               "type": "object",
@@ -11480,6 +11483,8 @@
         { "type": "object", "required": ["tag"], "properties": { "tag": { "const": "multimodal" } }, "additionalProperties": false },
         { "type": "object", "required": ["tag"], "properties": { "tag": { "const": "unstructured-text" } }, "additionalProperties": false },
         { "type": "object", "required": ["tag"], "properties": { "tag": { "const": "unstructured-binary" } }, "additionalProperties": false },
+        { "type": "object", "required": ["tag"], "properties": { "tag": { "const": "standard-multimodal" } }, "additionalProperties": false },
+        { "type": "object", "required": ["tag"], "properties": { "tag": { "const": "task-update" } }, "additionalProperties": false },
         { "type": "object", "required": ["tag", "value"], "properties": { "tag": { "const": "other" }, "value": { "type": "string" } }, "additionalProperties": false }
       ]
     },
@@ -11494,7 +11499,7 @@
         {
           "type": "object",
           "required": ["kind", "value"],
-          "properties": { "kind": { "enum": ["string", "char", "uuid"] }, "value": { "type": "string" } },
+          "properties": { "kind": { "enum": ["string", "json", "char", "uuid"] }, "value": { "type": "string" } },
           "additionalProperties": false
         },
         {

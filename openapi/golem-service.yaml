@@ -17902,6 +17902,17 @@ components:
           kind:
             type: string
             enum:
+            - json
+          value:
+            type: string
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - uuid
           value:
             type: string
@@ -22401,6 +22412,22 @@ components:
           tag:
             type: string
             enum:
+            - standard-multimodal
+        required:
+        - tag
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - task-update
+        required:
+        - tag
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
             - other
           value:
             type: string
@@ -22977,6 +23004,20 @@ components:
           kind:
             type: string
             enum:
+            - json
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -23530,6 +23571,17 @@ components:
           value:
             type: string
             format: uuid
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - json
+          value:
+            type: string
         required:
         - kind
         - value

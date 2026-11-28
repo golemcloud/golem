@@ -527,6 +527,10 @@ fn format_schema_value(
         (SchemaValue::Uuid(value), SchemaType::Uuid { .. }) => {
             format_tagged_string(buf, "uuid", &canonical_uuid::to_text(value))
         }
+        (SchemaValue::Json(value), SchemaType::Json { .. }) => {
+            serde_json::from_str::<serde_json::Value>(value).map_err(canonical_err)?;
+            format_tagged_string(buf, "json", value)
+        }
         (SchemaValue::Datetime { value }, SchemaType::Datetime { .. }) => {
             format_tagged_string(buf, "dt", &datetime::to_text(value).map_err(canonical_err)?)
         }
@@ -885,6 +889,12 @@ impl<'a> Parser<'a> {
                 canonical_uuid::from_text(&self.parse_tagged_string("uuid")?)
                     .map_err(|e| self.error(&format!("Invalid UUID: {e}")))?,
             )),
+            SchemaType::Json { .. } => {
+                let value = self.parse_tagged_string("json")?;
+                serde_json::from_str::<serde_json::Value>(&value)
+                    .map_err(|e| self.error(&format!("Invalid JSON: {e}")))?;
+                Ok(SchemaValue::Json(value))
+            }
             SchemaType::Datetime { .. } => Ok(SchemaValue::Datetime {
                 value: datetime::from_text(&self.parse_tagged_string("dt")?)
                     .map_err(|e| self.error(&format!("Invalid datetime: {e}")))?,

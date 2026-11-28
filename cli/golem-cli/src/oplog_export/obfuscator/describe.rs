@@ -46,6 +46,8 @@ pub(super) fn known_role(role: &Role) -> Option<KnownRole> {
         Role::Multimodal => Some(KnownRole::Multimodal),
         Role::UnstructuredText => Some(KnownRole::UnstructuredText),
         Role::UnstructuredBinary => Some(KnownRole::UnstructuredBinary),
+        Role::StandardMultimodal => Some(KnownRole::StandardMultimodal),
+        Role::TaskUpdate => Some(KnownRole::TaskUpdate),
         Role::Other(_) => None,
     }
 }
@@ -84,6 +86,7 @@ fn describe(ty: &SchemaType) -> TypeDescription {
             SchemaType::F64 { .. } => leaf(TypeKind::F64),
             SchemaType::Char { .. } => leaf(TypeKind::Char),
             SchemaType::String { .. } => leaf(TypeKind::String),
+            SchemaType::Json { .. } => leaf(TypeKind::Json),
             SchemaType::Record { fields, .. } => TypeDescription {
                 members: fields
                     .iter()

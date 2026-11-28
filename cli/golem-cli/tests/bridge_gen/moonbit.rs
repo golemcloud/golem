@@ -1735,6 +1735,15 @@ fn guest_mode_moon_checks_result_nested_in_list() {
     );
 }
 
+#[test]
+fn native_json_clients_compile_in_both_modes() {
+    let agent = crate::bridge_gen::fixtures::json_agent("moonbit");
+    let external = GeneratedPackage::new(agent.clone());
+    external.test_native();
+    let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
+    moon_check_wasm(guest.path());
+}
+
 fn uuid_agent() -> AgentTypeSchema {
     let ids = def(
         "ids",

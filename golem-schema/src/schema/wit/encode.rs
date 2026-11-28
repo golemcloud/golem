@@ -920,6 +920,7 @@ impl GraphCtx {
                 wire::SchemaTypeBody::UrlType(encode_url(restrictions))
             }
             SchemaType::Uuid { .. } => wire::SchemaTypeBody::UuidType,
+            SchemaType::Json { .. } => wire::SchemaTypeBody::JsonType,
             SchemaType::Datetime { .. } => wire::SchemaTypeBody::DatetimeType,
             SchemaType::Duration { .. } => wire::SchemaTypeBody::DurationType,
             SchemaType::Quantity { spec, .. } => {
@@ -1016,6 +1017,8 @@ pub fn encode_metadata(m: &MetadataEnvelope) -> wire::MetadataEnvelope {
             Role::Multimodal => wire::Role::Multimodal,
             Role::UnstructuredText => wire::Role::UnstructuredText,
             Role::UnstructuredBinary => wire::Role::UnstructuredBinary,
+            Role::StandardMultimodal => wire::Role::StandardMultimodal,
+            Role::TaskUpdate => wire::Role::TaskUpdate,
             Role::Other(s) => wire::Role::Other(s.clone()),
         }),
     }
@@ -1248,6 +1251,7 @@ impl ValueCtx {
             SchemaValue::Path { path } => wire::SchemaValueNode::PathValue(path.clone()),
             SchemaValue::Url { url } => wire::SchemaValueNode::UrlValue(url.clone()),
             SchemaValue::Uuid(value) => wire::SchemaValueNode::UuidValue((*value).into()),
+            SchemaValue::Json(value) => wire::SchemaValueNode::JsonValue(value.clone()),
             SchemaValue::Datetime { value } => {
                 let seconds = value.as_nanosecond().div_euclid(1_000_000_000) as i64;
                 let nanoseconds = value.as_nanosecond().rem_euclid(1_000_000_000) as u32;

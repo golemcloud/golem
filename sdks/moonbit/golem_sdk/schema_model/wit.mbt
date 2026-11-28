@@ -287,6 +287,7 @@ fn GraphEncoder::encode_body(
     Path(spec) => @types.PathType(spec)
     Url(restrictions) => @types.UrlType(restrictions)
     Uuid => @types.UuidType
+    Json => @types.JsonType
     Datetime => @types.DatetimeType
     Duration => @types.DurationType
     Quantity(spec) => @types.QuantityType(spec)
@@ -533,6 +534,7 @@ fn GraphDecoder::body_of(
     @types.PathType(spec) => Path(spec)
     @types.UrlType(restrictions) => Url(restrictions)
     @types.UuidType => Uuid
+    @types.JsonType => Json
     @types.DatetimeType => Datetime
     @types.DurationType => Duration
     @types.QuantityType(spec) => Quantity(spec)
@@ -694,6 +696,7 @@ fn ValueEncoder::emit_node(
     Path(s) => @types.PathValue(s)
     Url(s) => @types.UrlValue(s)
     Uuid(uuid) => @types.UuidValue(uuid)
+    Json(text) => @types.JsonValue(text)
     Datetime(dt) => {
       guard datetime_valid(dt) else {
         raise EncodeError(
@@ -1386,6 +1389,7 @@ fn ValueDecoder::from_node(
     @types.PathValue(s) => Path(s)
     @types.UrlValue(s) => Url(s)
     @types.UuidValue(uuid) => Uuid(uuid)
+    @types.JsonValue(text) => Json(text)
     @types.DatetimeValue(dt) => {
       guard datetime_valid(dt) else {
         raise DecodeError(

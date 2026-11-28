@@ -19,6 +19,7 @@
 
 import type {
   DiscriminatorRule,
+  MetadataEnvelope,
   NumericBound,
   NumericRestrictions,
   QuantityValue,
@@ -59,6 +60,7 @@ export type SchemaValidationErrorCode =
   | "invalid-text-length-range"
   | "invalid-binary-byte-range"
   | "invalid-numeric-restriction"
+  | "unsupported-role"
   | "nullable-nesting"
 
 export interface SchemaValidationError {
@@ -134,6 +136,7 @@ function checkType(
   }
   onPath.add(type)
   try {
+    checkRole(type.metadata, errors)
     const body = type.body
     switch (body.tag) {
       case "ref": {
@@ -155,7 +158,10 @@ function checkType(
           body.fields.map((field) => field.name),
           (name) => issue(errors, "duplicate-field-name", `duplicate field \`${name}\``),
         )
-        body.fields.forEach((field) => checkType(graph, field.body, errors, onPath))
+        body.fields.forEach((field) => {
+          checkRole(field.metadata, errors)
+          checkType(graph, field.body, errors, onPath)
+        })
         break
       case "variant":
         if (body.cases.length === 0) issue(errors, "empty-variant", "variant has no cases")
@@ -164,6 +170,7 @@ function checkType(
           (name) => issue(errors, "duplicate-variant-case", `duplicate variant case \`${name}\``),
         )
         body.cases.forEach((entry) => {
+          checkRole(entry.metadata, errors)
           if (entry.payload) checkType(graph, entry.payload, errors, onPath)
         })
         break
@@ -249,6 +256,7 @@ function checkType(
       case "path":
       case "url":
       case "uuid":
+      case "json":
       case "datetime":
       case "duration":
       case "quota-token":
@@ -546,6 +554,12 @@ function checkQuantity(
   }
 }
 
+function checkRole(metadata: MetadataEnvelope, errors: Errors): void {
+  const role = metadata.role?.tag
+  if (role === "standard-multimodal" || role === "task-update")
+    issue(errors, "unsupported-role", `role '${role}' has no supported shape`)
+}
+
 function checkUnion(
   graph: SchemaGraph,
   branches: readonly UnionBranch[],
@@ -558,6 +572,7 @@ function checkUnion(
     (tag) => issue(errors, "duplicate-union-tag", `duplicate union branch tag \`${tag}\``),
   )
   for (const branch of branches) {
+    checkRole(branch.metadata, errors)
     checkUnionBranch(graph, branch, errors)
     checkType(graph, branch.body, errors, onPath)
   }

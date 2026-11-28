@@ -59,6 +59,7 @@ fn is_path_leaf_type(typ: &SchemaType) -> bool {
         | SchemaType::F64 { .. }
         | SchemaType::Char { .. }
         | SchemaType::String { .. }
+        | SchemaType::Json { .. }
         // Rich scalar / capability types whose payloads carry no nested
         // user `SchemaType` are leaves.
         | SchemaType::Text { .. }
@@ -112,7 +113,8 @@ fn can_be_named(typ: &SchemaType) -> bool {
         | SchemaType::F32 { .. }
         | SchemaType::F64 { .. }
         | SchemaType::Char { .. }
-        | SchemaType::String { .. } => false,
+        | SchemaType::String { .. }
+        | SchemaType::Json { .. } => false,
         // Rich containers/scalars that render inline in both target
         // languages (`Map<K,V>`/`Vec<(K,V)>`, `T[]`/`Vec<T>`, string,
         // bigint, wrapper structs, …) never need a generated alias.

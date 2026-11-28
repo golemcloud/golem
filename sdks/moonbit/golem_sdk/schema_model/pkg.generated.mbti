@@ -77,6 +77,7 @@ pub suberror SchemaError {
   UnionUnsatisfiableFieldAbsent(tag~ : String, field_name~ : String)
   UnionAmbiguousDiscriminators(tag_a~ : String, tag_b~ : String, reason~ : String)
   InvalidRegex(tag~ : String, regex~ : String, message~ : String)
+  ReservedRole(String)
   TextLengthRangeInverted
   BinaryByteRangeInverted
   NullableNesting(inner~ : String)
@@ -242,6 +243,7 @@ pub(all) enum SchemaTypeBody {
   F64(@types.NumericRestrictions?)
   Char
   String
+  Json
   Record(Array[NamedFieldType])
   Variant(Array[VariantCaseType])
   Enum(Array[String])
@@ -294,6 +296,7 @@ pub(all) enum SchemaValue {
   F64(Double)
   Char(Char)
   String(String)
+  Json(String)
   Record(Array[SchemaValue])
   Variant(UInt32, SchemaValue?)
   Enum(UInt32)

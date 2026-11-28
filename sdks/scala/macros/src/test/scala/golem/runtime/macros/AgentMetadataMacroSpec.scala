@@ -87,6 +87,11 @@ private[macros] object AgentMetadataMacroTypes {
   object UuidRecord {
     implicit val schema: Schema[UuidRecord] = Schema.derived
   }
+
+  final case class JsonRecord(value: zio.blocks.schema.json.Json)
+  object JsonRecord {
+    implicit val schema: Schema[JsonRecord] = Schema.derived
+  }
 }
 
 /**
@@ -245,6 +250,19 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     def record(value: UuidRecord): Future[UuidRecord]
   }
 
+  @agentDefinition()
+  trait JsonAgent {
+    class Id()
+    def echo(value: zio.blocks.schema.json.Json): Future[zio.blocks.schema.json.Json]
+    def record(value: JsonRecord): Future[JsonRecord]
+  }
+
+  final class JsonAgentImpl() extends JsonAgent {
+    override def echo(value: zio.blocks.schema.json.Json): Future[zio.blocks.schema.json.Json] =
+      Future.successful(value)
+    override def record(value: JsonRecord): Future[JsonRecord] = Future.successful(value)
+  }
+
   final class UuidAgentImpl() extends UuidAgent {
     override def echo(value: UUID): Future[UUID]                  = Future.successful(value)
     override def maybe(value: Option[UUID]): Future[Option[UUID]] = Future.successful(value)
@@ -322,6 +340,23 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           compiled == dynamic,
           AgentDefinitionMacro
             .generateWire[EphemeralAgent] == golem.runtime.WireAgentMetadata.fromModel(ephemeralMetadata)
+        )
+      },
+      test("JSON wire metadata agrees with model metadata for clients and implementations") {
+        val metadata       = AgentMacros.agentMetadata[JsonAgent]
+        val expected       = golem.runtime.WireAgentMetadata.fromModel(metadata)
+        val client         = AgentClientMacro.wireType[JsonAgent]
+        val implementation = AgentImplementationMacro.wireImplementationTypeFromClass[JsonAgent, JsonAgentImpl]
+        assertTrue(
+          AgentDefinitionMacro.generateWire[JsonAgent] == expected,
+          client.metadata == expected,
+          implementation.metadata == expected,
+          rootBody(
+            metadata.methods.find(_.name == "echo").get.input.userSupplied.head.graph
+          ) == SchemaTypeBody.JsonType,
+          rootBody(
+            metadata.methods.find(_.name == "echo").get.output.asInstanceOf[OutputMetadata.Single].graph
+          ) == SchemaTypeBody.JsonType
         )
       },
       test("UUID parameters, outputs and fields use the native uuid schema") {

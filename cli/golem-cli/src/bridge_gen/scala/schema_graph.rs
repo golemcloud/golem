@@ -81,6 +81,7 @@ fn emit_schema_type(typ: &SchemaType) -> String {
     let body = match typ {
         Ref { id, .. } => format!("{SCHEMA}.SchemaTypeBody.RefType({})", string(id.as_str())),
         Bool { .. } => format!("{SCHEMA}.SchemaTypeBody.BoolType"),
+        Json { .. } => format!("{SCHEMA}.SchemaTypeBody.JsonType"),
         S8 { restrictions, .. } => numeric("S8", restrictions.as_ref()),
         S16 { restrictions, .. } => numeric("S16", restrictions.as_ref()),
         S32 { restrictions, .. } => numeric("S32", restrictions.as_ref()),
@@ -266,6 +267,8 @@ fn metadata(value: &MetadataEnvelope) -> String {
                 Role::Multimodal => format!("{SCHEMA}.Role.Multimodal"),
                 Role::UnstructuredText => format!("{SCHEMA}.Role.UnstructuredText"),
                 Role::UnstructuredBinary => format!("{SCHEMA}.Role.UnstructuredBinary"),
+                Role::StandardMultimodal => format!("{SCHEMA}.Role.StandardMultimodal"),
+                Role::TaskUpdate => format!("{SCHEMA}.Role.TaskUpdate"),
                 Role::Other(value) => format!("{SCHEMA}.Role.Other({})", string(value)),
             };
             format!("{SOME}({role})")

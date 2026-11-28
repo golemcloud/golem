@@ -20,6 +20,7 @@ import golem.{UByte, UInt, ULong, UShort}
 import zio.blocks.chunk.Chunk
 import zio.blocks.schema.{DynamicValue => DV, Modifier, PrimitiveType, PrimitiveValue, Reflect, Schema}
 import zio.blocks.typeid.{TypeId, TypeIdPrinter, TypeRepr}
+import zio.blocks.schema.json.Json
 
 import java.net.URI
 import java.time.{Duration => JDuration, Instant}
@@ -59,6 +60,7 @@ private[golem] object Derivation {
   private val instantTypeId: TypeId[Instant]       = TypeId.of[Instant]
   private val durationTypeId: TypeId[JDuration]    = TypeId.of[JDuration]
   private val uriTypeId: TypeId[URI]               = TypeId.of[URI]
+  private val jsonTypeId: TypeId[Json]             = TypeId.of[Json]
 
   // Inclusive upper bounds of the WIT unsigned ranges.
   private final val MaxU8: Long  = 0xffL
@@ -233,7 +235,8 @@ private[golem] object Derivation {
     Unstructured.restrictionFromModifiers(reflect.modifiers)
 
   private def richBody(reflect: Reflect.Bound[?]): Option[SchemaTypeBody] =
-    if (isPath(reflect)) Some(SchemaTypeBody.PathType(GolemPath.defaultSpec))
+    if (TypeId.structurallyEqual(reflect.typeId, jsonTypeId)) Some(SchemaTypeBody.JsonType)
+    else if (isPath(reflect)) Some(SchemaTypeBody.PathType(GolemPath.defaultSpec))
     else if (isUrl(reflect)) Some(SchemaTypeBody.UrlType(UrlText.defaultRestrictions))
     else if (isText(reflect)) Some(SchemaTypeBody.TextType(Text.defaultRestrictions))
     else if (isInstant(reflect)) Some(SchemaTypeBody.DatetimeType)
@@ -499,7 +502,11 @@ private[golem] object Derivation {
     extractSingleRecordPrimitive[String](d, typeName) { case PrimitiveValue.String(v) => v }
 
   private def richToSchemaValue[A](reflect: Reflect.Bound[A], d: DV): SchemaValue =
-    if (isPath(reflect))
+    if (TypeId.structurallyEqual(reflect.typeId, jsonTypeId)) {
+      val value =
+        reflect.fromDynamicValue(d).fold(e => throw SchemaEncodeError(e.toString), identity).asInstanceOf[Json]
+      SchemaValue.JsonValue(Json.jsonCodec.encodeToString(value))
+    } else if (isPath(reflect))
       SchemaValue.PathValue(UnicodeText.encodeText("path", stringFromSingleValueRecord(d, "GolemPath")))
     else if (isUrl(reflect))
       d match {
@@ -810,7 +817,14 @@ private[golem] object Derivation {
     }
 
   private def richToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
-    if (isPath(reflect))
+    if (TypeId.structurallyEqual(reflect.typeId, jsonTypeId))
+      value match {
+        case SchemaValue.JsonValue(text) =>
+          val parsed = Json.parse(text).fold(e => throw FromSchemaError(e.toString), identity)
+          reflect.toDynamicValue(parsed.asInstanceOf[A])
+        case other => throw FromSchemaError(s"expected JSON value, got $other")
+      }
+    else if (isPath(reflect))
       value match {
         case SchemaValue.PathValue(v) => DV.Record(Chunk("value" -> DV.Primitive(PrimitiveValue.String(v))))
         case other                    => throw FromSchemaError(s"expected path value for GolemPath, got $other")

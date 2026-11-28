@@ -87,6 +87,8 @@ object JsRole {
   def multimodal: JsRole          = JsShape.tagOnly[JsRole]("multimodal")
   def unstructuredText: JsRole    = JsShape.tagOnly[JsRole]("unstructured-text")
   def unstructuredBinary: JsRole  = JsShape.tagOnly[JsRole]("unstructured-binary")
+  def standardMultimodal: JsRole  = JsShape.tagOnly[JsRole]("standard-multimodal")
+  def taskUpdate: JsRole          = JsShape.tagOnly[JsRole]("task-update")
   def other(name: String): JsRole = JsShape.tagged[JsRole]("other", name)
 }
 
@@ -456,6 +458,7 @@ object JsSchemaTypeBody {
     JsShape.taggedOptional[JsSchemaTypeBody]("f64-type", r)
   def charType: JsSchemaTypeBody   = JsShape.tagOnly[JsSchemaTypeBody]("char-type")
   def stringType: JsSchemaTypeBody = JsShape.tagOnly[JsSchemaTypeBody]("string-type")
+  def jsonType: JsSchemaTypeBody   = JsShape.tagOnly[JsSchemaTypeBody]("json-type")
 
   def recordType(fields: js.Array[JsNamedFieldType]): JsSchemaTypeBody =
     JsShape.tagged[JsSchemaTypeBody]("record-type", fields)
@@ -618,6 +621,7 @@ object JsSchemaValueNode {
   def f64Value(v: Double): JsSchemaValueNode    = JsShape.tagged[JsSchemaValueNode]("f64-value", v.asInstanceOf[js.Any])
   def charValue(v: String): JsSchemaValueNode   = JsShape.tagged[JsSchemaValueNode]("char-value", v)
   def stringValue(v: String): JsSchemaValueNode = JsShape.tagged[JsSchemaValueNode]("string-value", v)
+  def jsonValue(v: String): JsSchemaValueNode   = JsShape.tagged[JsSchemaValueNode]("json-value", v)
 
   def recordValue(fields: js.Array[Int]): JsSchemaValueNode =
     JsShape.tagged[JsSchemaValueNode]("record-value", fields)

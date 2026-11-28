@@ -226,6 +226,9 @@ fn render_cm_value_inner(
         (SchemaType::Uuid { .. }, SchemaValue::Uuid(uuid)) => {
             render_rich_constructor(buf, "Uuid", &uuid.to_string());
         }
+        (SchemaType::Json { .. }, SchemaValue::Json(text)) => {
+            render_rich_constructor(buf, "Json", text);
+        }
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             let s = canonical::datetime::to_text(value).unwrap_or_else(|_| value.to_string());
             render_rich_constructor(buf, "Datetime", &s);
@@ -344,6 +347,7 @@ fn render_type_go_inner(
     }
     match ty {
         SchemaType::String { .. } => "string".to_string(),
+        SchemaType::Json { .. } => "json.RawMessage".to_string(),
         SchemaType::Char { .. } => "rune".to_string(),
         SchemaType::Bool { .. } => "bool".to_string(),
         SchemaType::U8 { .. } => "uint8".to_string(),

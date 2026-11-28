@@ -318,6 +318,7 @@ fn encode_type(
       encode_metadata(e, ty.metadata)
     }
     Uuid => encode_leaf(e, 38, ty.metadata)
+    Json => encode_leaf(e, 39, ty.metadata)
     Datetime => encode_leaf(e, 29, ty.metadata)
     Duration => encode_leaf(e, 30, ty.metadata)
     Quantity(spec) => {
@@ -519,6 +520,14 @@ fn encode_metadata(
       e.array(2)
       e.unsigned(3UL)
       e.text(value)
+    }
+    Some(@types.StandardMultimodal) => {
+      e.array(1)
+      e.unsigned(4UL)
+    }
+    Some(@types.TaskUpdate) => {
+      e.array(1)
+      e.unsigned(5UL)
     }
   }
 }

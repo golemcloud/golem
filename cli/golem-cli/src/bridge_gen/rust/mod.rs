@@ -639,7 +639,6 @@ impl RustBridgeGenerator {
                     "dep:golem-common",
                     "dep:reqwest",
                     "dep:reqwest-middleware",
-                    "dep:serde_json",
                     "uuid/v4",
                 ]);
                 doc["features"]["serde"] =
@@ -653,7 +652,7 @@ impl RustBridgeGenerator {
                 doc["dependencies"]["reqwest"] = optional_dep("0.13", &["rustls"]);
                 doc["dependencies"]["reqwest-middleware"] = optional_dep("0.5", &[]);
                 doc["dependencies"]["serde"] = optional_dep("1", &["derive", "std"]);
-                doc["dependencies"]["serde_json"] = optional_dep("1", &[]);
+                doc["dependencies"]["serde_json"] = dep("1", &[]);
                 doc["dependencies"]["url"] = dep("2.5.7", &[]);
                 doc["dependencies"]["uuid"] = dep("1.18.1", &[]);
             }
@@ -664,8 +663,11 @@ impl RustBridgeGenerator {
                     sdk_overrides()?.golem_rust_dependency()
                 };
                 doc["dependencies"]["jiff"] = dep("1.0.1", &[]);
-                doc["dependencies"]["golem-rust"] =
-                    sdk_dependency.as_toml_item(&["export_golem_agentic", "macro"])?;
+                doc["dependencies"]["golem-rust"] = sdk_dependency.as_toml_item(&[
+                    "export_golem_agentic",
+                    "macro",
+                    "serde_json_types",
+                ])?;
                 doc["dependencies"]["serde"] = dep("1", &["derive"]);
                 doc["dependencies"]["url"] = dep("2.5.7", &[]);
                 doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
@@ -3701,6 +3703,13 @@ impl RustBridgeGenerator {
         }
     }
 
+    fn json_type_tokens(&self) -> TokenStream {
+        match self.mode {
+            RustBridgeMode::ExternalRest => quote! { serde_json::Value },
+            RustBridgeMode::GuestWasmRpc => quote! { golem_rust::serde_json::Value },
+        }
+    }
+
     fn emit_encode_expr_mode(
         &mut self,
         val: TokenStream,
@@ -3878,6 +3887,9 @@ impl RustBridgeGenerator {
             }
             SchemaType::String { .. } => {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::String(#val)) }
+            }
+            SchemaType::Json { .. } => {
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Json(#val.to_string())) }
             }
             SchemaType::Option { inner, .. } => {
                 let inner_enc = self.emit_encode_expr_mode(
@@ -4194,6 +4206,15 @@ impl RustBridgeGenerator {
             SchemaType::String { .. } => quote! {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::String(__b) => Ok(__b), __other => Err(format!("Expected string value, got {:?}", __other)) }
             },
+            SchemaType::Json { .. } => {
+                let json_type = self.json_type_tokens();
+                quote! {
+                    match #val {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Json(__b) => __b.parse::<#json_type>().map_err(|__error| __error.to_string()),
+                        __other => Err(format!("Expected json value, got {:?}", __other)),
+                    }
+                }
+            }
             SchemaType::Option { inner, .. } => {
                 let inner_dec = self.emit_decode_expr_mode(
                     quote! { #e },
@@ -4527,6 +4548,7 @@ impl RustBridgeGenerator {
             SchemaType::F64 { .. } => Ok(quote! { f64 }),
             SchemaType::Char { .. } => Ok(quote! { char }),
             SchemaType::String { .. } => Ok(quote! { String }),
+            SchemaType::Json { .. } => Ok(self.json_type_tokens()),
             SchemaType::Option { inner, .. } => {
                 let inner = self.type_reference(inner, box_recursive)?;
                 Ok(quote! { Option<#inner> })

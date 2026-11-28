@@ -43,6 +43,7 @@ object SchemaValue {
   final case class F64Value(value: Double)    extends SchemaValue
   final case class CharValue(value: Int)      extends SchemaValue
   final case class StringValue(value: String) extends SchemaValue
+  final case class JsonValue(value: String)   extends SchemaValue
 
   // Structural composites
   final case class RecordValue(fields: List[SchemaValue])                     extends SchemaValue

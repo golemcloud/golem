@@ -16,7 +16,7 @@
 //! (Path, Url, Datetime, Duration, Quantity).
 
 use golem_rust::schema::TypeId;
-use golem_rust::{Quantity, QuantityUnit, agent_definition, agent_implementation};
+use golem_rust::{Quantity, QuantityUnit, agent_definition, agent_implementation, endpoint};
 use jiff::Timestamp;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -36,7 +36,7 @@ impl QuantityUnit for Bytes {
 
 pub type ByteQuantity = Quantity<Bytes>;
 
-#[agent_definition]
+#[agent_definition(mount = "/rich-types/{name}")]
 pub trait RichTypesAgent {
     fn new(name: String) -> Self;
 
@@ -45,16 +45,24 @@ pub trait RichTypesAgent {
     fn echo_datetime(&self, value: Timestamp) -> Timestamp;
     fn echo_duration(&self, value: Duration) -> Duration;
     fn echo_quantity(&self, value: ByteQuantity) -> ByteQuantity;
+    #[endpoint(post = "/json")]
+    fn echo_json(&mut self, value: serde_json::Value) -> serde_json::Value;
+    fn json_values(&self) -> Vec<serde_json::Value>;
+    async fn rpc_json(&self, value: serde_json::Value) -> serde_json::Value;
 }
 
 pub struct RichTypesAgentImpl {
     _name: String,
+    json_values: Vec<serde_json::Value>,
 }
 
 #[agent_implementation]
 impl RichTypesAgent for RichTypesAgentImpl {
     fn new(name: String) -> Self {
-        Self { _name: name }
+        Self {
+            _name: name,
+            json_values: Vec::new(),
+        }
     }
 
     fn echo_path(&self, value: PathBuf) -> PathBuf {
@@ -75,5 +83,20 @@ impl RichTypesAgent for RichTypesAgentImpl {
 
     fn echo_quantity(&self, value: ByteQuantity) -> ByteQuantity {
         value
+    }
+
+    fn echo_json(&mut self, value: serde_json::Value) -> serde_json::Value {
+        self.json_values.push(value.clone());
+        value
+    }
+
+    fn json_values(&self) -> Vec<serde_json::Value> {
+        self.json_values.clone()
+    }
+
+    async fn rpc_json(&self, value: serde_json::Value) -> serde_json::Value {
+        RichTypesAgentClient::upsert("json-rpc-target".to_string())
+            .echo_json(value)
+            .await
     }
 }

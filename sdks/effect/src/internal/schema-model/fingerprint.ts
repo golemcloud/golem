@@ -288,6 +288,9 @@ function encodeType(encoder: CborEncoder, type: SchemaType): void {
     case "uuid":
       leaf(38)
       break
+    case "json":
+      leaf(39)
+      break
     case "datetime":
       leaf(29)
       break
@@ -442,7 +445,13 @@ function encodeMetadata(encoder: CborEncoder, metadata: MetadataEnvelope): void 
     encoder.array(1)
     encoder.unsigned(
       BigInt(
-        metadata.role.tag === "multimodal" ? 0 : metadata.role.tag === "unstructured-text" ? 1 : 2,
+        {
+          multimodal: 0,
+          "unstructured-text": 1,
+          "unstructured-binary": 2,
+          "standard-multimodal": 4,
+          "task-update": 5,
+        }[metadata.role.tag],
       ),
     )
   }

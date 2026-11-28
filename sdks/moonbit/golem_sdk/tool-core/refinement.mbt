@@ -15,6 +15,7 @@ fn schema_kind_name(body : @model.SchemaTypeBody) -> String {
     | F64(_) => "numeric"
     Char => "char"
     String => "string"
+    Json => "json"
     Text(_) => "text"
     Path(_) => "path"
     Url(_) => "url"
