@@ -63,7 +63,7 @@ async fn ts_with_retry_policy_retries_on_user_land_error(
     let executor = start_with_overrides(deps, &context, overrides).await?;
 
     // Server fails the first 3 requests with HTTP 500, succeeds on the 4th.
-    let (port, counter) = start_attempt_counter_server(3).await;
+    let (_http_server, port, counter) = start_attempt_counter_server(3).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -105,7 +105,7 @@ async fn ts_http_status_retry_policy_retries_matching_status(
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, Default::default()).await?;
 
-    let (port, counter) = start_attempt_counter_server(3).await;
+    let (_http_server, port, counter) = start_attempt_counter_server(3).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -146,7 +146,7 @@ async fn ts_invocation_events_use_method_display_name(
     let executor = start(deps, &context).await?;
 
     // Server fails the first request with HTTP 500, succeeds on the 2nd.
-    let (port, _counter) = start_attempt_counter_server(1).await;
+    let (_http_server, port, _counter) = start_attempt_counter_server(1).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)

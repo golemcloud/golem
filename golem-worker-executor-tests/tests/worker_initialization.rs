@@ -38,8 +38,8 @@ use golem_worker_executor::services::agent_types::local_type_id;
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::rpc::Rpc;
 use golem_worker_executor::services::{
-    HasActiveAgents, HasOplog, HasOplogService, HasRpc, HasShardService, HasWorkerProxy,
-    HasWorkerService, UsesAllDeps,
+    HasActiveAgents, HasOplog, HasOplogService, HasRpc, HasShardService, HasWorkerService,
+    UsesAllDeps,
 };
 use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
 use golem_worker_executor::storage::keyvalue::fault_injecting::{
@@ -49,8 +49,9 @@ use golem_worker_executor::worker::target::{ResolvedTarget, ephemeral_invocation
 use golem_worker_executor::worker::{CreateIntent, NewOwner, Worker};
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerCtx,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
+    EmulatedWorkerService, LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    TestWorkerCtx, TestWorkerExecutor, WorkerExecutorTestDependencies, WorkerServiceOptions,
+    start_with_overrides,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -554,7 +555,8 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
         CreateWorkerRequest, create_worker_response,
     };
 
-    let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
+    let (executor, seed, _, worker_service) =
+        setup_with_worker_service(last_unique_id, deps, component).await?;
     let key = IdempotencyKey::fresh();
     let resolved = ephemeral_target(&seed, "fresh-grpc-streaming-preparation", &key);
     let target = resolved.owned_agent_id.agent_id;
@@ -668,12 +670,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
     );
     let rpc_target = rpc_resolved.owned_agent_id.agent_id;
     let metadata = seed.get_initial_worker_metadata();
-    let remote = crate::fork::remote_rpc_preparing_on(
-        &executor,
-        metadata.created_by,
-        seed.all().worker_proxy(),
-        seed.all().shard_service(),
-    );
+    let remote = worker_service.remote_rpc(seed.all().shard_service());
     remote
         .create_demand(
             rpc_resolved,
@@ -2328,6 +2325,35 @@ async fn setup_with_retry_interval(
         .await?;
     let seed = seed_worker(&executor, &component).await?;
     Ok((executor, seed, faults))
+}
+
+/// As `setup`, with an emulated worker service that forwards preparations to the executor, as
+/// the worker service does when the target lives on another executor.
+async fn setup_with_worker_service(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    component: &PrecompiledComponent,
+) -> anyhow::Result<(
+    TestWorkerExecutor,
+    Arc<Worker<TestWorkerCtx>>,
+    KeyValueStorageFaults,
+    EmulatedWorkerService,
+)> {
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let worker_service = EmulatedWorkerService::start(
+        WorkerServiceOptions::default().component_owner(context.account_id),
+    )
+    .await?;
+    let overrides =
+        overrides(&faults, Duration::from_millis(50)).with_worker_service(&worker_service);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let seed = seed_worker(&executor, &component).await?;
+    Ok((executor, seed, faults, worker_service))
 }
 
 fn overrides(faults: &KeyValueStorageFaults, retry_interval: Duration) -> TestExecutorOverrides {

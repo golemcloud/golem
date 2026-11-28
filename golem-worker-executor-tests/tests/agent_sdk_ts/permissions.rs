@@ -16,41 +16,18 @@
 //! `permissions` API in `test-components/agent-sdk-ts/src/permissions.ts`.
 
 use crate::Tracing;
-use async_trait::async_trait;
-
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
-use golem_common::model::agent::{
-    AgentInvocationMode, InvocationFreshnessDisposition, ParsedAgentKey,
-};
-use golem_common::model::card::{
-    CardId, CardManagedByRuntimeDerived, ScopeCard, StoredCard, parse_polymorphic_permission,
-};
-use golem_common::model::component::ComponentId;
-use golem_common::model::component::{ComponentDto, ComponentRevision};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, OwnedAgentId, PromiseId,
-};
-use golem_common::schema::{FromSchema, SchemaValue};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
+use golem_common::model::card::{StoredCard, parse_polymorphic_permission};
+use golem_common::model::component::ComponentDto;
+use golem_common::schema::FromSchema;
 use golem_common::{agent_key, data_value};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{
-    CardRevokeResult, CardService, CardState, RuntimeCardCreation,
-};
-use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
-use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
+    EmulatedRegistryService, EmulatedWorkerService, LastUniqueId, PrecompiledComponent,
+    TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
+    WorkerServiceOptions, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -65,438 +42,6 @@ const CALLER: &str = "PermissionCaller";
 const CALLEE: &str = "PermissionCallee";
 const NO_AUTHORITY: &str = "PermissionNoAuthority";
 
-/// Runtime-created cards and revocations. Other cards are live as in [`TestCardService`].
-#[derive(Default)]
-struct ScenarioCards {
-    cards: Mutex<HashMap<CardId, StoredCard>>,
-    revoked: Mutex<HashSet<CardId>>,
-}
-
-impl ScenarioCards {
-    fn register(&self, card: StoredCard) {
-        self.cards.lock().unwrap().insert(card.card_id(), card);
-    }
-
-    fn descendants_including_self(&self, card_id: CardId) -> Vec<CardId> {
-        let cards = self.cards.lock().unwrap();
-        let mut result = vec![card_id];
-        let mut index = 0;
-        while index < result.len() {
-            let parent = result[index];
-            for card in cards.values() {
-                if card.parent_ids().contains(&parent) && !result.contains(&card.card_id()) {
-                    result.push(card.card_id());
-                }
-            }
-            index += 1;
-        }
-        result
-    }
-}
-
-struct ScenarioCardService {
-    cards: Arc<ScenarioCards>,
-}
-
-#[async_trait]
-impl CardService for ScenarioCardService {
-    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        self.cards
-            .revoked
-            .lock()
-            .unwrap()
-            .extend(card_ids.iter().copied());
-    }
-
-    async fn check_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
-        let mut states = TestCardService.check_cards(card_ids).await?;
-        let cards = self.cards.cards.lock().unwrap();
-        let revoked = self.cards.revoked.lock().unwrap();
-        for (card_id, state) in states.iter_mut() {
-            if revoked.contains(card_id) {
-                *state = CardState::Revoked;
-            } else if let Some(card) = cards.get(card_id) {
-                *state = CardState::Live(Box::new(card.clone()));
-            }
-        }
-        Ok(states)
-    }
-
-    async fn create_runtime_card(
-        &self,
-        card: StoredCard,
-        _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
-        self.cards.register(card.clone());
-        Ok(RuntimeCardCreation::Created(Box::new(card)))
-    }
-
-    async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
-        let revoked = self.cards.descendants_including_self(card_id);
-        self.cards
-            .revoked
-            .lock()
-            .unwrap()
-            .extend(revoked.iter().copied());
-        Ok(CardRevokeResult::Revoked(revoked))
-    }
-
-    async fn live_ancestor_ids_including_self(
-        &self,
-        card: &StoredCard,
-    ) -> Result<Vec<CardId>, WorkerExecutorError> {
-        let cards = self.cards.cards.lock().unwrap();
-        let revoked = self.cards.revoked.lock().unwrap();
-        let mut result = vec![card.card_id()];
-        let mut pending = card.parent_ids().to_vec();
-        while let Some(parent) = pending.pop() {
-            if result.contains(&parent) || revoked.contains(&parent) {
-                continue;
-            }
-            result.push(parent);
-            if let Some(parent_card) = cards.get(&parent) {
-                pending.extend(parent_card.parent_ids().iter().copied());
-            }
-        }
-        Ok(result)
-    }
-}
-
-type LocalCardTransferDelivery = dyn Fn(
-        AgentId,
-        EnvironmentId,
-        uuid::Uuid,
-        CardId,
-        StoredCard,
-    ) -> futures::future::BoxFuture<'static, Result<(), WorkerProxyError>>
-    + Send
-    + Sync;
-
-/// Delivers card transfers to the test executor's own gRPC endpoint. The default test proxy
-/// sends them to the public worker API, which does not run in executor tests.
-struct LocalCardTransferProxy {
-    inner: Arc<dyn WorkerProxy>,
-    delivery: Arc<Mutex<Option<Arc<LocalCardTransferDelivery>>>>,
-}
-
-#[async_trait]
-impl WorkerProxy for LocalCardTransferProxy {
-    async fn prepare(
-        &self,
-        target: &ResolvedTarget,
-        method_name: &str,
-        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
-        caller_agent_id: &AgentId,
-        caller_env: HashMap<String, String>,
-        caller_stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        caller: golem_common::model::caller::Caller,
-        auth_ctx: &AuthCtx,
-        idempotency_key: Option<IdempotencyKey>,
-        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
-    ) -> Result<AgentFingerprint, WorkerProxyError> {
-        self.inner
-            .prepare(
-                target,
-                method_name,
-                invocation,
-                caller_agent_id,
-                caller_env,
-                caller_stack,
-                config,
-                caller,
-                auth_ctx,
-                idempotency_key,
-                freshness_disposition,
-            )
-            .await
-    }
-
-    async fn create(
-        &self,
-        target: &ResolvedTarget,
-        exclusive: bool,
-        caller_agent_id: &AgentId,
-        caller_env: HashMap<String, String>,
-        caller_stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        caller: golem_common::model::caller::Caller,
-        auth_ctx: &AuthCtx,
-        idempotency_key: Option<IdempotencyKey>,
-    ) -> Result<AgentFingerprint, WorkerProxyError> {
-        self.inner
-            .create(
-                target,
-                exclusive,
-                caller_agent_id,
-                caller_env,
-                caller_stack,
-                config,
-                caller,
-                auth_ctx,
-                idempotency_key,
-            )
-            .await
-    }
-
-    async fn invoke_agent(
-        &self,
-        target: &ResolvedTarget,
-        method_name: String,
-        method_parameters: SchemaValue,
-        mode: AgentInvocationMode,
-        schedule_at: Option<jiff::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
-        freshness_disposition: InvocationFreshnessDisposition,
-        expected_callee_fingerprint: Option<AgentFingerprint>,
-        caller_agent_id: AgentId,
-        caller_env: HashMap<String, String>,
-        caller_stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        caller: golem_common::model::caller::Caller,
-        environment_id: EnvironmentId,
-        auth_ctx: &AuthCtx,
-        scope_card: Option<ScopeCard>,
-    ) -> Result<AgentInvocationOutput, WorkerProxyError> {
-        self.inner
-            .invoke_agent(
-                target,
-                method_name,
-                method_parameters,
-                mode,
-                schedule_at,
-                idempotency_key,
-                freshness_disposition,
-                expected_callee_fingerprint,
-                caller_agent_id,
-                caller_env,
-                caller_stack,
-                config,
-                caller,
-                environment_id,
-                auth_ctx,
-                scope_card,
-            )
-            .await
-    }
-
-    async fn deliver_card_transfer(
-        &self,
-        target_agent_id: &AgentId,
-        environment_id: EnvironmentId,
-        transfer_id: uuid::Uuid,
-        source_card_id: CardId,
-        card: &StoredCard,
-    ) -> Result<(), WorkerProxyError> {
-        let delivery = self.delivery.lock().unwrap().clone().ok_or_else(|| {
-            WorkerProxyError::InternalError(WorkerExecutorError::runtime(
-                "local card-transfer delivery is not connected",
-            ))
-        })?;
-        delivery(
-            *target_agent_id,
-            environment_id,
-            transfer_id,
-            source_card_id,
-            card.clone(),
-        )
-        .await
-    }
-
-    async fn update(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        target_revision: ComponentRevision,
-        mode: golem_api_grpc::proto::golem::worker::UpdateMode,
-        disable_wakeup: bool,
-        requester: golem_common::model::caller::Caller,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .update(
-                owned_agent_id,
-                target_revision,
-                mode,
-                disable_wakeup,
-                requester,
-                auth_ctx,
-            )
-            .await
-    }
-
-    async fn resume(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        force: bool,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner.resume(owned_agent_id, force, auth_ctx).await
-    }
-
-    async fn fork_worker(
-        &self,
-        source_agent_id: &OwnedAgentId,
-        target_agent_id: &AgentId,
-        oplog_index_cutoff: &OplogIndex,
-        caller: golem_common::model::caller::Caller,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .fork_worker(
-                source_agent_id,
-                target_agent_id,
-                oplog_index_cutoff,
-                caller,
-                auth_ctx,
-            )
-            .await
-    }
-
-    async fn revert(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        target: RevertWorkerTarget,
-        resolved_revert: Option<ResolvedRevert>,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .revert(owned_agent_id, target, resolved_revert, auth_ctx)
-            .await
-    }
-
-    async fn complete_promise(
-        &self,
-        environment_id: EnvironmentId,
-        promise_id: PromiseId,
-        data: Vec<u8>,
-        auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .complete_promise(environment_id, promise_id, data, auth_ctx)
-            .await
-    }
-
-    async fn cancel_invocation(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        idempotency_key: golem_common::model::InvocationId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .cancel_invocation(owned_agent_id, idempotency_key, auth_ctx)
-            .await
-    }
-
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &golem_common::model::OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::agent::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
-    async fn lookup_invocation_status(
-        &self,
-        agent_id: &AgentId,
-        idempotency_key: golem_common::model::InvocationId,
-        environment_id: Option<EnvironmentId>,
-        auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::InvocationStatus, WorkerProxyError> {
-        self.inner
-            .lookup_invocation_status(agent_id, idempotency_key, environment_id, auth_ctx)
-            .await
-    }
-
-    async fn process_oplog_entries(
-        &self,
-        target_agent_id: &AgentId,
-        environment_id: EnvironmentId,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-        idempotency_key: golem_common::model::InvocationId,
-        account_id: AccountId,
-        config: Vec<(String, String)>,
-        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
-        first_entry_index: OplogIndex,
-        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
-        auth_ctx: &AuthCtx,
-        caller: &golem_common::model::caller::Caller,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .process_oplog_entries(
-                target_agent_id,
-                environment_id,
-                component_id,
-                component_revision,
-                idempotency_key,
-                account_id,
-                config,
-                metadata,
-                first_entry_index,
-                entries,
-                auth_ctx,
-                caller,
-            )
-            .await
-    }
-}
-
-fn connect_local_card_transfer_delivery(
-    delivery: &Arc<Mutex<Option<Arc<LocalCardTransferDelivery>>>>,
-    executor: &TestWorkerExecutor,
-) {
-    let client = executor.client.clone();
-    *delivery.lock().unwrap() = Some(Arc::new(
-        move |target_agent_id, environment_id, transfer_id, source_card_id, card| {
-            let mut client = client.clone();
-            Box::pin(async move {
-                use golem_api_grpc::proto::golem::workerexecutor::v1::{
-                    DeliverCardTransferRequest, deliver_card_transfer_response,
-                };
-
-                let response = client
-                    .deliver_card_transfer(DeliverCardTransferRequest {
-                        target_agent_id: Some(target_agent_id.into()),
-                        environment_id: Some(environment_id.into()),
-                        transfer_id: Some(transfer_id.into()),
-                        card: desert_rust::serialize_to_byte_vec(&card).map_err(|error| {
-                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
-                                "failed to serialize local card transfer: {error}"
-                            )))
-                        })?,
-                        auth_ctx: Some(AuthCtx::System.into()),
-                        source_card_id: Some(source_card_id.0.into()),
-                    })
-                    .await?
-                    .into_inner();
-                match response.result {
-                    Some(deliver_card_transfer_response::Result::Success(_)) => Ok(()),
-                    Some(deliver_card_transfer_response::Result::Failure(error)) => {
-                        Err(WorkerProxyError::InternalError(
-                            WorkerExecutorError::try_from(error).map_err(|error| {
-                                WorkerProxyError::InternalError(WorkerExecutorError::unknown(error))
-                            })?,
-                        ))
-                    }
-                    None => Err(WorkerProxyError::InternalError(
-                        WorkerExecutorError::unknown(
-                            "local permission-card delivery returned no result",
-                        ),
-                    )),
-                }
-            })
-        },
-    ));
-}
-
 struct Scenario {
     executor: TestWorkerExecutor,
     component: ComponentDto,
@@ -509,30 +54,12 @@ async fn start_scenario(
     agent_sdk_ts: &PrecompiledComponent,
     caller_name: &str,
 ) -> anyhow::Result<Scenario> {
-    let cards = Arc::new(ScenarioCards::default());
-    let delivery = Arc::new(Mutex::new(None));
-    let overrides = TestExecutorOverrides {
-        create_card_service: Some(Arc::new({
-            let cards = cards.clone();
-            move || {
-                Arc::new(ScenarioCardService {
-                    cards: cards.clone(),
-                })
-            }
-        })),
-        wrap_worker_proxy: Some(Arc::new({
-            let delivery = delivery.clone();
-            move |inner| {
-                Arc::new(LocalCardTransferProxy {
-                    inner,
-                    delivery: delivery.clone(),
-                })
-            }
-        })),
-        ..Default::default()
-    };
+    let registry = EmulatedRegistryService::start().await?;
+    let worker_service = EmulatedWorkerService::start(WorkerServiceOptions::default()).await?;
+    let overrides = TestExecutorOverrides::default()
+        .with_registry(&registry)
+        .with_worker_service(&worker_service);
     let executor = start_with_overrides(deps, context, overrides).await?;
-    connect_local_card_transfer_delivery(&delivery, &executor);
 
     let caller_grants = [
         "card(*) @ * : inspect : *",
@@ -560,15 +87,18 @@ async fn start_scenario(
         .store()
         .await?;
 
+    for agent_type in [CALLER, CALLEE, NO_AUTHORITY] {
+        let card = component
+            .metadata
+            .agent_type_provision_configs
+            .get(&AgentTypeName(agent_type.to_string()))
+            .map(|config| &config.initial_permissions)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing {agent_type} initial permission card"))?;
+        registry.add_card(StoredCard::Polymorphic(card));
+    }
+
     let caller = agent_key!(CALLER, caller_name);
-    let caller_card = component
-        .metadata
-        .agent_type_provision_configs
-        .get(&caller.agent_type)
-        .map(|config| &config.initial_permissions)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("missing {CALLER} initial permission card"))?;
-    cards.register(StoredCard::Polymorphic(caller_card));
     executor.start_agent(&component.id, caller.clone()).await?;
 
     Ok(Scenario {

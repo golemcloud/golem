@@ -5,11 +5,9 @@
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
 use super::{assert_invocation_receipt, assert_no_invocation_receipt};
-use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
+use crate::custom_api::http_test_context::{HttpTestContext, per_database_test_context};
 use base64::Engine;
 use golem_common::agent_key;
-use golem_common::base_model::agent::AgentTypeName;
-use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::durable_stream::StreamTerminalRecord;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
@@ -23,7 +21,7 @@ use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
 use std::time::{Duration, Instant};
-use test_r::{define_matrix_dimension, inherit_test_dep, tag, test, test_dep, timeout};
+use test_r::{define_matrix_dimension, inherit_test_dep, tag, test, timeout};
 use uuid::Uuid;
 
 #[path = "durable_streams_client.rs"]
@@ -40,46 +38,18 @@ inherit_test_dep!(
 );
 
 async fn build_test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    make_test_context(
-        deps,
-        [
+    HttpTestContext::builder("golem_it_agent_sdk_rust_release", "golem-it:agent-sdk-rust")
+        .agents([
             "DurableStreamAgent",
             "EphemeralStreamAgent",
             "PhantomStreamAgent",
-        ]
-        .into_iter()
-        .map(|name| {
-            (
-                AgentTypeName(name.to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            )
-        })
-        .collect(),
-        "golem_it_agent_sdk_rust_release",
-        "golem-it:agent-sdk-rust",
-    )
-    .await
-    .unwrap()
+        ])
+        .build(deps)
+        .await
+        .unwrap()
 }
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    build_test_context(deps).await
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "postgres")]
-async fn test_context_postgres(
-    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
-) -> HttpTestContext {
-    build_test_context(deps).await
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
-async fn test_context_sqlite(
-    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
-) -> HttpTestContext {
-    build_test_context(deps).await
-}
+per_database_test_context!(HttpTestContext, build_test_context);
 
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
@@ -257,17 +227,12 @@ async fn append_bytes(
 async fn string_stream_rejects_text_content_type_at_deployment(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    let error = make_test_context(
-        deps,
-        vec![(
-            AgentTypeName("InvalidDurableStreamAgent".to_string()),
-            HttpApiDeploymentAgentOptions::default(),
-        )],
-        "golem_it_agent_sdk_rust_release",
-        "golem-it:agent-sdk-rust",
-    )
-    .await
-    .expect_err("text/plain on stream<string> must fail deployment");
+    let error =
+        HttpTestContext::builder("golem_it_agent_sdk_rust_release", "golem-it:agent-sdk-rust")
+            .agents(["InvalidDurableStreamAgent"])
+            .build(deps)
+            .await
+            .expect_err("text/plain on stream<string> must fail deployment");
     let message = format!("{error:#}");
     assert!(
         message.contains("Durable Streams JSON slot 'input' must use application/json"),

@@ -4,6 +4,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     BlobStoreExistsGate, FailingBlobStoreService, start_with_resource_limits_and_overrides,
@@ -147,7 +148,7 @@ async fn pending_stop(
             PublicOplogEntry::Start(start) if matches_boundary(&start.function_name) => Some(entry.oplog_index), _ => None }).collect();
         ensure!(starts.len() == 1, "expected one open boundary: {before:#?}");
         let start = starts[0];
-        ensure!(terminal_count(&before, start) == 0);
+        ensure!(before.call(start).terminal_count() == 0);
         ensure!(!invocation.is_finished());
         limits.initialize_account(context.account_id).await?;
         let mut raw = worker.raw_interrupt_for_test();
@@ -164,7 +165,7 @@ async fn pending_stop(
         refresh.await?;
         ensure!(blob.dropped.load(Ordering::SeqCst) == 1 && blob.attempts.load(Ordering::SeqCst) == 1);
         let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-        ensure!(terminal_count(&stopped, start) == 0);
+        ensure!(stopped.call(start).terminal_count() == 0);
         ensure!(!stopped.iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Cancelled(_))));
         let raw_entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         let errors: Vec<_> = raw_entries.values().filter_map(|entry| match entry { OplogEntry::Error { error, .. } => Some(error), _ => None }).collect();
@@ -178,7 +179,7 @@ async fn pending_stop(
             let output = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await.context("same-key continuation")???;
             ensure!(!output.into_typed::<bool>()?);
             let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-            ensure!(terminal_count(&recovered, start) == 1);
+            ensure!(recovered.call(start).terminal_count() == 1);
             let recovered_starts: Vec<_> = recovered.iter().filter_map(|entry| match &entry.entry {
                 PublicOplogEntry::Start(call) if matches_boundary(&call.function_name) => Some(entry.oplog_index),
                 _ => None,
@@ -200,18 +201,4 @@ async fn pending_stop(
         let _ = invocation.await;
     }
     result
-}
-
-fn terminal_count(
-    entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
-    start: OplogIndex,
-) -> usize {
-    entries
-        .iter()
-        .filter(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) => end.start_index == start,
-            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
-            _ => false,
-        })
-        .count()
 }

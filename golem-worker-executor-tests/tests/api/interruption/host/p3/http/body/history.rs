@@ -5,6 +5,7 @@ use golem_common::model::oplog::{
     PublicDurableFunctionType, PublicOplogEntryWithIndex,
 };
 use golem_common::schema::FromSchema;
+use golem_worker_executor_test_utils::{OplogShape, OplogView};
 
 pub(super) const SEND: &str = "http::client::send";
 const BODY: &str = "http::types::response::consume-body";
@@ -58,17 +59,6 @@ pub(super) fn assert_invocation(
     Ok(started[0])
 }
 
-fn terminal_count(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> usize {
-    entries
-        .iter()
-        .filter(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) => end.start_index == start,
-            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
-            _ => false,
-        })
-        .count()
-}
-
 fn end_and_delivery(
     entries: &[PublicOplogEntryWithIndex],
     start: OplogIndex,
@@ -90,7 +80,7 @@ fn end_and_delivery(
         })
         .collect();
     ensure!(
-        terminal_count(entries, start) == 1 && ends.len() == 1 && deliveries.len() == 1,
+        entries.call(start).terminal_count() == 1 && ends.len() == 1 && deliveries.len() == 1,
         "Start {start} needs exactly one End and delivery: {entries:#?}"
     );
     ensure!(start < ends[0] && ends[0] < deliveries[0]);
@@ -120,7 +110,7 @@ fn chunk_response(
 
 fn assert_open(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> anyhow::Result<()> {
     ensure!(
-        terminal_count(entries, start) == 0,
+        entries.call(start).terminal_count() == 0,
         "Start {start} must remain incomplete"
     );
     ensure!(
@@ -211,7 +201,7 @@ fn inspect_pending(
                 if ![pending.parent, pending.next].contains(&entry.oplog_index) =>
             {
                 ensure!(
-                    terminal_count(entries, entry.oplog_index) == 1,
+                    entries.call(entry.oplog_index).terminal_count() == 1,
                     "unexpected additional open Start: {entry:?}"
                 );
             }
@@ -354,27 +344,19 @@ pub(super) fn assert_settled_history(
     original: PendingBody,
 ) -> anyhow::Result<()> {
     assert_retained(entries, original)?;
-    let last_finished = entries
-        .iter()
-        .rev()
-        .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-        .context("missing invocation Finished")?
-        .oplog_index;
-    for entry in entries {
-        match &entry.entry {
-            PublicOplogEntry::Start(_) => {
-                ensure!(
-                    terminal_count(entries, entry.oplog_index) == 1,
-                    "unsettled/duplicate visible Start: {entry:?}"
-                );
-                ensure!(entry.oplog_index < last_finished);
-            }
-            PublicOplogEntry::End(_) => ensure!(entry.oplog_index < last_finished),
-            PublicOplogEntry::Cancelled(_)
-            | PublicOplogEntry::CompletionDiscarded(_)
-            | PublicOplogEntry::Error(_) => anyhow::bail!("unexpected terminal: {entry:?}"),
-            _ => {}
-        }
-    }
-    Ok(())
+    OplogShape::of(entries)
+        .no_background_work()
+        .forbid(
+            "a failed invocation, cancellation, discard or error hint",
+            |entry| {
+                matches!(
+                    entry,
+                    PublicOplogEntry::AgentInvocationFailed(_)
+                        | PublicOplogEntry::Cancelled(_)
+                        | PublicOplogEntry::CompletionDiscarded(_)
+                        | PublicOplogEntry::Error(_)
+                )
+            },
+        )
+        .ensure_settled()
 }

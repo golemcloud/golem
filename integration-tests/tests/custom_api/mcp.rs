@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::custom_api::http_test_context::{DomainEnvironment, per_database_test_context};
 use golem_client::api::RegistryServiceClient;
 use golem_common::base_model::agent::AgentTypeName;
-use golem_common::base_model::domain_registration::{Domain, DomainRegistrationCreation};
+use golem_common::base_model::domain_registration::Domain;
 use golem_common::base_model::mcp_deployment::{McpDeploymentAgentOptions, McpDeploymentCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{EnvironmentOptions, TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use integration_tests::mcp_client::McpClient;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use test_r::{define_matrix_dimension, tag, test_dep};
+use test_r::{define_matrix_dimension, tag};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -66,30 +67,15 @@ impl McpTestContext {
 }
 
 async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
-    let user = deps.user().await.unwrap().with_auto_deploy(false);
-    let client = deps.registry_service().client(&user.token).await;
-    let (_, env) = user
-        .app_and_env_custom(&EnvironmentOptions {
-            security_overrides: true,
-            version_check: false,
-            compatibility_check: false,
-        })
-        .await
-        .unwrap();
+    let DomainEnvironment {
+        user,
+        environment,
+        domain,
+        client,
+        ..
+    } = DomainEnvironment::create(deps).await.unwrap();
 
-    let domain = Domain(format!("{}.golem.cloud", env.id));
-
-    client
-        .create_domain_registration(
-            &env.id.0,
-            &DomainRegistrationCreation {
-                domain: domain.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-    user.component(&env.id, "golem_it_mcp_release")
+    user.component(&environment.id, "golem_it_mcp_release")
         .name("golem-it:mcp")
         .store()
         .await
@@ -119,11 +105,11 @@ async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     };
 
     client
-        .create_mcp_deployment(&env.id.0, &mcp_deployment_creation)
+        .create_mcp_deployment(&environment.id.0, &mcp_deployment_creation)
         .await
         .unwrap();
 
-    user.deploy_environment(env.id).await.unwrap();
+    user.deploy_environment(environment.id).await.unwrap();
 
     McpTestContext {
         domain,
@@ -132,24 +118,7 @@ async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     }
 }
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
-    build_test_context(deps).await
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "postgres")]
-async fn test_context_postgres(
-    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
-) -> McpTestContext {
-    build_test_context(deps).await
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
-async fn test_context_sqlite(
-    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
-) -> McpTestContext {
-    build_test_context(deps).await
-}
+per_database_test_context!(McpTestContext, build_test_context);
 
 define_matrix_dimension!(db: McpTestContext -> "postgres", "sqlite");
 

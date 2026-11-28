@@ -26,7 +26,22 @@ precedent for adding more.
 This is a preference, not an absolute ban. An unavoidable hook needs a concrete explanation of the
 otherwise untestable guarantee and must have the smallest practical scope. Do not replace causal
 synchronization with sleeps, retries, weaker assertions, reduced concurrency, or a copied state
-machine. Timeouts bound failures; they do not establish ordering.
+machine. Timeouts bound failures; they do not establish ordering. Bound a wait with
+`within(timeout, what, future)` from `golem_test_framework::dsl`, so that a timeout names what
+the test waited for, and use `GATE_TIMEOUT`, `SETTLE_TIMEOUT` or a named constant of the file.
+Wait for a stdout line with `WorkerLogEventStream::wait_for_stdout`. Check a rejected or failed
+invocation by its worker error with `assert_worker_error!`, not by the text of the error.
+
+Put a test double at the boundary where the executor leaves its process, and keep the
+production code on the executor's side. To change some blob-storage operations, implement
+`BlobStorageDecorator` and pass `wrap_blob_storage()`. For calls the executor makes to the worker
+service, such as card transfers, start an `EmulatedWorkerService` and pass it with
+`TestExecutorOverrides::with_worker_service`. To prepare, fork or open a session on an agent of
+another executor, give it `WorkerServiceOptions::component_owner`, and reach it with
+`EmulatedWorkerService::remote_rpc`. For permission cards that the registry keeps,
+start an `EmulatedRegistryService`, add the initial cards, and pass it with `with_registry`.
+Do not write another wrapper of `BlobStorageBackend`, `WorkerProxy` or `CardService` for these
+cases.
 
 ## Rules for durability, replay and RPC tests
 
@@ -40,9 +55,10 @@ machine. Timeouts bound failures; they do not establish ordering.
   after `End` before delivery, after `AgentInvocationFinished`, during the drain before
   `AgentInvocationSettled`, during snapshot load, and during an update, using `simulated_crash`,
   wrapped services, or a guest method that effects-then-traps.
-- **Restart for real.** Drop the executor and `start_with_overrides` again (in-process executor
-  teardown and recreation over the same storage — a genuine reconstruction, not OS process
-  death), or `simulated_crash`; a cursor reset or `resume` on a resident worker is not a restart.
+- **Restart for real.** `executor.restart(Teardown::Drop | Shutdown | Release)` (in-process
+  executor teardown and recreation over the same storage with the same start function — a
+  genuine reconstruction, not OS process death; `restart_with` changes the overrides on purpose),
+  or `simulated_crash`; a cursor reset or `resume` on a resident worker is not a restart.
   Then check both guest-visible state and oplog shape (`get_oplog`, `search_oplog`): one
   `Finished` per key; every `Start` in successfully settled history has a terminal, except a
   `LeaveIncompleteOnDrop` call that was in flight when its entity body was cancelled; any other
@@ -53,7 +69,10 @@ machine. Timeouts bound failures; they do not establish ordering.
   including a manual update's, oplog-processor batches and external-tool invocations). `Start`/`End` entries between an invocation's terminal
   and its `Settled` are its background work and are expected. The exception is the terminal of a
   retained call or deferred destructor that a later invocation drives, or a task parked at a safe
-  park point (see `src/worker/AGENTS.md`).
+  park point (see `src/worker/AGENTS.md`). Check these rules with `OplogShape` from
+  `golem-worker-executor-test-utils` instead of a local copy, and name each exception with its
+  builder method (`crashed_during`, `left_incomplete_on_drop`, `settled_by_later_invocation`,
+  `in_flight`); select the entries of one call or invocation with `OplogView`.
 - **Prove no repeated effect on completed replay.** Stop or count the dependency before the
   restart; replay of a completed call must not touch it.
 - **Use asymmetric concurrent orderings.** Completion order must differ from initiation order in
@@ -61,7 +80,8 @@ machine. Timeouts bound failures; they do not establish ordering.
 - **Streams and tool bodies: crash at checkpoints, assert by offset and by `Start`.** Crash the
   producer after a committed `StreamItems` and the consumer after a journaled item; assert each
   item is observed once and one terminal is recorded. Drive tool bodies to named checkpoints with
-  the in-process crash-checkpoint server in `tool_streaming.rs` (never an external process) and
+  the in-process `CrashCheckpointServer` and `PromiseCheckpointServer` from
+  `golem-worker-executor-test-utils` (never an external process) and
   assert one entity terminal per `Start` and no repeated external effect on completed replay
   (the body's guest export does run again; count what it calls, not whether it ran).
 - **Replay errors are findings.** `unexpected_oplog_entry`, "no matching Start", extra entries or

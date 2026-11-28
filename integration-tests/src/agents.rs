@@ -260,36 +260,6 @@ pub fn keyed_agent_id(
     ))
 }
 
-/// The protobuf constructor of `key`: its agent type and constructor parameters.
-pub fn proto_agent_key(
-    key: &ParsedAgentKey,
-) -> anyhow::Result<golem_api_grpc::proto::golem::worker::AgentKey> {
-    AgentKey::new(key.agent_type.clone(), key.parameters.clone())
-        .map_err(|err| anyhow!("Invalid agent key {key}: {err}"))?
-        .try_into()
-        .map_err(|err: String| anyhow!("Invalid agent key {key}: {err}"))
-}
-
-/// The protobuf target of the keyed agent of `key`.
-pub fn key_target(
-    key: &ParsedAgentKey,
-) -> anyhow::Result<golem_api_grpc::proto::golem::worker::AgentTarget> {
-    Ok(golem_api_grpc::proto::golem::worker::AgentTarget {
-        target: Some(
-            golem_api_grpc::proto::golem::worker::agent_target::Target::Key(proto_agent_key(key)?),
-        ),
-    })
-}
-
-/// The protobuf target of the agent that has the ID `agent_id`.
-pub fn id_target(agent_id: AgentId) -> golem_api_grpc::proto::golem::worker::AgentTarget {
-    golem_api_grpc::proto::golem::worker::AgentTarget {
-        target: Some(
-            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(agent_id.into()),
-        ),
-    }
-}
-
 /// The ID that the keyed agent of `key` has in the environment of the component, whether or
 /// not the agent exists. It reads the type ID from the environment's deployed agent types.
 pub async fn derive_keyed_agent_id<Deps: TestDependencies>(

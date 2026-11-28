@@ -12,17 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::http_test_context::{
-    HttpTestContext, make_test_context, make_test_context_with_openapi_endpoint,
-};
+use crate::custom_api::http_test_context::{HttpTestContext, per_database_test_context};
 use goldenfile::Mint;
-use golem_common::model::agent::AgentTypeName;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use std::io::Write;
-use test_r::{define_matrix_dimension, test_dep};
+use test_r::define_matrix_dimension;
 use test_r::{inherit_test_dep, test};
 
 /// Normalizes server URLs in OpenAPI spec strings by replacing dynamic domains with placeholders
@@ -42,47 +38,14 @@ inherit_test_dep!(
 );
 
 async fn build_test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    make_test_context(
-        deps,
-        vec![
-            (
-                AgentTypeName("HttpAgent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-            (
-                AgentTypeName("CorsAgent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-            (
-                AgentTypeName("WebhookAgent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-        ],
-        "golem_it_agent_sdk_rust_release",
-        "golem-it:agent-sdk-rust",
-    )
-    .await
-    .unwrap()
+    HttpTestContext::builder("golem_it_agent_sdk_rust_release", "golem-it:agent-sdk-rust")
+        .agents(["HttpAgent", "CorsAgent", "WebhookAgent"])
+        .build(deps)
+        .await
+        .unwrap()
 }
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    build_test_context(deps).await
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "postgres")]
-async fn test_context_postgres(
-    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
-) -> HttpTestContext {
-    build_test_context(deps).await
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
-async fn test_context_sqlite(
-    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
-) -> HttpTestContext {
-    build_test_context(deps).await
-}
+per_database_test_context!(HttpTestContext, build_test_context);
 
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
@@ -161,27 +124,12 @@ async fn test_open_api_custom_prefix_json_generation(
     let mut mint = Mint::new("tests/goldenfiles");
     let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_json.json")?;
 
-    let agent = make_test_context_with_openapi_endpoint(
-        deps,
-        vec![
-            (
-                AgentTypeName("HttpAgent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-            (
-                AgentTypeName("CorsAgent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-            (
-                AgentTypeName("WebhookAgent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-        ],
-        "golem_it_agent_sdk_rust_release",
-        "golem-it:agent-sdk-rust",
-        "/docs".to_string(),
-    )
-    .await?;
+    let agent =
+        HttpTestContext::builder("golem_it_agent_sdk_rust_release", "golem-it:agent-sdk-rust")
+            .agents(["HttpAgent", "CorsAgent", "WebhookAgent"])
+            .openapi_endpoint("/docs")
+            .build(deps)
+            .await?;
 
     let json_response = agent
         .client
@@ -246,7 +194,6 @@ async fn test_open_api_custom_prefix_json_generation(
 async fn openapi_provider_context_cache_and_failure_corpus(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    use crate::custom_api::http_test_context::make_test_context_with_files;
     use golem_client::api::RegistryServiceClient;
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -268,16 +215,10 @@ async fn openapi_provider_context_cache_and_failure_corpus(
     let fixed = case("cache-fixed-provider-context");
     let isolated = case("cache-provider-failure-isolated");
     let component = "golem_it_agent_rpc_rust_release";
-    let context = make_test_context_with_files(
-        deps,
-        vec![(
-            AgentTypeName("StaticHttpRouter".into()),
-            HttpApiDeploymentAgentOptions::default(),
-        )],
-        component,
-        "golem-it:agent-rpc-rust",
-        String::new(),
-        &[(
+    let context = HttpTestContext::builder(component, "golem-it:agent-rpc-rust")
+        .agents(["StaticHttpRouter"])
+        .openapi_endpoint("")
+        .files(
             "StaticHttpRouter",
             vec![IFSEntry {
                 source_path: "initial-file-system/files/foo.txt".into(),
@@ -285,9 +226,9 @@ async fn openapi_provider_context_cache_and_failure_corpus(
                     .map_err(anyhow::Error::msg)?,
                 permissions: AgentFilePermissions::ReadOnly,
             }],
-        )],
-    )
-    .await?;
+        )
+        .build(deps)
+        .await?;
     let selected = fixed["input"]["component_revision"].as_u64().unwrap();
     let mut current = context
         .user

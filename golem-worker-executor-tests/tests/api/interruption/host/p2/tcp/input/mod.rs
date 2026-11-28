@@ -13,6 +13,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::{OplogShape, OplogView};
 use request_tasks::{finish_input_test, join_request, request_is_finished, start_refresh};
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -247,7 +248,8 @@ fn input_setup(
         if let PublicOplogEntry::Start(start) = &entry.entry {
             ensure!(start.parent_start_index.is_none() && start.observational_owner.is_none());
             ensure!(
-                entry.oplog_index == inputs[0] || terminal_count(entries, entry.oplog_index) == 1,
+                entry.oplog_index == inputs[0]
+                    || entries.call(entry.oplog_index).terminal_count() == 1,
                 "setup Start must be completed: {entry:?}"
             );
         }
@@ -450,7 +452,7 @@ async fn pending_input(
                 "pending splice must not send or close before input arrives"
             );
         }
-        ensure!(terminal_count(&entries, input_start) == 0, "the input is pending");
+        ensure!(entries.call(input_start).terminal_count() == 0, "the input is pending");
         info!(
             ?resource, ?mode, ?operation, %key, ?id, %connect_start, %input_start, ?initial, connections,
             "P2 connect completed; TCP input Start recorded; peer has sent no data"
@@ -521,7 +523,7 @@ async fn pending_input(
             "interruption must preserve the completed setup"
         );
         ensure!(
-            terminal_count(&stopped, input_start) == 0,
+            stopped.call(input_start).terminal_count() == 0,
             "interruption cannot invent an input terminal"
         );
         let entries = worker
@@ -635,7 +637,7 @@ async fn pending_input(
                 "replay keeps the connect poll; the reconnect adds one: {polls:?}"
             );
             ensure!(
-                terminal_count(&recovered, input_start) == 1
+                recovered.call(input_start).terminal_count() == 1
                     && ends_with_connection_loss(&recovered, input_start),
                 "the pending input completes with the lost connection"
             );
@@ -781,39 +783,16 @@ fn poll_starts(entries: &[PublicOplogEntryWithIndex]) -> Vec<OplogIndex> {
         .collect()
 }
 
-fn terminal_count(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> usize {
-    entries
-        .iter()
-        .filter(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) => end.start_index == start,
-            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
-            _ => false,
-        })
-        .count()
-}
-
 fn assert_settled_history(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<()> {
-    let last_finished = entries
-        .iter()
-        .rev()
-        .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-        .context("missing invocation terminal")?
-        .oplog_index;
-    for entry in entries {
-        match &entry.entry {
-            PublicOplogEntry::Start(_) => {
-                ensure!(
-                    terminal_count(entries, entry.oplog_index) == 1,
-                    "unsettled/duplicate Start: {entry:?}"
-                );
-                ensure!(entry.oplog_index < last_finished);
-            }
-            PublicOplogEntry::End(_) => ensure!(entry.oplog_index < last_finished),
-            PublicOplogEntry::Cancelled(_) | PublicOplogEntry::Error(_) => {
-                anyhow::bail!("unexpected terminal: {entry:?}")
-            }
-            _ => {}
-        }
-    }
-    Ok(())
+    OplogShape::of(entries)
+        .no_background_work()
+        .forbid("a failed invocation, cancellation or error hint", |entry| {
+            matches!(
+                entry,
+                PublicOplogEntry::AgentInvocationFailed(_)
+                    | PublicOplogEntry::Cancelled(_)
+                    | PublicOplogEntry::Error(_)
+            )
+        })
+        .ensure_settled()
 }

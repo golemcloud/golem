@@ -29,7 +29,7 @@ use golem_common::model::component::{
     ToolProvisionConfigCreation,
 };
 use golem_common::model::deployment::{
-    DeploymentAgentSecretDefault, DeploymentPlan, DeploymentRollback, DeploymentVersion,
+    DeploymentAgentSecretDefault, DeploymentRollback, DeploymentVersion,
 };
 use golem_common::model::diff::RemoteToolMiddlewareDeployment as DiffRemoteToolMiddlewareDeployment;
 use golem_common::model::diff::{
@@ -77,7 +77,7 @@ use golem_common::{agent_key, data_value};
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::{BlobStorageLabelledApi, BlobStorageNamespace};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended, deployment_from_plan};
 use integration_tests::agents::lookup_keyed_agent;
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
@@ -400,32 +400,6 @@ struct StreamEvidence {
     completion: String,
 }
 
-fn deployment_creation(
-    plan: &DeploymentPlan,
-    version: &str,
-    expected_deployment_hash: Hash,
-    publish_tools: Vec<ToolName>,
-    remote_tools: Vec<RemoteToolDeployment>,
-) -> DeploymentCreation {
-    DeploymentCreation {
-        current_revision: plan.current_revision,
-        expected_deployment_hash,
-        version: DeploymentVersion(version.to_string()),
-        agent_secret_defaults: Vec::new(),
-        quota_resource_defaults: Vec::new(),
-        retry_policy_defaults: Vec::new(),
-        publish_tools,
-        remote_tools,
-        mcp_imports: Vec::new(),
-        publish_tool_middlewares: Vec::new(),
-        remote_tool_middlewares: Vec::new(),
-        universal_tool_middlewares: Vec::new(),
-        environment_tool_middleware_bindings: Default::default(),
-        agent_tool_middleware_bindings: Default::default(),
-        replace_incompatible_agent_secrets: false,
-    }
-}
-
 fn external(value: SchemaValue) -> ExternalSchemaValue {
     ExternalSchemaValue::try_from(value).unwrap()
 }
@@ -515,10 +489,7 @@ async fn packaged_wasm_uses_one_compiled_artifact_across_environments(
             .get_environment_deployment_plan(&environment.id.0)
             .await?;
         client
-            .deploy_environment(
-                &environment.id.0,
-                &deployment_creation(&plan, "0.0.1", plan.deployment_hash, vec![], vec![]),
-            )
+            .deploy_environment(&environment.id.0, &deployment_from_plan(&plan, "0.0.1"))
             .await?;
         if environment.id == first.id {
             let artifact = wait_for_compiled_artifact(&blob_storage, wasm_hash).await?;
@@ -590,26 +561,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
 
     let deployment = client
-        .deploy_environment(
-            &env.id.0,
-            &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
-            },
-        )
+        .deploy_environment(&env.id.0, &deployment_from_plan(&plan, "0.0.1"))
         .await?;
 
     // plan hash and actual hash are the same
@@ -697,21 +649,8 @@ async fn deploy_rejects_reset_secret_override_when_compatibility_check_enabled(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
                 replace_incompatible_agent_secrets: true,
+                ..deployment_from_plan(&plan, "0.0.1")
             },
         )
         .await;
@@ -760,21 +699,8 @@ async fn deploy_allows_reset_secret_override_when_compatibility_check_disabled(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
                 replace_incompatible_agent_secrets: true,
+                ..deployment_from_plan(&plan, "0.0.1")
             },
         )
         .await?;
@@ -849,26 +775,7 @@ async fn get_component_version_from_previous_deployment(
     let plan_1 = client.get_environment_deployment_plan(&env.id.0).await?;
 
     let deployment_1 = client
-        .deploy_environment(
-            &env.id.0,
-            &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan_1.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
-            },
-        )
+        .deploy_environment(&env.id.0, &deployment_from_plan(&plan_1, "0.0.1"))
         .await?;
 
     let updated_component = client
@@ -908,20 +815,7 @@ async fn get_component_version_from_previous_deployment(
             &env.id.0,
             &DeploymentCreation {
                 current_revision: Some(deployment_1.current_revision),
-                expected_deployment_hash: plan_2.deployment_hash,
-                version: DeploymentVersion("0.0.2".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan_2, "0.0.2")
             },
         )
         .await?;
@@ -1011,26 +905,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     assert_eq!(plan.http_api_deployments[0].domain, domain);
 
     let deployment = client
-        .deploy_environment(
-            &env.id.0,
-            &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
-            },
-        )
+        .deploy_environment(&env.id.0, &deployment_from_plan(&plan, "0.0.1"))
         .await?;
     assert_eq!(deployment.deployment_hash, plan.deployment_hash);
 
@@ -1228,24 +1103,11 @@ async fn deploy_creates_missing_secret_from_default(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!("foo"),
                 }],
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan, "0.0.1")
             },
         )
         .await?;
@@ -1305,24 +1167,11 @@ async fn deploy_ignores_default_if_secret_already_exists(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!("foo"),
                 }],
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan, "0.0.1")
             },
         )
         .await?;
@@ -1384,24 +1233,11 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!("foo"),
                 }],
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan, "0.0.1")
             },
         )
         .await?;
@@ -1462,24 +1298,11 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!("abc"),
                 }],
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan, "0.0.1")
             },
         )
         .await;
@@ -1516,24 +1339,11 @@ async fn deploy_fails_if_secret_default_mismatches_component(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: None,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion("0.0.1".to_string()),
-                publish_tools: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
-                remote_tool_middlewares: Vec::new(),
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                remote_tools: Vec::new(),
-                mcp_imports: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!(false),
                 }],
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan, "0.0.1")
             },
         )
         .await;
@@ -1601,13 +1411,11 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
     publisher_client
         .deploy_environment(
             &publisher_env.id.0,
-            &deployment_creation(
-                &publisher_plan,
-                "publisher-1.2.0",
-                publisher_hash_input.hash()?,
-                vec![tool_name.clone()],
-                Vec::new(),
-            ),
+            &DeploymentCreation {
+                expected_deployment_hash: publisher_hash_input.hash()?,
+                publish_tools: vec![tool_name.clone()],
+                ..deployment_from_plan(&publisher_plan, "publisher-1.2.0")
+            },
         )
         .await?;
 
@@ -1681,13 +1489,11 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
     let ungranted_deploy = consumer_client
         .deploy_environment(
             &other_consumer_env.id.0,
-            &deployment_creation(
-                &other_plan,
-                "ungranted",
-                other_hash_input.hash()?,
-                Vec::new(),
-                vec![other_remote_request],
-            ),
+            &DeploymentCreation {
+                expected_deployment_hash: other_hash_input.hash()?,
+                remote_tools: vec![other_remote_request],
+                ..deployment_from_plan(&other_plan, "ungranted")
+            },
         )
         .await;
     assert_matches!(
@@ -1723,13 +1529,11 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
     let consumer_deployment_v12 = consumer_client
         .deploy_environment(
             &consumer_env.id.0,
-            &deployment_creation(
-                &consumer_plan_v12,
-                "consumer-1.2.0",
-                consumer_hash_input_v12.hash()?,
-                Vec::new(),
-                vec![remote_v12_request],
-            ),
+            &DeploymentCreation {
+                expected_deployment_hash: consumer_hash_input_v12.hash()?,
+                remote_tools: vec![remote_v12_request],
+                ..deployment_from_plan(&consumer_plan_v12, "consumer-1.2.0")
+            },
         )
         .await?;
     let consumer_summary_v12 = consumer_client
@@ -1804,13 +1608,11 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
     publisher_client
         .deploy_environment(
             &publisher_env.id.0,
-            &deployment_creation(
-                &publisher_plan_v13,
-                "publisher-1.3.0",
-                publisher_hash_input_v13.hash()?,
-                vec![tool_name.clone()],
-                Vec::new(),
-            ),
+            &DeploymentCreation {
+                expected_deployment_hash: publisher_hash_input_v13.hash()?,
+                publish_tools: vec![tool_name.clone()],
+                ..deployment_from_plan(&publisher_plan_v13, "publisher-1.3.0")
+            },
         )
         .await?;
     let release_v13 = publisher_client
@@ -1869,13 +1671,11 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
     let consumer_deployment_v13 = consumer_client
         .deploy_environment(
             &consumer_env.id.0,
-            &deployment_creation(
-                &consumer_plan_v13,
-                "consumer-1.3.0",
-                consumer_hash_input_v13.hash()?,
-                Vec::new(),
-                vec![remote_v13_request],
-            ),
+            &DeploymentCreation {
+                expected_deployment_hash: consumer_hash_input_v13.hash()?,
+                remote_tools: vec![remote_v13_request],
+                ..deployment_from_plan(&consumer_plan_v13, "consumer-1.3.0")
+            },
         )
         .await?;
     let consumer_summary_v13 = consumer_client
@@ -2068,21 +1868,11 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: plan.current_revision,
                 expected_deployment_hash: hash_input.hash()?,
-                version: DeploymentVersion("path-policy-e2e".to_string()),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                publish_tools: Vec::new(),
                 remote_tools: remote_tools.clone(),
-                mcp_imports: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: vec![remote_middleware.clone()],
                 universal_tool_middlewares: vec![installation.clone()],
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan, "path-policy-e2e")
             },
         )
         .await?;
@@ -2137,21 +1927,10 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: plan.current_revision,
                 expected_deployment_hash: hash_input.hash()?,
-                version: DeploymentVersion("path-policy-selective".to_string()),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                publish_tools: Vec::new(),
                 remote_tools: remote_tools.clone(),
-                mcp_imports: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: vec![remote_middleware.clone()],
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan, "path-policy-selective")
             },
         )
         .await?;
@@ -2306,21 +2085,10 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_revision: plan.current_revision,
                 expected_deployment_hash: hash_input.hash()?,
-                version: DeploymentVersion("path-policy-no-filesystem".to_string()),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-                retry_policy_defaults: Vec::new(),
-                publish_tools: Vec::new(),
                 remote_tools,
-                mcp_imports: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: vec![remote_middleware],
-                universal_tool_middlewares: Vec::new(),
-                environment_tool_middleware_bindings: Default::default(),
-                agent_tool_middleware_bindings: Default::default(),
-                replace_incompatible_agent_secrets: false,
+                ..deployment_from_plan(&plan, "path-policy-no-filesystem")
             },
         )
         .await?;
@@ -2416,30 +2184,6 @@ async fn tool_middleware_lookup_with_invalid_name_keeps_registry_serving(
     Ok(())
 }
 
-fn empty_deployment_creation(
-    current_revision: Option<golem_common::model::deployment::CurrentDeploymentRevision>,
-    expected_deployment_hash: Hash,
-    version: &str,
-) -> DeploymentCreation {
-    DeploymentCreation {
-        current_revision,
-        expected_deployment_hash,
-        version: DeploymentVersion(version.to_string()),
-        agent_secret_defaults: Vec::new(),
-        quota_resource_defaults: Vec::new(),
-        retry_policy_defaults: Vec::new(),
-        publish_tools: Vec::new(),
-        remote_tools: Vec::new(),
-        mcp_imports: Vec::new(),
-        publish_tool_middlewares: Vec::new(),
-        remote_tool_middlewares: Vec::new(),
-        universal_tool_middlewares: Vec::new(),
-        environment_tool_middleware_bindings: Default::default(),
-        agent_tool_middleware_bindings: Default::default(),
-        replace_incompatible_agent_secrets: false,
-    }
-}
-
 /// Deploys the `it_agent_counters_release` component again with its agent type declarations
 /// changed by `change`; the component's WASM stays the same. Agent types that `change` adds
 /// get initial permissions for `account_email`.
@@ -2510,7 +2254,10 @@ async fn deploy_counters_with_declarations(
     let deployment = client
         .deploy_environment(
             &env_id.0,
-            &empty_deployment_creation(*current_revision, plan.deployment_hash, version),
+            &DeploymentCreation {
+                current_revision: *current_revision,
+                ..deployment_from_plan(&plan, version)
+            },
         )
         .await?;
     *current_revision = Some(deployment.current_revision);
@@ -2591,10 +2338,7 @@ async fn deploy_checks_constructor_changes_against_the_last_deployed_constructor
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
     let mut current_revision = Some(
         client
-            .deploy_environment(
-                &env.id.0,
-                &empty_deployment_creation(None, plan.deployment_hash, "0.0.1"),
-            )
+            .deploy_environment(&env.id.0, &deployment_from_plan(&plan, "0.0.1"))
             .await?
             .current_revision,
     );
@@ -2680,10 +2424,7 @@ async fn deploy_warns_about_constructor_changes_when_compatibility_check_disable
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
     let mut current_revision = Some(
         client
-            .deploy_environment(
-                &env.id.0,
-                &empty_deployment_creation(None, plan.deployment_hash, "0.0.1"),
-            )
+            .deploy_environment(&env.id.0, &deployment_from_plan(&plan, "0.0.1"))
             .await?
             .current_revision,
     );

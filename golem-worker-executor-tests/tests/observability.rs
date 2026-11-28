@@ -27,7 +27,8 @@ use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use pretty_assertions::assert_eq;
 
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, callers, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, callers, start,
 };
 use http::HeaderMap;
 use log::info;
@@ -35,7 +36,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
-use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -356,21 +356,18 @@ async fn p3_unread_response_cleanup_reconstructs_before_next_accessor(
     let context = TestContext::new(last_unique_id);
     let requests = Arc::new(AtomicUsize::new(0));
     let server_requests = requests.clone();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-    let server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/drop-unread",
-            post(move || {
-                let request = server_requests.fetch_add(1, Ordering::SeqCst) + 1;
-                async move {
-                    http::StatusCode::from_u16(200 + request as u16)
-                        .expect("test request count must fit an HTTP status")
-                }
-            }),
-        );
-        axum::serve(listener, route).await.unwrap();
-    });
+    let route = Router::new().route(
+        "/drop-unread",
+        post(move || {
+            let request = server_requests.fetch_add(1, Ordering::SeqCst) + 1;
+            async move {
+                http::StatusCode::from_u16(200 + request as u16)
+                    .expect("test request count must fit an HTTP status")
+            }
+        }),
+    );
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
 
     let executor = start(deps, &context).await?;
     let component = executor
@@ -452,7 +449,7 @@ async fn p3_unread_response_cleanup_reconstructs_before_next_accessor(
             .count(),
         1
     );
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -489,34 +486,31 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
         let context = TestContext::new(last_unique_id);
         let requests = Arc::new(AtomicUsize::new(0));
         let server_requests = requests.clone();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
-        let server = tokio::spawn(async move {
-            let route = Router::new().route(
-                "/drop-unread",
-                post(move || {
-                    server_requests.fetch_add(1, Ordering::SeqCst);
-                    async {
-                        let mut trailers = HeaderMap::new();
-                        trailers.insert("x-finished", http::HeaderValue::from_static("yes"));
-                        let frames = futures::stream::iter([
-                            Ok::<_, std::convert::Infallible>(http_body::Frame::data(
-                                bytes::Bytes::from_static(b"unread response"),
-                            )),
-                            Ok(http_body::Frame::trailers(trailers)),
-                        ]);
-                        http::Response::builder()
-                            .status(201)
-                            .header("trailer", "x-finished")
-                            .body(axum::body::Body::new(http_body_util::StreamBody::new(
-                                frames,
-                            )))
-                            .unwrap()
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        });
+        let route = Router::new().route(
+            "/drop-unread",
+            post(move || {
+                server_requests.fetch_add(1, Ordering::SeqCst);
+                async {
+                    let mut trailers = HeaderMap::new();
+                    trailers.insert("x-finished", http::HeaderValue::from_static("yes"));
+                    let frames = futures::stream::iter([
+                        Ok::<_, std::convert::Infallible>(http_body::Frame::data(
+                            bytes::Bytes::from_static(b"unread response"),
+                        )),
+                        Ok(http_body::Frame::trailers(trailers)),
+                    ]);
+                    http::Response::builder()
+                        .status(201)
+                        .header("trailer", "x-finished")
+                        .body(axum::body::Body::new(http_body_util::StreamBody::new(
+                            frames,
+                        )))
+                        .unwrap()
+                }
+            }),
+        );
+        let server = LocalHttpServer::serve(route).await?;
+        let port = server.port();
         let executor = start_with_overrides(deps, &context, overrides()).await?;
         let component = executor
             .component_dep(&context.default_environment_id, fixture)
@@ -666,7 +660,7 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
                 "a replay-created response dropped live must close its span"
             );
         }
-        server.abort();
+        drop(server);
     }
     Ok(())
 }
@@ -1020,35 +1014,28 @@ async fn invocation_context_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
     let contexts = Arc::new(Mutex::new(Vec::new()));
     let contexts_clone = contexts.clone();
 
     let traceparents = Arc::new(Mutex::new(Vec::new()));
     let traceparents_clone = traceparents.clone();
 
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/invocation-context",
-                post(
-                    move |headers: HeaderMap, body: Json<serde_json::Value>| async move {
-                        contexts_clone.lock().unwrap().push(body.0);
-                        traceparents_clone
-                            .lock()
-                            .unwrap()
-                            .push(headers.get("traceparent").cloned());
-                        "ok"
-                    },
-                ),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/invocation-context",
+        post(
+            move |headers: HeaderMap, body: Json<serde_json::Value>| async move {
+                contexts_clone.lock().unwrap().push(body.0);
+                traceparents_clone
+                    .lock()
+                    .unwrap()
+                    .push(headers.get("traceparent").cloned());
+                "ok"
+            },
+        ),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
@@ -1096,7 +1083,7 @@ async fn invocation_context_test(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    http_server.abort();
+    drop(http_server);
     drop(executor);
 
     let traceparents = traceparents.lock().unwrap();

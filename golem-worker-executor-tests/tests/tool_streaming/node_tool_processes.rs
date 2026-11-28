@@ -46,14 +46,10 @@ async fn builtin_node_tcp_replays_after_restart(
             true,
         )
         .await?;
-        let mut deployment = deployment_state(
-            context.account_id,
-            provider.id,
-            provider.revision,
-            "golem:javascript-tools",
-            "ToolStreamingCaller",
-            metadata.tools,
-        );
+        let mut deployment = ToolDeployment::new(context.account_id, &provider)
+            .tools(metadata.tools)
+            .bound_to("ToolStreamingCaller")
+            .build();
         for bindings in deployment.tool_bindings.values_mut() {
             for binding in bindings.values_mut() {
                 binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -196,14 +192,10 @@ async fn builtin_node_tcp_send_parks_between_writes_and_replays(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider.id,
-        provider.revision,
-        "golem:javascript-tools",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -612,14 +604,15 @@ async fn builtin_tool_deployment(
             true,
         )
         .await?;
-        let next = deployment_state(
-            context.account_id,
-            provider.id,
-            provider.revision,
-            package,
-            "ToolStreamingCaller",
-            metadata.tools,
-        );
+        let mut next = ToolDeployment::new(context.account_id, &provider)
+            .tools(metadata.tools)
+            .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
+            .bound_to("ToolStreamingCaller");
+        // The registry marks the built-in `bash` release as the shell.
+        if package == "golem:bash" {
+            next = next.shell("bash");
+        }
+        let next = next.build();
         if let Some(current) = deployment.as_mut() {
             current.registered_tools.extend(next.registered_tools);
             for (owner, bindings) in next.tool_bindings {
@@ -799,9 +792,9 @@ const CRASH_CUT_EFFECT: &str = "dual-reconstruct-after-both-partial";
 const CRASH_CUT_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(90);
 
 async fn next_crash_cut_checkpoint(
-    checkpoints: &mut tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
+    checkpoints: &mut CrashCheckpointServer,
     phase: &str,
-) -> anyhow::Result<CrashCheckpointArrival> {
+) -> anyhow::Result<CrashCheckpoint> {
     let arrival = tokio::time::timeout(CRASH_CUT_CHECKPOINT_TIMEOUT, checkpoints.recv())
         .await
         .map_err(|_| {
@@ -872,8 +865,7 @@ async fn crash_during_pending_tool_attachments(
         caller_component.revision,
         Some(deployment),
     );
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoints) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let (effect_port, mut effects, effect_server) =
         middleware_acceptance::start_probe_effect_server().await;
     let name = format!(
@@ -886,20 +878,14 @@ async fn crash_during_pending_tool_attachments(
         .start_agent_with(
             &caller_component.id,
             agent.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-                (
+            checkpoints
+                .agent_env("")
+                .into_iter()
+                .chain([(
                     "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
                     effect_port.to_string(),
-                ),
-            ]),
+                )])
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -966,7 +952,7 @@ async fn crash_during_pending_tool_attachments(
         persist_pending_tool_attachments(&executor, &worker.agent_id, &owner, open_stdin).await?;
 
     executor.simulated_crash(&worker).await?;
-    drop(original.release);
+    drop(original);
     // Replay re-executes the JavaScript process and its calls up to the same checkpoint. The
     // interrupted gate read fails there, so the provider announces the checkpoint again.
     let replayed = next_crash_cut_checkpoint(&mut checkpoints, "during replay").await?;
@@ -977,8 +963,7 @@ async fn crash_during_pending_tool_attachments(
         "replay repeated the recorded provider effect"
     );
     replayed
-        .release
-        .send(())
+        .release()
         .map_err(|_| anyhow::anyhow!("the replayed checkpoint gate was dropped"))?;
 
     let result = tokio::time::timeout(
@@ -1016,7 +1001,7 @@ async fn crash_during_pending_tool_attachments(
         "unexpected additional live effect"
     );
     assert!(
-        checkpoints.try_recv().is_err(),
+        checkpoints.try_next().is_none(),
         "the checkpoint was reached more than once after the crash"
     );
 
@@ -1082,8 +1067,8 @@ async fn crash_during_pending_tool_attachments(
     );
     assert!(next.stderr.is_empty(), "after recovery: {next:?}");
     assert_collector_history_settled(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?);
-    assert!(effects.try_recv().is_err() && checkpoints.try_recv().is_err());
-    checkpoint_server.abort();
+    assert!(effects.try_recv().is_err() && checkpoints.try_next().is_none());
+    drop(checkpoints);
     effect_server.abort();
     Ok(())
 }

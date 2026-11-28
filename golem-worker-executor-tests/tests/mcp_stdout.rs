@@ -20,7 +20,7 @@ use golem_service_base::model::mcp_import::McpImportObservation;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_overrides,
 };
 use serde_json::{Value, json};
@@ -80,8 +80,6 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
         "cancel-output",
     ];
     let calls = Arc::new(Mutex::new(Vec::<String>::new()));
-    let mcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let mcp_port = mcp_listener.local_addr()?.port();
     let large = (0..65_537).map(|i| format!("{i:06}\n")).collect::<String>();
     let expected_large = large.as_bytes().to_vec();
     let mcp_handler = axum::routing::post({
@@ -119,11 +117,8 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
             }
         }
     });
-    let mcp_server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(mcp_listener, axum::Router::new().route("/mcp", mcp_handler))
-            .await
-            .unwrap();
-    }));
+    let mcp_server = LocalHttpServer::serve(axum::Router::new().route("/mcp", mcp_handler)).await?;
+    let mcp_port = mcp_server.port();
 
     let checkpoint_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let checkpoint_port = checkpoint_listener.local_addr()?.port();

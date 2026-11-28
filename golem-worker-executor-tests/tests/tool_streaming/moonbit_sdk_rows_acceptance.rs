@@ -160,14 +160,12 @@ async fn moonbit_generated_and_definition_owned_proxy_match_nested_error_princip
         context.default_environment_id,
         stored_component.id,
         stored_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            stored_component.id,
-            stored_component.revision,
-            "golem:moonbit-examples",
-            "MoonBitToolStreamingCaller",
-            tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &stored_component)
+                .tools(tools)
+                .bound_to("MoonBitToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("MoonBitToolStreamingCaller", "moonbit-sdk-core");
@@ -251,14 +249,12 @@ async fn moonbit_reflected_and_generated_runtime_match_success_error_principal_a
         context.default_environment_id,
         stored_component.id,
         stored_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            stored_component.id,
-            stored_component.revision,
-            "golem:moonbit-examples",
-            "MoonBitToolStreamingCaller",
-            tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &stored_component)
+                .tools(tools)
+                .bound_to("MoonBitToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("MoonBitToolStreamingCaller", "moonbit-reflection");
@@ -383,14 +379,12 @@ async fn check_moonbit_resource_observation(
         context.default_environment_id,
         stored_component.id,
         stored_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            stored_component.id,
-            stored_component.revision,
-            "golem:moonbit-examples",
-            "MoonBitResourceToolStreamingCaller",
-            tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &stored_component)
+                .tools(tools)
+                .bound_to("MoonBitResourceToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!(
@@ -559,14 +553,12 @@ async fn check_moonbit_existing_terminal_case(
         context.default_environment_id,
         stored_component.id,
         stored_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            stored_component.id,
-            stored_component.revision,
-            "golem:moonbit-examples",
-            "MoonBitToolStreamingCaller",
-            tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &stored_component)
+                .tools(tools)
+                .bound_to("MoonBitToolStreamingCaller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("MoonBitToolStreamingCaller", "moonbit-sdk-terminals");
@@ -709,14 +701,12 @@ async fn check_moonbit_lifecycle_case(
         context.default_environment_id,
         stored_component.id,
         stored_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            stored_component.id,
-            stored_component.revision,
-            "golem:moonbit-lifecycle-gol40",
-            "MoonBitLifecycleGol40Caller",
-            tools,
-        )),
+        Some(
+            ToolDeployment::new(context.account_id, &stored_component)
+                .tools(tools)
+                .bound_to("MoonBitLifecycleGol40Caller")
+                .build(),
+        ),
     );
 
     let agent_id = agent_key!("MoonBitLifecycleGol40Caller", "runtime-tuples");

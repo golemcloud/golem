@@ -30,8 +30,8 @@ use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_with_snapshot_policy,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start, start_with_snapshot_policy,
 };
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -218,38 +218,30 @@ async fn custom_durability_1(
     let request_history = Arc::new(Mutex::new(Vec::new()));
     let request_history_in_server = request_history.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
     #[derive(Deserialize)]
     struct QueryParams {
         payload: String,
     }
 
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/callback",
-                get(move |query: Query<QueryParams>| async move {
-                    request_history_in_server
-                        .lock()
-                        .unwrap()
-                        .push(query.payload.clone());
-                    let result = format!(
-                        "{}-{}",
-                        response_clone.fetch_add(1, Ordering::AcqRel),
-                        query.payload
-                    );
-                    tracing::info!("responding to callback: {result}");
-                    result
-                }),
+    let route = Router::new().route(
+        "/callback",
+        get(move |query: Query<QueryParams>| async move {
+            request_history_in_server
+                .lock()
+                .unwrap()
+                .push(query.payload.clone());
+            let result = format!(
+                "{}-{}",
+                response_clone.fetch_add(1, Ordering::AcqRel),
+                query.payload
             );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+            tracing::info!("responding to callback: {result}");
+            result
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -331,7 +323,7 @@ async fn custom_durability_1(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     assert_eq!(result1.into_typed::<String>()?, "0-a");
     assert_eq!(result2.into_typed::<String>()?, "1-b");
@@ -352,8 +344,6 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
     let executor = start(deps, &context).await?;
     let response = Arc::new(AtomicU32::new(0));
     let history = Arc::new(Mutex::new(Vec::<String>::new()));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
 
     #[derive(Deserialize)]
     struct Params {
@@ -362,43 +352,39 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
 
     let server_response = response.clone();
     let server_history = history.clone();
-    let server = tokio::spawn(
-        async move {
-            let slow_recorded = Arc::new(tokio::sync::Notify::new());
-            let fast_counter_assigned = Arc::new(tokio::sync::Notify::new());
-            let route = Router::new().route(
-                "/callback",
-                any(move |Query(params): Query<Params>| {
-                    let response = server_response.clone();
-                    let history = server_history.clone();
-                    let slow_recorded = slow_recorded.clone();
-                    let fast_counter_assigned = fast_counter_assigned.clone();
-                    async move {
-                        // Record slow first, but assign fast's response counter before slow's.
-                        if params.payload == "fast" {
-                            slow_recorded.notified().await;
-                        }
-                        history.lock().unwrap().push(params.payload.clone());
-                        if params.payload == "slow" {
-                            slow_recorded.notify_one();
-                            fast_counter_assigned.notified().await;
-                        }
-                        let result = format!(
-                            "{}-{}",
-                            response.fetch_add(1, Ordering::AcqRel),
-                            params.payload
-                        );
-                        if params.payload == "fast" {
-                            fast_counter_assigned.notify_one();
-                        }
-                        result
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let slow_recorded = Arc::new(tokio::sync::Notify::new());
+    let fast_counter_assigned = Arc::new(tokio::sync::Notify::new());
+    let route = Router::new().route(
+        "/callback",
+        any(move |Query(params): Query<Params>| {
+            let response = server_response.clone();
+            let history = server_history.clone();
+            let slow_recorded = slow_recorded.clone();
+            let fast_counter_assigned = fast_counter_assigned.clone();
+            async move {
+                // Record slow first, but assign fast's response counter before slow's.
+                if params.payload == "fast" {
+                    slow_recorded.notified().await;
+                }
+                history.lock().unwrap().push(params.payload.clone());
+                if params.payload == "slow" {
+                    slow_recorded.notify_one();
+                    fast_counter_assigned.notified().await;
+                }
+                let result = format!(
+                    "{}-{}",
+                    response.fetch_add(1, Ordering::AcqRel),
+                    params.payload
+                );
+                if params.payload == "fast" {
+                    fast_counter_assigned.notify_one();
+                }
+                result
+            }
+        }),
     );
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -541,7 +527,7 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
         "replay must not re-execute nested or concurrent generator effects"
     );
 
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -560,8 +546,6 @@ async fn custom_durability_cancelled_finish_drops_result_in_its_scope(
         let executor = start(deps, &context).await?;
         let history = Arc::new(Mutex::new(Vec::<String>::new()));
         let cancel = Arc::new(tokio::sync::Semaphore::new(0));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-        let port = listener.local_addr()?.port();
         #[derive(Deserialize)]
         struct Params {
             payload: String,
@@ -589,9 +573,8 @@ async fn custom_durability_cancelled_finish_drops_result_in_its_scope(
                     }
                 }),
             );
-        let server = tokio::spawn(
-            async move { axum::serve(listener, routes).await.unwrap() }.in_current_span(),
-        );
+        let server = LocalHttpServer::serve(routes).await?;
+        let port = server.port();
         let component = executor
             .component_dep(&context.default_environment_id, host_api_tests)
             .store()
@@ -694,7 +677,7 @@ async fn custom_durability_cancelled_finish_drops_result_in_its_scope(
             &["result-drop", "after-cancel", "fresh"],
             "reconstruction neither repeats the destructor effect nor loses the later root call"
         );
-        server.abort();
+        drop(server);
     }
     Ok(())
 }
@@ -714,8 +697,6 @@ async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling
     let second_arrived = Arc::new(tokio::sync::Notify::new());
     let checkpoint = Arc::new(tokio::sync::Notify::new());
     let resume = Arc::new(tokio::sync::Semaphore::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
 
     #[derive(Deserialize)]
     struct Params {
@@ -759,8 +740,8 @@ async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling
                 }
             }),
         );
-    let server =
-        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -910,7 +891,7 @@ async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling
     assert_eq!(root_sends[0].1.parent_start_index, None);
     assert_eq!(root_sends[0].1.invocation_id, release_send.1.invocation_id);
     assert_eq!(ends(&recovered, root_sends[0].0), 1);
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -928,8 +909,6 @@ async fn custom_durability_scopes_follow_poll_and_drop_execution(
     let history = Arc::new(Mutex::new(Vec::<String>::new()));
     let second_arrived = Arc::new(tokio::sync::Notify::new());
     let release_second = Arc::new(tokio::sync::Notify::new());
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
 
     #[derive(Deserialize)]
     struct Params {
@@ -971,8 +950,8 @@ async fn custom_durability_scopes_follow_poll_and_drop_execution(
                 }
             }),
         );
-    let server =
-        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -1323,7 +1302,7 @@ async fn custom_durability_scopes_follow_poll_and_drop_execution(
             .expect_err("invalid snapshot installation must trap");
         assert!(format!("{error:?}").contains(message), "{error:?}");
     }
-    server.abort();
+    drop(server);
     Ok(())
 }
 
@@ -1342,8 +1321,6 @@ async fn custom_durability_crash_mid_live_invocation_reexecutes_whole_body(
     let hold_first_callback = Arc::new(AtomicBool::new(true));
     let callback_arrived = Arc::new(tokio::sync::Notify::new());
     let release_callback = Arc::new(tokio::sync::Notify::new());
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
 
     #[derive(Deserialize)]
     struct Params {
@@ -1354,44 +1331,40 @@ async fn custom_durability_crash_mid_live_invocation_reexecutes_whole_body(
     let route_arrived = callback_arrived.clone();
     let route_release = release_callback.clone();
     let route_hold = hold_first_callback.clone();
-    let server = tokio::spawn(
-        async move {
-            let probe_history = route_history.clone();
-            let route = Router::new()
-                .route(
-                    "/probe",
-                    get(move |Query(params): Query<Params>| {
-                        probe_history
-                            .lock()
-                            .unwrap()
-                            .push(format!("probe:{}", params.payload));
-                        async { "probe" }
-                    }),
-                )
-                .route(
-                    "/callback",
-                    get(move |Query(params): Query<Params>| {
-                        let history = route_history.clone();
-                        let arrived = route_arrived.clone();
-                        let release = route_release.clone();
-                        let hold = route_hold.clone();
-                        async move {
-                            history
-                                .lock()
-                                .unwrap()
-                                .push(format!("callback:{}", params.payload));
-                            if hold.swap(false, Ordering::SeqCst) {
-                                arrived.notify_one();
-                                release.notified().await;
-                            }
-                            format!("done-{}", params.payload)
-                        }
-                    }),
-                );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
+    let probe_history = route_history.clone();
+    let route = Router::new()
+        .route(
+            "/probe",
+            get(move |Query(params): Query<Params>| {
+                probe_history
+                    .lock()
+                    .unwrap()
+                    .push(format!("probe:{}", params.payload));
+                async { "probe" }
+            }),
+        )
+        .route(
+            "/callback",
+            get(move |Query(params): Query<Params>| {
+                let history = route_history.clone();
+                let arrived = route_arrived.clone();
+                let release = route_release.clone();
+                let hold = route_hold.clone();
+                async move {
+                    history
+                        .lock()
+                        .unwrap()
+                        .push(format!("callback:{}", params.payload));
+                    if hold.swap(false, Ordering::SeqCst) {
+                        arrived.notify_one();
+                        release.notified().await;
+                    }
+                    format!("done-{}", params.payload)
+                }
+            }),
+        );
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -1478,7 +1451,7 @@ async fn custom_durability_crash_mid_live_invocation_reexecutes_whole_body(
         before_replay,
         "completed replay touches neither endpoint"
     );
-    server.abort();
+    drop(server);
     Ok(())
 }
 

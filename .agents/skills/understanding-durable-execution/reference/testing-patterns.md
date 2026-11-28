@@ -284,8 +284,8 @@ admission skipped for incomplete bodies.
 Do: for streams, crash the producer after a committed `StreamItems` and the consumer after a
 journaled `ConsumerItemValue`, restart, and assert every item is observed exactly once by offset
 and that exactly one terminal is recorded. For tools, drive the body to a named checkpoint with an
-in-process crash-checkpoint server (`tests/tool_streaming.rs::start_crash_checkpoint_server`, a
-tokio task — not an external process), crash, restart, and assert (a) the completed path
+in-process crash-checkpoint server (`CrashCheckpointServer` from
+`golem-worker-executor-test-utils`, a tokio task — not an external process), crash, restart, and assert (a) the completed path
 (`ReplayingCompleted`) runs the body's guest export again with its host calls replayed from the
 owner oplog and releases the recorded terminal without a repeated external effect (checkpoint
 server hit count unchanged), (b) the incomplete path completes under the original entity `Start`

@@ -26,7 +26,7 @@ test_r::enable!();
 
 #[test_r::sequential]
 mod rows {
-    use crate::http_test_context::{HttpTestContext, make_test_context};
+    use crate::http_test_context::HttpTestContext;
     use anyhow::{Context, ensure};
     use golem_api_grpc::proto::golem::worker::{
         ResumeOperation, ToolByteStreamRole, invocation_response, invocation_session_completion,
@@ -34,7 +34,6 @@ mod rows {
     };
     use golem_client::model::ComponentDto;
     use golem_common::base_model::agent::AgentTypeName;
-    use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
     use golem_common::base_model::type_id::TypeId;
     use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
     use golem_common::model::durable_stream::StreamSessionRecord;
@@ -58,7 +57,7 @@ mod rows {
         assert_fail_clean, assert_resumed,
     };
     use integration_tests::invocation_session::{
-        InvocationSession, OutputObservation, SessionCheckpoint, StreamId,
+        OutputObservation, ReattachingSession, SessionCheckpoint, StreamId,
     };
     use reqwest::StatusCode;
     use std::sync::Arc;
@@ -321,9 +320,9 @@ mod rows {
         row: &Row,
         agent: &ParsedAgentKey,
         run: u32,
-    ) -> anyhow::Result<(InvocationSession, PromiseId, StreamId)> {
+    ) -> anyhow::Result<(ReattachingSession, PromiseId, StreamId)> {
         let gate = gate(row, agent).await?;
-        let mut session = InvocationSession::start(
+        let mut session = ReattachingSession::start(
             deps,
             &row.component,
             agent,
@@ -447,7 +446,7 @@ mod rows {
             let run = next_run();
             let agent = fresh_agent();
             let gate = gate(&row, &agent).await?;
-            let report = InvocationSession::start(
+            let report = ReattachingSession::start(
                 deps,
                 &row.component,
                 &agent,
@@ -465,7 +464,7 @@ mod rows {
             // error, on its own agent: an SDK that traps on a failed stream leaves the agent
             // failed
             let run = next_run();
-            let report = InvocationSession::start(
+            let report = ReattachingSession::start(
                 deps,
                 &row.component,
                 &fresh_agent(),
@@ -557,7 +556,7 @@ mod rows {
             let checkpoint = session.disconnect();
             let effect = restart_executors(deps, before).await?;
             let (resumed, _) =
-                InvocationSession::reattach(deps, checkpoint, ResumeOperation::Takeover, PHASE)
+                ReattachingSession::reattach(deps, checkpoint, ResumeOperation::Takeover, PHASE)
                     .await?;
             row.open_gate(&gate).await?;
             let report = resumed.finish().await?;
@@ -586,7 +585,7 @@ mod rows {
             let after = service.pid().context("the service did not restart")?;
             let checkpoint = session.disconnect();
             let (resumed, _) =
-                InvocationSession::reattach(&view, checkpoint, ResumeOperation::Resume, PHASE)
+                ReattachingSession::reattach(&view, checkpoint, ResumeOperation::Resume, PHASE)
                     .await?;
             row.open_gate(&gate).await?;
             let report = resumed.finish().await?;
@@ -615,7 +614,8 @@ mod rows {
             let resets = relayed.drop_connections().await;
             let saved = session.disconnect();
             let (resumed, _) =
-                InvocationSession::reattach(&view, saved, ResumeOperation::Takeover, PHASE).await?;
+                ReattachingSession::reattach(&view, saved, ResumeOperation::Takeover, PHASE)
+                    .await?;
             let epoch_after = resumed.checkpoint().acceptance.as_ref().unwrap().epoch;
             row.open_gate(&gate).await?;
             let report = resumed.finish().await?;
@@ -729,7 +729,7 @@ mod rows {
             let agent = fresh_agent();
             let run = next_run();
             let gate = gate(&row, &agent).await?;
-            let mut session = InvocationSession::start_tool(
+            let mut session = ReattachingSession::start_tool(
                 deps,
                 &row.component,
                 gate.agent_id,
@@ -757,7 +757,7 @@ mod rows {
             let checkpoint = session.disconnect();
             let effect = restart_executors(deps, before).await?;
             let (resumed, _) =
-                InvocationSession::reattach(deps, checkpoint, ResumeOperation::Takeover, PHASE)
+                ReattachingSession::reattach(deps, checkpoint, ResumeOperation::Takeover, PHASE)
                     .await?;
             row.open_gate(&gate).await?;
             let report = resumed.finish().await?;
@@ -1033,16 +1033,10 @@ mod rows {
         deps: &EnvBasedTestDependencies,
         fixture: Fixture,
     ) -> anyhow::Result<HttpTestContext> {
-        make_test_context(
-            deps,
-            vec![(
-                AgentTypeName(FIXTURE_AGENT_TYPE.to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            )],
-            fixture.wasm,
-            fixture.component,
-        )
-        .await
+        HttpTestContext::builder(fixture.wasm, fixture.component)
+            .agents([FIXTURE_AGENT_TYPE])
+            .build(deps)
+            .await
     }
 
     fn durable_fixtures() -> impl Iterator<Item = Fixture> {

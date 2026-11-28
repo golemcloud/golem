@@ -25,14 +25,14 @@ use axum::routing::get;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
-use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -61,34 +61,28 @@ async fn go_retry_policy_retries_matching_status(
     const FAIL_COUNT: u32 = 2;
     let hits = Arc::new(AtomicU32::new(0));
     let hits_in_server = hits.clone();
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
 
     #[derive(Deserialize)]
     struct QueryParams {
         payload: String,
     }
 
-    let server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/callback",
-                get(move |query: Query<QueryParams>| {
-                    let hits = hits_in_server.clone();
-                    async move {
-                        let n = hits.fetch_add(1, Ordering::AcqRel);
-                        if n < FAIL_COUNT {
-                            (StatusCode::INTERNAL_SERVER_ERROR, "boom".to_string())
-                        } else {
-                            (StatusCode::OK, format!("ok-{}", query.payload))
-                        }
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/callback",
+        get(move |query: Query<QueryParams>| {
+            let hits = hits_in_server.clone();
+            async move {
+                let n = hits.fetch_add(1, Ordering::AcqRel);
+                if n < FAIL_COUNT {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "boom".to_string())
+                } else {
+                    (StatusCode::OK, format!("ok-{}", query.payload))
+                }
+            }
+        }),
     );
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_go)
@@ -108,7 +102,7 @@ async fn go_retry_policy_retries_matching_status(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    server.abort();
+    drop(server);
 
     assert_eq!(body, "ok-x");
     assert_eq!(
@@ -139,34 +133,28 @@ async fn go_retry_schedule_retries_in_the_agent_and_replays(
     const FAIL_COUNT: u32 = 2;
     let hits = Arc::new(AtomicU32::new(0));
     let hits_in_server = hits.clone();
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
 
     #[derive(Deserialize)]
     struct QueryParams {
         payload: String,
     }
 
-    let server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/callback",
-                get(move |query: Query<QueryParams>| {
-                    let hits = hits_in_server.clone();
-                    async move {
-                        let n = hits.fetch_add(1, Ordering::AcqRel);
-                        if n < FAIL_COUNT {
-                            (StatusCode::INTERNAL_SERVER_ERROR, "boom".to_string())
-                        } else {
-                            (StatusCode::OK, format!("ok-{}", query.payload))
-                        }
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/callback",
+        get(move |query: Query<QueryParams>| {
+            let hits = hits_in_server.clone();
+            async move {
+                let n = hits.fetch_add(1, Ordering::AcqRel);
+                if n < FAIL_COUNT {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "boom".to_string())
+                } else {
+                    (StatusCode::OK, format!("ok-{}", query.payload))
+                }
+            }
+        }),
     );
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_go)
@@ -196,7 +184,7 @@ async fn go_retry_schedule_retries_in_the_agent_and_replays(
         .into_typed::<u32>()?;
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    server.abort();
+    drop(server);
 
     assert_eq!(attempts, 3, "the replay rebuilt a different attempt count");
     assert_eq!(

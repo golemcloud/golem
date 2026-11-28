@@ -14,19 +14,25 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
+use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::oplog::payload::HostResponseWebsocketReceiveResponse;
+use golem_common::model::oplog::payload::types::SerializableWebsocketError;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
-use golem_common::schema::schema_value::ResultValuePayload;
-use golem_common::schema::{FromSchema, SchemaValue};
+use golem_common::model::{AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId};
+use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
-use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, stdout_event_matching};
+use golem_test_framework::dsl::{
+    GATE_TIMEOUT, SETTLE_TIMEOUT, TestDsl, WorkerLogEventStream, within,
+};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, start, start_with_overrides,
+    AgentInitializationEnqueueGateHandle, LastUniqueId, OplogView, PrecompiledComponent,
+    ReplayAdmissionStage, Teardown, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -34,12 +40,15 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
 use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -58,10 +67,349 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
+/// How long a test waits for a websocket pool permit that no call is expected to hold.
+const POOL_PERMIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a test polls the oplog for the calls of an invocation it started.
+const OPLOG_PROGRESS_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long an invocation may take that must not wait for the pool permit the test holds.
+const UNBLOCKED_INVOCATION_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a test waits for a test peer to accept connections or observe frames.
+const PEER_STATE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a test waits for an agent to reach the status that an interrupt or a parked call
+/// leads to.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a test waits for an agent to finish its invocations and become idle.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a test waits for the echo server to reach a connection and message count.
+const SERVER_STATE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a test lets calls park or queue inside the executor, where neither the peer nor
+/// the oplog can observe them.
+const QUEUE_SETTLE: Duration = Duration::from_millis(500);
+/// How long a test lets a restarted executor run before it checks that nothing reconnected.
+const RESTART_SETTLE: Duration = Duration::from_millis(100);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ServerEvent {
     connection: usize,
     payload: String,
+}
+
+/// The context, executor and stored component that the tests in this file start with.
+struct WebsocketTest {
+    context: TestContext,
+    executor: TestWorkerExecutor,
+    component: ComponentDto,
+}
+
+impl WebsocketTest {
+    /// A fresh context, an executor with the default configuration and the stored component.
+    async fn start(
+        deps: &WorkerExecutorTestDependencies,
+        last_unique_id: &LastUniqueId,
+        component: &PrecompiledComponent,
+    ) -> anyhow::Result<Self> {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        Self::with_component(context, executor, component).await
+    }
+
+    /// As [`WebsocketTest::start`], with at most `limit` connections in the executor's
+    /// websocket pool.
+    async fn start_with_connection_limit(
+        deps: &WorkerExecutorTestDependencies,
+        last_unique_id: &LastUniqueId,
+        component: &PrecompiledComponent,
+        limit: usize,
+    ) -> anyhow::Result<Self> {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_overrides(deps, &context, connection_limit(limit)).await?;
+        Self::with_component(context, executor, component).await
+    }
+
+    async fn with_component(
+        context: TestContext,
+        executor: TestWorkerExecutor,
+        component: &PrecompiledComponent,
+    ) -> anyhow::Result<Self> {
+        let component = executor
+            .component_dep(&context.default_environment_id, component)
+            .store()
+            .await?;
+        Ok(Self {
+            context,
+            executor,
+            component,
+        })
+    }
+}
+
+/// Executor overrides that allow at most `limit` connections in the websocket pool.
+fn connection_limit(limit: usize) -> TestExecutorOverrides {
+    TestExecutorOverrides::configured(move |config| config.max_websocket_connections = limit)
+}
+
+/// How a [`TestPeer`] accepts connections.
+#[derive(Debug, Clone, Copy)]
+enum Accept {
+    /// Accepts one connection, serves it and stops listening.
+    Once,
+    /// Accepts connections one after the other and serves each before the next accept.
+    Serially,
+    /// Accepts connections in a loop and serves each in its own task.
+    Concurrently,
+}
+
+/// What a [`TestPeer`] does on each connection after the handshake.
+#[derive(Debug, Clone, Copy)]
+enum PeerScript {
+    /// Records each text frame in the transcript and echoes text and binary frames until Close.
+    Echo,
+    /// Reads frames until Close and sends nothing.
+    Drain,
+    /// Waits for `delay`, sends one text frame and closes the connection.
+    Send { text: &'static str, delay: Duration },
+    /// Sends one text frame and then a Close frame.
+    SendThenClose(&'static str),
+    /// Sends one text frame and then reads frames until Close.
+    SendThenDrain(&'static str),
+}
+
+/// An in-process websocket server for tests that need a plain peer. It counts accepted
+/// connections and records the text frames that [`PeerScript::Echo`] receives. Dropping it
+/// stops the accept loop.
+struct TestPeer {
+    port: u16,
+    accepted: Arc<AtomicUsize>,
+    transcript: Arc<Mutex<Vec<ServerEvent>>>,
+    accept_loop: JoinHandle<()>,
+}
+
+impl TestPeer {
+    async fn start(accept: Accept, script: PeerScript) -> Self {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let transcript = Arc::new(Mutex::new(Vec::new()));
+        let accept_loop = spawn({
+            let accepted = Arc::clone(&accepted);
+            let transcript = Arc::clone(&transcript);
+            async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let connection = accepted.fetch_add(1, Ordering::SeqCst);
+                    let serve =
+                        serve_test_peer_connection(stream, connection, script, transcript.clone());
+                    match accept {
+                        Accept::Once => {
+                            serve.await;
+                            break;
+                        }
+                        Accept::Serially => serve.await,
+                        Accept::Concurrently => {
+                            spawn(serve.in_current_span());
+                        }
+                    }
+                }
+            }
+            .in_current_span()
+        });
+        Self {
+            port,
+            accepted,
+            transcript,
+            accept_loop,
+        }
+    }
+
+    fn url(&self) -> String {
+        format!("ws://localhost:{}", self.port)
+    }
+
+    /// The `WS_PORT` environment variable that points an agent at this peer.
+    fn port_env(&self) -> HashMap<String, String> {
+        HashMap::from([("WS_PORT".to_string(), self.port.to_string())])
+    }
+
+    fn accepted(&self) -> usize {
+        self.accepted.load(Ordering::SeqCst)
+    }
+
+    fn transcript(&self) -> Vec<ServerEvent> {
+        self.transcript.lock().unwrap().clone()
+    }
+
+    /// Stops accepting connections. Connections that are already served stay open.
+    fn abort(&self) {
+        self.accept_loop.abort();
+    }
+}
+
+impl Drop for TestPeer {
+    fn drop(&mut self) {
+        self.accept_loop.abort();
+    }
+}
+
+async fn serve_test_peer_connection(
+    stream: TcpStream,
+    connection: usize,
+    script: PeerScript,
+    transcript: Arc<Mutex<Vec<ServerEvent>>>,
+) {
+    let ws_stream = tokio_tungstenite::accept_async(stream)
+        .await
+        .expect("WS handshake failed");
+    let (mut write, mut read) = StreamExt::split(ws_stream);
+    match script {
+        PeerScript::Echo => {
+            while let Some(Ok(msg)) = read.next().await {
+                if msg.is_close() {
+                    break;
+                }
+                if msg.is_text() {
+                    let payload = msg
+                        .to_text()
+                        .expect("text message should decode")
+                        .to_string();
+                    transcript.lock().unwrap().push(ServerEvent {
+                        connection,
+                        payload,
+                    });
+                }
+                if msg.is_text() || msg.is_binary() {
+                    write.send(msg).await.ok();
+                }
+            }
+        }
+        PeerScript::Drain => drain_until_close(&mut read).await,
+        PeerScript::Send { text, delay } => {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            write.send(Message::text(text)).await.ok();
+        }
+        PeerScript::SendThenClose(text) => {
+            write.send(Message::text(text)).await.ok();
+            write.send(Message::Close(None)).await.ok();
+        }
+        PeerScript::SendThenDrain(text) => {
+            write.send(Message::text(text)).await.ok();
+            drain_until_close(&mut read).await;
+        }
+    }
+}
+
+async fn drain_until_close(read: &mut SplitStream<WsServerStream>) {
+    while let Some(Ok(msg)) = read.next().await {
+        if msg.is_close() {
+            break;
+        }
+    }
+}
+
+/// Asserts that every operation on the agent's lost report-loss handle reports `SessionLost`.
+async fn assert_reports_session_loss(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &ParsedAgentKey,
+) -> anyhow::Result<()> {
+    let reported: (bool, bool, bool, bool) = executor
+        .invoke_and_await_typed(component, agent_id, "probe_report_loss", data_value!())
+        .await?;
+    assert_eq!(
+        reported,
+        (true, true, true, true),
+        "receive, receive-with-timeout, send and close must each report SessionLost"
+    );
+    Ok(())
+}
+
+/// Crashes the executor while the gated call waits at its End gate: the gated call and every
+/// other call that has not finished stay as the crash leaves them.
+async fn crash_at_call_end(
+    executor: &TestWorkerExecutor,
+    gate: &AgentInitializationEnqueueGateHandle,
+) -> anyhow::Result<()> {
+    gate.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await
+}
+
+/// The function name of the `Start` entry at `index`, if there is one.
+fn start_function(oplog: &[PublicOplogEntryWithIndex], index: OplogIndex) -> Option<&str> {
+    oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::Start(params) if entry.oplog_index == index => {
+            Some(params.function_name.as_str())
+        }
+        _ => None,
+    })
+}
+
+/// A `WebsocketTest` agent of the stored component, with its worker.
+struct WebsocketAgent {
+    component: ComponentDto,
+    agent_id: ParsedAgentKey,
+    worker_id: OwnedAgentId,
+}
+
+impl WebsocketAgent {
+    async fn start(
+        executor: &TestWorkerExecutor,
+        component: &ComponentDto,
+        name: &str,
+    ) -> anyhow::Result<Self> {
+        let agent_id = agent_key!("WebsocketTest", name);
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+        Ok(Self {
+            component: component.clone(),
+            agent_id,
+            worker_id,
+        })
+    }
+
+    async fn oplog(
+        &self,
+        executor: &TestWorkerExecutor,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await
+    }
+
+    /// Enqueues the concurrent `receive` and `receive-with-timeout` on the persisted handle.
+    async fn start_contention(
+        &self,
+        executor: &TestWorkerExecutor,
+        key: &IdempotencyKey,
+    ) -> anyhow::Result<()> {
+        executor
+            .invoke_agent_with_key(
+                &self.component,
+                &self.agent_id,
+                key,
+                CONTENTION_METHOD,
+                data_value!(CONTENTION_TIMEOUT_MS),
+            )
+            .await
+    }
+
+    /// The results of the contention invocation with `key`: `receive`, then
+    /// `receive-with-timeout`.
+    async fn contention_result(
+        &self,
+        executor: &TestWorkerExecutor,
+        key: &IdempotencyKey,
+    ) -> anyhow::Result<(String, String)> {
+        executor
+            .invoke_and_await_typed_with_key(
+                &self.component,
+                &self.agent_id,
+                key,
+                CONTENTION_METHOD,
+                data_value!(CONTENTION_TIMEOUT_MS),
+            )
+            .await
+    }
 }
 
 #[test]
@@ -73,19 +421,15 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::oplog::payload::HostResponseWebsocketReceiveResponse;
-    use golem_common::model::oplog::payload::types::SerializableWebsocketError;
-
-    let context = TestContext::new(last_unique_id);
-    let mut executor = start(deps, &context).await?;
+    let WebsocketTest {
+        context,
+        mut executor,
+        component,
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
     let mut peer = ReconnectTestServer::start().await;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
     let agent_id = agent_key!("WebsocketTest", "guest-discarded-loss");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .start_agent(&component.id, agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(
@@ -101,12 +445,12 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
         .into_return_value()
         .ok_or_else(|| anyhow!("expected promise return value"))?;
     let cancel = promise_id_from_value(&cancel_value);
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    executor = start(deps, &context).await?;
+    executor = executor.restart(Teardown::Shutdown).await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
         .await?;
+
+    // The receive reaches its loss End; the guest has not polled it yet.
     let mut end = executor.gate_next_call_end(&worker_id.agent_id, true).await;
     let mut output = executor.make_worker_log_event_stream(&worker_id).await?;
     let key = IdempotencyKey::fresh();
@@ -119,99 +463,86 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
             crate::raw_params(vec![cancel_value.clone()]),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), end.entered()).await?;
+    within(
+        GATE_TIMEOUT,
+        "the End gate of the discarded receive",
+        end.entered(),
+    )
+    .await?;
     let discarded_start = end.start_index();
     let prefix = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
-        prefix
-            .iter()
-            .any(|entry| entry.oplog_index == discarded_start
-                && matches!(&entry.entry, PublicOplogEntry::Start(params)
-            if params.function_name == "golem:websocket/client::receive")),
-        "{}",
-        describe_oplog(&prefix)
+    assert_eq!(
+        start_function(&prefix, discarded_start),
+        Some(WEBSOCKET_RECEIVE_FUNCTION),
+        "the gated End belongs to a receive: {}",
+        prefix.describe()
     );
+
     // The guest retains the unpolled receive until its loss End is durable, then drops it.
     executor
         .complete_promise(&context.default_environment_id, &cancel, vec![1])
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while let Some(event) = output.message().await? {
-            if stdout_event_matching(&event, "report-loss receive discarded\n") {
-                return Ok::<_, anyhow::Error>(());
-            }
-        }
-        Err(anyhow!("guest output ended before receive discard"))
-    })
-    .await??;
+    output
+        .wait_for_stdout("report-loss receive discarded\n", GATE_TIMEOUT)
+        .await?;
     drop(end);
-    assert!(
-        executor
-            .invoke_and_await_agent_with_key(
-                &component,
-                &agent_id,
-                &key,
-                "discard_report_loss",
-                crate::raw_params(vec![cancel_value]),
-            )
-            .await?
-            .into_typed::<bool>()?
-    );
+    let discarded: bool = executor
+        .invoke_and_await_typed_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "discard_report_loss",
+            crate::raw_params(vec![cancel_value]),
+        )
+        .await?;
+    assert!(discarded, "the guest discarded the receive");
+
     let mut original_discard = None;
     for replay in [false, true] {
         if replay {
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            drop(executor);
-            executor = start(deps, &context).await?;
+            executor = executor.restart(Teardown::Shutdown).await?;
         }
-        assert_eq!(
-            executor
-                .invoke_and_await_agent(&component, &agent_id, "probe_report_loss", data_value!())
-                .await?
-                .into_typed::<(bool, bool, bool, bool)>()?,
-            (true, true, true, true)
-        );
+        assert_reports_session_loss(&executor, &component, &agent_id).await?;
+
+        // The receive settles once, as a session loss, and the guest discards that completion
+        // instead of observing it.
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        let ends: Vec<_> = oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == discarded_start)
-            })
-            .collect();
-        let discards: Vec<_> = oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry,
-            PublicOplogEntry::CompletionDiscarded(params) if params.start_index == discarded_start)
-            })
-            .collect();
-        assert_eq!(ends.len(), 1, "{}", describe_oplog(&oplog));
-        assert_eq!(discards.len(), 1, "{}", describe_oplog(&oplog));
-        assert!(ends[0].oplog_index < discards[0].oplog_index);
-        let PublicOplogEntry::End(params) = &ends[0].entry else {
-            unreachable!()
-        };
-        let response = params.response.as_ref().expect("receive response missing");
-        let response = HostResponseWebsocketReceiveResponse::from_value(response.value())?;
+        let receive = oplog.call(discarded_start);
+        assert_eq!(
+            (
+                receive.ends.len(),
+                receive.discards.len(),
+                receive.deliveries.len(),
+                receive.cancellations.len()
+            ),
+            (1, 1, 0, 0),
+            "one End and one CompletionDiscarded, no delivery or cancellation: {}",
+            oplog.describe()
+        );
+        assert!(
+            receive.ends[0].oplog_index < receive.discards[0].oplog_index,
+            "the End is durable before the discard"
+        );
+        let response: HostResponseWebsocketReceiveResponse = receive.end_response()?;
         assert_eq!(
             response.result,
             Err(SerializableWebsocketError::SessionLost)
         );
-        assert!(!oplog.iter().any(|entry| matches!(&entry.entry,
-            PublicOplogEntry::CompletionDelivered(params) if params.start_index == discarded_start)
-            || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == discarded_start)),
-            "{}", describe_oplog(&oplog));
+
+        // Replay keeps the original discard instead of recording another one.
         if let Some(original) = &original_discard {
-            assert_eq!(*discards[0], *original);
+            assert_eq!(*receive.discards[0], *original);
         } else {
-            original_discard = Some(discards[0].clone());
+            original_discard = Some(receive.discards[0].clone());
         }
-        assert_eq!(peer.accepted(), 1);
-        assert_eq!(peer.completed_handshakes(), 1);
         assert_eq!(
-            peer.frames_received(),
-            vec!["completed-before-crash".to_string()]
+            (
+                peer.accepted(),
+                peer.completed_handshakes(),
+                peer.frames_received()
+            ),
+            (1, 1, vec![COMPLETED_SEND_FRAME.to_string()]),
+            "the lost handle opens no new connection and sends no new frame"
         );
     }
     drop(executor);
@@ -221,29 +552,130 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
 
 #[test]
 #[tracing::instrument]
-#[timeout("5m")]
-async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
+#[timeout("3m")]
+async fn websocket_report_loss_replacement_connect_crashes_before_end(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    for (initialization, after_end) in [(false, false), (false, true), (true, false), (true, true)]
-    {
-        let context = TestContext::new(last_unique_id);
-        let mut executor = start(deps, &context).await?;
+    // The connect has no End, so the retry connects again; it is crashed a second time before
+    // the final retry connects a third time and continues live.
+    ReplacementCrash {
+        step: ReplacementStep::Connect,
+        after_end: false,
+        expected_result: Ok(RECONNECT_MESSAGES[0]),
+        replacement_handshakes: 3,
+    }
+    .run(deps, last_unique_id, host_api_tests)
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn websocket_report_loss_replacement_connect_crashes_after_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    // The connect End is durable, so the reconstructed connection reports the session loss.
+    ReplacementCrash {
+        step: ReplacementStep::Connect,
+        after_end: true,
+        expected_result: Err(REPLACEMENT_SESSION_LOST),
+        replacement_handshakes: 1,
+    }
+    .run(deps, last_unique_id, host_api_tests)
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn websocket_report_loss_replacement_initialization_crashes_before_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    // The initialization receive has no End, so its retry reports the session loss.
+    ReplacementCrash {
+        step: ReplacementStep::Initialization,
+        after_end: false,
+        expected_result: Err(REPLACEMENT_SESSION_LOST),
+        replacement_handshakes: 1,
+    }
+    .run(deps, last_unique_id, host_api_tests)
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn websocket_report_loss_replacement_initialization_crashes_after_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    // The initialization receive End is durable, so replay returns the received greeting.
+    ReplacementCrash {
+        step: ReplacementStep::Initialization,
+        after_end: true,
+        expected_result: Ok(RECONNECT_FIRST_MESSAGE),
+        replacement_handshakes: 1,
+    }
+    .run(deps, last_unique_id, host_api_tests)
+    .await
+}
+
+/// The guest error of a replacement whose connect or initialization lost its session.
+const REPLACEMENT_SESSION_LOST: &str = "Initialize error: Error::SessionLost";
+
+/// The call of `replace_report_loss` at which the executor crashes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplacementStep {
+    /// The connect to the replacement peer.
+    Connect,
+    /// The receive that initializes the replacement connection.
+    Initialization,
+}
+
+/// One crash window of an explicit replacement of a lost report-loss handle, and its
+/// expected outcome.
+struct ReplacementCrash {
+    step: ReplacementStep,
+    /// Crash after the End of the call is durable instead of before it.
+    after_end: bool,
+    expected_result: Result<&'static str, &'static str>,
+    /// The handshakes the replacement peer completes over every attempt.
+    replacement_handshakes: usize,
+}
+
+impl ReplacementCrash {
+    async fn run(
+        self,
+        deps: &WorkerExecutorTestDependencies,
+        last_unique_id: &LastUniqueId,
+        host_api_tests: &PrecompiledComponent,
+    ) -> anyhow::Result<()> {
+        let initialization = self.step == ReplacementStep::Initialization;
+        let after_end = self.after_end;
+        let WebsocketTest {
+            mut executor,
+            component,
+            ..
+        } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
         let mut original = ReconnectTestServer::start().await;
         let mut replacement = ReconnectTestServer::start().await;
-        let component = executor
-            .component_dep(&context.default_environment_id, host_api_tests)
-            .store()
-            .await?;
         let agent_id = agent_key!(
             "WebsocketTest",
             format!("replacement-{initialization}-{after_end}")
         );
         let worker_id = executor
-            .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+            .start_agent(&component.id, agent_id.clone())
             .await?;
         executor
             .invoke_and_await_agent(
@@ -253,16 +685,10 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
                 data_value!(original.url()),
             )
             .await?;
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
-        executor = start(deps, &context).await?;
-        assert_eq!(
-            executor
-                .invoke_and_await_agent(&component, &agent_id, "probe_report_loss", data_value!())
-                .await?
-                .into_typed::<(bool, bool, bool, bool)>()?,
-            (true, true, true, true)
-        );
+        executor = executor.restart(Teardown::Shutdown).await?;
+        assert_reports_session_loss(&executor, &component, &agent_id).await?;
+
+        // Crash at the gated End of the replacement's connect or initialization receive.
         let key = IdempotencyKey::fresh();
         let mut gate = executor
             .gate_next_call_end(&worker_id.agent_id, initialization || after_end)
@@ -276,32 +702,34 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
                 data_value!(replacement.url()),
             )
             .await?;
-        tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+        within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
         if initialization {
             let next = executor
                 .gate_next_call_end(&worker_id.agent_id, after_end)
                 .await;
             drop(gate);
             gate = next;
-            tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+            within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
         }
         let target = gate.start_index();
-        gate.abort();
-        executor.shutdown_and_wait_for_invocation_loops().await?;
+        crash_at_call_end(&executor, &gate).await?;
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let function = if initialization {
             "::receive"
         } else {
             "::connect"
         };
-        assert!(oplog.iter().any(|entry| entry.oplog_index == target && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.ends_with(function))), "{}", describe_oplog(&oplog));
+        assert!(
+            start_function(&oplog, target).is_some_and(|name| name.ends_with(function)),
+            "the crashed call is the replacement's {function}: {}",
+            oplog.describe()
+        );
         assert_call_terminal_counts(&oplog, target, usize::from(after_end), 0);
         drop(gate);
-        drop(executor);
 
         // Crash a fresh connect a second time while its original Start is still incomplete.
         if !initialization && !after_end {
-            executor = start(deps, &context).await?;
+            executor = executor.restart(Teardown::Drop).await?;
             let mut gate = executor
                 .gate_next_call_end(&worker_id.agent_id, false)
                 .await;
@@ -314,73 +742,72 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
                     data_value!(replacement.url()),
                 )
                 .await?;
-            tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
-            assert_eq!(gate.start_index(), target);
-            gate.abort();
-            executor.shutdown_and_wait_for_invocation_loops().await?;
+            within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
+            assert_eq!(
+                gate.start_index(),
+                target,
+                "the retried connect reuses its recorded Start"
+            );
+            crash_at_call_end(&executor, &gate).await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == target)), "{}", describe_oplog(&oplog));
+            assert!(oplog.call(target).ends.is_empty(), "{}", oplog.describe());
             drop(gate);
-            drop(executor);
         }
-        executor = start(deps, &context).await?;
-        let result = executor
-            .invoke_and_await_agent_with_key(
+
+        // The retry settles the crashed call once and returns the outcome of its crash window.
+        executor = executor.restart(Teardown::Drop).await?;
+        let result: Result<String, String> = executor
+            .invoke_and_await_typed_with_key(
                 &component,
                 &agent_id,
                 &key,
                 "replace_report_loss",
                 data_value!(replacement.url()),
             )
-            .await?
-            .into_typed::<Result<String, String>>()?;
-        let expected = match (initialization, after_end) {
-            (false, false) => Ok(RECONNECT_MESSAGES[0].to_string()),
-            (true, true) => Ok(RECONNECT_FIRST_MESSAGE.to_string()),
-            _ => Err("Initialize error: Error::SessionLost".to_string()),
-        };
-        assert_eq!(result, expected);
-        assert_eq!(original.accepted(), 1);
+            .await?;
         assert_eq!(
-            replacement.completed_handshakes(),
-            if !initialization && !after_end { 3 } else { 1 }
+            result,
+            self.expected_result
+                .map(str::to_string)
+                .map_err(str::to_string)
+        );
+        assert_eq!(
+            (original.accepted(), replacement.completed_handshakes()),
+            (1, self.replacement_handshakes),
+            "the original peer is never reconnected; replacement handshakes over every attempt"
         );
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_) if entry.oplog_index == target)).count(), 1);
+        assert!(
+            start_function(&oplog, target).is_some(),
+            "the crashed call keeps its one Start at {target}: {}",
+            oplog.describe()
+        );
         assert_call_terminal_counts(&oplog, target, 1, 1);
 
         // A distinct explicit replacement can initialize normally after either loss outcome.
         let mut fresh = ReconnectTestServer::start().await;
+        let greeting: Result<String, String> = executor
+            .invoke_and_await_typed(
+                &component,
+                &agent_id,
+                "replace_report_loss",
+                data_value!(fresh.url()),
+            )
+            .await?;
+        assert_eq!(greeting, Ok(RECONNECT_FIRST_MESSAGE.to_string()));
+        executor = executor.restart(Teardown::Shutdown).await?;
+        assert_reports_session_loss(&executor, &component, &agent_id).await?;
         assert_eq!(
-            executor
-                .invoke_and_await_agent(
-                    &component,
-                    &agent_id,
-                    "replace_report_loss",
-                    data_value!(fresh.url())
-                )
-                .await?
-                .into_typed::<Result<String, String>>()?,
-            Ok(RECONNECT_FIRST_MESSAGE.to_string())
+            (fresh.completed_handshakes(), original.accepted()),
+            (1, 1),
+            "the fresh replacement connects once and the original peer is never reconnected"
         );
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
-        executor = start(deps, &context).await?;
-        assert_eq!(
-            executor
-                .invoke_and_await_agent(&component, &agent_id, "probe_report_loss", data_value!())
-                .await?
-                .into_typed::<(bool, bool, bool, bool)>()?,
-            (true, true, true, true)
-        );
-        assert_eq!(fresh.completed_handshakes(), 1);
-        assert_eq!(original.accepted(), 1);
         drop(executor);
         original.stop().await?;
         replacement.stop().await?;
         fresh.stop().await?;
+        Ok(())
     }
-    Ok(())
 }
 
 #[test]
@@ -392,64 +819,93 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| config.max_websocket_connections = 1)),
-        ..Default::default()
-    };
-    let start_executor = || start_with_overrides(deps, &context, overrides.clone());
-    let mut executor = start_executor().await?;
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut peer = ReconnectTestServer::start().await;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
+    let agent = WebsocketAgent::start(&executor, &component, "exact-loss-prefixes").await?;
+    let greeting: String = executor
+        .invoke_and_await_typed(
+            &component,
+            &agent.agent_id,
+            "connect_report_loss",
+            data_value!(peer.url()),
+        )
         .await?;
-    let agent_id = agent_key!("WebsocketTest", "exact-loss-prefixes");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-    assert_eq!(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &agent_id,
-                "connect_report_loss",
-                data_value!(peer.url())
-            )
-            .await?
-            .into_typed::<String>()?,
-        RECONNECT_FIRST_MESSAGE
-    );
+    assert_eq!(greeting, RECONNECT_FIRST_MESSAGE);
 
-    // The send effect can have reached the peer. Only its absent End is authoritative.
     let send_key = IdempotencyKey::fresh();
+    let crashed = crash_a_send_before_its_end(&executor, &agent, &peer, &send_key).await?;
+    let executor =
+        reconstruct_the_unfinished_send_twice(executor, &agent, &peer, &send_key, &crashed).await?;
+    let executor = crash_receives_on_the_lost_handle(executor, &agent).await?;
+
+    // Every call settles once: the siblings completed before the crash, the send and the
+    // receives as session losses. The completed send reached the peer once, on the one
+    // connection.
+    let executor = executor.restart(Teardown::Shutdown).await?;
+    assert_reports_session_loss(&executor, &component, &agent.agent_id).await?;
+    let oplog = agent.oplog(&executor).await?;
+    for sibling in &crashed.completed_siblings {
+        assert_call_terminal_counts(&oplog, *sibling, 1, 1);
+    }
+    assert_call_terminal_counts(&oplog, crashed.send, 1, 1);
+    assert_eq!(
+        (
+            peer.frames_received()
+                .iter()
+                .filter(|text| text.as_str() == COMPLETED_SEND_FRAME)
+                .count(),
+            peer.accepted(),
+            peer.completed_handshakes()
+        ),
+        (1, 1, 1),
+        "the completed send reached the peer once, on the one connection"
+    );
+    drop(executor);
+    peer.stop().await?;
+    Ok(())
+}
+
+/// The send that the executor crashed before its End, and the calls on the handle that
+/// completed before it.
+struct CrashedSend {
+    send: OplogIndex,
+    completed_siblings: Vec<OplogIndex>,
+}
+
+/// Crashes the executor while a send waits before its End. The send effect can have reached
+/// the peer; only its absent End is authoritative.
+async fn crash_a_send_before_its_end(
+    executor: &TestWorkerExecutor,
+    agent: &WebsocketAgent,
+    peer: &ReconnectTestServer,
+    send_key: &IdempotencyKey,
+) -> anyhow::Result<CrashedSend> {
     let mut gate = executor
-        .gate_next_call_end(&worker_id.agent_id, false)
+        .gate_next_call_end(&agent.worker_id.agent_id, false)
         .await;
     executor
         .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &send_key,
+            &agent.component,
+            &agent.agent_id,
+            send_key,
             "send_persisted_result",
             data_value!("ambiguous-send".to_string()),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
-    gate.abort();
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
+    crash_at_call_end(executor, &gate).await?;
+
+    let oplog = agent.oplog(executor).await?;
     let send = oplog
-        .iter()
-        .rev()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Start(params) if params.function_name == WEBSOCKET_SEND_FUNCTION => {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        })
+        .starts_of(WEBSOCKET_SEND_FUNCTION)
+        .last()
+        .map(|entry| entry.oplog_index)
         .expect("pending send Start");
-    assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == send)), "{}", describe_oplog(&oplog));
+    assert!(oplog.call(send).ends.is_empty(), "{}", oplog.describe());
     let completed_siblings = oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
@@ -463,143 +919,139 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(completed_siblings.len(), 2, "{}", describe_oplog(&oplog));
+    assert_eq!(
+        completed_siblings.len(),
+        2,
+        "the connect's completed send and receive: {}",
+        oplog.describe()
+    );
     for sibling in &completed_siblings {
         assert_call_terminal_counts(&oplog, *sibling, 1, 1);
     }
-    peer.wait_for_count(
-        1,
-        |event| matches!(event, ReconnectServerEvent::FrameReceived(text) if text == "completed-before-crash"),
+    peer.wait_for_frame(
+        COMPLETED_SEND_FRAME,
         "observe the historical completed send",
-    ).await?;
+    )
+    .await?;
     drop(gate);
-    drop(executor);
+    Ok(CrashedSend {
+        send,
+        completed_siblings,
+    })
+}
 
-    // Repeatedly reconstruct the same unfinished send, first before its loss End,
-    // then with that End durable but before guest completion delivery.
+/// Reconstructs the same unfinished send twice, first crashing before its loss End, then with
+/// that End durable but before guest completion delivery. The reconstruction takes no pool
+/// permit and opens no connection; the retry then reports the session loss.
+async fn reconstruct_the_unfinished_send_twice(
+    mut executor: TestWorkerExecutor,
+    agent: &WebsocketAgent,
+    peer: &ReconnectTestServer,
+    send_key: &IdempotencyKey,
+    crashed: &CrashedSend,
+) -> anyhow::Result<TestWorkerExecutor> {
     for after_end in [false, true] {
-        executor = start_executor().await?;
+        executor = executor.restart(Teardown::Drop).await?;
         let mut admission = executor.gate_next_replay_access_admission(
-            &worker_id.agent_id,
+            &agent.worker_id.agent_id,
             "client::connect",
             ReplayAdmissionStage::BeforeScope,
         );
         let mut gate = executor
-            .gate_next_call_end(&worker_id.agent_id, after_end)
+            .gate_next_call_end(&agent.worker_id.agent_id, after_end)
             .await;
         executor
             .invoke_agent_with_key(
-                &component,
-                &agent_id,
-                &send_key,
+                &agent.component,
+                &agent.agent_id,
+                send_key,
                 "send_persisted_result",
                 data_value!("ambiguous-send".to_string()),
             )
             .await?;
-        tokio::time::timeout(Duration::from_secs(10), admission.entered()).await?;
+        within(
+            GATE_TIMEOUT,
+            "the replay admission of the reconstructed connect",
+            admission.entered(),
+        )
+        .await?;
         let pool = executor.websocket_connection_pool().expect("captured pool");
-        let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+        let permit = within(
+            POOL_PERMIT_TIMEOUT,
+            "a websocket pool permit",
+            pool.acquire(),
+        )
+        .await??;
         admission.release();
-        tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
-        gate.abort();
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        assert_call_terminal_counts(&oplog, send, usize::from(after_end), 0);
-        assert_eq!(peer.completed_handshakes(), 1);
+        within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
+        crash_at_call_end(&executor, &gate).await?;
+        let oplog = agent.oplog(&executor).await?;
+        assert_call_terminal_counts(&oplog, crashed.send, usize::from(after_end), 0);
+        assert_eq!(peer.completed_handshakes(), 1, "no reconnect: {after_end}");
         drop(gate);
         drop(permit);
-        drop(executor);
     }
-    executor = start_executor().await?;
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &send_key,
+    executor = executor.restart(Teardown::Drop).await?;
+    let result: Result<(), String> = executor
+        .invoke_and_await_typed_with_key(
+            &agent.component,
+            &agent.agent_id,
+            send_key,
             "send_persisted_result",
             data_value!("ambiguous-send".to_string()),
         )
-        .await?
-        .into_typed::<Result<(), String>>()?;
+        .await?;
     assert_eq!(result, Err("Send error: Error::SessionLost".into()));
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
+    Ok(executor)
+}
 
-    // Async receives on the lost handle must retain the End/delivery split too.
+/// Async receives on the lost handle keep the End and delivery split too: crashed before or
+/// after their loss End, their retry settles each with one End and one delivery.
+async fn crash_receives_on_the_lost_handle(
+    mut executor: TestWorkerExecutor,
+    agent: &WebsocketAgent,
+) -> anyhow::Result<TestWorkerExecutor> {
     for after_end in [false, true] {
-        executor = start_executor().await?;
+        executor = executor.restart(Teardown::Shutdown).await?;
         executor
-            .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
+            .invoke_and_await_agent(&agent.component, &agent.agent_id, "noop", data_value!())
             .await?;
         let pool = executor.websocket_connection_pool().expect("captured pool");
-        let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+        let permit = within(
+            POOL_PERMIT_TIMEOUT,
+            "a websocket pool permit",
+            pool.acquire(),
+        )
+        .await??;
         let key = IdempotencyKey::fresh();
         let mut gate = executor
-            .gate_next_call_end(&worker_id.agent_id, after_end)
+            .gate_next_call_end(&agent.worker_id.agent_id, after_end)
             .await;
-        executor
-            .invoke_agent_with_key(
-                &component,
-                &agent_id,
-                &key,
-                CONTENTION_METHOD,
-                data_value!(CONTENTION_TIMEOUT_MS),
-            )
-            .await?;
-        tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
-        gate.abort();
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        agent.start_contention(&executor, &key).await?;
+        within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
+        crash_at_call_end(&executor, &gate).await?;
+        let oplog = agent.oplog(&executor).await?;
         let start = gate.start_index();
         assert_call_terminal_counts(&oplog, start, usize::from(after_end), 0);
-        assert!(oplog.iter().any(|entry| entry.oplog_index == start && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.ends_with("::receive") || params.function_name.ends_with("::receive-with-timeout"))), "{}", describe_oplog(&oplog));
+        assert!(
+            start_function(&oplog, start).is_some_and(
+                |name| name.ends_with("::receive") || name.ends_with("::receive-with-timeout")
+            ),
+            "the crashed call is a receive: {}",
+            oplog.describe()
+        );
         drop(gate);
         drop(permit);
-        drop(executor);
-        executor = start_executor().await?;
+
+        executor = executor.restart(Teardown::Drop).await?;
         assert_eq!(
-            executor
-                .invoke_and_await_agent_with_key(
-                    &component,
-                    &agent_id,
-                    &key,
-                    CONTENTION_METHOD,
-                    data_value!(CONTENTION_TIMEOUT_MS)
-                )
-                .await?
-                .into_typed::<(String, String)>()?,
+            agent.contention_result(&executor, &key).await?,
             ("session-lost".into(), "session-lost".into())
         );
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let oplog = agent.oplog(&executor).await?;
         assert_call_terminal_counts(&oplog, start, 1, 1);
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
     }
-    executor = start_executor().await?;
-    assert_eq!(
-        executor
-            .invoke_and_await_agent(&component, &agent_id, "probe_report_loss", data_value!())
-            .await?
-            .into_typed::<(bool, bool, bool, bool)>()?,
-        (true, true, true, true)
-    );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    for sibling in completed_siblings {
-        assert_call_terminal_counts(&oplog, sibling, 1, 1);
-    }
-    assert_call_terminal_counts(&oplog, send, 1, 1);
-    assert_eq!(
-        peer.frames_received()
-            .iter()
-            .filter(|text| text.as_str() == "completed-before-crash")
-            .count(),
-        1
-    );
-    assert_eq!(peer.accepted(), 1);
-    assert_eq!(peer.completed_handshakes(), 1);
-    drop(executor);
-    peer.stop().await?;
-    Ok(())
+    Ok(executor)
 }
 
 #[test]
@@ -611,160 +1063,69 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    const RECEIVE: &str = "::receive";
-    const TIMED: &str = "::receive-with-timeout";
+    // Every case starts its own executor in the same context.
     let context = TestContext::new(last_unique_id);
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| config.max_websocket_connections = 1)),
-        ..Default::default()
-    };
-    let start_executor = || start_with_overrides(deps, &context, overrides.clone());
-    for (recorded, missing) in [(RECEIVE, TIMED), (TIMED, RECEIVE)] {
+    for siblings in [
+        ContentionSiblings {
+            recorded: RECEIVE_SUFFIX,
+            missing: TIMED_RECEIVE_SUFFIX,
+        },
+        ContentionSiblings {
+            recorded: TIMED_RECEIVE_SUFFIX,
+            missing: RECEIVE_SUFFIX,
+        },
+    ] {
         for after_end in [false, true] {
-            let mut executor = start_executor().await?;
+            let executor = start_with_overrides(deps, &context, connection_limit(1)).await?;
             let mut peer = ReconnectTestServer::start().await;
             let component = executor
                 .component_dep(&context.default_environment_id, host_api_tests)
                 .store()
                 .await?;
-            let agent_id = agent_key!(
-                "WebsocketTest",
-                format!(
-                    "one-sibling-{}-{after_end}",
-                    recorded.trim_start_matches("::")
-                )
+            let name = format!(
+                "one-sibling-{}-{after_end}",
+                siblings.recorded.trim_start_matches("::")
             );
-            let worker_id = executor
-                .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-                .await?;
+            let agent = WebsocketAgent::start(&executor, &component, &name).await?;
             executor
                 .invoke_and_await_agent(
                     &component,
-                    &agent_id,
+                    &agent.agent_id,
                     "connect_report_loss",
                     data_value!(peer.url()),
                 )
                 .await?;
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            drop(executor);
 
-            // Live: the missing sibling stops before appending its Start while the recorded
-            // sibling reaches its End, then the executor crashes.
-            executor = start_executor().await?;
-            executor
-                .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
-                .await?;
-            let pool = executor.websocket_connection_pool().expect("captured pool");
-            let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
-            let mut live_hold = executor.gate_next_replay_access_admission(
-                &worker_id.agent_id,
-                missing,
-                ReplayAdmissionStage::BeforeLiveStart,
-            );
-            let mut end_gate = executor
-                .gate_next_call_end(&worker_id.agent_id, after_end)
-                .await;
-            let key = IdempotencyKey::fresh();
-            executor
-                .invoke_agent_with_key(
-                    &component,
-                    &agent_id,
-                    &key,
-                    CONTENTION_METHOD,
-                    data_value!(CONTENTION_TIMEOUT_MS),
-                )
-                .await?;
-            tokio::time::timeout(Duration::from_secs(10), live_hold.entered()).await?;
-            tokio::time::timeout(Duration::from_secs(10), end_gate.entered()).await?;
-            end_gate.abort();
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            let starts = oplog
-                .iter()
-                .filter(|entry| entry.oplog_index >= end_gate.start_index())
-                .filter_map(|entry| match &entry.entry {
-                    PublicOplogEntry::Start(params)
-                        if params.function_name.ends_with(RECEIVE)
-                            || params.function_name.ends_with(TIMED) =>
-                    {
-                        Some(params.function_name.clone())
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(starts.len(), 1, "{}", describe_oplog(&oplog));
-            assert!(starts[0].ends_with(recorded), "{}", describe_oplog(&oplog));
-            let recorded_start = end_gate.start_index();
-            drop(live_hold);
-            drop(end_gate);
-            drop(permit);
-            drop(executor);
+            let (executor, crashed) =
+                crash_with_one_sibling_start(executor, &agent, siblings, after_end).await?;
+            let executor = replay_while_the_recorded_sibling_is_unclaimed(
+                executor, &agent, siblings, &crashed,
+            )
+            .await?;
 
-            // Replay: the recorded sibling is held before its claim, and the missing sibling must
-            // continue live while the recorded Start is still unclaimed.
-            executor = start_executor().await?;
-            // The earlier `connect_report_loss` invocation replays the same function first.
-            let mut earlier_occurrence = executor.gate_next_replay_access_admission(
-                &worker_id.agent_id,
-                recorded,
-                ReplayAdmissionStage::BeforeScope,
-            );
-            let mut recorded_hold = executor.gate_next_replay_access_admission(
-                &worker_id.agent_id,
-                recorded,
-                ReplayAdmissionStage::BeforeScope,
-            );
-            let mut missing_live = executor.gate_next_replay_access_admission(
-                &worker_id.agent_id,
-                missing,
-                ReplayAdmissionStage::BeforeLiveStart,
-            );
-            executor
-                .invoke_agent_with_key(
-                    &component,
-                    &agent_id,
-                    &key,
-                    CONTENTION_METHOD,
-                    data_value!(CONTENTION_TIMEOUT_MS),
-                )
-                .await?;
-            tokio::time::timeout(Duration::from_secs(10), earlier_occurrence.entered()).await?;
-            earlier_occurrence.release();
-            tokio::time::timeout(Duration::from_secs(10), recorded_hold.entered()).await?;
-            tokio::time::timeout(Duration::from_secs(10), missing_live.entered()).await?;
-            missing_live.release();
-            recorded_hold.release();
-            assert_eq!(
-                executor
-                    .invoke_and_await_agent_with_key(
-                        &component,
-                        &agent_id,
-                        &key,
-                        CONTENTION_METHOD,
-                        data_value!(CONTENTION_TIMEOUT_MS),
-                    )
-                    .await?
-                    .into_typed::<(String, String)>()?,
-                ("session-lost".to_string(), "session-lost".to_string())
-            );
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            assert_call_terminal_counts(&oplog, recorded_start, 1, 1);
+            // Both siblings settle once as session losses: the recorded one at its original
+            // Start, the missing one at one new Start.
+            let oplog = agent.oplog(&executor).await?;
+            assert_call_terminal_counts(&oplog, crashed.recorded_start, 1, 1);
             let missing_starts = oplog
                 .iter()
                 .filter_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(params)
-                        if entry.oplog_index > recorded_start
-                            && params.function_name.ends_with(missing) =>
+                        if entry.oplog_index > crashed.recorded_start
+                            && params.function_name.ends_with(siblings.missing) =>
                     {
                         Some(entry.oplog_index)
                     }
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(missing_starts.len(), 1, "{}", describe_oplog(&oplog));
+            assert_eq!(missing_starts.len(), 1, "{}", oplog.describe());
             assert_call_terminal_counts(&oplog, missing_starts[0], 1, 1);
-            assert_eq!(peer.accepted(), 1);
-            assert_eq!(peer.completed_handshakes(), 1);
+            assert_eq!(
+                (peer.accepted(), peer.completed_handshakes()),
+                (1, 1),
+                "the lost handle opens no new connection"
+            );
             executor.shutdown_and_wait_for_invocation_loops().await?;
             drop(executor);
             peer.stop().await?;
@@ -773,15 +1134,178 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
     Ok(())
 }
 
+const RECEIVE_SUFFIX: &str = "::receive";
+const TIMED_RECEIVE_SUFFIX: &str = "::receive-with-timeout";
+
+/// The two receives of the contention invocation: the one whose `Start` the crash leaves in
+/// the oplog, and the one that has no `Start` yet.
+#[derive(Debug, Clone, Copy)]
+struct ContentionSiblings {
+    recorded: &'static str,
+    missing: &'static str,
+}
+
+/// The contention invocation that the executor crashed with only the recorded sibling's
+/// `Start` in the oplog.
+struct CrashedContention {
+    key: IdempotencyKey,
+    recorded_start: OplogIndex,
+}
+
+/// Live: the missing sibling stops before appending its `Start` while the recorded sibling
+/// reaches its End, then the executor crashes.
+async fn crash_with_one_sibling_start(
+    executor: TestWorkerExecutor,
+    agent: &WebsocketAgent,
+    siblings: ContentionSiblings,
+    after_end: bool,
+) -> anyhow::Result<(TestWorkerExecutor, CrashedContention)> {
+    let executor = executor.restart(Teardown::Shutdown).await?;
+    executor
+        .invoke_and_await_agent(&agent.component, &agent.agent_id, "noop", data_value!())
+        .await?;
+    let pool = executor.websocket_connection_pool().expect("captured pool");
+    let permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "a websocket pool permit",
+        pool.acquire(),
+    )
+    .await??;
+    let mut live_hold = executor.gate_next_replay_access_admission(
+        &agent.worker_id.agent_id,
+        siblings.missing,
+        ReplayAdmissionStage::BeforeLiveStart,
+    );
+    let mut end_gate = executor
+        .gate_next_call_end(&agent.worker_id.agent_id, after_end)
+        .await;
+    let key = IdempotencyKey::fresh();
+    agent.start_contention(&executor, &key).await?;
+    within(
+        GATE_TIMEOUT,
+        "the missing sibling to stop before its live Start",
+        live_hold.entered(),
+    )
+    .await?;
+    within(
+        GATE_TIMEOUT,
+        "the End gate of the recorded sibling",
+        end_gate.entered(),
+    )
+    .await?;
+    crash_at_call_end(&executor, &end_gate).await?;
+
+    let oplog = agent.oplog(&executor).await?;
+    let starts = oplog
+        .iter()
+        .filter(|entry| entry.oplog_index >= end_gate.start_index())
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name.ends_with(RECEIVE_SUFFIX)
+                    || params.function_name.ends_with(TIMED_RECEIVE_SUFFIX) =>
+            {
+                Some(params.function_name.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts.len(),
+        1,
+        "only the recorded sibling has a Start: {}",
+        oplog.describe()
+    );
+    assert!(
+        starts[0].ends_with(siblings.recorded),
+        "{}",
+        oplog.describe()
+    );
+    let recorded_start = end_gate.start_index();
+    drop(live_hold);
+    drop(end_gate);
+    drop(permit);
+    Ok((
+        executor,
+        CrashedContention {
+            key,
+            recorded_start,
+        },
+    ))
+}
+
+/// Replay: the recorded sibling is held before its claim, and the missing sibling must
+/// continue live while the recorded `Start` is still unclaimed. Both then report the session
+/// loss.
+async fn replay_while_the_recorded_sibling_is_unclaimed(
+    executor: TestWorkerExecutor,
+    agent: &WebsocketAgent,
+    siblings: ContentionSiblings,
+    crashed: &CrashedContention,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let executor = executor.restart(Teardown::Drop).await?;
+    // The earlier `connect_report_loss` invocation replays the same function first.
+    let mut earlier_occurrence = executor.gate_next_replay_access_admission(
+        &agent.worker_id.agent_id,
+        siblings.recorded,
+        ReplayAdmissionStage::BeforeScope,
+    );
+    let mut recorded_hold = executor.gate_next_replay_access_admission(
+        &agent.worker_id.agent_id,
+        siblings.recorded,
+        ReplayAdmissionStage::BeforeScope,
+    );
+    let mut missing_live = executor.gate_next_replay_access_admission(
+        &agent.worker_id.agent_id,
+        siblings.missing,
+        ReplayAdmissionStage::BeforeLiveStart,
+    );
+    agent.start_contention(&executor, &crashed.key).await?;
+    within(
+        GATE_TIMEOUT,
+        "the replay admission of the earlier connect_report_loss occurrence",
+        earlier_occurrence.entered(),
+    )
+    .await?;
+    earlier_occurrence.release();
+    within(
+        GATE_TIMEOUT,
+        "the recorded sibling to reach its replay claim",
+        recorded_hold.entered(),
+    )
+    .await?;
+    within(
+        GATE_TIMEOUT,
+        "the missing sibling to reach its live Start",
+        missing_live.entered(),
+    )
+    .await?;
+    missing_live.release();
+    recorded_hold.release();
+    assert_eq!(
+        agent.contention_result(&executor, &crashed.key).await?,
+        ("session-lost".to_string(), "session-lost".to_string())
+    );
+    Ok(executor)
+}
+
 fn assert_call_terminal_counts(
     oplog: &[PublicOplogEntryWithIndex],
     start: OplogIndex,
     ends: usize,
     delivered: usize,
 ) {
-    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)).count(), ends, "{}", describe_oplog(oplog));
-    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(params) if params.start_index == start)).count(), delivered, "{}", describe_oplog(oplog));
-    assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDiscarded(params) if params.start_index == start) || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == start)), "{}", describe_oplog(oplog));
+    let call = oplog.call(start);
+    assert_eq!(
+        (
+            call.ends.len(),
+            call.deliveries.len(),
+            call.discards.len(),
+            call.cancellations.len()
+        ),
+        (ends, delivered, 0, 0),
+        "Ends, deliveries, discards and cancellations of the call at {start}: {}",
+        oplog.describe()
+    );
 }
 
 #[test]
@@ -793,17 +1317,16 @@ async fn websocket_report_loss_preserves_live_disconnect_and_recorded_close(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let mut executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
+    let WebsocketTest {
+        mut executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
     for closed in [false, true] {
         let mut peer = ReconnectTestServer::start().await;
         let agent_id = agent_key!("WebsocketTest", format!("closed-{closed}"));
         executor
-            .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+            .start_agent(&component.id, agent_id.clone())
             .await?;
         executor
             .invoke_and_await_agent(
@@ -813,36 +1336,36 @@ async fn websocket_report_loss_preserves_live_disconnect_and_recorded_close(
                 data_value!(peer.url()),
             )
             .await?;
-        peer.wait_for_count(1, |event| matches!(event, ReconnectServerEvent::FrameReceived(text) if text == "completed-before-crash"), "receive completed send").await?;
+        peer.wait_for_frame(COMPLETED_SEND_FRAME, "receive completed send")
+            .await?;
+
+        // A recorded close stays a close after a restart; a live disconnect is not a session
+        // loss.
         let method = if closed {
-            assert_eq!(
-                executor
-                    .invoke_and_await_agent(
-                        &component,
-                        &agent_id,
-                        "close_persisted_result",
-                        data_value!()
-                    )
-                    .await?
-                    .into_typed::<Result<(), String>>()?,
-                Ok(())
-            );
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            drop(executor);
-            executor = start(deps, &context).await?;
+            let closed: Result<(), String> = executor
+                .invoke_and_await_typed(
+                    &component,
+                    &agent_id,
+                    "close_persisted_result",
+                    data_value!(),
+                )
+                .await?;
+            assert_eq!(closed, Ok(()));
+            executor = executor.restart(Teardown::Shutdown).await?;
             "receive_is_closed"
         } else {
             peer.stop().await?;
             "live_disconnect_is_not_session_lost"
         };
-        assert!(
-            executor
-                .invoke_and_await_agent(&component, &agent_id, method, data_value!())
-                .await?
-                .into_typed::<bool>()?
+        let holds: bool = executor
+            .invoke_and_await_typed(&component, &agent_id, method, data_value!())
+            .await?;
+        assert!(holds, "{method}");
+        assert_eq!(
+            (peer.accepted(), peer.completed_handshakes()),
+            (1, 1),
+            "the handle opens no new connection"
         );
-        assert_eq!(peer.accepted(), 1);
-        assert_eq!(peer.completed_handshakes(), 1);
         if closed {
             peer.stop().await?;
         }
@@ -860,12 +1383,11 @@ async fn websocket_default_policy_reports_session_loss_after_restart(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let mut executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
+    let WebsocketTest {
+        mut executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
     for first_access in [
         "receive_next_from_persisted_result",
         "send_persisted_result",
@@ -873,57 +1395,60 @@ async fn websocket_default_policy_reports_session_loss_after_restart(
         let mut peer = ReconnectTestServer::start().await;
         let agent_id = agent_key!("WebsocketTest", format!("default-policy-{first_access}"));
         executor
-            .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+            .start_agent(&component.id, agent_id.clone())
             .await?;
-        assert_eq!(
-            executor
-                .invoke_and_await_agent(
-                    &component,
-                    &agent_id,
-                    "connect_default_and_receive_first",
-                    data_value!(peer.url())
-                )
-                .await?
-                .into_typed::<String>()?,
-            RECONNECT_FIRST_MESSAGE
-        );
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
-        executor = start(deps, &context).await?;
+        let greeting: String = executor
+            .invoke_and_await_typed(
+                &component,
+                &agent_id,
+                "connect_default_and_receive_first",
+                data_value!(peer.url()),
+            )
+            .await?;
+        assert_eq!(greeting, RECONNECT_FIRST_MESSAGE);
+        executor = executor.restart(Teardown::Shutdown).await?;
 
         let first = if first_access == "send_persisted_result" {
             executor
-                .invoke_and_await_agent(
+                .invoke_and_await_typed::<Result<(), String>>(
                     &component,
                     &agent_id,
                     first_access,
                     data_value!("must-not-reach-peer"),
                 )
                 .await?
-                .into_typed::<Result<(), String>>()?
                 .map(|()| "sent".to_string())
         } else {
             executor
-                .invoke_and_await_agent(&component, &agent_id, first_access, data_value!())
+                .invoke_and_await_typed::<Result<String, String>>(
+                    &component,
+                    &agent_id,
+                    first_access,
+                    data_value!(),
+                )
                 .await?
-                .into_typed::<Result<String, String>>()?
         };
-        let later = executor
-            .invoke_and_await_agent(
+        let later: Result<String, String> = executor
+            .invoke_and_await_typed(
                 &component,
                 &agent_id,
                 "receive_next_from_persisted_result",
                 data_value!(),
             )
-            .await?
-            .into_typed::<Result<String, String>>()?;
+            .await?;
         for result in [first, later] {
             let error = result.expect_err("a handle without a policy must not reconnect");
             assert!(error.ends_with("SessionLost"), "{error}");
         }
-        assert_eq!(peer.accepted(), 1, "no replacement connection");
-        assert_eq!(peer.completed_handshakes(), 1);
-        assert_eq!(peer.frames_received(), Vec::<String>::new());
+        assert_eq!(
+            (
+                peer.accepted(),
+                peer.completed_handshakes(),
+                peer.frames_received()
+            ),
+            (1, 1, Vec::<String>::new()),
+            "no replacement connection, and the failed send reaches no peer"
+        );
         peer.stop().await?;
     }
     drop(executor);
@@ -939,51 +1464,58 @@ async fn websocket_reconstruction_policies_are_independent_in_one_worker(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
     let mut report_peer = ReconnectTestServer::start().await;
     let mut automatic_peer = ReconnectTestServer::start().await;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
     let agent_id = agent_key!("WebsocketTest", "independent-policies");
     executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let greetings: (String, String) = executor
+        .invoke_and_await_typed(
+            &component,
+            &agent_id,
+            "connect_both_policies",
+            data_value!(report_peer.url(), automatic_peer.url()),
+        )
         .await?;
     assert_eq!(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &agent_id,
-                "connect_both_policies",
-                data_value!(report_peer.url(), automatic_peer.url())
-            )
-            .await?
-            .into_typed::<(String, String)>()?,
+        greetings,
         (
             RECONNECT_FIRST_MESSAGE.into(),
             RECONNECT_FIRST_MESSAGE.into()
         )
     );
-    report_peer.wait_for_count(1, |event| matches!(event, ReconnectServerEvent::FrameReceived(text) if text == "completed-before-crash"), "receive completed report-policy send").await?;
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start(deps, &context).await?;
+    report_peer
+        .wait_for_frame(COMPLETED_SEND_FRAME, "receive completed report-policy send")
+        .await?;
+
+    let executor = executor.restart(Teardown::Shutdown).await?;
+    let probed: (bool, String) = executor
+        .invoke_and_await_typed(&component, &agent_id, "probe_both_policies", data_value!())
+        .await?;
     assert_eq!(
-        executor
-            .invoke_and_await_agent(&component, &agent_id, "probe_both_policies", data_value!())
-            .await?
-            .into_typed::<(bool, String)>()?,
-        (true, RECONNECT_MESSAGES[0].into())
+        probed,
+        (true, RECONNECT_MESSAGES[0].into()),
+        "the report-loss handle reports the loss and the automatic handle reconnects"
     );
-    assert_eq!(report_peer.accepted(), 1);
     assert_eq!(
-        report_peer.frames_received(),
-        vec!["completed-before-crash".to_string()]
+        (report_peer.accepted(), report_peer.frames_received()),
+        (1, vec![COMPLETED_SEND_FRAME.to_string()]),
+        "the report-loss handle does not reconnect"
     );
-    assert_eq!(automatic_peer.accepted(), 2);
-    assert_eq!(automatic_peer.completed_handshakes(), 2);
+    assert_eq!(
+        (
+            automatic_peer.accepted(),
+            automatic_peer.completed_handshakes()
+        ),
+        (2, 2),
+        "the automatic handle reconnects once"
+    );
     drop(executor);
     report_peer.stop().await?;
     automatic_peer.stop().await?;
@@ -999,18 +1531,20 @@ async fn websocket_report_loss_effect_joins_initialization_before_replacement(
     _tracing: &Tracing,
     #[tagged_as("tool_streaming_effect_caller")] caller: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, caller).await?;
     let mut old_peer = ReconnectTestServer::start().await;
     let mut replacement_peer = ReconnectTestServer::start().await;
-    let component = executor
-        .component_dep(&context.default_environment_id, caller)
-        .store()
-        .await?;
     let agent_id = agent_key!("WebsocketRecoveryProbe", "effect-real-loss");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .start_agent(&component.id, agent_id.clone())
         .await?;
+
+    // Crash while the old connection's initialization has completed its greeting receive and
+    // a second read is pending.
     let key = IdempotencyKey::fresh();
     executor
         .invoke_agent_with_key(
@@ -1021,51 +1555,65 @@ async fn websocket_report_loss_effect_joins_initialization_before_replacement(
             data_value!(old_peer.url(), replacement_peer.url()),
         )
         .await?;
-    old_peer.wait_for_count(1, |event| matches!(event, ReconnectServerEvent::FrameReceived(text) if text == "initialize-old"), "receive old initialization").await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            executor.commit_oplog(&worker_id.agent_id).await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            if starts_of_websocket_function(&oplog, "golem:websocket/client::receive").len() == 2 {
-                return Ok::<_, anyhow::Error>(());
+    old_peer
+        .wait_for_frame("initialize-old", "receive old initialization")
+        .await?;
+    within(
+        OPLOG_PROGRESS_TIMEOUT,
+        "the pending read's receive Start",
+        async {
+            loop {
+                executor.commit_oplog(&worker_id.agent_id).await?;
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                if starts_of_websocket_function(&oplog, WEBSOCKET_RECEIVE_FUNCTION).len() == 2 {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    })
+        },
+    )
     .await??;
     executor.shutdown_and_wait_for_invocation_loops().await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let receives = starts_of_websocket_function(&oplog, "golem:websocket/client::receive");
+    let receives = starts_of_websocket_function(&oplog, WEBSOCKET_RECEIVE_FUNCTION);
     assert_eq!(
         receives.len(),
         2,
         "completed greeting and pending read must both exist"
     );
-    assert!(!oplog.iter().any(|entry| matches!(&entry.entry,
-        PublicOplogEntry::End(params) if params.start_index == receives[1])));
-    drop(executor);
-    let executor = start(deps, &context).await?;
-    let result = executor
-        .invoke_and_await_agent_with_key(
+    assert!(
+        oplog.call(receives[1]).ends.is_empty(),
+        "the pending read has no End: {}",
+        oplog.describe()
+    );
+
+    // The retry joins the old initialization before it replaces the lost connection.
+    let executor = executor.restart(Teardown::Drop).await?;
+    let result: (bool, bool, String) = executor
+        .invoke_and_await_typed_with_key(
             &component,
             &agent_id,
             &key,
             "recover",
             data_value!(old_peer.url(), replacement_peer.url()),
         )
-        .await?
-        .into_typed::<(bool, bool, String)>()?;
+        .await?;
     assert_eq!(result, (true, true, RECONNECT_FIRST_MESSAGE.into()));
-    replacement_peer.wait_for_count(1, |event| matches!(event, ReconnectServerEvent::FrameReceived(text) if text == "initialize-new"), "receive replacement initialization").await?;
-    assert_eq!(old_peer.accepted(), 1);
+    replacement_peer
+        .wait_for_frame("initialize-new", "receive replacement initialization")
+        .await?;
     assert_eq!(
-        old_peer.frames_received(),
-        vec!["initialize-old".to_string()]
+        (old_peer.accepted(), old_peer.frames_received()),
+        (1, vec!["initialize-old".to_string()]),
+        "the old peer is initialized once and never reconnected"
     );
-    assert_eq!(replacement_peer.accepted(), 1);
     assert_eq!(
-        replacement_peer.frames_received(),
-        vec!["initialize-new".to_string()]
+        (
+            replacement_peer.accepted(),
+            replacement_peer.frames_received()
+        ),
+        (1, vec!["initialize-new".to_string()]),
+        "the replacement peer is connected and initialized once"
     );
     drop(executor);
     old_peer.stop().await?;
@@ -1082,59 +1630,61 @@ async fn websocket_report_loss_ts_public_wrapper_replacement(
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, agent_sdk_ts).await?;
     let mut old_peer = ReconnectTestServer::start().await;
     let mut replacement_peer = ReconnectTestServer::start().await;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_sdk_ts)
-        .store()
-        .await?;
     let agent_id = agent_key!("WebSocketTest", "public-wrapper-loss");
     executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let greeting: String = executor
+        .invoke_and_await_typed(
+            &component,
+            &agent_id,
+            "connectReportLoss",
+            data_value!(old_peer.url()),
+        )
+        .await?;
+    assert_eq!(greeting, RECONNECT_FIRST_MESSAGE);
+
+    // After a restart the TypeScript wrapper reports the loss on every operation, without
+    // reconnecting.
+    let executor = executor.restart(Teardown::Shutdown).await?;
+    let reported: Vec<bool> = executor
+        .invoke_and_await_typed(&component, &agent_id, "probeReportLoss", data_value!())
+        .await?;
+    assert_eq!(reported, vec![true; 4]);
+    assert_eq!(
+        (old_peer.accepted(), old_peer.frames_received()),
+        (1, Vec::<String>::new()),
+        "the lost handle neither reconnects nor sends"
+    );
+
+    // An explicit replacement connects to the new peer and initializes it.
+    let greeting: String = executor
+        .invoke_and_await_typed(
+            &component,
+            &agent_id,
+            "replaceLost",
+            data_value!(replacement_peer.url()),
+        )
+        .await?;
+    assert_eq!(greeting, RECONNECT_FIRST_MESSAGE);
+    replacement_peer
+        .wait_for_frame(
+            "initialize-new",
+            "receive public-wrapper replacement initialization",
+        )
         .await?;
     assert_eq!(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &agent_id,
-                "connectReportLoss",
-                data_value!(old_peer.url())
-            )
-            .await?
-            .into_typed::<String>()?,
-        RECONNECT_FIRST_MESSAGE
+        (old_peer.accepted(), replacement_peer.completed_handshakes()),
+        (1, 1),
+        "the replacement connects once and the old peer is never reconnected"
     );
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start(deps, &context).await?;
-    assert_eq!(
-        executor
-            .invoke_and_await_agent(&component, &agent_id, "probeReportLoss", data_value!())
-            .await?
-            .into_typed::<Vec<bool>>()?,
-        vec![true; 4]
-    );
-    assert_eq!(old_peer.accepted(), 1);
-    assert_eq!(old_peer.frames_received(), Vec::<String>::new());
-    assert_eq!(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &agent_id,
-                "replaceLost",
-                data_value!(replacement_peer.url())
-            )
-            .await?
-            .into_typed::<String>()?,
-        RECONNECT_FIRST_MESSAGE
-    );
-    replacement_peer.wait_for_count(1,
-        |event| matches!(event, ReconnectServerEvent::FrameReceived(text) if text == "initialize-new"),
-        "receive public-wrapper replacement initialization").await?;
-    assert_eq!(old_peer.accepted(), 1);
-    assert_eq!(replacement_peer.completed_handshakes(), 1);
     drop(executor);
     old_peer.stop().await?;
     replacement_peer.stop().await?;
@@ -1150,88 +1700,95 @@ async fn websocket_report_loss_absorbs_repeated_restart_without_pool_io(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| config.max_websocket_connections = 1)),
-        ..Default::default()
-    };
-    let context = TestContext::new(last_unique_id);
-    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let WebsocketTest {
+        mut executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut peer = ReconnectTestServer::start().await;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
     let agent_id = agent_key!("WebsocketTest", "report-loss-restarts");
     executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .start_agent(&component.id, agent_id.clone())
         .await?;
-    let first = executor
-        .invoke_and_await_agent(
+    let first: String = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "connect_report_loss",
             data_value!(peer.url()),
         )
-        .await?
-        .into_typed::<String>()?;
+        .await?;
     assert_eq!(first, RECONNECT_FIRST_MESSAGE);
-
-    peer.wait_for_count(
-        1,
-        |event| {
-            matches!(event,
-        ReconnectServerEvent::FrameReceived(text) if text == "completed-before-crash")
-        },
+    peer.wait_for_frame(
+        COMPLETED_SEND_FRAME,
         "receive the completed send before crashing",
     )
     .await?;
+
     for _ in 0..3 {
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
-        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        executor = executor.restart(Teardown::Shutdown).await?;
         // Activating first reconstructs completed receive and timeout calls.
-        assert_eq!(
-            executor
-                .invoke_and_await_agent(&component, &agent_id, "noop", data_value!(),)
-                .await?
-                .into_typed::<String>()?,
-            "ok"
-        );
+        let noop: String = executor
+            .invoke_and_await_typed(&component, &agent_id, "noop", data_value!())
+            .await?;
+        assert_eq!(noop, "ok");
         let pool = executor
             .websocket_connection_pool()
             .expect("captured websocket pool");
-        let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+        let permit = within(
+            POOL_PERMIT_TIMEOUT,
+            "a websocket pool permit",
+            pool.acquire(),
+        )
+        .await??;
         // Loss must not wait for even the only permit, including close.
-        let result = tokio::time::timeout(
-            Duration::from_secs(10),
-            executor.invoke_and_await_agent(
+        let reported = within(
+            UNBLOCKED_INVOCATION_TIMEOUT,
+            "probe_report_loss while the test holds the only pool permit",
+            executor.invoke_and_await_typed::<(bool, bool, bool, bool)>(
                 &component,
                 &agent_id,
                 "probe_report_loss",
                 data_value!(),
             ),
         )
-        .await??
-        .into_typed::<(bool, bool, bool, bool)>()?;
-        assert_eq!(result, (true, true, true, true));
-        drop(permit);
-        assert_eq!(peer.accepted(), 1);
-        assert_eq!(peer.completed_handshakes(), 1);
+        .await??;
         assert_eq!(
-            peer.frames_sent(),
-            vec![RECONNECT_FIRST_MESSAGE.to_string()]
+            reported,
+            (true, true, true, true),
+            "receive, receive-with-timeout, send and close must each report SessionLost"
         );
+        drop(permit);
         assert_eq!(
-            peer.frames_received(),
-            vec!["completed-before-crash".to_string()]
+            (
+                peer.accepted(),
+                peer.completed_handshakes(),
+                peer.frames_sent(),
+                peer.frames_received()
+            ),
+            (
+                1,
+                1,
+                vec![RECONNECT_FIRST_MESSAGE.to_string()],
+                vec![COMPLETED_SEND_FRAME.to_string()]
+            ),
+            "the restarts open no connection and exchange no frame"
         );
     }
+
+    // Dropping the lost handle does not wait for the only permit either.
     let pool = executor
         .websocket_connection_pool()
         .expect("captured websocket pool");
-    let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
-    tokio::time::timeout(
-        Duration::from_secs(10),
+    let permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "a websocket pool permit",
+        pool.acquire(),
+    )
+    .await??;
+    within(
+        UNBLOCKED_INVOCATION_TIMEOUT,
+        "drop_persisted while the test holds the only pool permit",
         executor.invoke_and_await_agent(&component, &agent_id, "drop_persisted", data_value!()),
     )
     .await??;
@@ -1251,86 +1808,63 @@ async fn websocket_report_loss_pending_receives_after_restart(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
     let mut peer = ReconnectTestServer::start().await;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let agent_id = agent_key!("WebsocketTest", "report-loss-pending");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
+    let agent = WebsocketAgent::start(&executor, &component, "report-loss-pending").await?;
     executor
         .invoke_and_await_agent(
             &component,
-            &agent_id,
+            &agent.agent_id,
             "connect_report_loss",
             data_value!(peer.url()),
         )
         .await?;
+
+    // Crash while both contention receives are pending.
     let key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            executor.commit_oplog(&worker_id.agent_id).await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            if contention_receive_starts(&oplog).len() == 2 {
-                assert_contention_receives_incomplete(&oplog);
-                return Ok::<_, anyhow::Error>(());
+    agent.start_contention(&executor, &key).await?;
+    within(
+        OPLOG_PROGRESS_TIMEOUT,
+        "both contention receive Starts",
+        async {
+            loop {
+                executor.commit_oplog(&agent.worker_id.agent_id).await?;
+                let oplog = agent.oplog(&executor).await?;
+                if contention_receive_starts(&oplog).len() == 2 {
+                    assert_contention_receives_incomplete(&oplog);
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await??;
-    peer.wait_for_count(
-        1,
-        |event| {
-            matches!(event,
-        ReconnectServerEvent::FrameReceived(text) if text == "completed-before-crash")
         },
+    )
+    .await??;
+    peer.wait_for_frame(
+        COMPLETED_SEND_FRAME,
         "receive the completed send before crashing",
     )
     .await?;
     executor.shutdown_and_wait_for_invocation_loops().await?;
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receives_incomplete(&oplog);
-    drop(executor);
-    let executor = start(deps, &context).await?;
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    assert_contention_receives_incomplete(&agent.oplog(&executor).await?);
+
+    // The retry settles both receives as session losses, without a new connection.
+    let executor = executor.restart(Teardown::Drop).await?;
+    let result = agent.contention_result(&executor, &key).await?;
     assert_eq!(result, ("session-lost".into(), "session-lost".into()));
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_reports_session_loss(&executor, &component, &agent.agent_id).await?;
     assert_eq!(
-        executor
-            .invoke_and_await_agent(&component, &agent_id, "probe_report_loss", data_value!())
-            .await?
-            .into_typed::<(bool, bool, bool, bool)>()?,
-        (true, true, true, true)
-    );
-    assert_eq!(peer.accepted(), 1);
-    assert_eq!(peer.completed_handshakes(), 1);
-    assert_eq!(
-        peer.frames_received(),
-        vec!["completed-before-crash".to_string()]
+        (
+            peer.accepted(),
+            peer.completed_handshakes(),
+            peer.frames_received()
+        ),
+        (1, 1, vec![COMPLETED_SEND_FRAME.to_string()]),
+        "the lost handle opens no new connection and sends no new frame"
     );
     drop(executor);
     peer.stop().await?;
@@ -1353,12 +1887,12 @@ struct TwoPathPeer {
     first_connections: Arc<AtomicUsize>,
     second_connections: Arc<AtomicUsize>,
     release_second: watch::Sender<bool>,
-    accept_loop: tokio::task::JoinHandle<()>,
+    accept_loop: JoinHandle<()>,
 }
 
 impl TwoPathPeer {
     async fn start() -> anyhow::Result<Self> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let first_connections = Arc::new(AtomicUsize::new(0));
         let second_connections = Arc::new(AtomicUsize::new(0));
@@ -1400,14 +1934,14 @@ impl TwoPathPeer {
                                 "second-hello"
                             };
                             let _ = socket
-                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                .send(Message::Text(
                                     greeting.into(),
                                 ))
                                 .await;
                             while let Some(message) = socket.next().await {
                                 if matches!(
                                     message,
-                                    Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_)
+                                    Ok(Message::Close(_)) | Err(_)
                                 ) {
                                     break;
                                 }
@@ -1433,13 +1967,16 @@ impl TwoPathPeer {
     }
 
     async fn wait_for_second_connections(&self, count: usize) -> anyhow::Result<()> {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while self.second_connections.load(Ordering::SeqCst) < count {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+        within(
+            PEER_STATE_TIMEOUT,
+            format!("the peer to accept {count} connection(s) on /second"),
+            async {
+                while self.second_connections.load(Ordering::SeqCst) < count {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            },
+        )
         .await
-        .map_err(|_| anyhow!("the peer did not accept {count} connection(s) on /second"))
     }
 }
 
@@ -1457,7 +1994,7 @@ async fn receive_from_two_sockets_after_crash(
     let peer = TwoPathPeer::start().await?;
     let agent_id = agent_key!("WebsocketTest", agent_name);
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .start_agent(&component.id, agent_id.clone())
         .await?;
     let key = IdempotencyKey::fresh();
     executor
@@ -1473,42 +2010,39 @@ async fn receive_from_two_sockets_after_crash(
     // Crash once the first socket's greeting is durable and delivered while the second
     // socket's receive is still open.
     let receive_starts = |oplog: &[PublicOplogEntryWithIndex]| {
-        starts_of_websocket_function(oplog, "golem:websocket/client::receive")
+        starts_of_websocket_function(oplog, WEBSOCKET_RECEIVE_FUNCTION)
     };
-    let has_end = |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| {
-        oplog.iter().any(
-            |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start),
-        )
-    };
+    let has_end =
+        |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| !oplog.call(start).ends.is_empty();
     let delivered = |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| {
-        oplog.iter().any(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker)
-                if marker.start_index == start)
-        })
+        !oplog.call(start).deliveries.is_empty()
     };
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            executor.commit_oplog(&worker_id.agent_id).await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            let starts = receive_starts(&oplog);
-            if starts.len() == 2 {
-                let completed = starts
-                    .iter()
-                    .filter(|start| has_end(&oplog, **start) && delivered(&oplog, **start))
-                    .count();
-                let open = starts
-                    .iter()
-                    .filter(|start| !has_end(&oplog, **start))
-                    .count();
-                if completed == 1 && open == 1 {
-                    return Ok::<_, anyhow::Error>(());
+    within(
+        OPLOG_PROGRESS_TIMEOUT,
+        "the first receive to complete while the second stays open",
+        async {
+            loop {
+                executor.commit_oplog(&worker_id.agent_id).await?;
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                let starts = receive_starts(&oplog);
+                if starts.len() == 2 {
+                    let completed = starts
+                        .iter()
+                        .filter(|start| has_end(&oplog, **start) && delivered(&oplog, **start))
+                        .count();
+                    let open = starts
+                        .iter()
+                        .filter(|start| !has_end(&oplog, **start))
+                        .count();
+                    if completed == 1 && open == 1 {
+                        return Ok::<_, anyhow::Error>(());
+                    }
                 }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow!("the first receive did not complete while the second stayed open"))??;
+        },
+    )
+    .await??;
 
     let gates = match claim_order {
         TwoSocketClaimOrder::Natural => None,
@@ -1529,17 +2063,25 @@ async fn receive_from_two_sockets_after_crash(
     };
     executor.simulated_crash(&worker_id).await?;
     if let Some((mut held, mut other, mut other_claimed)) = gates {
-        let gate_timeout = Duration::from_secs(10);
-        tokio::time::timeout(gate_timeout, held.entered())
-            .await
-            .map_err(|_| anyhow!("the first replayed receive did not reach its claim"))?;
-        tokio::time::timeout(gate_timeout, other.entered())
-            .await
-            .map_err(|_| anyhow!("the second replayed receive did not reach its claim"))?;
+        within(
+            GATE_TIMEOUT,
+            "the first replayed receive to reach its claim",
+            held.entered(),
+        )
+        .await?;
+        within(
+            GATE_TIMEOUT,
+            "the second replayed receive to reach its claim",
+            other.entered(),
+        )
+        .await?;
         other.release();
-        tokio::time::timeout(gate_timeout, other_claimed.entered())
-            .await
-            .map_err(|_| anyhow!("the second replayed receive did not claim a Start"))?;
+        within(
+            GATE_TIMEOUT,
+            "the second replayed receive to claim a Start",
+            other_claimed.entered(),
+        )
+        .await?;
         held.release();
         other_claimed.release();
     }
@@ -1549,8 +2091,9 @@ async fn receive_from_two_sockets_after_crash(
     peer.wait_for_second_connections(2).await?;
     peer.release_second.send_replace(true);
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(30),
+    let result = within(
+        SETTLE_TIMEOUT,
+        "the replayed invocation to complete",
         executor.invoke_and_await_agent_with_key(
             component,
             &agent_id,
@@ -1559,8 +2102,7 @@ async fn receive_from_two_sockets_after_crash(
             data_value!(peer.url("/first"), peer.url("/second")),
         ),
     )
-    .await
-    .map_err(|_| anyhow!("the replayed invocation did not complete"))??
+    .await??
     .into_typed::<(String, String)>()?;
     assert_eq!(
         result,
@@ -1586,12 +2128,9 @@ async fn receive_from_two_sockets_after_crash(
         "{claim_order:?}: replay must reuse both recorded receive Starts"
     );
     for start in starts {
-        let ends = oplog
-            .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start))
-            .count();
         assert_eq!(
-            ends, 1,
+            oplog.call(start).ends.len(),
+            1,
             "{claim_order:?}: receive Start {start} must have exactly one End"
         );
         assert!(
@@ -1615,12 +2154,11 @@ async fn websocket_receives_on_two_sockets_replay_to_their_own_socket_after_cras
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
     for (name, claim_order) in [
         ("two-sockets-natural", TwoSocketClaimOrder::Natural),
         ("two-sockets-reversed", TwoSocketClaimOrder::Reversed),
@@ -1640,61 +2178,30 @@ async fn websocket_echo_rust(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-
-    let ws_server = spawn(
-        async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (mut write, mut read) = StreamExt::split(ws_stream);
-                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                    if msg.is_close() {
-                        break;
-                    }
-                    if msg.is_text() || msg.is_binary() {
-                        SinkExt::send(&mut write, msg).await.ok();
-                    }
-                }
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    let peer = TestPeer::start(Accept::Once, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "ws-echo-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
 
-    let result = executor
-        .invoke_and_await_agent(
+    let echoed: String = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "echo",
-            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
+            data_value!(peer.url(), "hello websocket"),
         )
         .await?;
 
-    assert_eq!(result.into_typed::<String>()?, "hello websocket");
-
+    assert_eq!(echoed, "hello websocket");
     executor.check_oplog_is_queryable(&worker_id).await?;
-
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -1707,96 +2214,48 @@ async fn websocket_echo_rust_oplog_replay(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    // First executor instance + WebSocket echo server
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-
-    // Accept many connections: the second invocation after executor restart
-    // performs a new live connect; a single accept() would leave nothing listening.
-    let ws_server = spawn(
-        async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
-                };
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (mut write, mut read) = StreamExt::split(ws_stream);
-                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                    if msg.is_close() {
-                        break;
-                    }
-                    if msg.is_text() || msg.is_binary() {
-                        SinkExt::send(&mut write, msg).await.ok();
-                    }
-                }
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    // The second invocation after the restart connects live again, so the peer keeps
+    // accepting.
+    let peer = TestPeer::start(Accept::Serially, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "ws-echo-oplog-replay");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
 
-    // First invocation: full WebSocket session (connect/send/receive/drop) and
-    // one entry persisted in agent-local `echo_history`.
-    let first_result = executor
-        .invoke_and_await_agent(
+    // The first invocation runs a full websocket session and records one entry in the
+    // agent-local `echo_history`.
+    let first: String = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "echo_and_record",
-            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
+            data_value!(peer.url(), "hello websocket"),
         )
         .await?;
-
-    assert_eq!(first_result.into_typed::<String>()?, "hello websocket");
-
+    assert_eq!(first, "hello websocket");
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    // Drop the executor to force replay on next activation. Keep server running
-    // so the second invocation can still do live websocket I/O.
-    drop(executor);
-
-    // Restarting does not directly invoke guest functions; replay is performed
-    // when this worker is activated by the next invocation.
-    let executor = start(deps, &context).await?;
-
-    // Second invocation: replay reconstructs agent state from the first invoke.
-    // We append another message and assert we now observe "m1|m2".
-    let second_result = executor
-        .invoke_and_await_agent(
+    // After the restart, the next invocation replays the first one to rebuild the agent
+    // state, then appends its own message.
+    let executor = executor.restart(Teardown::Drop).await?;
+    let second: String = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "echo_and_record",
-            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket 2"),
+            data_value!(peer.url(), "hello websocket 2"),
         )
         .await?;
-
-    assert_eq!(
-        second_result.into_typed::<String>()?,
-        "hello websocket|hello websocket 2"
-    );
-
+    assert_eq!(second, "hello websocket|hello websocket 2");
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -1809,78 +2268,21 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-    let accepted_connections = Arc::new(AtomicUsize::new(0));
-    let transcript = Arc::new(Mutex::new(Vec::<ServerEvent>::new()));
-    let accepted_connections_for_server = Arc::clone(&accepted_connections);
-    let transcript_for_server = Arc::clone(&transcript);
-
-    let ws_server = spawn(
-        async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
-                };
-                let connection = accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-                let transcript_for_connection = Arc::clone(&transcript_for_server);
-                spawn(
-                    async move {
-                        let ws_stream = tokio_tungstenite::accept_async(stream)
-                            .await
-                            .expect("WS handshake failed");
-                        let (mut write, mut read) = StreamExt::split(ws_stream);
-                        while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                            if msg.is_close() {
-                                break;
-                            }
-                            if msg.is_text() {
-                                let payload = msg
-                                    .to_text()
-                                    .expect("text message should decode")
-                                    .to_string();
-                                transcript_for_connection.lock().unwrap().push(ServerEvent {
-                                    connection,
-                                    payload,
-                                });
-                            }
-                            if msg.is_text() || msg.is_binary() {
-                                SinkExt::send(&mut write, msg).await.ok();
-                            }
-                        }
-                    }
-                    .in_current_span(),
-                );
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        context,
+        executor,
+        component,
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    let peer = TestPeer::start(Accept::Concurrently, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "ws-phase2-reconnect");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
-
-    let promise_id_value = executor
-        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    let params =
-        replay_reconnect_roundtrip_params(format!("ws://localhost:{ws_port}"), &promise_id_value);
+    let promise = create_promise(&executor, &component, &agent_id).await?;
+    let params = replay_reconnect_roundtrip_params(peer.url(), &promise);
     let idempotency_key = IdempotencyKey::fresh();
 
+    // The roundtrip sends two messages and suspends on the promise.
     executor
         .invoke_agent_with_key(
             &component,
@@ -1891,86 +2293,60 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
         )
         .await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Suspended, STATUS_TIMEOUT)
         .await?;
-    wait_for_server_state(&accepted_connections, &transcript, 1, 2).await?;
+    wait_for_server_state(&peer, 1, 2).await?;
     assert_eq!(
-        transcript.lock().unwrap().clone(),
-        vec![
-            ServerEvent {
-                connection: 0,
-                payload: "msg-1".to_string(),
-            },
-            ServerEvent {
-                connection: 0,
-                payload: "msg-2".to_string(),
-            },
-        ]
+        peer.transcript(),
+        vec![server_event(0, "msg-1"), server_event(0, "msg-2")]
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // The restart alone does not reconnect.
+    let executor = executor.restart(Teardown::Drop).await?;
+    tokio::time::sleep(RESTART_SETTLE).await;
+    assert_eq!(
+        (peer.accepted(), peer.transcript().len()),
+        (1, 2),
+        "the restart opens no connection"
     );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-    drop(executor);
-
-    let executor = start(deps, &context).await?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
-    assert_eq!(transcript.lock().unwrap().len(), 2);
-
+    // Completing the promise resumes the roundtrip: replay skips the completed sends, and the
+    // live part reconnects once and sends the rest.
     executor
         .complete_promise(
             &context.default_environment_id,
-            &promise_id_from_value(&promise_id_value),
+            &promise_id_from_value(&promise),
             vec![1],
         )
         .await?;
-
-    let result = executor
-        .invoke_and_await_agent_with_key(
+    let result: Result<String, String> = executor
+        .invoke_and_await_typed_with_key(
             &component,
             &agent_id,
             &idempotency_key,
             "replay_reconnect_roundtrip",
             params,
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    wait_for_server_state(&accepted_connections, &transcript, 2, 4).await?;
+        .await?;
+    wait_for_server_state(&peer, 2, 4).await?;
+    assert_eq!(result, Ok("msg-1|msg-2|msg-3|msg-4".to_string()));
     assert_eq!(
-        result,
-        SchemaValue::Result(ResultValuePayload::Ok {
-            value: Some(Box::new(SchemaValue::String(
-                "msg-1|msg-2|msg-3|msg-4".to_string(),
-            ))),
-        })
+        (peer.accepted(), peer.transcript()),
+        (
+            2,
+            vec![
+                server_event(0, "msg-1"),
+                server_event(0, "msg-2"),
+                server_event(1, "msg-3"),
+                server_event(1, "msg-4"),
+            ]
+        ),
+        "one reconnect, and only the messages after the replayed steps are sent on it"
     );
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
-    assert_eq!(
-        transcript.lock().unwrap().clone(),
-        vec![
-            ServerEvent {
-                connection: 0,
-                payload: "msg-1".to_string(),
-            },
-            ServerEvent {
-                connection: 0,
-                payload: "msg-2".to_string(),
-            },
-            ServerEvent {
-                connection: 1,
-                payload: "msg-3".to_string(),
-            },
-            ServerEvent {
-                connection: 1,
-                payload: "msg-4".to_string(),
-            },
-        ]
-    );
-
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -1983,78 +2359,19 @@ async fn websocket_reconnect_failure_returns_guest_error(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-    let accepted_connections = Arc::new(AtomicUsize::new(0));
-    let transcript = Arc::new(Mutex::new(Vec::<ServerEvent>::new()));
-    let accepted_connections_for_server = Arc::clone(&accepted_connections);
-    let transcript_for_server = Arc::clone(&transcript);
-
-    let ws_server = spawn(
-        async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
-                };
-                let connection = accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-                let transcript_for_connection = Arc::clone(&transcript_for_server);
-                spawn(
-                    async move {
-                        let ws_stream = tokio_tungstenite::accept_async(stream)
-                            .await
-                            .expect("WS handshake failed");
-                        let (mut write, mut read) = StreamExt::split(ws_stream);
-                        while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                            if msg.is_close() {
-                                break;
-                            }
-                            if msg.is_text() {
-                                let payload = msg
-                                    .to_text()
-                                    .expect("text message should decode")
-                                    .to_string();
-                                transcript_for_connection.lock().unwrap().push(ServerEvent {
-                                    connection,
-                                    payload,
-                                });
-                            }
-                            if msg.is_text() || msg.is_binary() {
-                                SinkExt::send(&mut write, msg).await.ok();
-                            }
-                        }
-                    }
-                    .in_current_span(),
-                );
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        context,
+        executor,
+        component,
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    let peer = TestPeer::start(Accept::Concurrently, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "ws-reconnect-failure");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
-
-    let promise_id_value = executor
-        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    let params =
-        replay_reconnect_roundtrip_params(format!("ws://localhost:{ws_port}"), &promise_id_value);
+    let promise = create_promise(&executor, &component, &agent_id).await?;
+    let params = replay_reconnect_roundtrip_params(peer.url(), &promise);
     let idempotency_key = IdempotencyKey::fresh();
-
     executor
         .invoke_agent_with_key(
             &component,
@@ -2065,26 +2382,23 @@ async fn websocket_reconnect_failure_returns_guest_error(
         )
         .await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Suspended, STATUS_TIMEOUT)
         .await?;
-    wait_for_server_state(&accepted_connections, &transcript, 1, 2).await?;
-
+    wait_for_server_state(&peer, 1, 2).await?;
     executor.check_oplog_is_queryable(&worker_id).await?;
-    ws_server.abort();
-    drop(executor);
 
-    let executor = start(deps, &context).await?;
-
+    // The peer stops accepting, so the reconnect after the restart fails.
+    peer.abort();
+    let executor = executor.restart(Teardown::Drop).await?;
     executor
         .complete_promise(
             &context.default_environment_id,
-            &promise_id_from_value(&promise_id_value),
+            &promise_id_from_value(&promise),
             vec![1],
         )
         .await?;
-
-    let result = executor
-        .invoke_and_await_agent_with_key(
+    let result: Result<String, String> = executor
+        .invoke_and_await_typed_with_key(
             &component,
             &agent_id,
             &idempotency_key,
@@ -2092,16 +2406,15 @@ async fn websocket_reconnect_failure_returns_guest_error(
             params,
         )
         .await?;
-    let error = get_result_error_string(result);
+
+    let error = result.expect_err("expected the reconnect failure to reach the guest");
     assert!(
         error.contains("ConnectionFailure"),
         "expected reconnect failure to reach the guest, got {error}"
     );
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
-
+    assert_eq!(peer.accepted(), 1);
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-
     Ok(())
 }
 
@@ -2114,113 +2427,50 @@ async fn websocket_closed_connection_stays_terminal_after_replay(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-    let accepted_connections = Arc::new(AtomicUsize::new(0));
-    let accepted_connections_for_server = Arc::clone(&accepted_connections);
-
-    let ws_server = spawn(
-        async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
-                };
-                accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-                spawn(
-                    async move {
-                        let ws_stream = tokio_tungstenite::accept_async(stream)
-                            .await
-                            .expect("WS handshake failed");
-                        let (mut write, _read) = StreamExt::split(ws_stream);
-                        SinkExt::send(
-                            &mut write,
-                            tokio_tungstenite::tungstenite::Message::text("msg-0"),
-                        )
-                        .await
-                        .ok();
-                        SinkExt::send(
-                            &mut write,
-                            tokio_tungstenite::tungstenite::Message::Close(None),
-                        )
-                        .await
-                        .ok();
-                    }
-                    .in_current_span(),
-                );
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    let peer = TestPeer::start(Accept::Concurrently, PeerScript::SendThenClose("msg-0")).await;
     let agent_id = agent_key!("WebsocketTest", "ws-terminal-close-replay");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
+    let first: String = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "connect_and_receive_first",
-            data_value!(format!("ws://localhost:{ws_port}")),
+            data_value!(peer.url()),
         )
         .await?;
-    assert_eq!(first.into_typed::<String>()?, "msg-0");
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+    assert_eq!((first.as_str(), peer.accepted()), ("msg-0", 1));
 
-    let closed_result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "receive_next_from_persisted_result",
-            data_value!(),
-        )
-        .await?;
-    let closed_error = get_result_error_string(closed_result);
+    // The peer closed the connection, so the persisted socket reports the closure.
+    let closed_error = receive_next_error(&executor, &component, &agent_id).await?;
     assert!(
         closed_error.contains("Closed"),
         "expected persisted socket to report closure, got {closed_error}"
     );
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
-
+    assert_eq!(peer.accepted(), 1);
     executor.check_oplog_is_queryable(&worker_id).await?;
-    drop(executor);
 
-    let executor = start(deps, &context).await?;
-    let replayed_result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "receive_next_from_persisted_result",
-            data_value!(),
-        )
-        .await?;
-    let replayed_error = get_result_error_string(replayed_result);
+    // Replay keeps the socket closed and does not reconnect.
+    let executor = executor.restart(Teardown::Drop).await?;
+    let replayed_error = receive_next_error(&executor, &component, &agent_id).await?;
     assert!(
         replayed_error.contains("Closed"),
         "expected replayed terminal socket to stay closed, got {replayed_error}"
     );
     assert_eq!(
-        accepted_connections.load(Ordering::SeqCst),
+        peer.accepted(),
         1,
         "terminal websocket should not reconnect after replay"
     );
-
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -2233,135 +2483,66 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-    let accepted_connections = Arc::new(AtomicUsize::new(0));
-    let accepted_connections_for_server = Arc::clone(&accepted_connections);
-
-    let ws_server = spawn(
-        async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
-                };
-                accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-                spawn(
-                    async move {
-                        let ws_stream = tokio_tungstenite::accept_async(stream)
-                            .await
-                            .expect("WS handshake failed");
-                        let (mut write, mut read) = StreamExt::split(ws_stream);
-                        SinkExt::send(
-                            &mut write,
-                            tokio_tungstenite::tungstenite::Message::text("msg-0"),
-                        )
-                        .await
-                        .ok();
-
-                        while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                            if msg.is_close() {
-                                break;
-                            }
-                        }
-                    }
-                    .in_current_span(),
-                );
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    let peer = TestPeer::start(Accept::Concurrently, PeerScript::SendThenDrain("msg-0")).await;
     let agent_id = agent_key!("WebsocketTest", "ws-close-terminal-replay");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
+    let first: String = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "connect_and_receive_first",
-            data_value!(format!("ws://localhost:{ws_port}")),
+            data_value!(peer.url()),
         )
         .await?;
-    assert_eq!(first.into_typed::<String>()?, "msg-0");
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+    assert_eq!((first.as_str(), peer.accepted()), ("msg-0", 1));
 
-    let close_result = executor
-        .invoke_and_await_agent(
+    // The guest closes the handle, which makes it terminal at once.
+    let close_result: Result<(), String> = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "close_persisted_result",
             data_value!(),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(
-        close_result,
-        SchemaValue::Result(ResultValuePayload::Ok { value: None })
-    );
-
-    let closed_result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "receive_next_from_persisted_result",
-            data_value!(),
-        )
         .await?;
-    let closed_error = get_result_error_string(closed_result);
+    assert_eq!(close_result, Ok(()));
+    let closed_error = receive_next_error(&executor, &component, &agent_id).await?;
     assert!(
         closed_error.contains("Closed"),
         "expected closed handle to become terminal immediately, got {closed_error}"
     );
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
-
+    assert_eq!(peer.accepted(), 1);
     executor.check_oplog_is_queryable(&worker_id).await?;
-    drop(executor);
 
-    let executor = start(deps, &context).await?;
-    let replayed_result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "receive_next_from_persisted_result",
-            data_value!(),
-        )
-        .await?;
-    let replayed_error = get_result_error_string(replayed_result);
+    // Replay keeps the closed handle terminal and does not reconnect.
+    let executor = executor.restart(Teardown::Drop).await?;
+    let replayed_error = receive_next_error(&executor, &component, &agent_id).await?;
     assert!(
         replayed_error.contains("Closed"),
         "expected successfully closed websocket to remain terminal after replay, got {replayed_error}"
     );
     assert_eq!(
-        accepted_connections.load(Ordering::SeqCst),
+        peer.accepted(),
         1,
         "successfully closed websocket should not reconnect after replay"
     );
-
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
 fn replay_reconnect_roundtrip_params(
     url: String,
     promise_id_value: &SchemaValue,
-) -> golem_common::schema::TypedSchemaValue {
+) -> TypedSchemaValue {
     crate::raw_params(vec![SchemaValue::String(url), promise_id_value.clone()])
 }
 
@@ -2369,32 +2550,55 @@ fn promise_id_from_value(value: &SchemaValue) -> PromiseId {
     PromiseId::from_value(value).expect("expected a promise ID returned by the guest")
 }
 
-fn get_result_error_string(result: golem_test_framework::dsl::AgentResult) -> String {
-    let return_value = result
-        .into_return_value()
-        .expect("expected a single return value");
+/// The guest error of `receive_next_from_persisted_result`; fails when the receive succeeded.
+async fn receive_next_error(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &ParsedAgentKey,
+) -> anyhow::Result<String> {
+    let result: Result<String, String> = executor
+        .invoke_and_await_typed(
+            component,
+            agent_id,
+            "receive_next_from_persisted_result",
+            data_value!(),
+        )
+        .await?;
+    Ok(result.expect_err("expected the receive to fail"))
+}
 
-    match return_value {
-        SchemaValue::Result(ResultValuePayload::Err {
-            value: Some(err_value),
-        }) => match *err_value {
-            SchemaValue::String(s) => s,
-            other => panic!("expected error String, got {other:?}"),
-        },
-        other => panic!("expected Result(Err(...)), got {other:?}"),
+/// The promise ID value that the guest's `create_promise` returns.
+async fn create_promise(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &ParsedAgentKey,
+) -> anyhow::Result<SchemaValue> {
+    executor
+        .invoke_and_await_agent(component, agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))
+}
+
+fn server_event(connection: usize, payload: &str) -> ServerEvent {
+    ServerEvent {
+        connection,
+        payload: payload.to_string(),
     }
 }
 
 async fn wait_for_server_state(
-    accepted_connections: &Arc<AtomicUsize>,
-    transcript: &Arc<Mutex<Vec<ServerEvent>>>,
+    peer: &TestPeer,
     expected_connections: usize,
     expected_messages: usize,
 ) -> anyhow::Result<()> {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let what = format!(
+        "the websocket server to reach {expected_connections} connections and {expected_messages} messages"
+    );
+    within(SERVER_STATE_TIMEOUT, what, async {
         loop {
-            let actual_connections = accepted_connections.load(Ordering::SeqCst);
-            let actual_messages = transcript.lock().unwrap().len();
+            let actual_connections = peer.accepted();
+            let actual_messages = peer.transcript.lock().unwrap().len();
 
             if actual_connections > expected_connections || actual_messages > expected_messages {
                 panic!(
@@ -2410,11 +2614,6 @@ async fn wait_for_server_state(
         }
     })
     .await
-    .map_err(|_| {
-        anyhow!(
-            "Timed out waiting for websocket server state: expected {expected_connections} connections and {expected_messages} messages"
-        )
-    })
 }
 
 #[test]
@@ -2426,60 +2625,30 @@ async fn websocket_receive_with_timeout(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-
-    let ws_server = spawn(
-        async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (_write, mut read) = StreamExt::split(ws_stream);
-                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                    if msg.is_close() {
-                        break;
-                    }
-                }
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    let peer = TestPeer::start(Accept::Once, PeerScript::Drain).await;
     let agent_id = agent_key!("WebsocketTest", "ws-timeout-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
 
-    let result = executor
-        .invoke_and_await_agent(
+    let received: Option<String> = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "receive_with_timeout_test",
-            data_value!(format!("ws://localhost:{ws_port}"), 1000u64),
+            data_value!(peer.url(), 1000u64),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
 
-    assert_eq!(result, SchemaValue::Option { inner: None });
-
+    assert_eq!(received, None, "the silent peer lets the receive time out");
     executor.check_oplog_is_queryable(&worker_id).await?;
-
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -2492,63 +2661,38 @@ async fn websocket_polling_test(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
     let message = "Hello from polling test";
-
-    let ws_server = spawn(
-        async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (mut write, _read) = StreamExt::split(ws_stream);
-                let msg = tokio_tungstenite::tungstenite::Message::text(message);
-                SinkExt::send(&mut write, msg).await.ok();
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let peer = TestPeer::start(
+        Accept::Once,
+        PeerScript::Send {
+            text: message,
+            delay: Duration::ZERO,
+        },
+    )
+    .await;
     let agent_id = agent_key!("WebsocketTest", "websocket-polling-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
 
-    let result = executor
-        .invoke_and_await_agent(
+    let polled: Result<String, String> = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "poll_for_message",
-            data_value!(format!("ws://localhost:{ws_port}"), 1000u64),
+            data_value!(peer.url(), 1000u64),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
 
-    assert_eq!(
-        result,
-        SchemaValue::Result(ResultValuePayload::Ok {
-            value: Some(Box::new(SchemaValue::String(message.to_string())))
-        })
-    );
-
+    assert_eq!(polled, Ok(message.to_string()));
     executor.check_oplog_is_queryable(&worker_id).await?;
-
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -2561,64 +2705,39 @@ async fn websocket_polling_survives_repeated_timeouts(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
     let message = "delayed polling message";
-
-    let ws_server = spawn(
-        async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (mut write, _read) = StreamExt::split(ws_stream);
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                let msg = tokio_tungstenite::tungstenite::Message::text(message);
-                SinkExt::send(&mut write, msg).await.ok();
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    // The delay outlasts several of the guest's 10 ms poll timeouts.
+    let peer = TestPeer::start(
+        Accept::Once,
+        PeerScript::Send {
+            text: message,
+            delay: Duration::from_millis(150),
+        },
+    )
+    .await;
     let agent_id = agent_key!("WebsocketTest", "websocket-polling-timeout-race-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
 
-    let result = executor
-        .invoke_and_await_agent(
+    let polled: Result<String, String> = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "poll_until_message_after_timeouts",
-            data_value!(format!("ws://localhost:{ws_port}"), 10u64, 30u32),
+            data_value!(peer.url(), 10u64, 30u32),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
 
-    assert_eq!(
-        result,
-        SchemaValue::Result(ResultValuePayload::Ok {
-            value: Some(Box::new(SchemaValue::String(message.to_string())))
-        })
-    );
-
+    assert_eq!(polled, Ok(message.to_string()));
     executor.check_oplog_is_queryable(&worker_id).await?;
-
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -2631,71 +2750,31 @@ async fn websocket_async_bidirectional_test(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-
-    // Echo server that supports multiple inbound/outbound messages on one connection.
-    let ws_server = spawn(
-        async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (mut write, mut read) = StreamExt::split(ws_stream);
-                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                    if msg.is_close() {
-                        break;
-                    }
-                    if msg.is_text() || msg.is_binary() {
-                        SinkExt::send(&mut write, msg).await.ok();
-                    }
-                }
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    // The echo peer serves several inbound and outbound messages on one connection.
+    let peer = TestPeer::start(Accept::Once, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "websocket-async-bidi-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
 
-    let result = executor
-        .invoke_and_await_agent(
+    let echoed: Result<String, String> = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "async_bidi_test",
-            data_value!(format!("ws://localhost:{ws_port}")),
+            data_value!(peer.url()),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
 
-    assert_eq!(
-        result,
-        SchemaValue::Result(ResultValuePayload::Ok {
-            value: Some(Box::new(SchemaValue::String(
-                "msg-a|msg-b|msg-c".to_string()
-            ))),
-        })
-    );
-
+    assert_eq!(echoed, Ok("msg-a|msg-b|msg-c".to_string()));
     executor.check_oplog_is_queryable(&worker_id).await?;
-
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -2708,102 +2787,43 @@ async fn websocket_async_bidirectional_test_oplog_replay(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-
-    // Keep accepting connections so the second invocation after restart can run live.
-    let ws_server = spawn(
-        async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
-                };
-
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (mut write, mut read) = StreamExt::split(ws_stream);
-                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                    if msg.is_close() {
-                        break;
-                    }
-                    if msg.is_text() || msg.is_binary() {
-                        SinkExt::send(&mut write, msg).await.ok();
-                    }
-                }
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, host_api_tests).await?;
+    // The second invocation after the restart runs live again, so the peer keeps accepting.
+    let peer = TestPeer::start(Accept::Serially, PeerScript::Echo).await;
     let agent_id = agent_key!("WebsocketTest", "websocket-async-bidi-oplog-replay");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
 
-    let first_result = executor
-        .invoke_and_await_agent(
+    let first: Result<String, String> = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "async_bidi_test",
-            data_value!(format!("ws://localhost:{ws_port}")),
+            data_value!(peer.url()),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-
-    assert_eq!(
-        first_result,
-        SchemaValue::Result(ResultValuePayload::Ok {
-            value: Some(Box::new(SchemaValue::String(
-                "msg-a|msg-b|msg-c".to_string()
-            ))),
-        })
-    );
-
+        .await?;
+    assert_eq!(first, Ok("msg-a|msg-b|msg-c".to_string()));
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    drop(executor);
-
-    let executor = start(deps, &context).await?;
-
-    let second_result = executor
-        .invoke_and_await_agent(
+    let executor = executor.restart(Teardown::Drop).await?;
+    let second: Result<String, String> = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "async_bidi_test",
-            data_value!(format!("ws://localhost:{ws_port}")),
+            data_value!(peer.url()),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-
-    assert_eq!(
-        second_result,
-        SchemaValue::Result(ResultValuePayload::Ok {
-            value: Some(Box::new(SchemaValue::String(
-                "msg-a|msg-b|msg-c".to_string()
-            ))),
-        })
-    );
-
+        .await?;
+    assert_eq!(second, Ok("msg-a|msg-b|msg-c".to_string()));
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -2816,61 +2836,30 @@ async fn websocket_echo_ts(
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-
-    let ws_server = spawn(
-        async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (mut write, mut read) = StreamExt::split(ws_stream);
-                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
-                    if msg.is_close() {
-                        break;
-                    }
-                    if msg.is_text() || msg.is_binary() {
-                        SinkExt::send(&mut write, msg).await.ok();
-                    }
-                }
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_sdk_ts)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start(deps, last_unique_id, agent_sdk_ts).await?;
+    let peer = TestPeer::start(Accept::Once, PeerScript::Echo).await;
     let agent_id = agent_key!("WebSocketTest", "ws-echo-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), peer.port_env(), Vec::new())
         .await?;
 
-    let result = executor
-        .invoke_and_await_agent(
+    let echoed: String = executor
+        .invoke_and_await_typed(
             &component,
             &agent_id,
             "echo",
-            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
+            data_value!(peer.url(), "hello websocket"),
         )
         .await?;
 
-    assert_eq!(result.into_typed::<String>()?, "hello websocket");
-
+    assert_eq!(echoed, "hello websocket");
     executor.check_oplog_is_queryable(&worker_id).await?;
-
     drop(executor);
-    ws_server.abort();
-
+    drop(peer);
     Ok(())
 }
 
@@ -2897,6 +2886,10 @@ const RECONNECT_MESSAGES: [&str; 2] = ["post-reconnect-a", "post-reconnect-b"];
 const CONTENTION_METHOD: &str = "receive_lock_contention_from_persisted";
 const CONTENTION_TIMEOUT_MS: u64 = 60_000;
 const DIRECT_SEND_MESSAGE: &str = "direct-send-payload";
+/// The frame that `connect_report_loss` sends and completes before the test crashes the
+/// executor.
+const COMPLETED_SEND_FRAME: &str = "completed-before-crash";
+const WEBSOCKET_RECEIVE_FUNCTION: &str = "golem:websocket/client::receive";
 const WEBSOCKET_SEND_FUNCTION: &str = "golem:websocket/client::send";
 const WEBSOCKET_CLOSE_FUNCTION: &str = "golem:websocket/client::close";
 
@@ -2940,9 +2933,8 @@ enum ReconnectServerEvent {
     ConnectionClosed,
 }
 
-type WsServerStream = WebSocketStream<tokio::net::TcpStream>;
-type WsServerSink =
-    futures::stream::SplitSink<WsServerStream, tokio_tungstenite::tungstenite::Message>;
+type WsServerStream = WebSocketStream<TcpStream>;
+type WsServerSink = SplitSink<WsServerStream, Message>;
 
 /// State shared between the peer's listener and per-connection tasks.
 #[derive(Clone)]
@@ -2978,8 +2970,8 @@ fn emit(shared: &ServerShared, event: ReconnectServerEvent) {
 struct ReconnectTestServer {
     port: u16,
     shared: ServerShared,
-    listener_task: Option<tokio::task::JoinHandle<()>>,
-    connection_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    listener_task: Option<JoinHandle<()>>,
+    connection_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl ReconnectTestServer {
@@ -2988,7 +2980,7 @@ impl ReconnectTestServer {
     }
 
     async fn start_with_reconnect_messages(reconnect_messages: &'static [&'static str]) -> Self {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (directive_tx, directive_rx) = watch::channel(HoldDirective::Released);
         let shared = ServerShared {
@@ -3131,7 +3123,7 @@ impl ReconnectTestServer {
         predicate: impl Fn(&ReconnectServerEvent) -> bool,
         description: &str,
     ) -> anyhow::Result<()> {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + PEER_STATE_TIMEOUT;
         loop {
             // The notified future is created before the condition check so no
             // wake-up between the check and the await is missed.
@@ -3147,7 +3139,7 @@ impl ReconnectTestServer {
             if count >= expected {
                 return Ok(());
             }
-            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 anyhow::bail!(
                     "timed out waiting for the server to {description} \
                      (expected {expected} matching events, got {count}); \
@@ -3157,6 +3149,30 @@ impl ReconnectTestServer {
             };
             let _ = tokio::time::timeout(remaining, notified).await;
         }
+    }
+
+    /// Waits until the peer received the text frame `text`.
+    async fn wait_for_frame(&self, text: &str, description: &str) -> anyhow::Result<()> {
+        self.wait_for_count(
+            1,
+            |event| matches!(event, ReconnectServerEvent::FrameReceived(received) if received == text),
+            description,
+        )
+        .await
+    }
+
+    /// Waits until the peer read `expected` websocket upgrade requests.
+    async fn wait_for_upgrade_requests(
+        &self,
+        expected: usize,
+        description: &str,
+    ) -> anyhow::Result<()> {
+        self.wait_for_count(
+            expected,
+            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
+            description,
+        )
+        .await
     }
 
     /// Stops the peer: aborts and joins the listener and every owned connection
@@ -3185,10 +3201,7 @@ impl ReconnectTestServer {
 /// completes the handshake according to the hold directive, sends the greeting
 /// frames of the connection's handshake index and serves the frame loop until
 /// the connection closes.
-async fn serve_connection(
-    mut stream: tokio::net::TcpStream,
-    mut shared: ServerShared,
-) -> Result<(), String> {
+async fn serve_connection(mut stream: TcpStream, mut shared: ServerShared) -> Result<(), String> {
     let request = read_upgrade_request(&mut stream).await?;
     emit(&shared, ReconnectServerEvent::UpgradeRequestRead);
     let key = extract_websocket_key(&request)
@@ -3288,18 +3301,14 @@ async fn serve_connection(
     loop {
         match StreamExt::next(&mut read).await {
             Some(Ok(message)) => match message {
-                tokio_tungstenite::tungstenite::Message::Text(text) => {
+                Message::Text(text) => {
                     emit(
                         &shared,
                         ReconnectServerEvent::FrameReceived(text.to_string()),
                     );
                 }
-                tokio_tungstenite::tungstenite::Message::Close(_) => {
-                    let _ = SinkExt::send(
-                        &mut write,
-                        tokio_tungstenite::tungstenite::Message::Close(None),
-                    )
-                    .await;
+                Message::Close(_) => {
+                    let _ = SinkExt::send(&mut write, Message::Close(None)).await;
                     emit(&shared, ReconnectServerEvent::CloseFrameReceived);
                     return Ok(());
                 }
@@ -3324,12 +3333,7 @@ async fn send_frame(
     payload: &str,
 ) -> Result<bool, String> {
     use tokio_tungstenite::tungstenite::Error;
-    match SinkExt::send(
-        write,
-        tokio_tungstenite::tungstenite::Message::text(payload),
-    )
-    .await
-    {
+    match SinkExt::send(write, Message::text(payload)).await {
         Ok(()) => {
             emit(shared, ReconnectServerEvent::FrameSent(payload.to_string()));
             Ok(true)
@@ -3353,7 +3357,7 @@ async fn send_frame(
 
 /// Reads the client's HTTP websocket upgrade request up to its header
 /// terminator.
-async fn read_upgrade_request(stream: &mut tokio::net::TcpStream) -> Result<String, String> {
+async fn read_upgrade_request(stream: &mut TcpStream) -> Result<String, String> {
     let mut request = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
@@ -3430,13 +3434,9 @@ fn starts_of_websocket_function(
     function: &str,
 ) -> Vec<OplogIndex> {
     oplog
+        .starts_of(function)
         .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Start(params) if params.function_name == function => {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        })
+        .map(|entry| entry.oplog_index)
         .collect()
 }
 
@@ -3477,18 +3477,13 @@ fn assert_contention_receives_incomplete(oplog: &[PublicOplogEntryWithIndex]) {
         "expected exactly one receive and one receive-with-timeout Start, got {starts:?}"
     );
     for (start, function) in starts {
+        let call = oplog.call(start);
         assert!(
-            !oplog
-                .iter()
-                .any(|entry| matches!(&entry.entry, PublicOplogEntry::End(params)
-                    if params.start_index == start)),
+            call.ends.is_empty(),
             "the interrupted round must leave the {function} Start at {start:?} without an End"
         );
         assert!(
-            !oplog.iter().any(
-                |entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
-                    if params.start_index == start)
-            ),
+            call.cancellations.is_empty(),
             "the interrupted round must leave the {function} Start at {start:?} without a Cancelled"
         );
     }
@@ -3524,35 +3519,20 @@ fn assert_contention_receive_correlation(oplog: &[PublicOplogEntryWithIndex]) {
     );
     let finished_index = finished[0].oplog_index;
     for (start, function) in &starts {
-        let ends = oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::End(params)
-                if params.start_index == *start)
-            })
-            .collect::<Vec<_>>();
+        let call = oplog.call(*start);
+        let (ends, deliveries) = (&call.ends, &call.deliveries);
         assert_eq!(
             ends.len(),
             1,
             "expected exactly one End for the {function} Start at {start:?}"
         );
-        let deliveries = oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(params)
-                if params.start_index == *start)
-            })
-            .collect::<Vec<_>>();
         assert_eq!(
             deliveries.len(),
             1,
             "expected exactly one CompletionDelivered for the {function} Start at {start:?}"
         );
         assert!(
-            !oplog.iter().any(
-                |entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
-                    if params.start_index == *start)
-            ),
+            call.cancellations.is_empty(),
             "expected no Cancelled for the {function} Start at {start:?}"
         );
         assert!(
@@ -3577,18 +3557,13 @@ fn assert_single_websocket_call_incomplete(oplog: &[PublicOplogEntryWithIndex], 
         "expected exactly one {function} Start, got {starts:?}"
     );
     let start = starts[0];
+    let call = oplog.call(start);
     assert!(
-        !oplog
-            .iter()
-            .any(|entry| matches!(&entry.entry, PublicOplogEntry::End(params)
-                if params.start_index == start)),
+        call.ends.is_empty(),
         "the interrupted {function} Start at {start:?} must have no End"
     );
     assert!(
-        !oplog.iter().any(
-            |entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
-                if params.start_index == start)
-        ),
+        call.cancellations.is_empty(),
         "the interrupted {function} Start at {start:?} must have no Cancelled"
     );
 }
@@ -3610,22 +3585,14 @@ fn assert_single_websocket_call_completed(oplog: &[PublicOplogEntryWithIndex], f
         "expected exactly one {function} Start, got {starts:?}"
     );
     let start = starts[0];
-    let ends = oplog
-        .iter()
-        .filter(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)
-        })
-        .collect::<Vec<_>>();
+    let call = oplog.call(start);
     assert_eq!(
-        ends.len(),
+        call.ends.len(),
         1,
         "expected exactly one End for the {function} Start at {start:?}"
     );
     assert!(
-        !oplog.iter().any(
-            |entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
-                if params.start_index == start)
-        ),
+        call.cancellations.is_empty(),
         "expected no Cancelled for the {function} Start at {start:?}"
     );
 }
@@ -3650,53 +3617,14 @@ fn sorted_reconnect_payloads(result: &(String, String)) -> Vec<String> {
 
 /// The greeting frames the peer must have sent: the initial connection's
 /// greeting followed by the single reconnected connection's messages.
-fn expected_reconnect_frames_sent() -> [&'static str; 3] {
+fn expected_reconnect_frames_sent() -> Vec<String> {
     [
         RECONNECT_FIRST_MESSAGE,
         RECONNECT_MESSAGES[0],
         RECONNECT_MESSAGES[1],
     ]
-}
-
-/// A compact one-line-per-entry oplog listing for timeout diagnostics.
-fn describe_oplog(oplog: &[PublicOplogEntryWithIndex]) -> String {
-    oplog
-        .iter()
-        .map(|entry| {
-            let description = match &entry.entry {
-                PublicOplogEntry::Start(params) => {
-                    format!("Start({})", params.function_name)
-                }
-                PublicOplogEntry::End(params) => format!("End(@{})", params.start_index),
-                PublicOplogEntry::Cancelled(params) => {
-                    format!("Cancelled(@{})", params.start_index)
-                }
-                PublicOplogEntry::CompletionDelivered(params) => {
-                    format!("CompletionDelivered(@{})", params.start_index)
-                }
-                PublicOplogEntry::Interrupted(_) => "Interrupted".to_string(),
-                PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
-                    PublicAgentInvocation::AgentMethodInvocation(invocation) => {
-                        format!("AgentInvocationStarted({})", invocation.method_name)
-                    }
-                    _ => "AgentInvocationStarted".to_string(),
-                },
-                PublicOplogEntry::AgentInvocationFinished(params) => format!(
-                    "AgentInvocationFinished({})",
-                    params.method_name.as_deref().unwrap_or("?")
-                ),
-                other => {
-                    let kind = std::any::type_name_of_val(other)
-                        .rsplit("::")
-                        .next()
-                        .unwrap_or("?");
-                    kind.to_string()
-                }
-            };
-            format!("{}: {description}", entry.oplog_index)
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+    .map(String::from)
+    .to_vec()
 }
 
 /// Polls the worker's oplog until `predicate` holds. While the worker is
@@ -3707,22 +3635,22 @@ fn describe_oplog(oplog: &[PublicOplogEntryWithIndex]) -> String {
 /// crash commits the oplog.
 async fn wait_for_oplog(
     executor: &TestWorkerExecutor,
-    worker_id: &golem_common::model::OwnedAgentId,
+    worker_id: &OwnedAgentId,
     predicate: impl Fn(&[PublicOplogEntryWithIndex]) -> bool,
     description: &str,
     timeout: Duration,
 ) -> anyhow::Result<()> {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
         if predicate(&oplog) {
             return Ok(());
         }
         anyhow::ensure!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "timed out waiting for the worker's oplog to {description}; \
              oplog so far: {}",
-            describe_oplog(&oplog)
+            oplog.describe()
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -3740,20 +3668,70 @@ async fn wait_for_oplog(
 /// the interrupt landed.
 async fn wait_for_contention_receives_to_park(
     executor: &TestWorkerExecutor,
-    worker_id: &golem_common::model::OwnedAgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     executor
-        .wait_for_status(worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .wait_for_status(worker_id, AgentStatus::Running, STATUS_TIMEOUT)
         .await?;
     wait_for_oplog(
         executor,
         worker_id,
         |oplog| contention_invocation_started(oplog).is_some(),
         "commit the contention invocation's AgentInvocationStarted entry",
-        Duration::from_secs(10),
+        OPLOG_PROGRESS_TIMEOUT,
     )
     .await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(QUEUE_SETTLE).await;
+    Ok(())
+}
+
+/// Connects the agent's persisted handle to `server`: the first handshake greets the initial
+/// live connection, whose handle the agent keeps in its state.
+async fn connect_persisted_handle(
+    executor: &TestWorkerExecutor,
+    agent: &WebsocketAgent,
+    server: &ReconnectTestServer,
+) -> anyhow::Result<()> {
+    let greeting: String = executor
+        .invoke_and_await_typed(
+            &agent.component,
+            &agent.agent_id,
+            "connect_and_receive_first",
+            data_value!(server.url()),
+        )
+        .await?;
+    assert_eq!(greeting, RECONNECT_FIRST_MESSAGE);
+    assert_eq!(
+        (server.accepted(), server.completed_handshakes()),
+        (1, 1),
+        "the initial connection"
+    );
+    Ok(())
+}
+
+/// Starts the contention invocation and waits until both receives park on the live
+/// connection, on which the server sends nothing further. Returns the invocation's key.
+async fn park_contention_receives(
+    executor: &TestWorkerExecutor,
+    agent: &WebsocketAgent,
+) -> anyhow::Result<IdempotencyKey> {
+    let key = IdempotencyKey::fresh();
+    agent.start_contention(executor, &key).await?;
+    wait_for_contention_receives_to_park(executor, &agent.worker_id).await?;
+    Ok(key)
+}
+
+/// Interrupts the agent. The interrupt commits the oplog, so both abandoned receives are
+/// recorded, and neither has an End or a Cancelled.
+async fn interrupt_parked_receives(
+    executor: &TestWorkerExecutor,
+    agent: &WebsocketAgent,
+) -> anyhow::Result<()> {
+    executor.interrupt(&agent.worker_id).await?;
+    executor
+        .wait_for_status(&agent.worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
+        .await?;
+    assert_contention_receives_incomplete(&agent.oplog(executor).await?);
     Ok(())
 }
 
@@ -3776,150 +3754,78 @@ async fn websocket_reconnect_concurrent_receives_complete_after_reconstruction(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.max_websocket_connections = 1;
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut ws_server = ReconnectTestServer::start().await;
-    let url = ws_server.url();
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-contention");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    // The first handshake greets the initial live connection, whose handle is
-    // persisted in agent state.
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
-
-    // Both receives park on the live connection: the server sends nothing
-    // further on it.
-    let contention_key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?;
-
-    wait_for_contention_receives_to_park(&executor, &worker_id).await?;
+    let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-contention").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
+    let contention_key = park_contention_receives(&executor, &agent).await?;
 
     // Interrupting abandons both receives with their `Start`s left incomplete.
-    executor.interrupt(&worker_id).await?;
-    executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-
-    // The interrupt commits the oplog, so both abandoned receive-family
-    // `Start`s are recorded and still incomplete: no `End` and no `Cancelled`
-    // terminal references either of them.
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receives_incomplete(&oplog);
+    interrupt_parked_receives(&executor, &agent).await?;
 
     // Resuming replays the persisted handle as a `Replay` entry and retries the
     // retained invocation: both receives re-execute live and contend on
     // reconnecting the same handle. With a single-connection pool this only
     // completes if the reconnect is coordinated per handle; otherwise the
     // follower parks on the pool and the worker never returns to idle.
-    executor.resume(&worker_id, false).await?;
+    executor.resume(&agent.worker_id, false).await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     // The retained invocation finished exactly once; its recorded result holds
     // both post-reconnect payloads regardless of which receive reconnected.
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    let result = agent.contention_result(&executor, &contention_key).await?;
     assert_eq!(
         sorted_reconnect_payloads(&result),
         expected_reconnect_payloads()
     );
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    // Exactly one reconnect connection was opened and both its greeting
-    // messages were delivered to the receives.
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
-    assert_eq!(ws_server.frames_received(), Vec::<String>::new());
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.frames_sent(),
+            ws_server.frames_received()
+        ),
+        (2, 2, expected_reconnect_frames_sent(), Vec::<String>::new()),
+        "exactly one reconnect connection, and both its greetings went to the receives"
+    );
 
     // Re-invoking with the same key replays the recorded result without
     // opening new receive-family durable calls or a new connection.
-    let replayed = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    let replayed = agent.contention_result(&executor, &contention_key).await?;
     assert_eq!(replayed, result);
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (ws_server.accepted(), ws_server.completed_handshakes()),
+        (2, 2),
+        "the replayed result opens no connection"
+    );
 
     // Completed receives replay from their recorded `End`s without touching
     // the network: after evicting the idle worker and stopping the peer —
     // which really closes every connection — a fresh activation replays every
     // completed websocket call offline.
-    assert!(executor.stop_worker_if_idle(&worker_id.clone()).await?);
+    assert!(executor.stop_worker_if_idle(&agent.worker_id).await?);
     ws_server.stop().await?;
-    let noop = executor
-        .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
+    let noop: String = executor
+        .invoke_and_await_typed(&component, &agent.agent_id, "noop", data_value!())
         .await?;
-    assert_eq!(noop.into_typed::<String>()?, "ok");
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
+    assert_eq!(noop, "ok");
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (ws_server.accepted(), ws_server.completed_handshakes()),
+        (2, 2),
+        "the offline replay opens no connection"
+    );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
     drop(executor);
-
     Ok(())
 }
 
@@ -3944,84 +3850,29 @@ async fn websocket_reconnect_coordination_admits_one_accessor_reconnect(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.max_websocket_connections = 1;
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut ws_server = ReconnectTestServer::start().await;
-    let url = ws_server.url();
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-coordinate");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
-
-    let contention_key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?;
-    wait_for_contention_receives_to_park(&executor, &worker_id).await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receives_incomplete(&oplog);
+    let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-coordinate").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
+    let contention_key = park_contention_receives(&executor, &agent).await?;
+    interrupt_parked_receives(&executor, &agent).await?;
 
     // Withhold the retry's reconnect handshake at the real peer: the decided
     // call parks inside its real `connect_async` handshake, and the queued
     // peer waits on the per-handle gate for the published entry.
     ws_server.arm_hold();
-    executor.resume(&worker_id, false).await?;
+    executor.resume(&agent.worker_id, false).await?;
     ws_server
-        .wait_for_count(
-            2,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read the reconnect's upgrade request",
-        )
+        .wait_for_upgrade_requests(2, "read the reconnect's upgrade request")
         .await?;
-
     // The queued call's position on the per-handle gate is internal to the
     // executor and cannot be observed from the peer; a short settle lets it
     // queue before the hold is resolved.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(QUEUE_SETTLE).await;
 
     // While the decided call's handshake is withheld, exactly one reconnect
     // TCP connection exists — the queued call did not open its own — and no
@@ -4042,55 +3893,39 @@ async fn websocket_reconnect_coordination_admits_one_accessor_reconnect(
     // connection and the queued call reuse it; both receives complete.
     ws_server.release_hold();
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
-
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    let result = agent.contention_result(&executor, &contention_key).await?;
     assert_eq!(
         sorted_reconnect_payloads(&result),
         expected_reconnect_payloads()
     );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    // Exactly one reconnect connection was opened and both its greeting
-    // messages were delivered to the receives.
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
-    assert_eq!(ws_server.frames_received(), Vec::<String>::new());
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.frames_sent(),
+            ws_server.frames_received()
+        ),
+        (2, 2, expected_reconnect_frames_sent(), Vec::<String>::new()),
+        "exactly one reconnect connection, and both its greetings went to the receives"
+    );
 
     // Re-invoking with the same key replays the recorded result without any
     // new connection.
-    let replayed = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    let replayed = agent.contention_result(&executor, &contention_key).await?;
     assert_eq!(replayed, result);
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (ws_server.accepted(), ws_server.completed_handshakes()),
+        (2, 2),
+        "the replayed result opens no connection"
+    );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
     drop(executor);
     ws_server.stop().await?;
-
     Ok(())
 }
 
@@ -4111,83 +3946,32 @@ async fn websocket_reconnect_coordination_after_executor_restart(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.max_websocket_connections = 1;
-        })),
-        ..Default::default()
-    };
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut ws_server = ReconnectTestServer::start().await;
-    let url = ws_server.url();
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-restart");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
-
-    let contention_key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?;
-    wait_for_contention_receives_to_park(&executor, &worker_id).await?;
+    let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-restart").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
+    let contention_key = park_contention_receives(&executor, &agent).await?;
 
     // Crashing the executor while both receives are parked abandons the
     // retained invocation with its durable calls left incomplete.
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let executor = executor.restart(Teardown::Shutdown).await?;
 
     // The same-key invocation on the fresh executor recovers the worker; the
     // recovered handle is a `Replay` entry, and withhold its reconnect
     // handshake at the real peer.
     ws_server.arm_hold();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?;
+    agent.start_contention(&executor, &contention_key).await?;
     ws_server
-        .wait_for_count(
-            2,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read the reconnect's upgrade request",
-        )
+        .wait_for_upgrade_requests(2, "read the reconnect's upgrade request")
         .await?;
-
     // The queued call's position on the per-handle gate is internal to the
     // executor and cannot be observed from the peer; a short settle lets it
     // queue before the hold is resolved.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(QUEUE_SETTLE).await;
 
     assert_eq!(
         ws_server.accepted(),
@@ -4203,37 +3987,28 @@ async fn websocket_reconnect_coordination_after_executor_restart(
 
     ws_server.release_hold();
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
-
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    let result = agent.contention_result(&executor, &contention_key).await?;
     assert_eq!(
         sorted_reconnect_payloads(&result),
         expected_reconnect_payloads()
     );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    // Exactly one reconnect connection was opened and both its greeting
-    // messages were delivered to the receives.
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
-    assert_eq!(ws_server.frames_received(), Vec::<String>::new());
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.frames_sent(),
+            ws_server.frames_received()
+        ),
+        (2, 2, expected_reconnect_frames_sent(), Vec::<String>::new()),
+        "exactly one reconnect connection, and both its greetings went to the receives"
+    );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
     drop(executor);
     ws_server.stop().await?;
-
     Ok(())
 }
 
@@ -4253,77 +4028,23 @@ async fn websocket_reconnect_coordination_with_spare_pool_permits(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.max_websocket_connections = 2;
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 2).await?;
     let mut ws_server = ReconnectTestServer::start().await;
-    let url = ws_server.url();
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-spare");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
-
-    let contention_key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?;
-    wait_for_contention_receives_to_park(&executor, &worker_id).await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receives_incomplete(&oplog);
+    let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-spare").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
+    let contention_key = park_contention_receives(&executor, &agent).await?;
+    interrupt_parked_receives(&executor, &agent).await?;
 
     ws_server.arm_hold();
-    executor.resume(&worker_id, false).await?;
+    executor.resume(&agent.worker_id, false).await?;
     ws_server
-        .wait_for_count(
-            2,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read the reconnect's upgrade request",
-        )
+        .wait_for_upgrade_requests(2, "read the reconnect's upgrade request")
         .await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(QUEUE_SETTLE).await;
 
     // Even with a spare pool permit, only the decided call's reconnect
     // connection exists while its handshake is withheld: the queued call did
@@ -4333,43 +4054,40 @@ async fn websocket_reconnect_coordination_with_spare_pool_permits(
         2,
         "even with a spare permit, only the decided call's reconnect connection may be accepted while its handshake is withheld"
     );
-    assert_eq!(ws_server.completed_handshakes(), 1);
-    assert_eq!(ws_server.upgrade_requests_read(), 2);
+    assert_eq!(
+        (
+            ws_server.completed_handshakes(),
+            ws_server.upgrade_requests_read()
+        ),
+        (1, 2),
+        "the reconnect's handshake is still withheld"
+    );
 
     ws_server.release_hold();
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
-
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    let result = agent.contention_result(&executor, &contention_key).await?;
     assert_eq!(
         sorted_reconnect_payloads(&result),
         expected_reconnect_payloads()
     );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    // Even with a spare permit, only one new connection was opened: the queued
-    // call reused the published entry instead of reconnecting, and the single
-    // reconnected connection's greeting went to the receives.
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
-    assert_eq!(ws_server.frames_received(), Vec::<String>::new());
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.frames_sent(),
+            ws_server.frames_received()
+        ),
+        (2, 2, expected_reconnect_frames_sent(), Vec::<String>::new()),
+        "even with a spare permit, only one new connection was opened: the queued call reused \
+         the published entry, and the reconnected connection's greetings went to the receives"
+    );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
     drop(executor);
     ws_server.stop().await?;
-
     Ok(())
 }
 
@@ -4390,148 +4108,87 @@ async fn websocket_reconnect_failure_publishes_terminal_outcome(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.max_websocket_connections = 1;
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut ws_server = ReconnectTestServer::start().await;
-    let url = ws_server.url();
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-terminal");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
-
-    let contention_key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?;
-    wait_for_contention_receives_to_park(&executor, &worker_id).await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receives_incomplete(&oplog);
+    let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-terminal").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
+    let contention_key = park_contention_receives(&executor, &agent).await?;
+    interrupt_parked_receives(&executor, &agent).await?;
 
     // Withhold the retry's reconnect handshake at the real peer and reject
     // it: the decided call's live handshake fails, and the failure is
     // published terminally per handle.
     ws_server.arm_hold();
-    executor.resume(&worker_id, false).await?;
+    executor.resume(&agent.worker_id, false).await?;
     ws_server
-        .wait_for_count(
-            2,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read the reconnect's upgrade request",
-        )
+        .wait_for_upgrade_requests(2, "read the reconnect's upgrade request")
         .await?;
     // The queued call's gate position is not observable from the peer; a
     // short settle lets it queue before the rejection.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(QUEUE_SETTLE).await;
     ws_server.reject_hold();
-
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     assert_eq!(ws_server.handshakes_rejected(), 1);
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    let result = agent.contention_result(&executor, &contention_key).await?;
     for (side, payload) in [("receive", &result.0), ("receive-with-timeout", &result.1)] {
         assert!(
             payload.contains("Receive error") && payload.contains("ConnectionFailure"),
             "the {side} result must report the failed reconnect, got {payload:?}"
         );
     }
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    // The rejected connection never completed its handshake, and the queued
-    // call never opened one of its own.
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 1);
-    assert_eq!(ws_server.upgrade_requests_read(), 2);
-    assert_eq!(ws_server.clients_vanished_while_held(), 0);
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.upgrade_requests_read(),
+            ws_server.clients_vanished_while_held()
+        ),
+        (2, 1, 2, 0),
+        "the rejected connection never completed its handshake, and the queued call never \
+         opened one of its own"
+    );
 
     // The failed reconnect released the pool permit it briefly held: the pool
     // admits a new connection.
     let pool = executor
         .websocket_connection_pool()
         .expect("the executor's websocket connection pool is captured");
-    let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
-        .await
-        .expect("the failed reconnect must not leak its pool permit")?;
+    let permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "the pool permit that the failed reconnect must not leak",
+        pool.acquire(),
+    )
+    .await??;
     drop(permit);
 
     // A fresh connection to the same peer completes normally after the
     // rejection.
-    let connect_result = executor
-        .invoke_and_await_agent(
+    let connected: Result<(), String> = executor
+        .invoke_and_await_typed(
             &component,
-            &agent_id,
+            &agent.agent_id,
             "connect_result",
-            data_value!(url.clone()),
+            data_value!(ws_server.url()),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
+    assert_eq!(connected, Ok(()));
     assert_eq!(
-        connect_result,
-        SchemaValue::Result(ResultValuePayload::Ok { value: None })
+        (ws_server.accepted(), ws_server.completed_handshakes()),
+        (3, 2),
+        "the fresh connection completes its handshake"
     );
-    assert_eq!(ws_server.accepted(), 3);
-    assert_eq!(ws_server.completed_handshakes(), 2);
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
     drop(executor);
     ws_server.stop().await?;
-
     Ok(())
 }
 
@@ -4551,144 +4208,120 @@ async fn websocket_reconnect_coordination_is_per_handle(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.max_websocket_connections = 2;
-            })),
-            ..Default::default()
-        },
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 2).await?;
+    let mut ws_server_a = ReconnectTestServer::start().await;
+    let mut ws_server_b = ReconnectTestServer::start().await;
+    let agent_a = WebsocketAgent::start(&executor, &component, "ws-reconnect-per-handle-a").await?;
+    let agent_b = WebsocketAgent::start(&executor, &component, "ws-reconnect-per-handle-b").await?;
+    connect_persisted_handle(&executor, &agent_a, &ws_server_a).await?;
+    connect_persisted_handle(&executor, &agent_b, &ws_server_b).await?;
+
+    let [key_a, key_b] = park_and_interrupt_both(&executor, [&agent_a, &agent_b]).await?;
+    hold_both_reconnects(
+        &executor,
+        [(&agent_a, &ws_server_a, "a"), (&agent_b, &ws_server_b, "b")],
     )
     .await?;
 
-    let mut ws_server_a = ReconnectTestServer::start().await;
-    let mut ws_server_b = ReconnectTestServer::start().await;
+    // After both releases, both pairs of receives complete on one reconnect each.
+    ws_server_a.release_hold();
+    ws_server_b.release_hold();
+    for agent in [&agent_a, &agent_b] {
+        executor
+            .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
+            .await?;
+    }
+    for (agent, key) in [(&agent_a, &key_a), (&agent_b, &key_b)] {
+        let result = agent.contention_result(&executor, key).await?;
+        assert_eq!(
+            sorted_reconnect_payloads(&result),
+            expected_reconnect_payloads()
+        );
+    }
+    for agent in [&agent_a, &agent_b] {
+        assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    }
+    for server in [&ws_server_a, &ws_server_b] {
+        assert_eq!(
+            (
+                server.accepted(),
+                server.completed_handshakes(),
+                server.frames_sent()
+            ),
+            (2, 2, expected_reconnect_frames_sent()),
+            "each handle reconnects once and its greetings go to its receives"
+        );
+    }
 
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id_a = agent_key!("WebsocketTest", "ws-reconnect-per-handle-a");
-    let agent_id_b = agent_key!("WebsocketTest", "ws-reconnect-per-handle-b");
-    let worker_id_a = executor
-        .start_agent_with(
-            &component.id,
-            agent_id_a.clone(),
-            HashMap::new(),
-            Vec::new(),
-        )
-        .await?;
-    let worker_id_b = executor
-        .start_agent_with(
-            &component.id,
-            agent_id_b.clone(),
-            HashMap::new(),
-            Vec::new(),
-        )
-        .await?;
-
-    let first_a = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id_a,
-            "connect_and_receive_first",
-            data_value!(ws_server_a.url()),
-        )
-        .await?;
-    assert_eq!(first_a.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    let first_b = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id_b,
-            "connect_and_receive_first",
-            data_value!(ws_server_b.url()),
-        )
-        .await?;
-    assert_eq!(first_b.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server_a.accepted(), 1);
-    assert_eq!(ws_server_a.completed_handshakes(), 1);
-    assert_eq!(ws_server_b.accepted(), 1);
-    assert_eq!(ws_server_b.completed_handshakes(), 1);
-
-    let contention_key_a = IdempotencyKey::fresh();
-    let contention_key_b = IdempotencyKey::fresh();
     executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id_a,
-            &contention_key_a,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
+        .check_oplog_is_queryable(&agent_a.worker_id)
         .await?;
     executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id_b,
-            &contention_key_b,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
+        .check_oplog_is_queryable(&agent_b.worker_id)
         .await?;
-    wait_for_contention_receives_to_park(&executor, &worker_id_a).await?;
-    wait_for_contention_receives_to_park(&executor, &worker_id_b).await?;
+    drop(executor);
+    ws_server_a.stop().await?;
+    ws_server_b.stop().await?;
+    Ok(())
+}
 
-    executor.interrupt(&worker_id_a).await?;
-    executor.interrupt(&worker_id_b).await?;
-    executor
-        .wait_for_status(
-            &worker_id_a,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    executor
-        .wait_for_status(
-            &worker_id_b,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    let oplog_a = executor
-        .get_oplog(&worker_id_a, OplogIndex::INITIAL)
-        .await?;
-    assert_contention_receives_incomplete(&oplog_a);
-    let oplog_b = executor
-        .get_oplog(&worker_id_b, OplogIndex::INITIAL)
-        .await?;
-    assert_contention_receives_incomplete(&oplog_b);
+/// Starts the contention invocations of both agents, waits until all four receives park,
+/// then interrupts both agents. Returns the invocations' keys.
+async fn park_and_interrupt_both(
+    executor: &TestWorkerExecutor,
+    agents: [&WebsocketAgent; 2],
+) -> anyhow::Result<[IdempotencyKey; 2]> {
+    let keys = [IdempotencyKey::fresh(), IdempotencyKey::fresh()];
+    for (agent, key) in agents.iter().zip(&keys) {
+        agent.start_contention(executor, key).await?;
+    }
+    for agent in agents {
+        wait_for_contention_receives_to_park(executor, &agent.worker_id).await?;
+    }
+    for agent in agents {
+        executor.interrupt(&agent.worker_id).await?;
+    }
+    for agent in agents {
+        executor
+            .wait_for_status(&agent.worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
+            .await?;
+    }
+    for agent in agents {
+        assert_contention_receives_incomplete(&agent.oplog(executor).await?);
+    }
+    Ok(keys)
+}
 
-    // Withhold both reconnect handshakes at their own peers.
-    ws_server_a.arm_hold();
-    ws_server_b.arm_hold();
-    executor.resume(&worker_id_a, false).await?;
-    executor.resume(&worker_id_b, false).await?;
-    ws_server_a
-        .wait_for_count(
-            2,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read worker a's reconnect upgrade request",
-        )
-        .await?;
-    ws_server_b
-        .wait_for_count(
-            2,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read worker b's reconnect upgrade request",
-        )
-        .await?;
+/// Withholds both reconnect handshakes at their own peers and resumes both agents. Each
+/// handle sees exactly one decided reconnect and one queued call: the coordination neither
+/// starves nor merges the two handles.
+async fn hold_both_reconnects(
+    executor: &TestWorkerExecutor,
+    handles: [(&WebsocketAgent, &ReconnectTestServer, &str); 2],
+) -> anyhow::Result<()> {
+    for (_, server, _) in handles {
+        server.arm_hold();
+    }
+    for (agent, _, _) in handles {
+        executor.resume(&agent.worker_id, false).await?;
+    }
+    for (_, server, worker) in handles {
+        server
+            .wait_for_upgrade_requests(
+                2,
+                &format!("read worker {worker}'s reconnect upgrade request"),
+            )
+            .await?;
+    }
     // The queued calls' gate positions are internal to the executor and
     // cannot be observed from the peers; a short settle lets them queue
     // before the holds are resolved.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Each handle saw exactly one decided reconnect and one queued peer: the
-    // coordination neither starved nor merged the two handles.
-    for (server, worker) in [(&ws_server_a, "a"), (&ws_server_b, "b")] {
+    tokio::time::sleep(QUEUE_SETTLE).await;
+    for (_, server, worker) in handles {
         assert_eq!(
             server.accepted(),
             2,
@@ -4700,65 +4333,6 @@ async fn websocket_reconnect_coordination_is_per_handle(
             "the {worker} handle's reconnect handshake must still be withheld"
         );
     }
-
-    ws_server_a.release_hold();
-    ws_server_b.release_hold();
-    executor
-        .wait_for_status(&worker_id_a, AgentStatus::Idle, Duration::from_secs(20))
-        .await?;
-    executor
-        .wait_for_status(&worker_id_b, AgentStatus::Idle, Duration::from_secs(20))
-        .await?;
-
-    let result_a = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id_a,
-            &contention_key_a,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
-    assert_eq!(
-        sorted_reconnect_payloads(&result_a),
-        expected_reconnect_payloads()
-    );
-    let result_b = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id_b,
-            &contention_key_b,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
-    assert_eq!(
-        sorted_reconnect_payloads(&result_b),
-        expected_reconnect_payloads()
-    );
-    let oplog_a = executor
-        .get_oplog(&worker_id_a, OplogIndex::INITIAL)
-        .await?;
-    assert_contention_receive_correlation(&oplog_a);
-    let oplog_b = executor
-        .get_oplog(&worker_id_b, OplogIndex::INITIAL)
-        .await?;
-    assert_contention_receive_correlation(&oplog_b);
-    for server in [&ws_server_a, &ws_server_b] {
-        assert_eq!(server.accepted(), 2);
-        assert_eq!(server.completed_handshakes(), 2);
-        assert_eq!(server.frames_sent(), expected_reconnect_frames_sent());
-    }
-
-    executor.check_oplog_is_queryable(&worker_id_a).await?;
-    executor.check_oplog_is_queryable(&worker_id_b).await?;
-
-    drop(executor);
-    ws_server_a.stop().await?;
-    ws_server_b.stop().await?;
-
     Ok(())
 }
 
@@ -4780,66 +4354,17 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.max_websocket_connections = 1;
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut ws_server = ReconnectTestServer::start().await;
-    let url = ws_server.url();
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-interruptible-pool");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
-
-    let contention_key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?;
-    wait_for_contention_receives_to_park(&executor, &worker_id).await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receives_incomplete(&oplog);
+    let agent =
+        WebsocketAgent::start(&executor, &component, "ws-reconnect-interruptible-pool").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
+    let contention_key = park_contention_receives(&executor, &agent).await?;
+    interrupt_parked_receives(&executor, &agent).await?;
 
     // Take the pool's only permit from the captured pool before the retry:
     // the decided call parks acquiring it, before opening any connection. The
@@ -4848,18 +4373,18 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
     let pool = executor
         .websocket_connection_pool()
         .expect("the executor's websocket connection pool is captured");
-    let held_permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
-        .await
-        .expect("the initial connection's permit must be back in the pool after the interrupt")?;
-
-    executor.resume(&worker_id, false).await?;
-
+    let held_permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "the initial connection's permit, back in the pool after the interrupt",
+        pool.acquire(),
+    )
+    .await??;
+    executor.resume(&agent.worker_id, false).await?;
     // The decided call's pool-park position inside the executor is not
     // directly observable — no connection is opened before the permit — and
     // its peer's gate position is internal as well; a short settle lets both
     // park before the interrupt.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
+    tokio::time::sleep(QUEUE_SETTLE).await;
     // No reconnect connection was opened while the pool permit was
     // unavailable: the decided call parks on the pool and its peer queues on
     // the per-handle gate.
@@ -4869,23 +4394,8 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
         "no reconnect connection may be opened while the pool's only permit is held"
     );
 
-    executor.interrupt(&worker_id).await?;
-    executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receives_incomplete(&oplog);
-    let contention_started = contention_invocation_started(&oplog)
-        .ok_or_else(|| anyhow!("the contention invocation never started"))?;
-    assert!(
-        interrupted_entries_after(&oplog, contention_started) >= 2,
-        "each of the two interrupts must record a typed Interrupted entry"
-    );
+    interrupt_parked_receives(&executor, &agent).await?;
+    assert_two_interrupts_recorded(&agent.oplog(&executor).await?)?;
     assert_eq!(
         ws_server.accepted(),
         1,
@@ -4895,40 +4405,43 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
     // Return the permit and resume: the same retained invocation retries, the
     // decided call acquires the freed permit and the reconnect completes.
     drop(held_permit);
-    executor.resume(&worker_id, false).await?;
+    executor.resume(&agent.worker_id, false).await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
-
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
+    let result = agent.contention_result(&executor, &contention_key).await?;
     assert_eq!(
         sorted_reconnect_payloads(&result),
         expected_reconnect_payloads()
     );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    // The retry reused the single pool slot exactly once: one reconnect
-    // connection, and none of the interrupted reconnect attempts leaked or
-    // lingered as held clients at the peer.
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(ws_server.clients_vanished_while_held(), 0);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.clients_vanished_while_held(),
+            ws_server.frames_sent()
+        ),
+        (2, 2, 0, expected_reconnect_frames_sent()),
+        "the retry reused the single pool slot exactly once: one reconnect connection, and no \
+         interrupted reconnect attempt leaked or lingered as a held client at the peer"
+    );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
     drop(executor);
     ws_server.stop().await?;
+    Ok(())
+}
 
+/// Asserts that each of the two interrupts of the contention invocation recorded a typed
+/// `Interrupted` entry.
+fn assert_two_interrupts_recorded(oplog: &[PublicOplogEntryWithIndex]) -> anyhow::Result<()> {
+    let contention_started = contention_invocation_started(oplog)
+        .ok_or_else(|| anyhow!("the contention invocation never started"))?;
+    assert!(
+        interrupted_entries_after(oplog, contention_started) >= 2,
+        "each of the two interrupts must record a typed Interrupted entry"
+    );
     Ok(())
 }
 
@@ -4949,97 +4462,98 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_hand
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.max_websocket_connections = 1;
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut ws_server = ReconnectTestServer::start().await;
-    let url = ws_server.url();
+    let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-interruptible").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
+    let contention_key = park_contention_receives(&executor, &agent).await?;
+    interrupt_parked_receives(&executor, &agent).await?;
 
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
+    interrupt_a_reconnect_held_on_its_handshake(&executor, &agent, &ws_server).await?;
 
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-interruptible");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
-
-    let contention_key = IdempotencyKey::fresh();
+    // Resolve the abandoned hold and resume: the same retained invocation
+    // retries, the reconnect completes on a fresh connection and both
+    // receives return.
+    ws_server.release_hold();
+    executor.resume(&agent.worker_id, false).await?;
     executor
-        .invoke_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
+        .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
-    wait_for_contention_receives_to_park(&executor, &worker_id).await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receives_incomplete(&oplog);
-
-    // Withhold the retry's reconnect handshake at the real peer: the decided
-    // call parks inside its real `connect_async` handshake and its peer queues
-    // on the per-handle gate.
-    ws_server.arm_hold();
-    executor.resume(&worker_id, false).await?;
-    ws_server
-        .wait_for_count(
+    let result = agent.contention_result(&executor, &contention_key).await?;
+    assert_eq!(
+        sorted_reconnect_payloads(&result),
+        expected_reconnect_payloads()
+    );
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.clients_vanished_while_held(),
+            ws_server.frames_sent(),
+            ws_server.frames_received()
+        ),
+        (
+            3,
             2,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read the reconnect's upgrade request",
-        )
+            1,
+            expected_reconnect_frames_sent(),
+            Vec::<String>::new()
+        ),
+        "the abandoned held connection never completed its handshake; the retry opened one \
+         fresh connection, and its greetings went to the receives"
+    );
+
+    // Re-invoking with the same key replays the recorded result without any
+    // new connection.
+    let replayed = agent.contention_result(&executor, &contention_key).await?;
+    assert_eq!(replayed, result);
+    assert_contention_receive_correlation(&agent.oplog(&executor).await?);
+    assert_eq!(
+        (ws_server.accepted(), ws_server.completed_handshakes()),
+        (3, 2),
+        "the replayed result opens no connection"
+    );
+
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
+    drop(executor);
+    ws_server.stop().await?;
+    Ok(())
+}
+
+/// Withholds the retry's reconnect handshake at the real peer, so the decided call parks
+/// inside its real `connect_async` handshake and its peer queues on the per-handle gate, then
+/// interrupts both. The peer observes the abandoned held connection, both receives keep their
+/// incomplete `Start`s, and the abandoned reconnect returns its pool permit.
+async fn interrupt_a_reconnect_held_on_its_handshake(
+    executor: &TestWorkerExecutor,
+    agent: &WebsocketAgent,
+    ws_server: &ReconnectTestServer,
+) -> anyhow::Result<()> {
+    ws_server.arm_hold();
+    executor.resume(&agent.worker_id, false).await?;
+    ws_server
+        .wait_for_upgrade_requests(2, "read the reconnect's upgrade request")
         .await?;
     // The queued call's gate position is internal to the executor and cannot
     // be observed from the peer; a short settle lets it queue before the
     // interrupt.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 1);
+    tokio::time::sleep(QUEUE_SETTLE).await;
+    assert_eq!(
+        (ws_server.accepted(), ws_server.completed_handshakes()),
+        (2, 1),
+        "the decided call's reconnect connection waits for its withheld handshake"
+    );
 
     // Interrupting abandons both parked calls without resolving the hold.
-    executor.interrupt(&worker_id).await?;
+    executor.interrupt(&agent.worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&agent.worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
-
-    // The abandoned client of the withheld handshake is observed at the peer.
     ws_server
         .wait_for_count(
             1,
@@ -5047,83 +4561,22 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_hand
             "observe the abandoned held connection",
         )
         .await?;
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let oplog = agent.oplog(executor).await?;
     assert_contention_receives_incomplete(&oplog);
-    let contention_started = contention_invocation_started(&oplog)
-        .ok_or_else(|| anyhow!("the contention invocation never started"))?;
-    assert!(
-        interrupted_entries_after(&oplog, contention_started) >= 2,
-        "each of the two interrupts must record a typed Interrupted entry"
-    );
+    assert_two_interrupts_recorded(&oplog)?;
 
     // The abandoned reconnect released the pool permit it held while parked on
     // the withheld handshake.
     let pool = executor
         .websocket_connection_pool()
         .expect("the executor's websocket connection pool is captured");
-    let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
-        .await
-        .expect("the interrupted reconnect must not leak its pool permit")?;
+    let permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "the pool permit that the interrupted reconnect must not leak",
+        pool.acquire(),
+    )
+    .await??;
     drop(permit);
-
-    // Resolve the abandoned hold and resume: the same retained invocation
-    // retries, the reconnect completes on a fresh connection and both
-    // receives return.
-    ws_server.release_hold();
-    executor.resume(&worker_id, false).await?;
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
-        .await?;
-
-    let result = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
-    assert_eq!(
-        sorted_reconnect_payloads(&result),
-        expected_reconnect_payloads()
-    );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    // The abandoned held connection never completed its handshake; the retry's
-    // reconnect opened one fresh connection which completed, and the single
-    // reconnected connection's greeting went to the receives.
-    assert_eq!(ws_server.accepted(), 3);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(ws_server.clients_vanished_while_held(), 1);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
-    assert_eq!(ws_server.frames_received(), Vec::<String>::new());
-
-    // Re-invoking with the same key replays the recorded result without any
-    // new connection.
-    let replayed = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &agent_id,
-            &contention_key,
-            CONTENTION_METHOD,
-            data_value!(CONTENTION_TIMEOUT_MS),
-        )
-        .await?
-        .into_typed::<(String, String)>()?;
-    assert_eq!(replayed, result);
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_contention_receive_correlation(&oplog);
-    assert_eq!(ws_server.accepted(), 3);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    ws_server.stop().await?;
-
     Ok(())
 }
 
@@ -5144,46 +4597,19 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.max_websocket_connections = 1;
-        })),
-        ..Default::default()
-    };
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     let mut ws_server = ReconnectTestServer::start().await;
-    let url = ws_server.url();
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-direct-send");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
+    let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-direct-send").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
 
     // Crash the executor while the worker is idle: the persisted handle's
     // connection is lost, so the send below reconnects it on the fresh
     // executor.
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let executor = executor.restart(Teardown::Shutdown).await?;
 
     // Withhold the send's reconnect handshake at the real peer: the send parks
     // inside its real `connect_async` handshake.
@@ -5192,7 +4618,7 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
     executor
         .invoke_agent_with_key(
             &component,
-            &agent_id,
+            &agent.agent_id,
             &send_key,
             "send_persisted_result",
             data_value!(DIRECT_SEND_MESSAGE),
@@ -5204,22 +4630,12 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
     // call is not exposed by the oplog query API, and the interrupt below
     // commits it for the assertions that follow.
     ws_server
-        .wait_for_count(
-            2,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read the send's reconnect upgrade request",
-        )
+        .wait_for_upgrade_requests(2, "read the send's reconnect upgrade request")
         .await?;
-
-    executor.interrupt(&worker_id).await?;
+    executor.interrupt(&agent.worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&agent.worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
-
     // The abandoned client of the withheld handshake is observed at the peer.
     ws_server
         .wait_for_count(
@@ -5228,8 +4644,7 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
             "observe the abandoned held connection",
         )
         .await?;
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let oplog = agent.oplog(&executor).await?;
     assert_single_websocket_call_incomplete(&oplog, WEBSOCKET_SEND_FUNCTION);
     let send_started = starts_of_websocket_function(&oplog, WEBSOCKET_SEND_FUNCTION)
         .first()
@@ -5247,70 +4662,69 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
     // Resolve the abandoned hold and resume: the same retained invocation
     // retries, the send reconnects and delivers its frame to the peer.
     ws_server.release_hold();
-    executor.resume(&worker_id, false).await?;
+    executor.resume(&agent.worker_id, false).await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&agent.worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
-
-    let send_result = executor
-        .invoke_and_await_agent_with_key(
+    let sent: Result<(), String> = executor
+        .invoke_and_await_typed_with_key(
             &component,
-            &agent_id,
+            &agent.agent_id,
             &send_key,
             "send_persisted_result",
             data_value!(DIRECT_SEND_MESSAGE),
         )
         .await?;
-    assert_eq!(
-        send_result.into_return_value(),
-        Some(SchemaValue::Result(ResultValuePayload::Ok { value: None }))
-    );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(sent, Ok(()));
     // The send is a direct call: its guest is blocked inside the host call, so
     // the completed call records one Start and one End with no
     // CompletionDelivered marker even though it spans the interrupt.
-    assert_single_websocket_call_completed(&oplog, WEBSOCKET_SEND_FUNCTION);
-    // The abandoned held connection never completed its handshake; the retry's
-    // reconnect opened one fresh connection which completed, the peer
-    // received the send's frame on it, and its greeting frames were sent.
-    assert_eq!(ws_server.accepted(), 3);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(ws_server.clients_vanished_while_held(), 1);
-    assert_eq!(ws_server.frames_sent(), expected_reconnect_frames_sent());
+    assert_single_websocket_call_completed(&agent.oplog(&executor).await?, WEBSOCKET_SEND_FUNCTION);
     assert_eq!(
-        ws_server.frames_received(),
-        vec![DIRECT_SEND_MESSAGE.to_string()]
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.clients_vanished_while_held(),
+            ws_server.frames_sent(),
+            ws_server.frames_received()
+        ),
+        (
+            3,
+            2,
+            1,
+            expected_reconnect_frames_sent(),
+            vec![DIRECT_SEND_MESSAGE.to_string()]
+        ),
+        "the abandoned held connection never completed its handshake; the retry opened one \
+         fresh connection, sent its greetings and received the send's frame on it"
     );
 
     // Re-invoking with the same key replays the recorded result without any
     // new connection or frame.
-    let replayed = executor
-        .invoke_and_await_agent_with_key(
+    let replayed: Result<(), String> = executor
+        .invoke_and_await_typed_with_key(
             &component,
-            &agent_id,
+            &agent.agent_id,
             &send_key,
             "send_persisted_result",
             data_value!(DIRECT_SEND_MESSAGE),
         )
         .await?;
+    assert_eq!(replayed, Ok(()));
+    assert_single_websocket_call_completed(&agent.oplog(&executor).await?, WEBSOCKET_SEND_FUNCTION);
     assert_eq!(
-        replayed.into_return_value(),
-        Some(SchemaValue::Result(ResultValuePayload::Ok { value: None }))
-    );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_single_websocket_call_completed(&oplog, WEBSOCKET_SEND_FUNCTION);
-    assert_eq!(ws_server.accepted(), 3);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(
-        ws_server.frames_received(),
-        vec![DIRECT_SEND_MESSAGE.to_string()]
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.frames_received()
+        ),
+        (3, 2, vec![DIRECT_SEND_MESSAGE.to_string()]),
+        "the replayed result opens no connection and sends no frame"
     );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
     drop(executor);
     ws_server.stop().await?;
-
     Ok(())
 }
 
@@ -5329,64 +4743,35 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.max_websocket_connections = 1;
-        })),
-        ..Default::default()
-    };
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-
+    let WebsocketTest {
+        executor,
+        component,
+        ..
+    } = WebsocketTest::start_with_connection_limit(deps, last_unique_id, host_api_tests, 1).await?;
     // Close does not read unsolicited greetings on the reconnected transport.
     let mut ws_server = ReconnectTestServer::start_with_reconnect_messages(&[]).await;
-    let url = ws_server.url();
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_key!("WebsocketTest", "ws-reconnect-direct-close");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_and_receive_first",
-            data_value!(url.clone()),
-        )
-        .await?;
-    assert_eq!(first.into_typed::<String>()?, RECONNECT_FIRST_MESSAGE);
-    assert_eq!(ws_server.accepted(), 1);
-    assert_eq!(ws_server.completed_handshakes(), 1);
+    let agent = WebsocketAgent::start(&executor, &component, "ws-reconnect-direct-close").await?;
+    connect_persisted_handle(&executor, &agent, &ws_server).await?;
 
     // Crash the executor while the worker is idle: the persisted handle's
     // connection is lost, so the close below reconnects it on the fresh
     // executor.
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
+    let executor = executor.restart(Teardown::Shutdown).await?;
     let close_key = IdempotencyKey::fresh();
-    let close_result = executor
-        .invoke_and_await_agent_with_key(
+    let closed: Result<(), String> = executor
+        .invoke_and_await_typed_with_key(
             &component,
-            &agent_id,
+            &agent.agent_id,
             &close_key,
             "close_persisted_result",
             data_value!(),
         )
         .await?;
-    assert_eq!(
-        close_result.into_return_value(),
-        Some(SchemaValue::Result(ResultValuePayload::Ok { value: None }))
+    assert_eq!(closed, Ok(()));
+    assert_single_websocket_call_completed(
+        &agent.oplog(&executor).await?,
+        WEBSOCKET_CLOSE_FUNCTION,
     );
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_single_websocket_call_completed(&oplog, WEBSOCKET_CLOSE_FUNCTION);
     // Completing close does not wait for the peer to observe the frame.
     ws_server
         .wait_for_count(
@@ -5395,27 +4780,20 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
             "observe the close frame on the reconnected connection",
         )
         .await?;
-    // The close reconnected on one fresh connection, and the peer observed
-    // its websocket close frame.
-    assert_eq!(ws_server.accepted(), 2);
-    assert_eq!(ws_server.completed_handshakes(), 2);
-    assert_eq!(ws_server.close_frames_received(), 1);
     assert_eq!(
-        ws_server.frames_sent(),
-        vec![RECONNECT_FIRST_MESSAGE.to_string()]
+        (
+            ws_server.accepted(),
+            ws_server.completed_handshakes(),
+            ws_server.close_frames_received(),
+            ws_server.frames_sent()
+        ),
+        (2, 2, 1, vec![RECONNECT_FIRST_MESSAGE.to_string()]),
+        "the close reconnected on one fresh connection, and the peer observed its close frame"
     );
 
     // A receive on the terminalized handle fails with the closed-connection
     // error and must not reconnect: no new connection is opened.
-    let receive_result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "receive_next_from_persisted_result",
-            data_value!(),
-        )
-        .await?;
-    let message = get_result_error_string(receive_result);
+    let message = receive_next_error(&executor, &component, &agent.agent_id).await?;
     assert!(
         message.contains("Receive error") && message.contains("Closed"),
         "expected a closed-connection receive error, got {message:?}"
@@ -5425,16 +4803,14 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
         2,
         "the terminal handle must not reconnect"
     );
-    assert_eq!(ws_server.close_frames_received(), 1);
     assert_eq!(
-        ws_server.frames_sent(),
-        vec![RECONNECT_FIRST_MESSAGE.to_string()]
+        (ws_server.close_frames_received(), ws_server.frames_sent()),
+        (1, vec![RECONNECT_FIRST_MESSAGE.to_string()]),
+        "the terminal handle sends no frame"
     );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    executor.check_oplog_is_queryable(&agent.worker_id).await?;
     drop(executor);
     ws_server.stop().await?;
-
     Ok(())
 }

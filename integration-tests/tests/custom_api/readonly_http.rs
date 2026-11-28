@@ -30,16 +30,14 @@
 //! - Authenticated responses are private and require revalidation
 
 use super::{assert_invocation_receipt, assert_json_content_type, assert_no_invocation_receipt};
-use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
-use golem_common::base_model::agent::AgentTypeName;
-use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use crate::custom_api::http_test_context::{HttpTestContext, per_database_test_context};
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use pretty_assertions::assert_eq;
 use reqwest::header::{CACHE_CONTROL, CONTENT_LENGTH, ETAG, HeaderValue, IF_NONE_MATCH, VARY};
-use test_r::{define_matrix_dimension, test_dep};
+use test_r::define_matrix_dimension;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -55,37 +53,14 @@ inherit_test_dep!(
 const AGENT_PATH_PREFIX: &str = "/readonly-agents/h-agent";
 
 async fn build_test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    make_test_context(
-        deps,
-        vec![(
-            AgentTypeName("ReadonlyAgent".to_string()),
-            HttpApiDeploymentAgentOptions::default(),
-        )],
-        "golem_it_agent_sdk_rust_release",
-        "golem-it:agent-sdk-rust",
-    )
-    .await
-    .unwrap()
+    HttpTestContext::builder("golem_it_agent_sdk_rust_release", "golem-it:agent-sdk-rust")
+        .agents(["ReadonlyAgent"])
+        .build(deps)
+        .await
+        .unwrap()
 }
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    build_test_context(deps).await
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "postgres")]
-async fn test_context_postgres(
-    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
-) -> HttpTestContext {
-    build_test_context(deps).await
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
-async fn test_context_sqlite(
-    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
-) -> HttpTestContext {
-    build_test_context(deps).await
-}
+per_database_test_context!(HttpTestContext, build_test_context);
 
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 

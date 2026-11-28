@@ -1,11 +1,9 @@
-use super::http_test_context::{HttpTestContext, make_test_context_with_files};
+use super::http_test_context::HttpTestContext;
 use golem_common::agent_key;
 use golem_common::data_value;
 use golem_common::model::agent::{AgentTypeName, OwnedAgentId};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
-use golem_common::model::http_api_deployment::{
-    HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
-};
+use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDsl;
@@ -31,26 +29,25 @@ fn large_file_contents() -> Vec<u8> {
 async fn authenticated_live_files_preserve_no_store(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    use super::http_test_context::make_test_context;
     use golem_common::model::http_api_deployment::{
         HttpApiDeploymentAgentSecurity, TestSessionHeaderAgentSecurity,
     };
 
-    let context = make_test_context(
-        deps,
-        vec![(
-            AgentTypeName("AuthenticatedLiveFiles".into()),
-            HttpApiDeploymentAgentOptions {
-                security: Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(
-                    TestSessionHeaderAgentSecurity {
-                        header_name: "x-session".into(),
-                    },
-                )),
-            },
-        )],
+    let context = HttpTestContext::builder(
         "it_initial_file_system_release",
         "golem-it:initial-file-system",
     )
+    .agent_with(
+        "AuthenticatedLiveFiles",
+        HttpApiDeploymentAgentOptions {
+            security: Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(
+                TestSessionHeaderAgentSecurity {
+                    header_name: "x-session".into(),
+                },
+            )),
+        },
+    )
+    .build(deps)
     .await?;
     context
         .user
@@ -110,36 +107,27 @@ fn large_file_exceeds_compressed_grpc_window() {
 }
 
 async fn context(deps: &EnvBasedTestDependencies) -> anyhow::Result<HttpTestContext> {
-    make_test_context_with_files(
-        deps,
-        ["LiveFiles", "LiveFilesByPath", "LiveFilesByQuery"]
-            .into_iter()
-            .map(|name| {
-                (
-                    AgentTypeName(name.into()),
-                    HttpApiDeploymentAgentOptions::default(),
-                )
-            })
-            .collect(),
+    HttpTestContext::builder(
         "it_initial_file_system_release",
         "golem-it:initial-file-system",
-        HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
-        &[(
-            "LiveFiles",
-            vec![
-                IFSEntry {
-                    source_path: "initial-file-system/files/foo.txt".into(),
-                    target_path: CanonicalFilePath::from_abs_str("/public/ro.txt").unwrap(),
-                    permissions: AgentFilePermissions::ReadOnly,
-                },
-                IFSEntry {
-                    source_path: "initial-file-system/files/baz.txt".into(),
-                    target_path: CanonicalFilePath::from_abs_str("/public/rw.txt").unwrap(),
-                    permissions: AgentFilePermissions::ReadWrite,
-                },
-            ],
-        )],
     )
+    .agents(["LiveFiles", "LiveFilesByPath", "LiveFilesByQuery"])
+    .files(
+        "LiveFiles",
+        vec![
+            IFSEntry {
+                source_path: "initial-file-system/files/foo.txt".into(),
+                target_path: CanonicalFilePath::from_abs_str("/public/ro.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            },
+            IFSEntry {
+                source_path: "initial-file-system/files/baz.txt".into(),
+                target_path: CanonicalFilePath::from_abs_str("/public/rw.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
+            },
+        ],
+    )
+    .build(deps)
     .await
 }
 

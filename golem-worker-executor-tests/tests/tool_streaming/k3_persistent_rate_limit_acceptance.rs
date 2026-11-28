@@ -133,14 +133,13 @@ macro_rules! setup_k3_rate_limit_chain_with_checkpoint {
             .expect("K3 pre-leaf checkpoint middleware metadata");
         let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
         let tool_name = ToolName::try_from("middleware-probe").unwrap();
-        let mut deployment = deployment_state(
+        let mut deployment = rust_provider_deployment(
             $context.account_id,
-            $provider_component.id,
-            $provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            agent_type.0.as_str(),
+            &$provider_component,
             provider_metadata.tools,
-        );
+        )
+        .bound_to(agent_type.0.as_str())
+        .build();
         install_middleware_chain(
             &mut deployment,
             &agent_type,
@@ -425,23 +424,20 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
         definition
     );
     let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
-    let (checkpoint_port, checkpoint_server, mut arrivals) =
-        start_promise_checkpoint_server().await;
+    let mut promises = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "k3-rate-3-owner");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
+            promises
+                .agent_env("MIDDLEWARE")
+                .into_iter()
+                .chain([(
                     "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
                     effect_port.to_string(),
-                ),
-                (
-                    "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-            ]),
+                )])
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -455,9 +451,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
     tokio::pin!(invocation);
 
     let checkpoint = tokio::select! {
-        checkpoint = next_promise_checkpoint(
-            &mut arrivals,
-            "k3-rate-limit-post-admission-pre-leaf"
+        checkpoint = promises.reach("k3-rate-limit-post-admission-pre-leaf"
         ) => checkpoint?,
         result = invocation.as_mut() => panic!("K3 call settled before post-admission checkpoint: {result:?}"),
     };
@@ -538,7 +532,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .promise_id(&worker_id, checkpoint.oplog_index)
                 .await?,
             vec![],
         )
@@ -606,7 +600,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
     assert_eq!(old_stats.attempts, 1);
     assert_eq!(old_stats.committed_charges, 1);
 
-    checkpoint_server.abort();
+    drop(promises);
     effect_server.abort();
     Ok(())
 }

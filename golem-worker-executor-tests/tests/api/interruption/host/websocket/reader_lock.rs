@@ -3,6 +3,7 @@ use anyhow::{Context as _, ensure};
 use golem_common::model::oplog::HostResponseGolemApiPromiseId;
 use golem_common::model::oplog::host_functions::host_response_from_typed_schema_value;
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
@@ -45,7 +46,7 @@ async fn establish_reader_order(
     .map_err(anyhow::Error::msg)?
     .promise_id;
     ensure!(&promise.agent_id == id && promise.oplog_idx == creates[0]);
-    ensure!(terminal_count(&entries, creates[0]) == 1);
+    ensure!(entries.call(creates[0]).terminal_count() == 1);
     executor
         .complete_promise(&executor.context.default_environment_id, &promise, vec![1])
         .await?;
@@ -314,7 +315,7 @@ fn lock_receive_starts(
                     );
                 }
                 ensure!(
-                    terminal_count(entries, entry.oplog_index)
+                    entries.call(entry.oplog_index).terminal_count()
                         == if entry.oplog_index == untimed[0] || entry.oplog_index == timed[0] {
                             terminals
                         } else {

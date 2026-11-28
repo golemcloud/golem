@@ -1,7 +1,6 @@
-use crate::http_test_context::{HttpTestContext, make_test_context};
+use crate::http_test_context::HttpTestContext;
 use golem_common::base_model::ScanCursor;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
-use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::{AgentFilter, FilterComparator};
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::components::worker_service::restartable::RestartableWorkerService;
@@ -26,17 +25,12 @@ struct RawHttpProcessLossContext {
 async fn raw_http_process_loss_context(
     deps: &EnvBasedTestDependencies,
 ) -> RawHttpProcessLossContext {
-    let http = make_test_context(
-        deps,
-        vec![(
-            AgentTypeName("RawHttpRouter".to_string()),
-            HttpApiDeploymentAgentOptions::default(),
-        )],
-        "golem_it_agent_rpc_rust_release",
-        "golem-it:agent-rpc-rust",
-    )
-    .await
-    .unwrap();
+    let http =
+        HttpTestContext::builder("golem_it_agent_rpc_rust_release", "golem-it:agent-rpc-rust")
+            .agents(["RawHttpRouter"])
+            .build(deps)
+            .await
+            .unwrap();
 
     RawHttpProcessLossContext { http }
 }

@@ -18,11 +18,43 @@
 #![recursion_limit = "256"]
 
 pub mod agent_deployments_service;
+pub mod blob_storage_decorator;
 pub mod callers;
+pub mod checkpoint_server;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
+pub mod emulated_registry_service;
+pub mod emulated_worker_service;
+pub mod invocation_session;
+pub mod local_http_server;
+pub mod oplog_shape;
+pub mod oplog_view;
+pub mod restart;
 pub mod standalone_tool;
+pub mod tool_deployment;
+
+pub use blob_storage_decorator::{
+    BlobStorageDecorator, BlobStorageInner, DecoratedBlobStorage, WrappedBlobStorage,
+};
+pub use checkpoint_server::{
+    CrashCheckpoint, CrashCheckpointServer, PromiseCheckpoint, PromiseCheckpointServer,
+};
+pub use emulated_registry_service::EmulatedRegistryService;
+pub use emulated_worker_service::{
+    EmulatedWorkerService, RecordedCardTransfer, RemoteRpcEvidence, WorkerServiceOptions,
+};
+pub use golem_test_framework::assert_worker_error;
+pub use golem_test_framework::dsl::invocation_error::{InvocationError, InvocationErrorExt};
+pub use golem_test_framework::dsl::invocation_session::{
+    InvocationSession, InvocationSessionResultExt, InvocationStartBuilder, SessionOutcome,
+    SessionTerminal, id_target, key_target, resume_attach, start_target_id, stream_reference,
+};
+pub use local_http_server::LocalHttpServer;
+pub use oplog_shape::OplogShape;
+pub use oplog_view::{CallRecord, InvocationRecord, OplogView};
+pub use restart::Teardown;
+pub use tool_deployment::ToolDeployment;
 
 use self::agent_deployments_service::{
     ConfiguredRetryPoliciesEnvironmentStateService, DisabledEnvironmentStateService,
@@ -122,7 +154,7 @@ use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreMutation, BlobStoreService, DefaultBlobStoreService,
 };
 use golem_worker_executor::services::card::{
-    CardService, CardState, NoopCardService, RuntimeCardCreation,
+    CardService, CardServiceDefault, CardState, NoopCardService, RuntimeCardCreation,
 };
 use golem_worker_executor::services::card_interest::CardInterestIndex;
 use golem_worker_executor::services::component::ComponentService;
@@ -168,7 +200,7 @@ use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use golem_worker_executor::services::{
-    HasActiveAgents, HasAll, HasWorkerService, NoAdditionalDeps, rdbms,
+    HasActiveAgents, HasAll, HasComponentService, HasWorkerService, NoAdditionalDeps, rdbms,
 };
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
@@ -636,6 +668,8 @@ pub struct TestWorkerExecutor {
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     leak_detector: std::sync::Weak<()>,
     caller: Option<AuthCtx>,
+    /// The start function that created this executor, which `restart` calls again.
+    started_with: Option<restart::StartedWith>,
 }
 
 impl TestWorkerExecutor {
@@ -2989,11 +3023,14 @@ pub async fn start_with_redis_oplog_config(
 
     let mut config = make_base_test_config(deps);
     apply_redis_storage_config(&mut config, deps, context);
-    if let Some(oplog_config) = oplog_config_override {
+    if let Some(oplog_config) = oplog_config_override.clone() {
         config.oplog = oplog_config;
     }
 
-    start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await
+    let mut executor =
+        start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await?;
+    executor.started_with = Some(restart::StartedWith::RedisOplog(oplog_config_override));
+    Ok(executor)
 }
 
 /// Overrides for customizing the test executor. Allows wrapping services with
@@ -3016,7 +3053,6 @@ type WrapComponentServiceFn =
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 type WrapWorkerEnumerationServiceFn =
     dyn Fn(Arc<dyn WorkerEnumerationService>) -> Arc<dyn WorkerEnumerationService> + Send + Sync;
-type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
 type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
 type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
 type WrapShardServiceFn = dyn Fn(Arc<dyn ShardService>) -> Arc<dyn ShardService> + Send + Sync;
@@ -3044,7 +3080,6 @@ pub struct TestExecutorOverrides {
     /// including the periodic re-check a caller parked in
     /// `Worker::wait_for_invocation_result` runs.
     pub wrap_shard_service: Option<Arc<WrapShardServiceFn>>,
-    pub wrap_worker_proxy: Option<Arc<WrapWorkerProxyFn>>,
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
@@ -3066,9 +3101,20 @@ pub struct TestExecutorOverrides {
         golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore,
         golem_worker_executor::services::golem_config::FilesystemSnapshotUploadConfig,
     )>,
+    /// The worker service that the executor calls; see
+    /// [`TestExecutorOverrides::with_worker_service`].
+    pub worker_service: Option<EmulatedWorkerService>,
 }
 
 impl TestExecutorOverrides {
+    /// Overrides that only change the executor configuration with `configure`.
+    pub fn configured(configure: impl Fn(&mut GolemConfig) + Send + Sync + 'static) -> Self {
+        Self {
+            configure: Some(Arc::new(configure)),
+            ..Default::default()
+        }
+    }
+
     /// Overrides that turn on `wasi:sockets` for agents, which the executor refuses by default.
     pub fn agent_sockets_enabled() -> Self {
         Self::default().with_agent_sockets()
@@ -3083,6 +3129,43 @@ impl TestExecutorOverrides {
                     configure(config);
                 }
                 config.agent_sockets.enabled = true;
+            })),
+            ..self
+        }
+    }
+
+    /// Points the executor's `public_worker_api` at `worker_service`, after any `configure`
+    /// already set, and connects the service to the executor on each start, including
+    /// `restart`. Panics when the overrides already have a worker service, because replacing
+    /// it would silently drop what the caller's emulator records.
+    pub fn with_worker_service(self, worker_service: &EmulatedWorkerService) -> Self {
+        assert!(
+            self.worker_service.is_none(),
+            "the overrides already have an emulated worker service"
+        );
+        let configure = self.configure.clone();
+        let port = worker_service.port();
+        Self {
+            configure: Some(Arc::new(move |config| {
+                if let Some(configure) = &configure {
+                    configure(config);
+                }
+                config.public_worker_api.host = "127.0.0.1".to_string();
+                config.public_worker_api.port = port;
+            })),
+            worker_service: Some(worker_service.clone()),
+            ..self
+        }
+    }
+
+    /// Gives the executor the production card service, `CardServiceDefault`, over a registry
+    /// client that calls `registry`. Each start, including `restart`, builds a new card service
+    /// with an empty cache over the same `registry`.
+    pub fn with_registry(self, registry: &EmulatedRegistryService) -> Self {
+        let registry = registry.clone();
+        Self {
+            create_card_service: Some(Arc::new(move || {
+                Arc::new(CardServiceDefault::new(Arc::new(registry.client())))
             })),
             ..self
         }
@@ -3500,6 +3583,7 @@ async fn start_executor_with_config(
     // mutate per-worker test-only state, e.g. eviction).
     let additional_test_deps = AdditionalTestDeps::new();
     let services = Arc::new(Mutex::new(None));
+    let worker_service = overrides.worker_service.clone();
 
     context.wait_for_shut_down_executors().await?;
     // The future of an executor start is large. It lives on the heap, so a test that starts
@@ -3535,6 +3619,14 @@ async fn start_executor_with_config(
             let client = WorkerExecutorClient::new(otel_channel)
                 .max_decoding_message_size(32 * 1024 * 1024)
                 .max_encoding_message_size(32 * 1024 * 1024);
+            if let Some(worker_service) = &worker_service {
+                let component_service = services
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|services| services.component_service());
+                worker_service.attach(client.clone(), component_service);
+            }
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,
@@ -3548,6 +3640,7 @@ async fn start_executor_with_config(
                 concurrent_resource_entry: None,
                 leak_detector,
                 caller: None,
+                started_with: None,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
@@ -3570,7 +3663,9 @@ pub async fn start_with_overrides(
         configure(&mut config);
     }
 
-    start_executor_with_config(deps, context, config, overrides).await
+    let mut executor = start_executor_with_config(deps, context, config, overrides.clone()).await?;
+    executor.started_with = Some(restart::StartedWith::Overrides(Box::new(overrides)));
+    Ok(executor)
 }
 
 pub async fn start_customized(
@@ -3588,20 +3683,29 @@ pub async fn start_customized(
         system_memory_override,
         ..Default::default()
     };
-    if let Some(retry) = retry_override {
+    if let Some(retry) = retry_override.clone() {
         config.retry = retry;
     }
-    if let Some(snapshot_policy) = snapshot_policy_override {
+    if let Some(snapshot_policy) = snapshot_policy_override.clone() {
         config.oplog.default_snapshotting = snapshot_policy;
     }
-    if let Some(http_client) = http_client_override {
+    if let Some(http_client) = http_client_override.clone() {
         config.http_client = http_client;
     }
-    if let Some(oplog_config) = oplog_config_override {
+    if let Some(oplog_config) = oplog_config_override.clone() {
         config.oplog = oplog_config;
     }
 
-    start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await
+    let mut executor =
+        start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await?;
+    executor.started_with = Some(restart::StartedWith::Customized {
+        system_memory_override,
+        retry_override,
+        snapshot_policy_override,
+        http_client_override,
+        oplog_config_override,
+    });
+    Ok(executor)
 }
 
 async fn run(
@@ -4814,12 +4918,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     }
 
     fn create_worker_proxy(&self, golem_config: &GolemConfig) -> Arc<dyn WorkerProxy> {
-        let worker_proxy = Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api));
-        if let Some(wrap) = &self.overrides.wrap_worker_proxy {
-            wrap(worker_proxy)
-        } else {
-            worker_proxy
-        }
+        Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api))
     }
 
     fn filesystem_snapshot_store(
@@ -5325,6 +5424,7 @@ async fn run_production_context_bootstrap(
     let additional_deps = NoAdditionalDeps::new();
     let test_oplog_deps = AdditionalTestDeps::new();
     let oplog = Arc::new(std::sync::OnceLock::new());
+    let worker_service = overrides.worker_service.clone();
     context.wait_for_shut_down_executors().await?;
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
@@ -5372,6 +5472,9 @@ async fn run_production_context_bootstrap(
             let client = WorkerExecutorClient::new(otel_channel)
                 .max_decoding_message_size(32 * 1024 * 1024)
                 .max_encoding_message_size(32 * 1024 * 1024);
+            if let Some(worker_service) = &worker_service {
+                worker_service.attach(client.clone(), None);
+            }
             return Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,
@@ -5391,6 +5494,7 @@ async fn run_production_context_bootstrap(
                 concurrent_resource_entry,
                 leak_detector,
                 caller: None,
+                started_with: None,
             });
         } else if start.elapsed().as_secs() > 10 {
             return Err(anyhow::anyhow!(timeout_msg));

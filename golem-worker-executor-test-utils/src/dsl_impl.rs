@@ -17,12 +17,9 @@ use crate::component_writer::CachedAnalysis;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
-use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome;
 use golem_api_grpc::proto::golem::worker::{
-    AgentKey as ProtoAgentKey, AgentTarget as ProtoAgentTarget, InvocationRequest,
+    AgentInvocationMode, AgentKey as ProtoAgentKey, AgentTarget as ProtoAgentTarget,
     InvocationSessionResult, InvocationStart, LogEvent, UpdateMode, agent_target,
-    invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -41,12 +38,12 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
+use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
 };
-use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
-use golem_common::model::agent::{AgentKey, OwnedAgentId};
+use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
@@ -67,81 +64,16 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
+use golem_test_framework::dsl::invocation_session::{
+    SessionTerminal, invocation_target, proto_agent_key,
+};
 use golem_test_framework::dsl::{AgentResult, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::services::agent_types::local_type_id;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
 use uuid::Uuid;
-
-#[derive(Debug)]
-pub struct InvocationSessionRejection {
-    pub reason: golem_api_grpc::proto::golem::worker::InvocationRejectionReason,
-    pub message: String,
-    pub worker_error: Option<WorkerExecutorError>,
-}
-
-impl std::fmt::Display for InvocationSessionRejection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Agent invocation rejected ({}): {} ({:?})",
-            self.reason.as_str_name(),
-            self.message,
-            self.worker_error
-        )
-    }
-}
-
-impl std::error::Error for InvocationSessionRejection {}
-
-fn proto_agent_key(key: &ParsedAgentKey) -> anyhow::Result<ProtoAgentKey> {
-    AgentKey::new(key.agent_type.clone(), key.parameters.clone())
-        .map_err(|err| anyhow!("Invalid agent key {key}: {err}"))?
-        .try_into()
-        .map_err(|err: String| anyhow!("Invalid agent key {key}: {err}"))
-}
-
-/// The target and the constructor of an invocation on the agent of `key`. A durable agent is
-/// the keyed agent of `key`. An ephemeral invocation runs on an instance of its own, whose ID
-/// derives from the invocation's owner key, and the executor creates it from `key`.
-fn invocation_target(
-    component: &ComponentDto,
-    key: &ParsedAgentKey,
-    owner_key: &IdempotencyKey,
-) -> anyhow::Result<(ProtoAgentTarget, Option<ProtoAgentKey>)> {
-    let is_ephemeral = component
-        .metadata
-        .agent_types
-        .iter()
-        .map(|agent| &agent.declaration)
-        .find(|agent| agent.type_name == key.agent_type)
-        .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
-    let constructor = proto_agent_key(key)?;
-    if is_ephemeral {
-        let agent_id = AgentId::ephemeral_invocation(
-            component.environment_id,
-            local_type_id(component.environment_id, &key.agent_type),
-            owner_key,
-        );
-        Ok((
-            ProtoAgentTarget {
-                target: Some(agent_target::Target::Id(agent_id.into())),
-            },
-            Some(constructor),
-        ))
-    } else {
-        Ok((
-            ProtoAgentTarget {
-                target: Some(agent_target::Target::Key(constructor)),
-            },
-            None,
-        ))
-    }
-}
 
 fn result_agent_id(
     environment_id: EnvironmentId,
@@ -347,95 +279,20 @@ impl TestWorkerExecutor {
             .map_err(|err| anyhow!("Failed to convert oplog entry {oplog_index}: {err}"))
     }
 
+    /// Opens a session for `start` and reads it to the end, as a non-streaming caller does: it
+    /// fails on a stream frame, and returns the result or the typed
+    /// [`InvocationError`](crate::InvocationError).
     pub async fn invoke_agent_session(
         &self,
         start: InvocationStart,
     ) -> anyhow::Result<InvocationSessionResult> {
-        let (requests, receiver) = mpsc::channel(1);
-        let request = InvocationRequest {
-            request: Some(invocation_request::Request::Start(start)),
-        };
-        let mut state = InvocationSessionState::default();
-        state
-            .validate_trusted_request(&request)
-            .map_err(anyhow::Error::msg)?;
-        requests
-            .send(request)
-            .await
-            .map_err(|_| anyhow!("invocation session request ended before start"))?;
-        let mut responses = self
-            .client
-            .clone()
-            .invoke_agent_session(ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let mut result = None;
-        let mut terminal = None;
-
-        while let Some(response) = responses.message().await? {
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
-            match response.response {
-                Some(
-                    invocation_response::Response::Accepted(_)
-                    | invocation_response::Response::Ready(_),
-                ) => {}
-                Some(invocation_response::Response::Rejected(rejected)) => {
-                    terminal = Some(Err(InvocationSessionRejection {
-                        reason: rejected.reason.try_into()?,
-                        message: rejected.error,
-                        worker_error: rejected
-                            .worker_error
-                            .map(WorkerExecutorError::try_from)
-                            .transpose()
-                            .map_err(anyhow::Error::msg)?,
-                    }
-                    .into()));
-                }
-                Some(invocation_response::Response::Result(invocation_result)) => {
-                    result = Some(invocation_result);
-                }
-                Some(invocation_response::Response::Finished(finished)) => {
-                    terminal = Some(match finished.outcome {
-                        Some(Outcome::Success(_)) => result
-                            .take()
-                            .ok_or_else(|| anyhow!("invocation completed without a result")),
-                        Some(Outcome::Failure(failure)) => {
-                            let message = format!("Agent invocation failed: {failure:?}");
-                            Err(match failure.worker_error {
-                                Some(error) => anyhow::Error::new(
-                                    WorkerExecutorError::try_from(error)
-                                        .map_err(anyhow::Error::msg)?,
-                                )
-                                .context(message),
-                                None => anyhow!(message),
-                            })
-                        }
-                        None => Err(anyhow!("invocation completion has no outcome")),
-                    });
-                }
-                Some(
-                    invocation_response::Response::OutputItem(_)
-                    | invocation_response::Response::StreamEnd(_)
-                    | invocation_response::Response::InputAck(_),
-                ) => {
-                    return Err(anyhow!(
-                        "non-streaming test invocation received a stream frame"
-                    ));
-                }
-                Some(invocation_response::Response::AttachmentRevoked(_)) => {
-                    unreachable!("response validation rejects attachment revocation")
-                }
-                None => unreachable!("response validation rejects empty frames"),
-            }
+        let outcome = self.open_session(start).await?.collect().await?;
+        match outcome.terminal {
+            SessionTerminal::Succeeded => outcome
+                .result
+                .ok_or_else(|| anyhow!("invocation completed without a result")),
+            SessionTerminal::Failed(error) | SessionTerminal::Rejected(error) => Err(error.into()),
         }
-
-        terminal.unwrap_or_else(|| {
-            Err(anyhow!(
-                "invocation session response ended before completion"
-            ))
-        })
     }
 
     /// Invokes `method_name` on the existing agent `agent_id` of `component` and awaits its
@@ -478,40 +335,17 @@ impl TestWorkerExecutor {
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
-        let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
-            value.try_into().map_err(anyhow::Error::msg)?;
-
-        let result = self
-            .invoke_agent_session(InvocationStart {
-                target: Some(target),
-                constructor,
-                component_id: Some(component.id.into()),
-                method_name: Some(method_name.to_string()),
-                input: Some(proto_method_parameters),
-                captured_method_input: None,
-                allow_streams: false,
-                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-                schedule_at: None,
-                idempotency_key: idempotency_key.cloned().map(Into::into),
-                component_owner_account_id: Some(component.account_id.into()),
-                environment_id: Some(component.environment_id.into()),
-                auth_ctx: Some(self.auth_ctx().into()),
-                context: None,
-                caller: Some(principal.unwrap_or_else(Caller::anonymous).into()),
-                freshness_disposition:
-                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                        as i32,
-                config: Vec::new(),
-                attempt_id: None,
-                expected_callee_fingerprint: None,
-                durable_input_mappings: Vec::new(),
-                scope_card: None,
-                origin_invocation: None,
-                external_tool: None,
-                request_key: Some(request_key.into()),
-            })
-            .await?;
+        let mut start = self
+            .invocation(component, method_name)
+            .with_component_id()
+            .input(params)?
+            .caller(principal.unwrap_or_else(Caller::anonymous))
+            .build()?;
+        start.target = Some(target);
+        start.constructor = constructor;
+        start.idempotency_key = idempotency_key.cloned().map(Into::into);
+        start.request_key = Some(request_key.into());
+        let result = self.invoke_agent_session(start).await?;
 
         let worker_agent_id = result_agent_id(component.environment_id, result.agent_id)?;
         let value = match result.result {
@@ -906,46 +740,16 @@ impl TestDsl for TestWorkerExecutor {
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
-        let request_key = InvocationRequestKey::external(
-            self.auth_ctx().idempotency_scope(),
-            Some(idempotency_key),
-        );
-        let (target, constructor) =
-            invocation_target(component, agent_id, &request_key.owner_key(method_name))?;
-
-        let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
-            value.try_into().map_err(anyhow::Error::msg)?;
-
-        self.invoke_agent_session(InvocationStart {
-            target: Some(target),
-            constructor,
-            component_id: Some(component.id.into()),
-            method_name: Some(method_name.to_string()),
-            input: Some(proto_method_parameters),
-            captured_method_input: None,
-            allow_streams: false,
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-            schedule_at: None,
-            idempotency_key: Some(idempotency_key.clone().into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(self.auth_ctx().into()),
-            context: None,
-            caller: Some(Caller::anonymous().into()),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            config: Vec::new(),
-            attempt_id: None,
-            expected_callee_fingerprint: None,
-            durable_input_mappings: Vec::new(),
-            scope_card: None,
-            origin_invocation: None,
-            external_tool: None,
-            request_key: Some(request_key.into()),
-        })
-        .await?;
+        let start = self
+            .invocation(component, method_name)
+            .on_key(agent_id)
+            .with_component_id()
+            .input(params)?
+            .idempotency_key(idempotency_key)
+            .with_request_key()
+            .mode(AgentInvocationMode::Schedule)
+            .build()?;
+        self.invoke_agent_session(start).await?;
         Ok(())
     }
 
@@ -961,8 +765,17 @@ impl TestDsl for TestWorkerExecutor {
     ) -> anyhow::Result<AgentResult> {
         let request_key =
             InvocationRequestKey::external(self.auth_ctx().idempotency_scope(), idempotency_key);
-        let (target, constructor) =
-            invocation_target(component, agent_id, &request_key.owner_key(method_name))?;
+        let (target, constructor) = invocation_target(
+            component,
+            agent_id,
+            &request_key.owner_key(method_name),
+            || {
+                Ok(local_type_id(
+                    component.environment_id,
+                    &agent_id.agent_type,
+                ))
+            },
+        )?;
         self.invoke_and_await_target(
             component,
             target,

@@ -20,7 +20,7 @@ use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::collections::HashMap;
@@ -29,7 +29,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
-use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tracing::Instrument;
 
@@ -168,23 +167,13 @@ impl ChaosInner {
 ///   - shared chaos config that handlers consult on every request,
 ///   - per-endpoint attempt counters,
 ///   - per-endpoint successful-call counters,
-///   - an `Arc<ServerShutdown>` that aborts the axum server when the
+///   - an `Arc<LocalHttpServer>` that stops the axum server when the
 ///     last `ChaosBackend` clone is dropped (matching the kill-on-drop
 ///     semantics of the previous `tokio::process::Child` handle).
 #[derive(Clone)]
 struct ChaosBackend {
     inner: ChaosInner,
-    _shutdown: Arc<ServerShutdown>,
-}
-
-struct ServerShutdown {
-    abort: tokio::task::AbortHandle,
-}
-
-impl Drop for ServerShutdown {
-    fn drop(&mut self) {
-        self.abort.abort();
-    }
+    _shutdown: Arc<LocalHttpServer>,
 }
 
 impl ChaosBackend {
@@ -391,9 +380,6 @@ async fn start_chaos_backend() -> (u16, ChaosBackend) {
         email_response_gate: Arc::new(Mutex::new(None)),
     };
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-
     let make_route = |ep: Endpoint| {
         let s = inner.clone();
         move |req: axum::http::Request<axum::body::Body>| {
@@ -408,19 +394,14 @@ async fn start_chaos_backend() -> (u16, ChaosBackend) {
         .route("/shipment/create", post(make_route(Endpoint::Shipment)))
         .route("/email/send", post(make_route(Endpoint::Email)));
 
-    let handle = tokio::spawn(
-        async move {
-            let _ = axum::serve(listener, app).await;
-        }
-        .in_current_span(),
-    );
-    let abort = handle.abort_handle();
+    let http_server = LocalHttpServer::serve(app).await.unwrap();
+    let port = http_server.port();
 
     tracing::info!(port, "embedded chaos-backend ready");
 
     let backend = ChaosBackend {
         inner,
-        _shutdown: Arc::new(ServerShutdown { abort }),
+        _shutdown: Arc::new(http_server),
     };
     (port, backend)
 }

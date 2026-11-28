@@ -19,7 +19,6 @@ use golem_common::model::agent::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
 use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::deployment::{DeploymentPlan, DeploymentVersion};
 use golem_common::model::diff::Hashable;
 use golem_common::model::diff::{
     Deployment as DiffDeployment, EffectiveToolBinding,
@@ -43,7 +42,7 @@ use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaV
 use golem_common::{agent_key, data_value};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended, deployment_from_plan};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test, timeout};
@@ -236,13 +235,11 @@ async fn chunk_g_environment_fixture(
     publisher_client
         .deploy_environment(
             &publisher_environment.id.0,
-            &deployment_creation(
-                &publisher_plan,
-                "gol40-chunk-g-publisher",
-                publisher_hash_input.hash()?,
-                vec![tool_name.clone()],
-                Vec::new(),
-            ),
+            &DeploymentCreation {
+                expected_deployment_hash: publisher_hash_input.hash()?,
+                publish_tools: vec![tool_name.clone()],
+                ..deployment_from_plan(&publisher_plan, "gol40-chunk-g-publisher")
+            },
         )
         .await?;
     let release = publisher_client
@@ -369,13 +366,11 @@ async fn prepare_consumer(
     client
         .deploy_environment(
             &environment.id.0,
-            &deployment_creation(
-                &plan,
-                &format!("gol40-chunk-g-consumer-{label}"),
-                hash_input.hash()?,
-                Vec::new(),
-                vec![request],
-            ),
+            &DeploymentCreation {
+                expected_deployment_hash: hash_input.hash()?,
+                remote_tools: vec![request],
+                ..deployment_from_plan(&plan, &format!("gol40-chunk-g-consumer-{label}"))
+            },
         )
         .await?;
     let parsed_agent_id = agent_key!(CALLER, &format!("gol40-chunk-g-{label}"));
@@ -431,32 +426,6 @@ async fn invoke_probe(
         secret: secret.clone(),
         reserved: *reserved,
     })
-}
-
-fn deployment_creation(
-    plan: &DeploymentPlan,
-    version: &str,
-    expected_deployment_hash: golem_common::model::diff::Hash,
-    publish_tools: Vec<ToolName>,
-    remote_tools: Vec<RemoteToolDeployment>,
-) -> DeploymentCreation {
-    DeploymentCreation {
-        current_revision: plan.current_revision,
-        expected_deployment_hash,
-        version: DeploymentVersion(version.to_string()),
-        publish_tools,
-        publish_tool_middlewares: Vec::new(),
-        remote_tool_middlewares: Vec::new(),
-        universal_tool_middlewares: Vec::new(),
-        environment_tool_middleware_bindings: Default::default(),
-        agent_tool_middleware_bindings: Default::default(),
-        remote_tools,
-        mcp_imports: Vec::new(),
-        agent_secret_defaults: Vec::new(),
-        quota_resource_defaults: Vec::new(),
-        retry_policy_defaults: Vec::new(),
-        replace_incompatible_agent_secrets: false,
-    }
 }
 
 fn caller_binding() -> ToolBindingInput {

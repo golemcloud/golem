@@ -1,5 +1,5 @@
 use super::{assert_invocation_receipt, assert_no_invocation_receipt};
-use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
+use crate::custom_api::http_test_context::{HttpTestContext, per_database_test_context};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::agent::OwnedAgentId;
@@ -7,7 +7,7 @@ use golem_common::model::{AgentFilter, FilterComparator};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use reqwest::{Body, Method, StatusCode};
 use std::error::Error as _;
-use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep, timeout};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -21,46 +21,26 @@ inherit_test_dep!(
     EnvBasedTestDependencies
 );
 
-#[test_dep(scope = PerWorker, tagged_as = "postgres")]
-async fn raw_router_context_postgres(
-    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
-) -> HttpTestContext {
-    raw_router_context(deps).await
+async fn build_raw_router_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+    HttpTestContext::builder("golem_it_agent_rpc_rust_release", "golem-it:agent-rpc-rust")
+        .agents(["RawHttpRouter"])
+        .build(deps)
+        .await
+        .unwrap()
 }
 
-#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
-async fn raw_router_context_sqlite(
-    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
-) -> HttpTestContext {
-    raw_router_context(deps).await
-}
+per_database_test_context!(HttpTestContext, build_raw_router_context);
 
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
-
-#[test_dep(scope = PerWorker)]
-async fn raw_router_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    make_test_context(
-        deps,
-        vec![(
-            AgentTypeName("RawHttpRouter".to_string()),
-            HttpApiDeploymentAgentOptions::default(),
-        )],
-        "golem_it_agent_rpc_rust_release",
-        "golem-it:agent-rpc-rust",
-    )
-    .await
-    .unwrap()
-}
 
 #[test]
 #[timeout("60s")]
 async fn mounted_files_and_raw_responses_apply_cache_privacy(
     #[dimension(db)] raw_router_context: &HttpTestContext,
 ) -> anyhow::Result<()> {
-    use crate::custom_api::http_test_context::make_test_context_with_files;
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use golem_common::model::http_api_deployment::{
-        HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation, TestSessionHeaderAgentSecurity,
+        HttpApiDeploymentAgentSecurity, TestSessionHeaderAgentSecurity,
     };
     use golem_test_framework::model::IFSEntry;
 
@@ -70,33 +50,30 @@ async fn mounted_files_and_raw_responses_apply_cache_privacy(
         } else {
             "StaticHttpRouter"
         };
-        let context = make_test_context_with_files(
-            &raw_router_context.user.deps,
-            vec![(
-                AgentTypeName(agent_type.into()),
-                HttpApiDeploymentAgentOptions {
-                    security: authenticated.then(|| {
-                        HttpApiDeploymentAgentSecurity::TestSessionHeader(
-                            TestSessionHeaderAgentSecurity {
-                                header_name: "x-session".into(),
-                            },
-                        )
-                    }),
-                },
-            )],
-            "golem_it_agent_rpc_rust_release",
-            "golem-it:agent-rpc-rust",
-            HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
-            &[(
-                agent_type,
-                vec![IFSEntry {
-                    source_path: "initial-file-system/files/foo.txt".into(),
-                    target_path: CanonicalFilePath::from_abs_str("/assets/asset.txt").unwrap(),
-                    permissions: AgentFilePermissions::ReadOnly,
-                }],
-            )],
-        )
-        .await?;
+        let context =
+            HttpTestContext::builder("golem_it_agent_rpc_rust_release", "golem-it:agent-rpc-rust")
+                .agent_with(
+                    agent_type,
+                    HttpApiDeploymentAgentOptions {
+                        security: authenticated.then(|| {
+                            HttpApiDeploymentAgentSecurity::TestSessionHeader(
+                                TestSessionHeaderAgentSecurity {
+                                    header_name: "x-session".into(),
+                                },
+                            )
+                        }),
+                    },
+                )
+                .files(
+                    agent_type,
+                    vec![IFSEntry {
+                        source_path: "initial-file-system/files/foo.txt".into(),
+                        target_path: CanonicalFilePath::from_abs_str("/assets/asset.txt").unwrap(),
+                        permissions: AgentFilePermissions::ReadOnly,
+                    }],
+                )
+                .build(&raw_router_context.user.deps)
+                .await?;
         for (path, anonymous_policy, body) in [
             ("/raw/static/asset.txt", Some("no-cache"), "foo\n"),
             ("/raw/static/missing.txt", None, ""),
@@ -609,7 +586,7 @@ async fn raw_router_accepts_large_producer_chunk(
 async fn raw_router_disconnect_stops_private_execution(
     #[dimension(db)] raw_router_context: &HttpTestContext,
 ) -> anyhow::Result<()> {
-    let raw_router_context = &self::raw_router_context(&raw_router_context.user.deps).await;
+    let raw_router_context = &build_raw_router_context(&raw_router_context.user.deps).await;
     use anyhow::Context;
     use golem_client::api::WorkerClient;
     use golem_common::model::ScanCursor;
@@ -737,7 +714,7 @@ async fn raw_router_disconnect_stops_private_execution(
 async fn raw_router_h2_reset_stops_private_execution(
     #[dimension(db)] raw_router_context: &HttpTestContext,
 ) -> anyhow::Result<()> {
-    let raw_router_context = &self::raw_router_context(&raw_router_context.user.deps).await;
+    let raw_router_context = &build_raw_router_context(&raw_router_context.user.deps).await;
     use golem_common::model::ScanCursor;
     use golem_test_framework::dsl::TestDsl;
     use std::time::Duration;
@@ -889,7 +866,7 @@ async fn wait_for_stopped(context: &HttpTestContext, agent: &OwnedAgentId) -> an
 async fn raw_router_cors_preflight_does_not_invoke(
     #[dimension(db)] raw_router_context: &HttpTestContext,
 ) -> anyhow::Result<()> {
-    let raw_router_context = &self::raw_router_context(&raw_router_context.user.deps).await;
+    let raw_router_context = &build_raw_router_context(&raw_router_context.user.deps).await;
     use golem_common::model::ScanCursor;
     use golem_test_framework::dsl::TestDsl;
     let count = || async {
@@ -935,40 +912,32 @@ async fn raw_router_cors_preflight_does_not_invoke(
 async fn immutable_router_files_from_registry_blob_storage(
     #[dimension(db)] raw_router_context: &HttpTestContext,
 ) -> anyhow::Result<()> {
-    use crate::custom_api::http_test_context::make_test_context_with_files;
     use golem_common::model::ScanCursor;
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
-    use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
     use golem_test_framework::dsl::TestDsl;
     use golem_test_framework::model::IFSEntry;
-    let context = make_test_context_with_files(
-        &raw_router_context.user.deps,
-        vec![(
-            AgentTypeName("StaticHttpRouter".into()),
-            HttpApiDeploymentAgentOptions::default(),
-        )],
-        "golem_it_agent_rpc_rust_release",
-        "golem-it:agent-rpc-rust",
-        HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
-        &[(
-            "StaticHttpRouter",
-            vec![
-                IFSEntry {
-                    source_path: "initial-file-system/files/foo.txt".into(),
-                    target_path: CanonicalFilePath::from_abs_str("/assets/asset.txt")
-                        .map_err(anyhow::Error::msg)?,
-                    permissions: AgentFilePermissions::ReadOnly,
-                },
-                IFSEntry {
-                    source_path: "initial-file-system/files/baz.txt".into(),
-                    target_path: CanonicalFilePath::from_abs_str("/assets/private.txt")
-                        .map_err(anyhow::Error::msg)?,
-                    permissions: AgentFilePermissions::ReadWrite,
-                },
-            ],
-        )],
-    )
-    .await?;
+    let context =
+        HttpTestContext::builder("golem_it_agent_rpc_rust_release", "golem-it:agent-rpc-rust")
+            .agents(["StaticHttpRouter"])
+            .files(
+                "StaticHttpRouter",
+                vec![
+                    IFSEntry {
+                        source_path: "initial-file-system/files/foo.txt".into(),
+                        target_path: CanonicalFilePath::from_abs_str("/assets/asset.txt")
+                            .map_err(anyhow::Error::msg)?,
+                        permissions: AgentFilePermissions::ReadOnly,
+                    },
+                    IFSEntry {
+                        source_path: "initial-file-system/files/baz.txt".into(),
+                        target_path: CanonicalFilePath::from_abs_str("/assets/private.txt")
+                            .map_err(anyhow::Error::msg)?,
+                        permissions: AgentFilePermissions::ReadWrite,
+                    },
+                ],
+            )
+            .build(&raw_router_context.user.deps)
+            .await?;
     let etag = format!("\"blake3-{}\"", blake3::hash(b"foo\n").to_hex());
     for (method, path, range, condition, status, length, expected) in [
         (

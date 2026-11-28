@@ -12,6 +12,7 @@ use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::{OplogShape, OplogView};
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -155,7 +156,7 @@ fn receive_start(
                     ensure!(start.request.is_some());
                 }
                 ensure!(
-                    terminal_count(entries, entry.oplog_index)
+                    entries.call(entry.oplog_index).terminal_count()
                         == if entry.oplog_index == starts[0] {
                             terminals
                         } else {
@@ -594,7 +595,7 @@ async fn pending_receive(
             }).collect();
             ensure!(starts.len() == 2 && starts[0] == receive_start);
             for start in starts {
-                ensure!(terminal_count(&history, start) == 1);
+                ensure!(history.call(start).terminal_count() == 1);
                 ensure!(history.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(delivery) if delivery.start_index == start)).count() == 1);
             }
             assert_settled_history(&history)?;
@@ -628,39 +629,16 @@ async fn pending_receive(
     result
 }
 
-fn terminal_count(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> usize {
-    entries
-        .iter()
-        .filter(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) => end.start_index == start,
-            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
-            _ => false,
-        })
-        .count()
-}
-
 fn assert_settled_history(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<()> {
-    let last_finished = entries
-        .iter()
-        .rev()
-        .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-        .context("missing invocation terminal")?
-        .oplog_index;
-    for entry in entries {
-        match &entry.entry {
-            PublicOplogEntry::Start(_) => {
-                ensure!(
-                    terminal_count(entries, entry.oplog_index) == 1,
-                    "unsettled/duplicate Start: {entry:?}"
-                );
-                ensure!(entry.oplog_index < last_finished);
-            }
-            PublicOplogEntry::End(_) => ensure!(entry.oplog_index < last_finished),
-            PublicOplogEntry::Cancelled(_) | PublicOplogEntry::Error(_) => {
-                anyhow::bail!("unexpected terminal: {entry:?}")
-            }
-            _ => {}
-        }
-    }
-    Ok(())
+    OplogShape::of(entries)
+        .no_background_work()
+        .forbid("a failed invocation, cancellation or error hint", |entry| {
+            matches!(
+                entry,
+                PublicOplogEntry::AgentInvocationFailed(_)
+                    | PublicOplogEntry::Cancelled(_)
+                    | PublicOplogEntry::Error(_)
+            )
+        })
+        .ensure_settled()
 }

@@ -229,14 +229,11 @@ async fn write_and_reconstruct(
         environment_id,
         component.id,
         component.revision,
-        Some(deployment_state(
-            context.account_id,
-            component.id,
-            component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "NapFetchOwner",
-            metadata.tools,
-        )),
+        Some(
+            rust_provider_deployment(context.account_id, &component, metadata.tools)
+                .bound_to("NapFetchOwner")
+                .build(),
+        ),
     );
     let name = agent_key!("NapFetchOwner", format!("entity-blob-{fence}"));
     let id = executor.start_agent(&component.id, name.clone()).await?;

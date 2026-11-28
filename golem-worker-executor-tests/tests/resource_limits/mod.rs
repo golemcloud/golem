@@ -27,7 +27,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_concurrent_agent_limit,
     start_with_concurrent_agent_limit_and_overrides, start_with_invocation_limits,
     start_with_overrides, start_with_table_limit,
@@ -733,26 +733,23 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
         let gate_clone = gate.clone();
         let polling = Arc::new(tokio::sync::Notify::new());
         let polling_clone = polling.clone();
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-        let port = listener.local_addr()?.port();
-        let http_server = tokio::spawn(async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || {
-                    let gate = gate_clone.clone();
-                    let polling = polling_clone.clone();
-                    async move {
-                        polling.notify_one();
-                        gate.acquire()
-                            .await
-                            .expect("gate semaphore closed")
-                            .forget();
-                        "done".to_string()
-                    }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        });
+        let route = Router::new().route(
+            "/poll",
+            get(move || {
+                let gate = gate_clone.clone();
+                let polling = polling_clone.clone();
+                async move {
+                    polling.notify_one();
+                    gate.acquire()
+                        .await
+                        .expect("gate semaphore closed")
+                        .forget();
+                    "done".to_string()
+                }
+            }),
+        );
+        let http_server = LocalHttpServer::serve(route).await?;
+        let port = http_server.port();
         let component = executor
             .component_dep(&context.default_environment_id, http_tests)
             .store()
@@ -841,7 +838,7 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
         }
 
         drop(held_permit);
-        http_server.abort();
+        drop(http_server);
     }
 
     Ok(())
@@ -875,24 +872,21 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     // before the release call.
     let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
     let gate_clone = gate.clone();
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || {
-                let gate = gate_clone.clone();
-                async move {
-                    gate.acquire()
-                        .await
-                        .expect("gate semaphore closed")
-                        .forget();
-                    "done".to_string()
-                }
-            }),
-        );
-        axum::serve(listener, route).await.unwrap();
-    });
+    let route = Router::new().route(
+        "/poll",
+        get(move || {
+            let gate = gate_clone.clone();
+            async move {
+                gate.acquire()
+                    .await
+                    .expect("gate semaphore closed")
+                    .forget();
+                "done".to_string()
+            }
+        }),
+    );
+    let http_server = LocalHttpServer::serve(route).await?;
+    let port = http_server.port();
 
     let http_component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -966,7 +960,7 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
         .wait_for_status(&a2_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -1014,26 +1008,23 @@ async fn concurrent_agent_idle_releases_permit(
     // how the runner schedules the tasks.
     let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
     let gate_clone = gate.clone();
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/poll",
-            get(move || {
-                let gate = gate_clone.clone();
-                async move {
-                    // Consume one permit permanently so a single added permit
-                    // releases exactly one poll, not a recycled one.
-                    gate.acquire()
-                        .await
-                        .expect("gate semaphore closed")
-                        .forget();
-                    "done".to_string()
-                }
-            }),
-        );
-        axum::serve(listener, route).await.unwrap();
-    });
+    let route = Router::new().route(
+        "/poll",
+        get(move || {
+            let gate = gate_clone.clone();
+            async move {
+                // Consume one permit permanently so a single added permit
+                // releases exactly one poll, not a recycled one.
+                gate.acquire()
+                    .await
+                    .expect("gate semaphore closed")
+                    .forget();
+                "done".to_string()
+            }
+        }),
+    );
+    let http_server = LocalHttpServer::serve(route).await?;
+    let port = http_server.port();
 
     let http_component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -1108,7 +1099,7 @@ async fn concurrent_agent_idle_releases_permit(
         .wait_for_status(&a2_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
-    http_server.abort();
+    drop(http_server);
     Ok(())
 }
 
@@ -1213,26 +1204,16 @@ async fn http_call_limit_exceeded_traps_invocation(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use axum::routing::post;
-    use tokio::spawn;
-    use tracing::Instrument;
 
     let context = TestContext::new(last_unique_id);
     // Limit is 0: the very first HTTP call in any invocation must trap.
     let executor = start_with_invocation_limits(deps, &context, 0, u64::MAX).await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
     // Spin up a minimal HTTP server. The worker should trap before it reaches
     // the server, but we still bind one so the PORT env var resolves correctly.
-    spawn(
-        async move {
-            axum::serve(listener, Router::new().route("/", post(|| async { "ok" })))
-                .await
-                .unwrap();
-        }
-        .in_current_span(),
-    );
+    let http_server =
+        LocalHttpServer::serve(Router::new().route("/", post(|| async { "ok" }))).await?;
+    let host_http_port = http_server.port();
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)

@@ -1,5 +1,6 @@
 use super::*;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::id_target;
 use test_r::test;
 
 async fn exercise_python_sidecar(
@@ -32,14 +33,10 @@ async fn exercise_python_sidecar(
         true,
     )
     .await?;
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider.id,
-        provider.revision,
-        "golem:python",
-        "ToolStreamingCaller",
-        metadata.tools,
-    );
+    let mut deployment = ToolDeployment::new(context.account_id, &provider)
+        .tools(metadata.tools)
+        .bound_to("ToolStreamingCaller")
+        .build();
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
@@ -237,7 +234,7 @@ async fn exercise_python_session(
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                target: Some(crate::agent::id_target(&worker_id)),
+                target: Some(id_target(&worker_id)),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 caller: Some(callers::account(context.account_id).into()),

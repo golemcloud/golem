@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
@@ -193,7 +194,7 @@ async fn periodic_refresh_stops_overage_tcp(
         ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "stop changed the full committed prefix");
         let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(input_setup(&stopped, Operation::Read)? == setup);
-        ensure!(terminal_count(&stopped, setup.1) == 0, "the stop leaves the read pending");
+        ensure!(stopped.call(setup.1).terminal_count() == 0, "the stop leaves the read pending");
         let raw_entries = read_stored().await?;
         let errors: Vec<_> = raw_entries.values().filter_map(|entry| match entry { OplogEntry::Error { error, .. } => Some(error), _ => None }).collect();
         let suspends = raw_entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count();
@@ -235,7 +236,7 @@ async fn periodic_refresh_stops_overage_tcp(
             let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(poll_starts(&recovered).len() == 2 && poll_starts(&recovered)[0] == setup.0);
             ensure!(
-                terminal_count(&recovered, setup.1) == 1 && ends_with_connection_loss(&recovered, setup.1),
+                recovered.call(setup.1).terminal_count() == 1 && ends_with_connection_loss(&recovered, setup.1),
                 "the pending read completes with the lost connection"
             );
             ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "recovery changed the full committed prefix");

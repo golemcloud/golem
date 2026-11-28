@@ -30,7 +30,8 @@ use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies, start,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -97,53 +98,42 @@ async fn go_parallel_http_from_goroutines_replays(
     let holding = Arc::new(AtomicBool::new(true));
     let holding_in_server = holding.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    let http_server = spawn(
-        async move {
-            let route = Router::new().route(
-                "/post-example",
-                post(move |headers: HeaderMap, body: Bytes| {
-                    let held = held_in_server.clone();
-                    let arrivals = arrivals_in_server.clone();
-                    let holding = holding_in_server.clone();
-                    let captured_body = captured_body_clone.clone();
-                    async move {
-                        let header = headers
-                            .get("X-Test")
-                            .map(|h| h.to_str().unwrap().to_string())
-                            .unwrap_or("no X-Test header".to_string());
-                        let body = String::from_utf8(body.to_vec()).unwrap();
-                        {
-                            let mut capture = captured_body.lock().unwrap();
-                            capture.push(body.clone());
-                        }
-                        if arrivals.fetch_add(1, Ordering::SeqCst) < 16
-                            && holding.load(Ordering::SeqCst)
-                        {
-                            let id: u16 = header
-                                .parse()
-                                .expect("the first invocation's requests carry numeric X-Test ids");
-                            let (release_tx, release_rx) = oneshot::channel();
-                            let previous = held.lock().unwrap().insert(id, release_tx);
-                            assert!(
-                                previous.is_none(),
-                                "request id {id} must arrive exactly once while responses are held"
-                            );
-                            let _ = release_rx.await;
-                        }
-                        format!(
-                            "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
-                        )
-                    }
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
+    let route = Router::new().route(
+        "/post-example",
+        post(move |headers: HeaderMap, body: Bytes| {
+            let held = held_in_server.clone();
+            let arrivals = arrivals_in_server.clone();
+            let holding = holding_in_server.clone();
+            let captured_body = captured_body_clone.clone();
+            async move {
+                let header = headers
+                    .get("X-Test")
+                    .map(|h| h.to_str().unwrap().to_string())
+                    .unwrap_or("no X-Test header".to_string());
+                let body = String::from_utf8(body.to_vec()).unwrap();
+                {
+                    let mut capture = captured_body.lock().unwrap();
+                    capture.push(body.clone());
+                }
+                if arrivals.fetch_add(1, Ordering::SeqCst) < 16 && holding.load(Ordering::SeqCst) {
+                    let id: u16 = header
+                        .parse()
+                        .expect("the first invocation's requests carry numeric X-Test ids");
+                    let (release_tx, release_rx) = oneshot::channel();
+                    let previous = held.lock().unwrap().insert(id, release_tx);
+                    assert!(
+                        previous.is_none(),
+                        "request id {id} must arrive exactly once while responses are held"
+                    );
+                    let _ = release_rx.await;
+                }
+                format!("{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}")
+            }
+        }),
     );
+
+    let http_server = LocalHttpServer::serve(route).await?;
+    let host_http_port = http_server.port();
 
     // Releases the held responses once all 16 concurrent requests (ids 0..16)
     // are in flight, in reverse request-id order, pacing the releases so the
@@ -279,7 +269,7 @@ async fn go_parallel_http_from_goroutines_replays(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    http_server.abort();
+    drop(http_server);
 
     Ok(())
 }

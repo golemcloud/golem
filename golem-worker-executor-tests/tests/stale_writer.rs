@@ -28,7 +28,7 @@ use golem_worker_executor::storage::keyvalue::fault_injecting::{
     FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_with_overrides, take_agent_oplog_over_at_epoch,
 };
 use std::collections::{HashMap, HashSet};
@@ -97,8 +97,6 @@ async fn stale_writer_takeover(
     )
     .await?;
     let effects = Arc::new(AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
     let route = Router::new().route(
         "/poll",
         get({
@@ -109,9 +107,8 @@ async fn stale_writer_takeover(
             }
         }),
     );
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, route).await
-    }));
+    let server = LocalHttpServer::serve(route).await?;
+    let port = server.port();
 
     let component = old
         .component_dep(&context.default_environment_id, http_tests)

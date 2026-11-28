@@ -117,78 +117,27 @@ async fn effect_duplex_websocket_crash_continuation(
         let boundary = executor.oplog_max_index(&worker).await?;
         let metadata = executor.get_worker_metadata(&worker).await?;
         let key = IdempotencyKey::fresh();
-        let start = InvocationStart {
-            allow_streams: true,
-            target: Some(crate::agent::id_target(&worker)),
-            constructor: None,
-            component_id: None,
-            method_name: Some("echo".to_string()),
-            input: Some(golem_schema::proto::golem::schema::SchemaValue {
-                value: Some(schema_value::Value::RecordValue(RecordValue {
-                    fields: vec![golem_schema::proto::golem::schema::SchemaValue {
-                        value: Some(schema_value::Value::StreamReference(
-                            SchemaValueStreamReference { stream_id: 1 },
-                        )),
-                    }],
-                })),
-            }),
-            request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
-            ),
-            idempotency_key: Some(key.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
-            ..Default::default()
-        };
-        let (requests, receiver) = mpsc::channel(8);
-        requests
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::Start(start)),
-            })
-            .await?;
-        let mut responses = executor
-            .client
-            .clone()
-            .invoke_agent_session(ReceiverStream::new(receiver))
-            .await?
-            .into_inner();
-        let accepted = tokio::time::timeout(Duration::from_secs(10), responses.message())
-            .await??
-            .expect("acceptance");
-        let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
-            anyhow::bail!("missing acceptance");
-        };
+        let start = executor
+            .invocation(&component, "echo")
+            .on_agent(&worker)
+            .allow_streams()
+            .input_record(vec![stream_reference(1)])
+            .idempotency_key(&key)
+            .with_request_key()
+            .fresh_attempt()
+            .expect_fingerprint(metadata.fingerprint.0)
+            .build()?;
+        let mut session = executor.open_unvalidated_session(start).await?;
+        let accepted =
+            tokio::time::timeout(Duration::from_secs(10), session.acceptance()).await??;
         // A queued acceptance has no stream mappings yet; readiness carries them.
-        let accepted = tokio::time::timeout(
-            Duration::from_secs(10),
-            await_session_readiness(&mut responses, None, accepted),
-        )
-        .await??;
-        let stream_id = accepted.stream_mappings[0]
-            .handle
-            .as_ref()
-            .and_then(|h| h.stream_id);
-        let input = |sequence, text: &str| InvocationRequest {
-            request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                transport_stream_id: 1,
-                sequence,
-                payload: Some(input_stream_item::Payload::Value(
-                    SchemaValue::String(text.to_string()).try_into().unwrap(),
-                )),
-                durable_stream_id: stream_id,
-                epoch: accepted.epoch,
-            })),
-        };
-        requests.send(input(0, "hello")).await?;
+        tokio::time::timeout(Duration::from_secs(10), session.ready(accepted)).await??;
+        session
+            .send_input(1, 0, SchemaValue::String("hello".to_string()))
+            .await?;
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let response = responses.message().await?.expect("first output");
+                let response = session.message().await?.expect("first output");
                 if let Some(invocation_response::Response::OutputItem(item)) = response.response {
                     assert_eq!(
                         item.value.unwrap().value,
@@ -233,28 +182,13 @@ async fn effect_duplex_websocket_crash_continuation(
         if crash {
             executor.simulated_crash(&worker).await?;
         }
-        requests.send(input(1, "after")).await?;
-        requests
-            .send(InvocationRequest {
-                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
-                    transport_stream_id: 1,
-                    producer_sequence: 2,
-                    direction: StreamDirection::Input as i32,
-                    authored_by: StreamTerminalAuthor::Guest as i32,
-                    outcome: Some(
-                        StreamTerminal::Finished
-                            .try_into()
-                            .expect("finished terminal"),
-                    ),
-                    durable_stream_id: stream_id,
-                    epoch: accepted.epoch,
-                    ..Default::default()
-                })),
-            })
+        session
+            .send_input(1, 1, SchemaValue::String("after".to_string()))
             .await?;
+        session.finish_input(1, 2).await?;
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let response = responses.message().await?.expect("input acknowledgement");
+                let response = session.message().await?.expect("input acknowledgement");
                 match response.response {
                     Some(invocation_response::Response::InputAck(ack)) => {
                         if ack.highest_contiguous_sequence == 2 {
@@ -274,7 +208,7 @@ async fn effect_duplex_websocket_crash_continuation(
         let mut finished = false;
         let completion = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let response = responses.message().await?.expect("session completion");
+                let response = session.message().await?.expect("session completion");
                 match response.response {
                     Some(invocation_response::Response::OutputItem(item)) => {
                         values.push(item.value.unwrap().value)

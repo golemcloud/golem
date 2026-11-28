@@ -641,7 +641,6 @@ async fn executor_refuses_an_invocation_with_no_caller(
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::worker::{AgentInvocationMode, InvocationStart};
     use golem_common::model::InvocationRequestKey;
 
     let context = TestContext::new(last_unique_id);
@@ -659,17 +658,16 @@ async fn executor_refuses_an_invocation_with_no_caller(
             .try_into()
             .map_err(anyhow::Error::msg)?;
     let error = executor
-        .invoke_agent_session(InvocationStart {
-            target: Some(crate::agent::id_target(&probe_id)),
-            method_name: Some("report".to_string()),
-            input: Some(method_parameters),
-            mode: AgentInvocationMode::Await as i32,
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            caller: None,
-            request_key: Some(InvocationRequestKey::external(None, None).into()),
-            ..Default::default()
+        .invoke_agent_session({
+            let mut start = executor
+                .invocation(&component, "report")
+                .on_agent(&probe_id)
+                .build()?;
+            start.idempotency_key = None;
+            start.input = Some(method_parameters);
+            start.caller = None;
+            start.request_key = Some(InvocationRequestKey::external(None, None).into());
+            start
         })
         .await
         .expect_err("an invocation without a caller must be refused");

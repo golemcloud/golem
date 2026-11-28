@@ -248,14 +248,15 @@ async fn fixture(
                 context.default_environment_id,
                 owner_component.id,
                 owner_component.revision,
-                Some(deployment_state(
-                    context.account_id,
-                    provider_component.id,
-                    provider_component.revision,
-                    "golem-it:tool-streaming-rust-provider",
-                    owner_type,
-                    metadata.tools,
-                )),
+                Some(
+                    rust_provider_deployment(
+                        context.account_id,
+                        &provider_component,
+                        metadata.tools,
+                    )
+                    .bound_to(owner_type)
+                    .build(),
+                ),
             );
             Some(clock_race)
         }

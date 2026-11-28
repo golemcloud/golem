@@ -40,8 +40,9 @@ use golem_common::{agent_key, data_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::invocation_session::{id_target, proto_agent_key};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use integration_tests::agents::{agent_type_id, id_target, keyed_agent_id, proto_agent_key};
+use integration_tests::agents::{agent_type_id, keyed_agent_id};
 use pretty_assertions::assert_eq;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
@@ -493,7 +494,10 @@ async fn ephemeral_grpc_invocations_preserve_explicit_ids_and_rest_retries_reuse
         let expected_agent_id = AgentId::random(type_id);
         let response = grpc
             .invoke_agent(InvokeAgentRequest {
-                target: Some(id_target(expected_agent_id)),
+                target: Some(id_target(&OwnedAgentId::new(
+                    component.environment_id,
+                    &expected_agent_id,
+                ))),
                 constructor: Some(proto_agent_key(&key)?),
                 method_name: Some("get_id".into()),
                 method_parameters: Some(method_parameters.clone()),

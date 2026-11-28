@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::OplogView;
 use test_r::test;
 
 macro_rules! completion_case {
@@ -138,7 +139,7 @@ async fn completion_and_history(
         ensure!(tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await?? == 0);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(input_setup(&completed, operation)? == setup);
-        ensure!(terminal_count(&completed, setup.1) == 1, "the input completed before the stop");
+        ensure!(completed.call(setup.1).terminal_count() == 1, "the input completed before the stop");
         assert_settled_history(&completed)?;
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
         operation.assert_result(executor.invoke_and_await_agent_with_key(&component, &name, &key, operation.method(), data_value!(port)).await?, 0)?;

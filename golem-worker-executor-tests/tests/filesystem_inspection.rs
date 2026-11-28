@@ -30,6 +30,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit,
 };
+use golem_worker_executor_test_utils::{id_target, key_target};
 use serde_json::Value;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -107,7 +108,7 @@ pub(crate) async fn first_read_frame(
         .client
         .clone()
         .get_file_contents(GetFileContentsRequest {
-            target: Some(crate::agent::id_target(agent)),
+            target: Some(id_target(agent)),
             component_id: None,
             component_owner_account_id: Some(executor.context.account_id.into()),
             environment_id: Some(agent.environment_id.into()),
@@ -206,7 +207,7 @@ async fn a_key_bound_file_read_rejects_another_keys_agent(
         .client
         .clone()
         .get_file_contents(GetFileContentsRequest {
-            target: Some(crate::agent::key_target(&requested)?),
+            target: Some(key_target(&requested)?),
             component_id: Some(component.id.into()),
             component_owner_account_id: Some(component.account_id.into()),
             environment_id: Some(context.default_environment_id.into()),
@@ -1029,7 +1030,7 @@ async fn grpc_read_waits_for_blocking_invocation_and_completes(
     .await?;
     let mut client = executor.client.clone();
     let mut read = Box::pin(client.get_file_contents(GetFileContentsRequest {
-        target: Some(crate::agent::id_target(&agent)),
+        target: Some(id_target(&agent)),
         component_id: None,
         component_owner_account_id: Some(component.account_id.into()),
         environment_id: Some(context.default_environment_id.into()),
@@ -1118,7 +1119,7 @@ async fn exact_file_read_grpc_rejects_unsafe_paths_before_activation(
             .client
             .clone()
             .get_file_contents(GetFileContentsRequest {
-                target: Some(crate::agent::id_target(&agent)),
+                target: Some(id_target(&agent)),
                 component_id: None,
                 component_owner_account_id: Some(component.account_id.into()),
                 environment_id: Some(context.default_environment_id.into()),

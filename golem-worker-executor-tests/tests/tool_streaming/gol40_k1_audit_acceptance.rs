@@ -151,14 +151,13 @@ async fn gol40_k1_audit_deployment(
         .clone();
     let agent_type = AgentTypeName(caller_agent_type.to_string());
     let tool_name = ToolName::try_from(tool_name).unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,

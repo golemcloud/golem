@@ -1,16 +1,17 @@
 use async_trait::async_trait;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use golem_service_base::storage::blob::{
-    BlobMetadata, BlobRangeStream, BlobStorageBackend, BlobStorageNamespace, ExistsResult,
-    ListedBlob, NormalizedBlobPath, PutIfAbsent,
+use golem_service_base::storage::blob::{BlobStorageNamespace, NormalizedBlobPath};
+use golem_worker_executor_test_utils::{
+    BlobStorageDecorator, BlobStorageInner, DecoratedBlobStorage,
 };
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::{Notify, Semaphore};
 
+/// An in-memory blob storage whose mutations a test can hold; see [`MutationGate`].
+pub(super) type MutationStorage = DecoratedBlobStorage<MutationGate, InMemoryBlobStorage>;
+
 #[derive(Debug)]
-pub(super) struct MutationStorage {
-    inner: InMemoryBlobStorage,
+pub(super) struct MutationGate {
     pub armed: AtomicBool,
     pub pending: Notify,
     pub release: Semaphore,
@@ -20,10 +21,9 @@ pub(super) struct MutationStorage {
     pub dropped: AtomicUsize,
 }
 
-impl Default for MutationStorage {
+impl Default for MutationGate {
     fn default() -> Self {
         Self {
-            inner: InMemoryBlobStorage::new(),
             armed: AtomicBool::new(false),
             pending: Notify::new(),
             release: Semaphore::new(0),
@@ -35,7 +35,7 @@ impl Default for MutationStorage {
     }
 }
 
-struct MutationWait<'a>(&'a MutationStorage, bool);
+struct MutationWait<'a>(&'a MutationGate, bool);
 
 impl Drop for MutationWait<'_> {
     fn drop(&mut self) {
@@ -45,7 +45,7 @@ impl Drop for MutationWait<'_> {
     }
 }
 
-impl MutationStorage {
+impl MutationGate {
     async fn mutate<T>(&self, work: impl std::future::Future<Output = T>) -> T {
         self.entered.fetch_add(1, Ordering::SeqCst);
         if !self.armed.swap(false, Ordering::SeqCst) {
@@ -70,44 +70,14 @@ impl MutationStorage {
     }
 }
 
+/// Gates the blob mutations of the in-memory storage it decorates: once armed, the next
+/// mutation waits for `release`, and the counters record what entered, completed, took effect or
+/// was dropped.
 #[async_trait]
-impl BlobStorageBackend for MutationStorage {
-    async fn get_raw_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.inner.get_raw_at(target, op, ns, path).await
-    }
-
-    async fn get_range_stream_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        offset: u64,
-        length: u64,
-    ) -> anyhow::Result<Option<BlobRangeStream>> {
-        self.inner
-            .get_range_stream_at(target, op, ns, path, offset, length)
-            .await
-    }
-
-    async fn get_metadata_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<BlobMetadata>> {
-        self.inner.get_metadata_at(target, op, ns, path).await
-    }
-
+impl BlobStorageDecorator<InMemoryBlobStorage> for MutationGate {
     async fn put_raw_at(
         &self,
+        inner: &InMemoryBlobStorage,
         target: &'static str,
         op: &'static str,
         ns: BlobStorageNamespace,
@@ -115,7 +85,9 @@ impl BlobStorageBackend for MutationStorage {
         data: &[u8],
     ) -> anyhow::Result<()> {
         let result = self
-            .mutate(self.inner.put_raw_at(target, op, ns, path, data))
+            .mutate(BlobStorageInner::put_raw_at(
+                inner, target, op, ns, path, data,
+            ))
             .await;
         if result.is_ok() {
             self.effects.fetch_add(1, Ordering::SeqCst);
@@ -123,81 +95,9 @@ impl BlobStorageBackend for MutationStorage {
         result
     }
 
-    async fn put_raw_if_absent_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<PutIfAbsent> {
-        self.inner
-            .put_raw_if_absent_at(target, op, ns, path, data)
-            .await
-    }
-
-    async fn delete_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner.delete_at(target, op, ns, path).await
-    }
-
-    async fn create_dir_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner.create_dir_at(target, op, ns, path).await
-    }
-
-    async fn list_dir_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Vec<PathBuf>> {
-        self.inner.list_dir_at(target, op, ns, path).await
-    }
-
-    async fn list_blobs_below_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Box<[ListedBlob]>> {
-        self.inner.list_blobs_below_at(target, op, ns, path).await
-    }
-
-    async fn delete_dir_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<u64>> {
-        self.inner.delete_dir_at(target, op, ns, path).await
-    }
-
-    async fn exists_at(
-        &self,
-        target: &'static str,
-        op: &'static str,
-        ns: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<ExistsResult> {
-        self.inner.exists_at(target, op, ns, path).await
-    }
-
     async fn copy_between_at(
         &self,
+        inner: &InMemoryBlobStorage,
         target: &'static str,
         op: &'static str,
         from_ns: BlobStorageNamespace,
@@ -206,10 +106,9 @@ impl BlobStorageBackend for MutationStorage {
         to: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<bool> {
         let result = self
-            .mutate(
-                self.inner
-                    .copy_between_at(target, op, from_ns, from, to_ns, to),
-            )
+            .mutate(BlobStorageInner::copy_between_at(
+                inner, target, op, from_ns, from, to_ns, to,
+            ))
             .await;
         if matches!(result, Ok(true)) {
             self.effects.fetch_add(1, Ordering::SeqCst);

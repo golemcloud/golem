@@ -34,8 +34,9 @@ use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::oplog::OplogServiceOps;
 use golem_worker_executor::services::{HasOplogProcessorPlugin, HasOplogService, UsesAllDeps};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, callers, start, start_with_overrides, test_component,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, callers, start, start_with_overrides,
+    test_component,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -160,26 +161,17 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     assert!(executor.get_worker_metadata(&reserved).await.is_err());
 
     let (callbacks_tx, mut callbacks) = tokio::sync::mpsc::unbounded_channel();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let callback_url = format!("http://{}/batch", listener.local_addr()?);
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            Router::new().route(
-                "/batch",
-                post(move |Json(body): Json<serde_json::Value>| {
-                    let callbacks_tx = callbacks_tx.clone();
-                    async move {
-                        callbacks_tx.send(body).unwrap();
-                    }
-                }),
-            ),
-        )
-        .await
-        .unwrap();
-    });
-    // Abort the in-process listener even if an assertion fails.
-    let _server_guard = tokio_util::task::AbortOnDropHandle::new(server);
+    let server = LocalHttpServer::serve(Router::new().route(
+        "/batch",
+        post(move |Json(body): Json<serde_json::Value>| {
+            let callbacks_tx = callbacks_tx.clone();
+            async move {
+                callbacks_tx.send(body).unwrap();
+            }
+        }),
+    ))
+    .await?;
+    let callback_url = server.url("/batch");
     let seed = executor.active_agent(&source_id).await.unwrap().primary();
     let source_metadata = seed.get_latest_worker_metadata().await;
     let dispatcher = seed.all().oplog_processor_plugin();

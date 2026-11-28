@@ -41,9 +41,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobMissingError, BlobRangeStream, BlobRefusal, BlobRefusedError, BlobStorage,
-    BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
-    PutIfAbsent,
+    BlobRefusal, BlobRefusedError, BlobStorageNamespace, NormalizedBlobPath,
 };
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::filesystem_snapshot_testing::{
@@ -56,9 +54,10 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
-    start_with_snapshot_policy,
+    BlobStorageDecorator, BlobStorageInner, EmulatedWorkerService, LastUniqueId, LocalHttpServer,
+    PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, WorkerServiceOptions, WrappedBlobStorage, start,
+    start_customized, start_with_overrides, start_with_snapshot_policy,
 };
 use http::StatusCode;
 use log::info;
@@ -69,7 +68,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
-use tokio::task::JoinHandle;
 use tracing::{Instrument, debug};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -120,50 +118,44 @@ impl F1Control {
 }
 
 pub struct TestHttpServer {
-    handle: JoinHandle<()>,
+    handle: LocalHttpServer,
     f1_blocker: Arc<Mutex<Option<F1Blocker>>>,
     port: u16,
 }
 
 impl TestHttpServer {
     pub async fn start() -> Self {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-        let port = listener.local_addr().unwrap().port();
-
         let f1_blocker = Arc::new(Mutex::new(None::<F1Blocker>));
         let f1_blocker_clone = f1_blocker.clone();
 
-        let handle = spawn(async move {
-            let route = Router::new().route(
-                "/f1",
-                post(move |body: Bytes| {
-                    async move {
-                        let body: u64 = String::from_utf8(body.to_vec()).unwrap().parse().unwrap();
-                        debug!("f1: {}", body);
+        let route = Router::new().route(
+            "/f1",
+            post(move |body: Bytes| {
+                async move {
+                    let body: u64 = String::from_utf8(body.to_vec()).unwrap().parse().unwrap();
+                    debug!("f1: {}", body);
 
-                        let mut guard = f1_blocker_clone.lock().await;
-                        if let Some(blocker) = &*guard
-                            && blocker.value == body
-                        {
-                            let F1Blocker {
-                                reached, resume, ..
-                            } = guard.take().unwrap();
-                            debug!("Reached f1 blocking point");
-                            reached.send(()).unwrap();
-                            debug!("Awaiting resume at f1 blocking point");
-                            resume.await.unwrap();
-                            debug!("Resuming from f1 blocking point");
-                        }
-
-                        StatusCode::OK
+                    let mut guard = f1_blocker_clone.lock().await;
+                    if let Some(blocker) = &*guard
+                        && blocker.value == body
+                    {
+                        let F1Blocker {
+                            reached, resume, ..
+                        } = guard.take().unwrap();
+                        debug!("Reached f1 blocking point");
+                        reached.send(()).unwrap();
+                        debug!("Awaiting resume at f1 blocking point");
+                        resume.await.unwrap();
+                        debug!("Resuming from f1 blocking point");
                     }
-                    .in_current_span()
-                }),
-            );
 
-            axum::serve(listener, route).await.unwrap();
-        });
+                    StatusCode::OK
+                }
+                .in_current_span()
+            }),
+        );
+        let handle = LocalHttpServer::serve(route).await.unwrap();
+        let port = handle.port();
         Self {
             handle,
             f1_blocker,
@@ -175,8 +167,8 @@ impl TestHttpServer {
         self.port
     }
 
-    pub fn abort(&self) {
-        self.handle.abort()
+    pub fn abort(self) {
+        drop(self.handle)
     }
 
     pub async fn f1_control(&mut self, value: u64) -> F1Control {
@@ -545,8 +537,6 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
     use std::sync::atomic::{AtomicUsize, Ordering};
     let requests = Arc::new(AtomicUsize::new(0));
     let observed = requests.clone();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let url = format!("http://{}/message", listener.local_addr()?);
     let router = Router::new().route(
         "/message",
         post(move || {
@@ -557,9 +547,8 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
             }
         }),
     );
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    }));
+    let server = LocalHttpServer::serve(router).await?;
+    let url = server.url("/message");
     let context = TestContext::new(last_unique_id);
     let outage = Arc::new(Outage::default());
     let wrapper_outage = outage.clone();
@@ -1269,6 +1258,10 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
     for revoke in [false, true] {
         let context = TestContext::new(last_unique_id);
         let service = Arc::new(SaveHookCardService::default());
+        let worker_service = EmulatedWorkerService::start(
+            WorkerServiceOptions::default().accept_card_transfers_without_delivery(),
+        )
+        .await?;
         let overrides = TestExecutorOverrides {
             configure: Some(Arc::new(|config| {
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
@@ -1277,10 +1270,10 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
                 let service = service.clone();
                 move || service.clone()
             })),
-            // This proves source-side transfer, not target-side delivery.
-            wrap_worker_proxy: Some(Arc::new(crate::api::accepting_card_transfer_proxy)),
             ..Default::default()
-        };
+        }
+        // This proves source-side transfer, not target-side delivery.
+        .with_worker_service(&worker_service);
         let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
         let component = executor
             .component_dep(&context.default_environment_id, agent_update_v1)
@@ -2774,10 +2767,8 @@ async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::worker::{
-        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
-    };
-    use golem_common::model::{IdempotencyKey, InvocationRequestKey};
+    use golem_api_grpc::proto::golem::worker::{AgentInvocationMode, InvocationStart};
+    use golem_common::model::IdempotencyKey;
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2798,23 +2789,17 @@ async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
     let key = IdempotencyKey::fresh();
     let (_, input) = data_value!().into_parts();
     let trigger = |method_name: &str| -> anyhow::Result<InvocationStart> {
-        Ok(InvocationStart {
-            target: Some(crate::agent::id_target(&worker_id)),
-            component_id: Some(component.id.into()),
-            method_name: Some(method_name.to_string()),
-            input: Some(input.clone().try_into().map_err(anyhow::Error::msg)?),
-            mode: AgentInvocationMode::Schedule as i32,
-            idempotency_key: Some(key.clone().into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
-            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
-            request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
-            ),
-            ..Default::default()
+        Ok({
+            let mut start = executor
+                .invocation(&component, method_name)
+                .on_agent(&worker_id)
+                .with_component_id()
+                .idempotency_key(&key)
+                .with_request_key()
+                .mode(AgentInvocationMode::Schedule)
+                .build()?;
+            start.input = Some(input.clone().try_into().map_err(anyhow::Error::msg)?);
+            start
         })
     };
     let starts = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
@@ -5091,21 +5076,18 @@ async fn start_save_fault_agent(
     faults: &'static [&'static str],
 ) -> anyhow::Result<SaveFaultAgent> {
     let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let fault_server = spawn({
+    let route = {
         let saves = saves.clone();
-        async move {
-            let route = Router::new().route(
-                "/save-fault",
-                axum::routing::get(move || {
-                    let save = saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    async move { faults.get(save).copied().unwrap_or("ok") }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-    });
+        Router::new().route(
+            "/save-fault",
+            axum::routing::get(move || {
+                let save = saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move { faults.get(save).copied().unwrap_or("ok") }
+            }),
+        )
+    };
+    let fault_server = LocalHttpServer::serve(route).await?;
+    let port = fault_server.port();
 
     let executor = start_with_overrides(
         deps,
@@ -5162,7 +5144,7 @@ struct SaveFaultAgent {
     worker_id: OwnedAgentId,
     target_revision: ComponentRevision,
     saves: Arc<std::sync::atomic::AtomicUsize>,
-    fault_server: JoinHandle<()>,
+    fault_server: LocalHttpServer,
 }
 
 impl SaveFaultAgent {
@@ -5183,7 +5165,7 @@ impl SaveFaultAgent {
     }
 
     /// Requests the manual update again at once and checks that it succeeds with the second save.
-    async fn retried_update_succeeds(&self) -> anyhow::Result<()> {
+    async fn retried_update_succeeds(self) -> anyhow::Result<()> {
         self.executor
             .manual_update_worker(&self.worker_id, self.target_revision, false)
             .await?;
@@ -5223,7 +5205,7 @@ impl SaveFaultAgent {
         self.executor
             .check_oplog_is_queryable(&self.worker_id)
             .await?;
-        self.fault_server.abort();
+        drop(self.fault_server);
         Ok(())
     }
 }
@@ -5287,7 +5269,7 @@ async fn a_manual_update_whose_save_hook_threw_keeps_the_instance(
     let saves = agent.saves.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(saves, 1, "{:?}", settled.updates);
     assert_ne!(settled.component_revision, agent.target_revision);
-    agent.fault_server.abort();
+    drop(agent.fault_server);
     Ok(())
 }
 
@@ -6759,17 +6741,11 @@ async fn a_transient_initial_file_download_at_a_host_call_update_point_retries_a
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let outage = Arc::new(InitialFileOutage::default());
-    let wrapper_outage = outage.clone();
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
-            wrap_blob_storage: Some(Arc::new(move |inner| {
-                Arc::new(FlakyInitialFileStorage {
-                    inner,
-                    outage: wrapper_outage.clone(),
-                })
-            })),
+            wrap_blob_storage: Some(outage.clone().wrap_blob_storage()),
             ..Default::default()
         },
     )
@@ -6887,19 +6863,13 @@ async fn cold_initial_file_starts_wait_for_an_outage_but_fail_for_a_refusal(
     for (permanent, component_unavailable) in [(false, false), (true, false), (false, true)] {
         let context = TestContext::new(last_unique_id);
         let outage = Arc::new(InitialFileOutage::default());
-        let wrapper_outage = outage.clone();
         let component_outage = Arc::new(Outage::default());
         let wrapper_component_outage = component_outage.clone();
         let executor = start_with_overrides(
             deps,
             &context,
             TestExecutorOverrides {
-                wrap_blob_storage: Some(Arc::new(move |inner| {
-                    Arc::new(FlakyInitialFileStorage {
-                        inner,
-                        outage: wrapper_outage.clone(),
-                    })
-                })),
+                wrap_blob_storage: Some(outage.clone().wrap_blob_storage()),
                 wrap_component_service: Some(Arc::new(move |inner| {
                     Arc::new(FlakyComponentService {
                         inner,
@@ -7032,17 +7002,11 @@ async fn refusing_initial_files_of_both_revisions_fails_the_update_then_the_sour
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let outage = Arc::new(InitialFileOutage::default());
-    let wrapper_outage = outage.clone();
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
-            wrap_blob_storage: Some(Arc::new(move |inner| {
-                Arc::new(FlakyInitialFileStorage {
-                    inner,
-                    outage: wrapper_outage.clone(),
-                })
-            })),
+            wrap_blob_storage: Some(outage.clone().wrap_blob_storage()),
             ..Default::default()
         },
     )
@@ -7137,17 +7101,11 @@ async fn a_manual_update_whose_target_initial_file_does_not_load_fails_only_the_
     for missing in [false, true] {
         let context = TestContext::new(last_unique_id);
         let outage = Arc::new(InitialFileOutage::default());
-        let wrapper_outage = outage.clone();
         let executor = start_with_overrides(
             deps,
             &context,
             TestExecutorOverrides {
-                wrap_blob_storage: Some(Arc::new(move |inner| {
-                    Arc::new(FlakyInitialFileStorage {
-                        inner,
-                        outage: wrapper_outage.clone(),
-                    })
-                })),
+                wrap_blob_storage: Some(outage.clone().wrap_blob_storage()),
                 ..Default::default()
             },
         )
@@ -7345,15 +7303,6 @@ async fn an_update_to_an_initial_file_under_another_declared_file_fails_only_the
     Ok(())
 }
 
-/// A blob storage that cannot give the content of an initial file while it is down, as a blob
-/// storage whose outage outlived the retry budget of its backend cannot. Every other operation
-/// goes to the storage that it wraps.
-#[derive(Debug)]
-struct FlakyInitialFileStorage {
-    inner: Arc<dyn BlobStorage>,
-    outage: Arc<InitialFileOutage>,
-}
-
 #[derive(Debug)]
 enum InitialFileFailure {
     Unavailable,
@@ -7364,7 +7313,9 @@ enum InitialFileFailure {
     Missing,
 }
 
-/// The failure of a [`FlakyInitialFileStorage`] and the initial-file reads it observed.
+/// A blob storage that cannot give the content of an initial file while it is down, as a blob
+/// storage whose outage outlived the retry budget of its backend cannot: the failure, and the
+/// initial-file reads it observed. Every other operation goes to the storage that it decorates.
 #[derive(Debug, Default)]
 struct InitialFileOutage {
     failure: std::sync::Mutex<Option<InitialFileFailure>>,
@@ -7439,53 +7390,42 @@ impl InitialFileOutage {
 }
 
 #[async_trait::async_trait]
-impl BlobStorageBackend for FlakyInitialFileStorage {
+impl BlobStorageDecorator for InitialFileOutage {
     async fn get_raw_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        if !self.outage.check(&namespace, path)? {
+        if !self.check(&namespace, path)? {
             return Ok(None);
         }
-        self.inner
-            .get_raw(target_label, op_label, namespace, path)
+        inner
+            .get_raw_at(target_label, op_label, namespace, path)
             .await
     }
 
     async fn get_stream_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
-        if !self.outage.check(&namespace, path)? {
+        if !self.check(&namespace, path)? {
             return Ok(None);
         }
-        self.inner
-            .get_stream(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn get_range_stream_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        offset: u64,
-        length: u64,
-    ) -> anyhow::Result<Option<BlobRangeStream>> {
-        self.inner
-            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+        inner
+            .get_stream_at(target_label, op_label, namespace, path)
             .await
     }
 
     async fn get_raw_slice_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
@@ -7493,175 +7433,36 @@ impl BlobStorageBackend for FlakyInitialFileStorage {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.inner
-            .get_raw_slice(target_label, op_label, namespace, path, start, end)
-            .await
-    }
-
-    async fn get_metadata_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<BlobMetadata>> {
-        self.inner
-            .get_metadata(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn put_raw_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        self.inner
-            .put_raw(target_label, op_label, namespace, path, data)
-            .await
-    }
-
-    async fn put_raw_if_absent_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<PutIfAbsent> {
-        self.inner
-            .put_raw_if_absent(target_label, op_label, namespace, path, data)
+        inner
+            .get_raw_slice_at(target_label, op_label, namespace, path, start, end)
             .await
     }
 
     async fn put_stream_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
         stream: &dyn ErasedReplayableStream<Item = anyhow::Result<Vec<u8>>, Error = anyhow::Error>,
     ) -> anyhow::Result<()> {
-        self.inner
-            .put_stream(target_label, op_label, namespace, path, stream)
-            .await
-    }
-
-    async fn delete_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .delete(target_label, op_label, namespace, path)
+        inner
+            .put_stream_at(target_label, op_label, namespace, path, stream)
             .await
     }
 
     async fn delete_many_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         paths: &[NormalizedBlobPath<'_>],
     ) -> anyhow::Result<()> {
-        let paths = paths
-            .iter()
-            .map(|path| path.to_path_buf())
-            .collect::<Vec<_>>();
-        self.inner
-            .delete_many(target_label, op_label, namespace, &paths)
+        inner
+            .delete_many_at(target_label, op_label, namespace, paths)
             .await
-    }
-
-    async fn create_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .create_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Vec<PathBuf>> {
-        self.inner
-            .list_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_blobs_below_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Box<[ListedBlob]>> {
-        self.inner
-            .list_blobs_below(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn delete_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<u64>> {
-        self.inner
-            .delete_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn exists_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<ExistsResult> {
-        self.inner
-            .exists(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn copy_between_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        from_namespace: BlobStorageNamespace,
-        from: &NormalizedBlobPath<'_>,
-        to_namespace: BlobStorageNamespace,
-        to: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
-        match self
-            .inner
-            .copy_between(
-                target_label,
-                op_label,
-                from_namespace,
-                from,
-                to_namespace,
-                to,
-            )
-            .await
-        {
-            Ok(()) => Ok(true),
-            Err(error) if error.is::<BlobMissingError>() => Ok(false),
-            Err(error) => Err(error),
-        }
     }
 }
 

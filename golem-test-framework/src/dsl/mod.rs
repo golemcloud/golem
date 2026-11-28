@@ -13,7 +13,8 @@
 // limitations under the License.
 
 pub mod debug_render;
-pub mod oplog_shape;
+pub mod invocation_error;
+pub mod invocation_session;
 
 use self::debug_render::debug_render_oplog_entry;
 use crate::components::redis::Redis;
@@ -48,7 +49,9 @@ use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget, UpdateRecord,
 };
-use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};
+use golem_common::model::deployment::{
+    CurrentDeployment, DeploymentCreation, DeploymentPlan, DeploymentRevision, DeploymentVersion,
+};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -57,6 +60,7 @@ use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -89,6 +93,30 @@ pub struct PrecompiledComponent {
     pub wasm_name: String,
     /// The WIT package name used as the component name (passed to `.name()`)
     pub package_name: String,
+}
+
+/// A deployment of the environment that `plan` describes, at the plan's current revision and
+/// with its hash, under `version`. It sets no secret, quota or retry defaults, no tools, no MCP
+/// imports and no tool middlewares. Set those with struct-update syntax:
+/// `DeploymentCreation { publish_tools, ..deployment_from_plan(&plan, "1.0.0") }`.
+pub fn deployment_from_plan(plan: &DeploymentPlan, version: &str) -> DeploymentCreation {
+    DeploymentCreation {
+        current_revision: plan.current_revision,
+        expected_deployment_hash: plan.deployment_hash,
+        version: DeploymentVersion(version.to_string()),
+        agent_secret_defaults: Vec::new(),
+        quota_resource_defaults: Vec::new(),
+        retry_policy_defaults: Vec::new(),
+        publish_tools: Vec::new(),
+        remote_tools: Vec::new(),
+        mcp_imports: Vec::new(),
+        publish_tool_middlewares: Vec::new(),
+        remote_tool_middlewares: Vec::new(),
+        universal_tool_middlewares: Vec::new(),
+        environment_tool_middleware_bindings: Default::default(),
+        agent_tool_middleware_bindings: Default::default(),
+        replace_incompatible_agent_secrets: false,
+    }
 }
 
 /// Default permissions for tests that predate host-call enforcement and exercise host APIs.
@@ -512,6 +540,40 @@ pub trait TestDsl {
             params,
         )
         .await
+    }
+
+    /// Invokes an agent method, waits for its result and decodes the returned value into `T`
+    /// with [`AgentResult::into_typed`].
+    async fn invoke_and_await_typed<T: FromSchema + Send>(
+        &self,
+        component: &ComponentDto,
+        agent_id: &ParsedAgentKey,
+        method_name: &str,
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<T> {
+        self.invoke_and_await_agent(component, agent_id, method_name, params)
+            .await?
+            .into_typed()
+    }
+
+    /// As [`TestDsl::invoke_and_await_typed`], with the idempotency key of the invocation.
+    async fn invoke_and_await_typed_with_key<T: FromSchema + Send>(
+        &self,
+        component: &ComponentDto,
+        agent_id: &ParsedAgentKey,
+        idempotency_key: &IdempotencyKey,
+        method_name: &str,
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<T> {
+        self.invoke_and_await_agent_with_key(
+            component,
+            agent_id,
+            idempotency_key,
+            method_name,
+            params,
+        )
+        .await?
+        .into_typed()
     }
 
     /// Invokes an agent as the given caller, as the read-only cache tests do: two callers
@@ -1250,6 +1312,25 @@ pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
         .collect()
 }
 
+/// How long a test waits for a gate or signal it armed itself; such a wait ends almost at once.
+pub const GATE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a test waits for an agent or oplog state that needs a reconstruction or a full
+/// invocation to reach.
+pub const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Awaits `future` for at most `timeout`. On a timeout the error names `what` the test waited
+/// for, as in `timed out after 10s waiting for the receive End gate`.
+pub async fn within<F: Future>(
+    timeout: Duration,
+    what: impl Display,
+    future: F,
+) -> anyhow::Result<F::Output> {
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| anyhow!("timed out after {timeout:?} waiting for {what}"))
+}
+
 pub fn stdout_event_matching(event: &LogEvent, s: &str) -> bool {
     if let LogEvent {
         event: Some(log_event::Event::Stdout(StdOutLog { message, .. })),
@@ -1567,6 +1648,23 @@ pub async fn build_ifs_archive(
 #[async_trait]
 pub trait WorkerLogEventStream: 'static + Send {
     async fn message(&mut self) -> anyhow::Result<Option<LogEvent>>;
+
+    /// Reads events until one is the stdout line `line`, as [`stdout_event_matching`] decides,
+    /// for at most `timeout`. The events before it are consumed. Fails when the stream ends
+    /// first or the timeout elapses.
+    async fn wait_for_stdout(&mut self, line: &str, timeout: Duration) -> anyhow::Result<()> {
+        within(timeout, format!("the stdout line {line:?}"), async {
+            while let Some(event) = self.message().await? {
+                if stdout_event_matching(&event, line) {
+                    return Ok(());
+                }
+            }
+            Err(anyhow!(
+                "the output stream ended before the stdout line {line:?}"
+            ))
+        })
+        .await?
+    }
 }
 
 #[cfg(test)]

@@ -44,7 +44,7 @@ use golem_service_base::model::mcp_import::McpImportObservation;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, LocalHttpServer, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
@@ -1592,13 +1592,8 @@ async fn dynamic_tool_invocation_quota_exhaustion_during_activation_resumes(
             }
         }
     });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, axum::Router::new().route("/mcp", handler))
-            .await
-            .unwrap();
-    }));
+    let server = LocalHttpServer::serve(axum::Router::new().route("/mcp", handler)).await?;
+    let port = server.port();
 
     let context = TestContext::new(last_unique_id);
     let service = Arc::new(TestEnvironmentStateService::default());
@@ -1715,8 +1710,6 @@ async fn dynamic_tool_invocation_replays_committed_response_without_upstream_or_
 ) -> anyhow::Result<()> {
     use serde_json::{Value, json};
     use std::sync::Mutex;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let effects = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
     let crash_after_effect = Arc::new(tokio::sync::Notify::new());
@@ -1774,11 +1767,8 @@ async fn dynamic_tool_invocation_replays_committed_response_without_upstream_or_
             }
         }
     });
-    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, axum::Router::new().route("/mcp", handler))
-            .await
-            .unwrap();
-    }));
+    let server = LocalHttpServer::serve(axum::Router::new().route("/mcp", handler)).await?;
+    let port = server.port();
     let context = TestContext::new(last_unique_id);
     let service = Arc::new(TestEnvironmentStateService::default());
     let overrides = TestExecutorOverrides {
@@ -2018,8 +2008,6 @@ async fn dynamic_tool_invalid_params_forces_refresh_to_distinguish_removal_from_
     use serde_json::{Value, json};
     use tokio::sync::{mpsc, oneshot};
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let releases = Arc::new(std::sync::Mutex::new(Vec::<oneshot::Receiver<()>>::new()));
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -2043,11 +2031,8 @@ async fn dynamic_tool_invalid_params_forces_refresh_to_distinguish_removal_from_
             }
         }
     });
-    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(listener, axum::Router::new().route("/mcp", handler))
-            .await
-            .unwrap();
-    }));
+    let server = LocalHttpServer::serve(axum::Router::new().route("/mcp", handler)).await?;
+    let port = server.port();
 
     let context = TestContext::new(last_unique_id);
     let service = Arc::new(TestEnvironmentStateService::default());
@@ -2263,13 +2248,8 @@ async fn dynamic_tool_crash_retains_call_identity(
                 }
             }
         });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
-        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            axum::serve(listener, axum::Router::new().route("/mcp", handler))
-                .await
-                .unwrap();
-        }));
+        let server = LocalHttpServer::serve(axum::Router::new().route("/mcp", handler)).await?;
+        let port = server.port();
         let context = TestContext::new(last_unique_id);
         let service = Arc::new(TestEnvironmentStateService::default());
         let overrides = TestExecutorOverrides {
@@ -2418,13 +2398,8 @@ async fn dynamic_tool_http_limits_apply_before_dispatch(
                 }
             }
         });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
-        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            axum::serve(listener, axum::Router::new().route("/mcp", handler))
-                .await
-                .unwrap();
-        }));
+        let server = LocalHttpServer::serve(axum::Router::new().route("/mcp", handler)).await?;
+        let port = server.port();
         let context = TestContext::new(last_unique_id);
         let service = Arc::new(TestEnvironmentStateService::default());
         let entry = Arc::new(AtomicResourceEntry::new_with_all_limits(

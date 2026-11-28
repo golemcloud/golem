@@ -69,14 +69,15 @@ async fn deploy_streaming_and_bash(
             true,
         )
         .await?;
-        let next = deployment_state(
-            context.account_id,
-            provider.id,
-            provider.revision,
-            package,
-            "ToolStreamingCaller",
-            metadata.tools,
-        );
+        let mut next = ToolDeployment::new(context.account_id, &provider)
+            .tools(metadata.tools)
+            .filesystem_access("capable-streaming", ToolFilesystemAccess::Allowed)
+            .bound_to("ToolStreamingCaller");
+        // The registry marks the built-in `bash` release as the shell.
+        if package == "golem:bash" {
+            next = next.shell("bash");
+        }
+        let next = next.build();
         match deployment.as_mut() {
             Some(current) => {
                 current.registered_tools.extend(next.registered_tools);

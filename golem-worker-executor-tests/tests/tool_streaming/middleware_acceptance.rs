@@ -219,14 +219,7 @@ macro_rules! setup_rate_limit_chain {
             .expect("persistent rate-limit middleware metadata");
         let $agent_type = AgentTypeName("ToolStreamingCaller".to_string());
         let tool_name = ToolName::try_from("middleware-probe").unwrap();
-        let mut deployment = deployment_state(
-            $context.account_id,
-            $provider_component.id,
-            $provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            $agent_type.0.as_str(),
-            provider_metadata.tools,
-        );
+        let mut deployment = rust_provider_deployment($context.account_id, &$provider_component, provider_metadata.tools).bound_to($agent_type.0.as_str()).build();
         install_middleware_chain(
             &mut deployment,
             &$agent_type,
@@ -313,14 +306,7 @@ macro_rules! setup_probe_chain {
         .await?;
         let $agent_type = AgentTypeName("ToolStreamingCaller".to_string());
         let tool_name = ToolName::try_from("middleware-probe").unwrap();
-        let mut $deployment = deployment_state(
-            $context.account_id,
-            $provider_component.id,
-            $provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            $agent_type.0.as_str(),
-            provider_metadata.tools,
-        );
+        let mut $deployment = rust_provider_deployment($context.account_id, &$provider_component, provider_metadata.tools).bound_to($agent_type.0.as_str()).build();
         let occurrences = $names
             .iter()
             .map(|name| {
@@ -879,14 +865,13 @@ async fn shipped_audit_records_payload_free_success_error_and_stream_summaries(
         .expect("shipped audit middleware metadata");
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("streaming").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -1040,14 +1025,13 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
         .expect("universal secret policy middleware metadata");
     let agent_type = AgentTypeName("ToolSecretCaller".to_string());
     let tool_name = ToolName::try_from("secret-policy-probe").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -1095,17 +1079,13 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
         Some(deployment),
     );
 
-    let (promise_port, promise_server, mut promise_arrivals) =
-        start_promise_checkpoint_server().await;
+    let mut promises = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolSecretCaller", "isolated-secret-policy");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([(
-                "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
-                promise_port.to_string(),
-            )]),
+            promises.agent_env("MIDDLEWARE"),
             Vec::new(),
         )
         .await?;
@@ -1118,7 +1098,7 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     tokio::pin!(invocation);
     let checkpoint = tokio::select! {
         result = invocation.as_mut() => panic!("secret policy invocation settled before checkpoint: {result:?}"),
-        checkpoint = next_promise_checkpoint(&mut promise_arrivals, "secret-policy-before-access") => checkpoint?,
+        checkpoint = promises.reach("secret-policy-before-access") => checkpoint?,
     };
     executor
         .wait_for_status(
@@ -1155,13 +1135,12 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .promise_id(&worker_id, checkpoint.oplog_index)
                 .await?,
             vec![],
         )
         .await?;
-    let after_forward =
-        next_promise_checkpoint(&mut promise_arrivals, "secret-policy-after-forward").await?;
+    let after_forward = promises.reach("secret-policy-after-forward").await?;
     executor
         .wait_for_status(
             &worker_id,
@@ -1174,7 +1153,7 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&worker_id, after_forward.oplog_idx)
+                .promise_id(&worker_id, after_forward.oplog_index)
                 .await?,
             vec![],
         )
@@ -1382,7 +1361,7 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
         cli_shaped.contains("toolSecret"),
         "configured-secret reveal audit payloads must retain the canonical config key"
     );
-    promise_server.abort();
+    drop(promises);
     Ok(())
 }
 
@@ -1460,14 +1439,13 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
         .expect("shipped audit middleware metadata");
     let agent_type = AgentTypeName("ToolSecretCaller".to_string());
     let tool_name = ToolName::try_from("secret-policy-probe").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -1622,14 +1600,13 @@ async fn shipped_audit_sink_deduplicates_crash_after_commit_and_keeps_pinned_pol
         .expect("shipped audit middleware metadata");
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -1979,14 +1956,13 @@ async fn output_redaction_preserves_structured_stream_error_and_completed_replay
         .find(|definition| definition.name == "output-redaction")
         .expect("output-redaction middleware metadata");
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
-    let mut deployment = deployment_state(
+    let mut deployment = rust_provider_deployment(
         context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        "golem-it:tool-streaming-rust-provider",
-        agent_type.0.as_str(),
+        &provider_component,
         provider_metadata.tools,
-    );
+    )
+    .bound_to(agent_type.0.as_str())
+    .build();
     install_middleware_chain(
         &mut deployment,
         &agent_type,
@@ -2137,29 +2113,18 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
         caller_component.revision,
         Some(deployment),
     );
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut arrivals) =
-        start_crash_checkpoint_server().await;
-    let (promise_port, promise_server, mut promise_arrivals) =
-        start_promise_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
+    let mut promises = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "middleware-race-settlement");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-                (
-                    "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
-                    promise_port.to_string(),
-                ),
-            ]),
+            checkpoints
+                .agent_env("")
+                .into_iter()
+                .chain(promises.agent_env("MIDDLEWARE"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -2174,10 +2139,9 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
     tokio::pin!(invocation);
     let cancelled = tokio::select! {
         result = invocation.as_mut() => panic!("race settled before loser admission: {result:?}"),
-        arrival = next_crash_checkpoint(&mut arrivals, "middleware-race-cancelled") => arrival?,
+        arrival = checkpoints.reach("middleware-race-cancelled") => arrival?,
     };
-    let cancel_ready =
-        next_promise_checkpoint(&mut promise_arrivals, "middleware-race-cancel-ready").await?;
+    let cancel_ready = promises.reach("middleware-race-cancel-ready").await?;
     // The promise holds the middleware before cancellation and before either later sibling
     // is admitted, so this is the cancelled leaf's durable identity.
     let admitted = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -2192,7 +2156,7 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&worker_id, cancel_ready.oplog_idx)
+                .promise_id(&worker_id, cancel_ready.oplog_index)
                 .await?,
             vec![],
         )
@@ -2205,7 +2169,7 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
     .map_err(|_| anyhow::anyhow!("timed out waiting for loser body completion"))?;
     let detached = tokio::select! {
         result = invocation.as_mut() => panic!("parent settled before detached child: {result:?}"),
-        arrival = next_crash_checkpoint(&mut arrivals, "middleware-race-detached") => arrival?,
+        arrival = checkpoints.reach("middleware-race-detached") => arrival?,
     };
     let owner = worker_id.clone();
     // Flush the other terminals before releasing the loser, so their commits cannot
@@ -2288,10 +2252,7 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
             .await
             .is_err()
     );
-    detached
-        .release
-        .send(())
-        .expect("release detached observer child");
+    detached.release().expect("release detached observer child");
     let result: String = invocation.await?.into_typed()?;
     assert_eq!(result, "race-winner[leaf(race-sibling(asymmetric-17))]");
 
@@ -2334,8 +2295,8 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
     );
     assert_eq!(middleware_starts.len(), 1);
     assert_one_terminal_before_finished(&oplog, middleware_starts[0].oplog_index, finished);
-    checkpoint_server.abort();
-    promise_server.abort();
+    drop(checkpoints);
+    drop(promises);
     Ok(())
 }
 
@@ -2891,8 +2852,7 @@ async fn accepted_supervisor_crash_checkpoint(
         agent_sockets = true
     );
     let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "rate-3-owner");
     let mut primary_disposal = executor.probe_runtime_disposal(
         &crate::agent::keyed_agent_id(caller_component.environment_id, &agent_id).agent_id,
@@ -2901,20 +2861,14 @@ async fn accepted_supervisor_crash_checkpoint(
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
+            checkpoints
+                .agent_env("")
+                .into_iter()
+                .chain([(
                     "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
                     effect_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+                )])
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -2932,7 +2886,7 @@ async fn accepted_supervisor_crash_checkpoint(
     };
     assert_eq!(effect, "rate-limit-crash(first)");
     let _original = tokio::select! {
-        checkpoint = next_crash_checkpoint(&mut arrivals, "rate-limit-leaf-after-effect") => checkpoint?,
+        checkpoint = checkpoints.reach("rate-limit-leaf-after-effect") => checkpoint?,
         result = invocation.as_mut() => panic!("rate-limit call settled before its leaf checkpoint: {result:?}"),
     };
 
@@ -3048,7 +3002,7 @@ async fn accepted_supervisor_crash_checkpoint(
             1,
             "late cleanup must not silently restart a failed owner"
         );
-        checkpoint_server.abort();
+        drop(checkpoints);
         effect_server.abort();
         return Ok(());
     }
@@ -3057,7 +3011,7 @@ async fn accepted_supervisor_crash_checkpoint(
     assert_eq!(executor.instance_load_count(&worker_id.agent_id), 1);
     drop(control);
     let replay = tokio::select! {
-        checkpoint = next_crash_checkpoint(&mut arrivals, "rate-limit-leaf-after-effect") => checkpoint?,
+        checkpoint = checkpoints.reach("rate-limit-leaf-after-effect") => checkpoint?,
         result = invocation.as_mut() => panic!("rate-limit call settled before its replayed leaf checkpoint: {result:?}"),
     };
     assert!(
@@ -3066,7 +3020,7 @@ async fn accepted_supervisor_crash_checkpoint(
             .is_err(),
         "the committed leaf effect must not repeat during reconstruction"
     );
-    replay.release.send(()).expect("release replayed leaf");
+    replay.release().expect("release replayed leaf");
     let result: String = invocation.await?.into_typed()?;
     assert_eq!(result, "leaf(rate-limit-crash(first))");
 
@@ -3096,7 +3050,7 @@ async fn accepted_supervisor_crash_checkpoint(
     assert_eq!(after_fresh.committed_charges, 2);
     assert_eq!(after_fresh.recorded_decisions, 2);
 
-    checkpoint_server.abort();
+    drop(checkpoints);
     effect_server.abort();
     Ok(())
 }
@@ -3290,22 +3244,20 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
         Some(deployment),
     );
     let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
-    let (promise_port, promise_server, mut arrivals) = start_promise_checkpoint_server().await;
+    let mut promises = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "middleware-mixed-suspension");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
+            promises
+                .agent_env("MIDDLEWARE")
+                .into_iter()
+                .chain([(
                     "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
                     effect_port.to_string(),
-                ),
-                (
-                    "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
-                    promise_port.to_string(),
-                ),
-            ]),
+                )])
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -3318,7 +3270,7 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
     tokio::pin!(invocation);
     let before_leaf = tokio::select! {
         result = invocation.as_mut() => panic!("mixed chain settled before leaf dispatch: {result:?}"),
-        checkpoint = next_promise_checkpoint(&mut arrivals, "lifecycle-before-leaf") => checkpoint?,
+        checkpoint = promises.reach("lifecycle-before-leaf") => checkpoint?,
     };
     executor
         .wait_for_status(
@@ -3380,7 +3332,7 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&worker_id, before_leaf.oplog_idx)
+                .promise_id(&worker_id, before_leaf.oplog_index)
                 .await?,
             vec![],
         )
@@ -3389,7 +3341,7 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
         effects.recv().await.as_deref(),
         Some("lifecycle-effect(suspend(asymmetric-61))")
     );
-    let after_leaf = next_promise_checkpoint(&mut arrivals, "lifecycle-after-leaf").await?;
+    let after_leaf = promises.reach("lifecycle-after-leaf").await?;
     executor
         .wait_for_status(
             &worker_id,
@@ -3413,7 +3365,7 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
         .complete_promise(
             &executor.context.default_environment_id,
             &executor
-                .promise_id(&worker_id, after_leaf.oplog_idx)
+                .promise_id(&worker_id, after_leaf.oplog_index)
                 .await?,
             vec![],
         )
@@ -3438,7 +3390,7 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
         .into_typed()?;
     assert_eq!(fresh, "short(fresh)");
     effect_server.abort();
-    promise_server.abort();
+    drop(promises);
     Ok(())
 }
 
@@ -3474,23 +3426,13 @@ async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity
         caller_component.revision,
         Some(deployment),
     );
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoints) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "middleware-owner-restart");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+            checkpoints.agent_env(""),
             Vec::new(),
         )
         .await?;
@@ -3520,7 +3462,7 @@ async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity
     tokio::pin!(invocation);
     let _original = tokio::select! {
         result = invocation.as_mut() => panic!("middleware call settled before its leaf blocked: {result:?}"),
-        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+        checkpoint = checkpoints.reach("cascade-blocked-leaf") => checkpoint?,
     };
 
     let active = executor.active_agent(&owner).await.unwrap();
@@ -3572,7 +3514,7 @@ async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity
 
     let replayed = tokio::select! {
         result = invocation.as_mut() => panic!("middleware call settled before its replayed leaf blocked: {result:?}"),
-        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+        checkpoint = checkpoints.reach("cascade-blocked-leaf") => checkpoint?,
     };
     assert!(
         Arc::ptr_eq(&executor.active_agent(&owner).await.unwrap(), &active),
@@ -3587,10 +3529,7 @@ async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity
         vec![middleware_start, leaf_start],
         "the reconstructed owner claims the recorded entity Starts"
     );
-    replayed
-        .release
-        .send(())
-        .expect("release the replayed leaf");
+    replayed.release().expect("release the replayed leaf");
     let result: String = invocation.await?.into_typed()?;
     assert_eq!(result, "leaf(cascade-blocked(owner-restart-29))");
     assert_eq!(
@@ -3610,7 +3549,7 @@ async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity
     tokio::pin!(interrupted);
     let _blocked = tokio::select! {
         result = interrupted.as_mut() => panic!("middleware call settled before its leaf blocked: {result:?}"),
-        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+        checkpoint = checkpoints.reach("cascade-blocked-leaf") => checkpoint?,
     };
     executor.commit_oplog(&worker_id.agent_id).await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -3654,7 +3593,7 @@ async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity
     );
 
     executor.resume(&worker_id, false).await?;
-    let resumed = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf").await?;
+    let resumed = checkpoints.reach("cascade-blocked-leaf").await?;
     // A terminal interrupt removes the retired generation's active agent, so the resumed owner
     // admits its entities through a new one.
     let resumed_active = executor.active_agent(&owner).await.unwrap();
@@ -3674,7 +3613,7 @@ async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity
         vec![middleware_start, leaf_start],
         "resuming replays the completed call's entity bodies in new Stores"
     );
-    resumed.release.send(()).expect("release the resumed leaf");
+    resumed.release().expect("release the resumed leaf");
     let resumed_result: String = executor
         .invoke_and_await_agent_with_key(
             &caller_component,
@@ -3726,7 +3665,7 @@ async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity
     for start in middleware_starts.into_iter().chain(leaf_starts) {
         assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
     }
-    checkpoint_server.abort();
+    drop(checkpoints);
     Ok(())
 }
 
@@ -3771,28 +3710,18 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
         caller_component.revision,
         Some(deployment),
     );
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoints) =
-        start_crash_checkpoint_server().await;
-    let (promise_port, promise_server, mut promises) = start_promise_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
+    let mut promises = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "middleware-mixed-cascade");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-                (
-                    "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
-                    promise_port.to_string(),
-                ),
-            ]),
+            checkpoints
+                .agent_env("")
+                .into_iter()
+                .chain(promises.agent_env("MIDDLEWARE"))
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -3807,13 +3736,15 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
     tokio::pin!(invocation);
     let blocked = tokio::select! {
         result = invocation.as_mut() => panic!("mixed cascade settled before its child blocked: {result:?}"),
-        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+        checkpoint = checkpoints.reach("cascade-blocked-leaf") => checkpoint?,
     };
-    let admitted = next_promise_checkpoint(&mut promises, "cascade-child-admitted").await?;
+    let admitted = promises.reach("cascade-child-admitted").await?;
     executor
         .complete_promise(
             &executor.context.default_environment_id,
-            &executor.promise_id(&worker_id, admitted.oplog_idx).await?,
+            &executor
+                .promise_id(&worker_id, admitted.oplog_index)
+                .await?,
             vec![],
         )
         .await?;
@@ -3857,10 +3788,7 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
         3,
         "healthy ancestors retain their unfinished detached descendant"
     );
-    blocked
-        .release
-        .send(())
-        .expect("release unrelated detached leaf");
+    blocked.release().expect("release unrelated detached leaf");
     let error: String = invocation.await?.into_typed()?;
     assert!(
         error.contains("wasm `unreachable` instruction executed"),
@@ -3985,8 +3913,8 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
         .await?
         .into_typed()?;
     assert_eq!(fresh, "leaf(control)");
-    checkpoint_server.abort();
-    promise_server.abort();
+    drop(checkpoints);
+    drop(promises);
     Ok(())
 }
 
@@ -4024,27 +3952,20 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
         Some(deployment),
     );
     let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
-    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut arrivals) =
-        start_crash_checkpoint_server().await;
+    let mut checkpoints = CrashCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "middleware-partial-fanout-restart");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([
-                (
+            checkpoints
+                .agent_env("")
+                .into_iter()
+                .chain([(
                     "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
                     effect_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_PORT".to_string(),
-                    checkpoint_port.to_string(),
-                ),
-                (
-                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    checkpoint_gate_port.to_string(),
-                ),
-            ]),
+                )])
+                .collect::<HashMap<_, _>>(),
             Vec::new(),
         )
         .await?;
@@ -4073,8 +3994,7 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
             .iter()
             .any(|effect| effect.starts_with("partial-pending("))
     );
-    let _original_pending =
-        next_crash_checkpoint(&mut arrivals, "middleware-partial-pending").await?;
+    let _original_pending = checkpoints.reach("middleware-partial-pending").await?;
     let completed_start =
         wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?;
     let before_crash = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -4127,7 +4047,7 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
     );
     executor.simulated_crash(&worker_id).await?;
     let replay_pending = tokio::select! {
-        checkpoint = next_crash_checkpoint(&mut arrivals, "middleware-partial-pending") => checkpoint?,
+        checkpoint = checkpoints.reach("middleware-partial-pending") => checkpoint?,
         result = invocation.as_mut() => panic!("partial fanout settled before its repaired child was released: {result:?}"),
     };
     assert!(
@@ -4137,8 +4057,7 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
         "neither independently completed effect may repeat during replay"
     );
     replay_pending
-        .release
-        .send(())
+        .release()
         .expect("release repaired pending child");
     let result: String = invocation.await?.into_typed()?;
     assert_eq!(
@@ -4207,7 +4126,7 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
         effects.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     );
-    checkpoint_server.abort();
+    drop(checkpoints);
     effect_server.abort();
     Ok(())
 }
@@ -4243,16 +4162,13 @@ async fn early_return_parent_end_survives_restart_while_detached_child_is_pendin
         caller_component.revision,
         Some(deployment),
     );
-    let (promise_port, promise_server, mut arrivals) = start_promise_checkpoint_server().await;
+    let mut promises = PromiseCheckpointServer::start().await?;
     let agent_id = agent_key!("ToolStreamingCaller", "middleware-early-return-restart");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
             agent_id.clone(),
-            HashMap::from([(
-                "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-                promise_port.to_string(),
-            )]),
+            promises.agent_env("PROVIDER"),
             Vec::new(),
         )
         .await?;
@@ -4265,7 +4181,7 @@ async fn early_return_parent_end_survives_restart_while_detached_child_is_pendin
     tokio::pin!(invocation);
     let child = tokio::select! {
         result = invocation.as_mut() => panic!("parent settled before detached child: {result:?}"),
-        child = next_promise_checkpoint(&mut arrivals, "middleware-early-child") => child?,
+        child = promises.reach("middleware-early-child") => child?,
     };
     let parent_start = wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?;
     let before_crash = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -4293,7 +4209,7 @@ async fn early_return_parent_end_survives_restart_while_detached_child_is_pendin
     executor
         .complete_promise(
             &executor.context.default_environment_id,
-            &executor.promise_id(&worker_id, child.oplog_idx).await?,
+            &executor.promise_id(&worker_id, child.oplog_index).await?,
             vec![],
         )
         .await?;
@@ -4317,7 +4233,7 @@ async fn early_return_parent_end_survives_restart_while_detached_child_is_pendin
     for start in middleware_starts.into_iter().chain(leaf_starts) {
         assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
     }
-    promise_server.abort();
+    drop(promises);
     Ok(())
 }
 
