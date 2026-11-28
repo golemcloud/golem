@@ -399,7 +399,7 @@ export const deployment = {
     {
       visual: "cloud",
       title: "Golem Cloud",
-      body: "Managed hosting, free for Preview prototypes. Paid availability and pricing are not yet announced.",
+      body: "Managed hosting. Start on the Free plan, and move to Pro for more compute, memory and filesystem.",
     },
   ],
   sharedLabel: "In every deployment",
