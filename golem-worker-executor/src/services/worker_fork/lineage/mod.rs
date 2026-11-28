@@ -25,7 +25,6 @@ use golem_common::model::durable_stream::{
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{AgentFingerprint, OwnedAgentId};
-use std::borrow::Cow;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, desert_rust::BinaryCodec)]
@@ -46,27 +45,6 @@ enum LineageSource<'a> {
 
 fn lineage_corruption(detail: impl Into<String>) -> OplogReadError {
     OplogReadError::corruption(OplogReadSource::Other("stream fork lineage"), detail)
-}
-
-pub(in crate::services) async fn entry_requires_lineage_discovery(
-    service: &dyn OplogService,
-    owner: &OwnedAgentId,
-    mode: AgentMode,
-    entry: Cow<'_, OplogEntry>,
-) -> bool {
-    if matches!(*entry, OplogEntry::Revert { .. }) {
-        return true;
-    }
-    let record = match entry {
-        Cow::Borrowed(OplogEntry::StreamSession { record, .. }) => record.clone(),
-        Cow::Owned(OplogEntry::StreamSession { record, .. }) => record,
-        _ => return false,
-    };
-    // A later revert can delete an unreadable payload. Resolve the deletion mask first.
-    matches!(
-        service.download_payload(owner, mode, record).await,
-        Ok(StreamSessionRecord::ForkCut(_)) | Err(_)
-    )
 }
 
 impl LineageSource<'_> {
@@ -159,7 +137,18 @@ impl StreamForkLineage {
                     )));
                 }
                 covered = index;
-                if entry_requires_lineage_discovery(service, owner, mode, Cow::Owned(entry)).await {
+                if matches!(entry, OplogEntry::Revert { .. }) {
+                    return Ok(true);
+                }
+                if let OplogEntry::StreamSession { record, .. } = entry
+                    && matches!(
+                        source
+                            .download_session(index, record)
+                            .await
+                            .map_err(unreadable)?,
+                        StreamSessionRecord::ForkCut(_)
+                    )
+                {
                     return Ok(true);
                 }
             }

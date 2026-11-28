@@ -1133,14 +1133,14 @@ fn only_a_held_attachment_changes_its_cleanup_phase() {
         CleanupEvent::of_observation_failure(&WorkerExecutorError::oplog_read_unavailable("later")),
         ReadFailed
     );
-    // A reconstruction for a cause that is not a read keeps the attachment held.
+    // A reconstruction or a reroute for a cause that is not a read keeps the attachment held.
     assert_eq!(
         CleanupEvent::of_observation_failure(&WorkerExecutorError::recovery_required("later")),
         OtherFailure
     );
     assert_eq!(
         CleanupEvent::of_observation_failure(&WorkerExecutorError::ShardingNotReady),
-        AuthorityEnded
+        OtherFailure
     );
     assert_eq!(
         CleanupEvent::of_observation_failure(&WorkerExecutorError::runtime("boom")),

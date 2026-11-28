@@ -34,7 +34,7 @@ use golem_common::model::{
     AgentId, AgentInvocationResult, BackgroundFailure, IdempotencyKey, InvocationOwner,
     OwnedAgentId, OwnedInvocationId, RESERVED_TYPE_TAG, StandaloneToolInvocation,
 };
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailureCause, WorkerExecutorError};
 use golem_service_base::model::auth::AuthCtx;
 use jiff::Timestamp;
 use std::time::SystemTime;
@@ -491,10 +491,10 @@ impl WorkerService {
     }
 
     /// The result of a terminal invocation, read through the existing result lookup. A lookup
-    /// failure that is the recorded outcome is the result. A missing agent, a denied access and a
-    /// routing refusal keep their own error. Every other lookup failure, also a failed oplog read,
-    /// fails with an internal error. That error does not show the details of the lookup failure,
-    /// because they can contain stored data.
+    /// failure that is the recorded outcome is the result. A failed oplog read, also one that an
+    /// accepted invocation or a failed resume wraps, fails with an internal error that does not
+    /// show the details of the read, because they can contain stored data. Any other lookup
+    /// failure gives no outcome.
     async fn invocation_outcome(
         &self,
         agent: &ManagedAgent,
@@ -525,18 +525,21 @@ impl WorkerService {
                 {
                     return Ok(Some(InvocationOutcome::Failure(failure)));
                 }
-                let failed_read = refused_by_a_failed_read(&error);
-                if !failed_read && keeps_its_own_error(&error) {
-                    return Err(error);
+                if refused_by_a_failed_read(&error) {
+                    warn!(
+                        invocation_id = %invocation_id,
+                        "The result of a terminal invocation cannot be read"
+                    );
+                    return Err(WorkerServiceError::Internal(format!(
+                        "the result of invocation {invocation_id} cannot be read"
+                    )));
                 }
                 warn!(
                     invocation_id = %invocation_id,
-                    failed_read,
-                    "The result of a terminal invocation cannot be read"
+                    error = error.to_safe_string(),
+                    "Failed to read the result of a terminal invocation"
                 );
-                return Err(WorkerServiceError::Internal(format!(
-                    "the result of invocation {invocation_id} cannot be read"
-                )));
+                return Ok(None);
             }
         };
         let background_failure = output.background_failure.map(background_failure);
@@ -652,36 +655,22 @@ pub(super) fn background_failure(failure: BackgroundFailure) -> InvocationFailur
     }
 }
 
-/// Whether a failed oplog read refused the result lookup, also when an accepted invocation or a
-/// failed resume wraps the read error.
+/// Whether a failed oplog read refused the result lookup, for a time or for good, also when an
+/// accepted invocation or a failed resume wraps the read error.
 fn refused_by_a_failed_read(error: &WorkerServiceError) -> bool {
+    fn failed_read(error: &WorkerExecutorError) -> bool {
+        match error {
+            WorkerExecutorError::OplogFailed {
+                cause: OplogFailureCause::Read,
+                ..
+            } => true,
+            WorkerExecutorError::FailedToResumeAgent { reason, .. } => failed_read(reason),
+            error => error.is_oplog_read_failure(),
+        }
+    }
     match error {
         WorkerServiceError::AcceptedInvocation { source, .. } => refused_by_a_failed_read(source),
-        WorkerServiceError::GolemError(error) => error.is_oplog_read_failure(),
-        _ => false,
-    }
-}
-
-/// Whether a failed result lookup keeps its own error: a missing agent or component, a denied
-/// access, or a refusal of the routing to the executor. These errors do not contain stored data.
-fn keeps_its_own_error(error: &WorkerServiceError) -> bool {
-    match error {
-        WorkerServiceError::AcceptedInvocation { source, .. } => keeps_its_own_error(source),
-        WorkerServiceError::AgentNotFound(_)
-        | WorkerServiceError::InvocationNotFound(_)
-        | WorkerServiceError::ComponentNotFound(_)
-        | WorkerServiceError::AccountIdNotFound(_)
-        | WorkerServiceError::AgentAccessDenied(_)
-        | WorkerServiceError::AuthError(_)
-        | WorkerServiceError::InternalCallError(_) => true,
-        WorkerServiceError::GolemError(error) => matches!(
-            error,
-            WorkerExecutorError::AgentNotFound { .. }
-                | WorkerExecutorError::ComponentNotFound { .. }
-                | WorkerExecutorError::PermissionDenied { .. }
-                | WorkerExecutorError::InvalidShardId { .. }
-                | WorkerExecutorError::ShardingNotReady
-        ),
+        WorkerServiceError::GolemError(error) => failed_read(error),
         _ => false,
     }
 }

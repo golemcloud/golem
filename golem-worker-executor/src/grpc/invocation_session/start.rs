@@ -1122,7 +1122,7 @@ mod tests {
         assert!(observation.check_observation().is_ok());
         assert!(observation.wait_for_completion().now_or_never().is_none());
 
-        let outage = WorkerExecutorError::recovery_required("temporary result read failure");
+        let outage = WorkerExecutorError::oplog_read_unavailable("temporary result read failure");
         let mut observation = InvocationObservation::accepted(ready(Err(outage.clone())), None);
         observation.wait_for_completion().now_or_never().unwrap();
         assert_eq!(observation.check_observation(), Err(outage.clone()));

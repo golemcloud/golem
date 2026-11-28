@@ -25,13 +25,12 @@ use crate::services::oplog::{
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::worker::DERIVED_CACHE_EXPIRY;
 use crate::services::worker::DurableStreamRecoveryMetadata;
-use crate::services::worker_fork::lineage::{StreamForkLineage, entry_requires_lineage_discovery};
+use crate::services::worker_fork::lineage::StreamForkLineage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use bytes::Bytes;
-use futures::StreamExt;
 use golem_common::base_model::durable_stream::{
     LocalStreamReaderId, StreamSessionKey, StreamSessionRecord,
 };
@@ -42,7 +41,6 @@ use golem_common::model::{
     OwnedAgentId,
 };
 use golem_common::serialization::{DecodeError, decode, serialize};
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use tokio::sync::Mutex as AsyncMutex;
@@ -1032,18 +1030,28 @@ impl StreamSessionIndexService {
                 let rebuild = if metadata.lineage_discovered_through == OplogIndex::NONE {
                     true
                 } else if entries.keys().max().is_some_and(|index| *index >= horizon) {
-                    futures::stream::iter(
-                        entries.range(metadata.lineage_discovered_through.next()..=horizon),
-                    )
-                    .any(|(_, entry)| {
-                        entry_requires_lineage_discovery(
-                            oplog.as_ref(),
-                            id,
-                            mode,
-                            Cow::Borrowed(entry),
-                        )
-                    })
-                    .await
+                    let mut found = false;
+                    for (index, entry) in
+                        entries.range(metadata.lineage_discovered_through.next()..=horizon)
+                    {
+                        if matches!(entry, OplogEntry::Revert { .. }) {
+                            found = true;
+                            break;
+                        }
+                        if let OplogEntry::StreamSession { record, .. } = entry
+                            && matches!(
+                                oplog
+                                    .download_payload(id, mode, record.clone())
+                                    .await
+                                    .map_err(|error| payload_error(*index, error))?,
+                                StreamSessionRecord::ForkCut(_)
+                            )
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    found
                 } else {
                     StreamForkLineage::suffix_contains_fork_cut(
                         oplog.as_ref(),

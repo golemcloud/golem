@@ -1401,14 +1401,20 @@ retries, fails the open, and the open-oplog cache keeps nothing. The open fails 
 rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
 `UnreadableOplog` up to the boundary, where it becomes `OplogFailed` or `RecoveryRequired` by its
 kind. An invocation session attachment records a failed session terminal (`fail_protocol`) only
-for a violation of the session protocol (`grpc/invocation_session/mod.rs::end_attachment_on_failure`).
+for a violation of the session protocol (`grpc/invocation_session/attachment.rs::end_attachment_on_failure`).
 When a read of the session history meets storage that did not answer (including a stream payload
 download), the attachment ends without a terminal frame, and the client reattaches from its
-durable cursors. A fence or an oplog that failed for good goes out as its worker error. It records
-no session terminal and no invocation outcome, and cancels no input; the attachment still writes
-its ordinary `Detached` record. While an input or an output has no terminal, the response validator
-rejects that completion, so the client sees only the end of the attachment, not the error: the
-current protocol has no frame for it. An ephemeral oplog whose writer task cannot store a batch in the first
+durable cursors. A fence or an oplog that failed for good goes out as its worker error. On this
+executor path it records no session terminal and no invocation outcome, and cancels no input;
+the transport attempts its ordinary `Detached` record only while its cleanup authority is held. In
+the active phase the response validator accepts a completion only after every stream terminal and
+with no pending input acknowledgement (a queued acceptance and a joined observer have their own
+rules); before the first decision of a resume it accepts only an acceptance or a rejection, so the
+executor sends a rejection with the worker error where it can, and a completion there is dropped.
+Where the completion is not legal, the client sees only the end of the attachment, not the error:
+the current protocol has no frame for it. These guarantees cover the executor path only. An HTTP
+session reattaches a bounded number of times; what it does when that budget runs out, such as its
+cleanup, is downstream of this path. An ephemeral oplog whose writer task cannot store a batch in the first
 archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
 refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
 (`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write

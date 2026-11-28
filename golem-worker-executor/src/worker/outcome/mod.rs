@@ -75,17 +75,13 @@ pub(super) fn monthly_interrupt_error(
 
 use crate::worker::*;
 
-/// Why an observation of an invocation gave no outcome. None of these is an outcome of the
-/// invocation: a waiter can learn from it why there is no answer, but nothing records, caches,
-/// cancels or appends because of it.
+/// Why an observation of an invocation gave no outcome. It is not an outcome of the invocation:
+/// a waiter can learn from it why there is no answer, but nothing records, caches, cancels or
+/// appends because of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InvocationObservationFailure {
     /// A read of stored data failed for a time. A later read can pass.
     RetryableRead,
-    /// A reconstruction is necessary for a cause that is not a read.
-    Recovery,
-    /// The agent is not on this executor.
-    Reroute,
 }
 
 impl InvocationObservationFailure {
@@ -108,14 +104,7 @@ impl InvocationObservationFailure {
 
     /// Why `error` gives no outcome, or `None` when `error` can be an outcome.
     pub(crate) fn classify(error: &WorkerExecutorError) -> Option<Self> {
-        Self::stored_read(error)
-            .map(|(read, _)| read)
-            .or(match error {
-                WorkerExecutorError::RecoveryRequired { .. } => Some(Self::Recovery),
-                WorkerExecutorError::InvalidShardId { .. }
-                | WorkerExecutorError::ShardingNotReady => Some(Self::Reroute),
-                _ => None,
-            })
+        Self::stored_read(error).map(|(read, _)| read)
     }
 }
 

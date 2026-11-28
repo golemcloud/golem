@@ -54,12 +54,11 @@ pub(super) enum CleanupEvent {
 
 impl CleanupEvent {
     /// The event of a failed observation of the invocation. Only a read that failed for a time
-    /// or a reroute changes the cleanup authority.
+    /// changes the cleanup authority.
     pub(super) fn of_observation_failure(error: &WorkerExecutorError) -> Self {
         match InvocationObservationFailure::classify(error) {
             Some(InvocationObservationFailure::RetryableRead) => Self::ReadFailed,
-            Some(InvocationObservationFailure::Reroute) => Self::AuthorityEnded,
-            _ => Self::OtherFailure,
+            None => Self::OtherFailure,
         }
     }
 
@@ -162,9 +161,10 @@ pub(super) fn ends_only_the_attachment(error: &SessionError) -> bool {
 
 /// Ends the attachment on a failed durable session operation. Only a violation of the session
 /// protocol records a failed session terminal. A refused write and an oplog that does not read
-/// are failures of the shard or of the agent, not of the session: they go out as the worker error
-/// they are and record no session terminal and no invocation outcome, so the session result stays
-/// with the history. The attachment still writes its ordinary `Detached` record.
+/// are failures of the shard or of the agent, not of the session: on this path they go out as the
+/// worker error they are and record no session terminal and no invocation outcome, so the session
+/// result stays with the history. The transport attempts its ordinary `Detached` record when it
+/// ends only while its cleanup authority is held.
 pub(super) async fn end_attachment_on_failure(
     streams: &StreamSession,
     responses: &mpsc::Sender<InvocationResponse>,

@@ -1168,141 +1168,107 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
     use golem_common::model::durable_stream::StreamForkCutRecord;
     use golem_common::model::regions::OplogRegion;
 
-    futures::stream::iter([
-        (false, 2050, false),
-        (true, 2050, false),
-        (true, 0, true),
-        (true, 2050, true),
-    ])
-    .for_each(|(warm, padding, corrupt_suffix)| async move {
-        let (service, _, oplog_service) = service_with_oplog().await;
-        let id = owned_agent("reverted-session");
-        let key = test_invocation_id("discarded".into());
-        let fingerprint = session_key(&id, &key).callee_fingerprint;
-        let mut metadata = agent_metadata(&id);
-        metadata.fingerprint = fingerprint;
-        let oplog = oplog_service
-            .create_fresh(
-                &mut oplog_service.lock_lifecycle(&id.agent_id).await,
-                &id,
-                AgentMode::Durable,
-                create_entry(&id, AgentMode::Durable, metadata.created_by, fingerprint),
-                metadata,
-                stale_status(),
-                suspended_status(),
-                None,
-            )
-            .await
-            .unwrap();
-        if corrupt_suffix {
-            assert!(
-                service
-                    .stream_session_index
-                    .lookup_persisted(
-                        &id,
-                        AgentMode::Durable,
-                        fingerprint,
-                        OplogIndex::INITIAL,
-                        &key,
-                    )
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
-            oplog
-                .add(OplogEntry::StreamSession {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                    record: OplogPayload::SerializedInline {
-                        bytes: vec![255],
-                        cached: None,
-                    },
-                    summary: None,
-                })
+    futures::stream::iter([false, true])
+        .for_each(|warm| async move {
+            let (service, _, oplog_service) = service_with_oplog().await;
+            let id = owned_agent("reverted-session");
+            let key = test_invocation_id("discarded".into());
+            let fingerprint = session_key(&id, &key).callee_fingerprint;
+            let mut metadata = agent_metadata(&id);
+            metadata.fingerprint = fingerprint;
+            let oplog = oplog_service
+                .create_fresh(
+                    &mut oplog_service.lock_lifecycle(&id.agent_id).await,
+                    &id,
+                    AgentMode::Durable,
+                    create_entry(&id, AgentMode::Durable, metadata.created_by, fingerprint),
+                    metadata,
+                    stale_status(),
+                    suspended_status(),
+                    None,
+                )
                 .await
                 .unwrap();
-        } else {
             append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
-        }
-        futures::stream::iter(0..padding)
-            .for_each(|_| async {
-                append_memory_hint(oplog.as_ref()).await;
-            })
-            .await;
-        oplog.commit(CommitLevel::Always).await.unwrap();
-        let end = oplog.current_oplog_index().await;
-        if warm && !corrupt_suffix {
+            futures::stream::iter(0..2050)
+                .for_each(|_| async {
+                    append_memory_hint(oplog.as_ref()).await;
+                })
+                .await;
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            let end = oplog.current_oplog_index().await;
+            if warm {
+                assert!(
+                    service
+                        .stream_session_index
+                        .lookup_persisted(&id, AgentMode::Durable, fingerprint, end, &key)
+                        .await
+                        .unwrap()
+                        .is_some()
+                );
+            }
+            let region = OplogRegion {
+                start: OplogIndex::INITIAL.next(),
+                end,
+            };
+            let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
+                format_version: 1,
+                request_hash: vec![0; 32],
+                creation_fingerprint: fingerprint,
+                export: None,
+                cut_index: OplogIndex::INITIAL,
+                revert: Some(region.clone()),
+                epoch_floor: 2,
+                selected_stream_id: None,
+                retained_through: None,
+            });
+            let marker_entry =
+                DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
+            oplog
+                .add_pair(OplogEntry::revert(region), Box::new(move |_| marker_entry))
+                .await
+                .unwrap();
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            let marker = oplog.current_oplog_index().await;
             assert!(
                 service
                     .stream_session_index
-                    .lookup_persisted(&id, AgentMode::Durable, fingerprint, end, &key)
+                    .lookup_persisted(&id, AgentMode::Durable, fingerprint, marker, &key)
                     .await
                     .unwrap()
-                    .is_some()
+                    .is_none(),
+                "deleted session survived (warm={warm})"
             );
-        }
-        let region = OplogRegion {
-            start: OplogIndex::INITIAL.next(),
-            end,
-        };
-        let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
-            format_version: 1,
-            request_hash: vec![0; 32],
-            creation_fingerprint: fingerprint,
-            export: None,
-            cut_index: OplogIndex::INITIAL,
-            revert: Some(region.clone()),
-            epoch_floor: 2,
-            selected_stream_id: None,
-            retained_through: None,
-        });
-        let marker_entry =
-            DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
-        oplog
-            .add_pair(OplogEntry::revert(region), Box::new(move |_| marker_entry))
-            .await
-            .unwrap();
-        oplog.commit(CommitLevel::Always).await.unwrap();
-        let marker = oplog.current_oplog_index().await;
-        assert!(
-            service
-                .stream_session_index
-                .lookup_persisted(&id, AgentMode::Durable, fingerprint, marker, &key)
-                .await
-                .unwrap()
-                .is_none(),
-            "deleted session survived (warm={warm}, padding={padding}, corrupt={corrupt_suffix})"
-        );
-        assert!(
-            service
-                .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable, fingerprint,)
-                .await
-                .unwrap()
-                .sessions
-                .is_empty()
-        );
+            assert!(
+                service
+                    .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable, fingerprint,)
+                    .await
+                    .unwrap()
+                    .sessions
+                    .is_empty()
+            );
 
-        // The same invocation key can be accepted again after its old preparation is deleted.
-        let prepared = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
-        oplog.commit(CommitLevel::Always).await.unwrap();
-        let state = service
-            .stream_session_index
-            .lookup_persisted(&id, AgentMode::Durable, fingerprint, prepared, &key)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(state.first_prepared, Some(prepared));
-        assert_eq!(
-            service
-                .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable, fingerprint,)
+            // The same invocation key can be accepted again after its old preparation is deleted.
+            let prepared = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            let state = service
+                .stream_session_index
+                .lookup_persisted(&id, AgentMode::Durable, fingerprint, prepared, &key)
                 .await
                 .unwrap()
-                .sessions
-                .len(),
-            1
-        );
-    })
-    .await;
+                .unwrap();
+            assert_eq!(state.first_prepared, Some(prepared));
+            assert_eq!(
+                service
+                    .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable, fingerprint,)
+                    .await
+                    .unwrap()
+                    .sessions
+                    .len(),
+                1
+            );
+        })
+        .await;
 }
 
 #[test]

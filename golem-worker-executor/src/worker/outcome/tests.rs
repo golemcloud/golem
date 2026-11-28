@@ -351,17 +351,9 @@ fn invocation_classification_uses_the_recovery_cause_and_the_resume_reason() {
             Some(InvocationObservationFailure::RetryableRead),
             true,
         ),
-        (
-            other.clone(),
-            Some(InvocationObservationFailure::Recovery),
-            false,
-        ),
+        (other.clone(), None, false),
         (wrap(&other), None, false),
-        (
-            WorkerExecutorError::ShardingNotReady,
-            Some(InvocationObservationFailure::Reroute),
-            false,
-        ),
+        (WorkerExecutorError::ShardingNotReady, None, false),
         (WorkerExecutorError::unknown("guest trapped"), None, false),
     ];
     let wrong = cases
