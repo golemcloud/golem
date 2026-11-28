@@ -3105,7 +3105,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
     );
 
     // A guest search has the same limit, and still reads no entry after its pinned end.
-    let guest_with_revision = |from: OplogIndex, revision: ComponentRevision| {
+    let guest_search = |from, end, revision, query| {
         search_public_oplog(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
@@ -3116,13 +3116,14 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             None,
             revision,
             from,
-            Some(matching[2]),
+            Some(end),
             2,
-            "needle",
+            query,
             budget,
             ClaimVisibility::Hidden,
         )
     };
+    let guest_with_revision = |from, revision| guest_search(from, matching[2], revision, "needle");
     let guest = |from: OplogIndex| guest_with_revision(from, ComponentRevision::INITIAL);
     let first = guest(OplogIndex::INITIAL).await.unwrap();
     let indices = |entries: &[PublicOplogEntryWithIndex]| {
@@ -3163,6 +3164,16 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
         after_the_end_at_a_revision.current_component_revision,
         revision
     );
+
+    // A pin can outlast a replacement with a shorter oplog. The empty page still reports
+    // the live tail, and being past the pin does not bypass query validation.
+    let pin = matching[3].next();
+    let shortened = guest_search(pin.next(), pin, revision, "needle")
+        .await
+        .unwrap();
+    assert!(shortened.entries.is_empty());
+    assert_eq!(shortened.last_index, matching[3]);
+    assert!(guest_search(pin.next(), pin, revision, "(").await.is_err());
 }
 
 #[test]

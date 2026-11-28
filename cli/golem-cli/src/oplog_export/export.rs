@@ -73,9 +73,9 @@ pub trait OplogReads: Send + Sync {
         query: Option<&str>,
     ) -> anyhow::Result<OplogPage>;
 
-    /// Reads one page of the range from `from` to `to`, inclusive, within `allowance`. Without
-    /// an allowance, the read has no scan limit. The function does not retry a failed read with an
-    /// allowance, because the server can have spent allowance on it.
+    /// Reads one page of the range from `from` to `to`, inclusive, within `allowance`, or
+    /// within the configured allowance of the server without one. A failed read is not retried,
+    /// because the server can have spent allowance on it.
     async fn read_range_page(
         &self,
         from: u64,
@@ -477,8 +477,8 @@ pub struct OplogRange {
     pub to: u64,
 }
 
-/// The scan allowance of the first read of a bounded report. The server clamps this explicit
-/// allowance to its configured allowance. The report carries the remaining allowance forward.
+/// The server clamps this initial allowance to its configured budget. An explicit allowance
+/// prevents a revision scan from reading past a spent budget to make progress on the first page.
 const ANY_ALLOWANCE: OplogScanAllowance = OplogScanAllowance {
     entries: u64::MAX,
     millis: u64::MAX,

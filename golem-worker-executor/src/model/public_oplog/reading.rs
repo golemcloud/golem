@@ -145,8 +145,8 @@ pub async fn get_public_oplog_chunk(
 /// Reads an oplog page for a remote reader. The page omits entries that are larger than
 /// `limits.max_entry_bytes`, and ends early when the next entry does not fit in `limits.max_bytes`.
 /// The entries hold claims only with `ClaimVisibility::Shown`, so only claims that the reader asked
-/// for count against the limits. The page reads from `start`. It reports the
-/// last index of the oplog. Use [`get_public_oplog_range_page`] for a read with an end.
+/// for count against the limits. The page reports the last index of the oplog. Use
+/// [`get_public_oplog_range_page`] for a read with an end.
 pub async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -156,7 +156,7 @@ pub async fn get_public_oplog_page(
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
-    start: OplogIndex,
+    initial_oplog_index: OplogIndex,
     limits: PublicOplogPageLimits,
     claims: ClaimVisibility,
 ) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
@@ -169,7 +169,7 @@ pub async fn get_public_oplog_page(
         owner_kind,
         agent_type_name,
         initial_component_revision,
-        start,
+        initial_oplog_index,
         limits.count,
         None,
         claims,
@@ -364,14 +364,20 @@ pub async fn search_public_oplog(
     budget: ScanBudget,
     claims: ClaimVisibility,
 ) -> Result<PublicOplogSearchResult, String> {
+    let scan = RangeScan::within(budget);
+    let query = Query::parse(query)?;
     let range = match OplogRange::new(Some(initial_oplog_index), last_oplog_index) {
         Ok(range) => range,
         Err(ends_before_start) => {
+            let last_index = oplog_service
+                .get_last_index(owned_agent_id, agent_mode)
+                .await
+                .map_err(|error| error.to_string())?;
             return Ok(PublicOplogSearchResult {
                 entries: Vec::new(),
-                next_oplog_index: initial_oplog_index,
+                next_oplog_index: initial_oplog_index.max(OplogIndex::INITIAL),
                 current_component_revision: initial_component_revision,
-                last_index: ends_before_start.end(),
+                last_index: ends_before_start.end().min(last_index),
             });
         }
     };
@@ -386,8 +392,8 @@ pub async fn search_public_oplog(
         initial_component_revision,
         range,
         count,
-        &Query::parse(query)?,
-        RangeScan::within(budget),
+        &query,
+        scan,
         claims,
         InProcessChunk,
     )

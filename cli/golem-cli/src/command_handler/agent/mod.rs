@@ -1168,17 +1168,17 @@ impl AgentCommandHandler {
     }
 
     /// Exports the oplog entries of `range` that match `query` to `path` as JSON Lines. The export
-    /// follows the cursor of each page to the end of the range. It ends at the end of the oplog at
-    /// its first page, also when the agent adds entries during the export. It writes each page
-    /// before it reads the next, so its memory does not grow with the oplog. A page that the scan
-    /// budget of the server ends early still has a cursor. The export has no total scan budget.
-    /// The export reads in full each entry that a page omits for its size, and a
-    /// failed read fails the export. The export reads the fingerprint of the agent before the first
-    /// page. Each read names that fingerprint, and the worker service compares it with the agent
-    /// before the read. After the last page, the export reads the fingerprint again. It fails when
-    /// the agent became another incarnation. The export writes to a temporary file in the directory
-    /// of `path`. It renames the file to `path` only after the last entry, so a failed export
-    /// leaves `path` as it was.
+    /// follows each cursor to the oplog end reported by the first page, capped by the range end.
+    /// Later appends do not move that end. The export writes each page before it reads the next.
+    /// It follows empty pages with a cursor and has no total scan budget. It reads in full each
+    /// entry that a page omits for its size, and a failed read fails the export.
+    ///
+    /// The export reads the agent's metadata fingerprint before the first page. The worker service
+    /// compares it with current metadata before each read. The export compares it again after
+    /// the last page. A mismatch fails the export. These checks are separate from the oplog reads.
+    ///
+    /// The export writes to a temporary file in the directory of `path`. It renames the file to
+    /// `path` only after the last entry, so a failed export leaves `path` as it was.
     async fn cmd_oplog_jsonl_export(
         &self,
         agent_id: AgentIdArgs,
